@@ -1,0 +1,13 @@
+# 设备清单模板（复制为 devices.yaml 后填写，devices.yaml 已被 gitignore）
+# 每台萤石摄像头对应一个感知端点
+devices:
+  - id: home_entry_01        # 模块内部设备 ID（用于事件/证据命名）
+    serial: BK6415780        # 萤石设备序列号（真实值勿入库）
+    name: 家门口H6C
+    location: 入户门
+    enabled: true
+  # - id: home_entry_02
+  #   serial: XXXXXXXXX
+  #   name: 客厅摄像头
+  #   location: 客厅
+  #   enabled: false

@@ -1,0 +1,47 @@
+# ============================================================
+# Home 感知模块 - 全局默认配置
+# 支持 ${ENV_VAR:-default} 形式引用环境变量（由 core/config.py 展开）
+# 设备清单见 config/devices.yaml（不入库，含真实序列号）
+# ============================================================
+
+logging:
+  level: INFO
+  json_logs: true
+
+ingestion:
+  protocol: rtsp          # rtsp=低延迟(默认) | hls=已验证回退方案
+  quality: 1              # 1=HD
+  channel_no: 1
+  reconnect:
+    max_retries: 5
+    backoff_s: 3
+  fps_target: 8           # 感知抽帧率（YOLO 前的有效处理帧率）
+
+detection:
+  model: yolov8n.pt
+  conf_threshold: 0.45
+  classes: [0]            # 0=person
+  device: cpu             # cpu | cuda:0
+  tracker: botsort        # bytetrack | botsort
+
+analysis:
+  dwell_threshold_s: 30       # 门口逗留超过该时长触发告警
+  odd_hour_start: 23          # 异常时段起点（含）
+  odd_hour_end: 6             # 异常时段终点（不含）
+  cooldown_s: 60              # 同一设备同源事件冷却时间
+
+evidence:
+  store: local                # local | cos
+  local_dir: data/evidence
+  clip_seconds: 10            # 事件前后取证片段时长
+  snapshot: true
+
+output:
+  transport: mqtt             # mqtt | http
+  mqtt:
+    host: ${CENTER_MQTT_HOST:-127.0.0.1}
+    port: ${CENTER_MQTT_PORT:-1883}
+    topic: silvershield/home/{device_id}/events
+  buffer:
+    enabled: true             # 中心不可达时本地落盘，恢复后补发
+    max_items: 200

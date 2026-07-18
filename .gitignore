@@ -1,0 +1,41 @@
+# ============================================================
+# SilverShield Home 感知模块 - .gitignore
+# ============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- 密钥 / 本地配置（含真实凭证与设备序列号，禁止入库）---
+.env
+.env.local
+prototypes/
+config/devices.yaml
+
+# --- 模型权重 / 证据数据（体积大，不入库）---
+data/models/*.pt
+data/evidence/**
+data/cache/**
+*.mp4
+*.avi
+*.jpg
+!data/evidence/.gitkeep
+
+# --- 编辑器 / 系统 ---
+.idea/
+.vscode/
+.DS_Store
+
+# --- 测试 / 覆盖率缓存 ---
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/

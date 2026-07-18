@@ -1,0 +1,14 @@
+# Home 感知模块 - 运行时依赖（MVP）
+# 安装：pip install -r requirements.txt
+opencv-python>=4.9.0
+numpy>=1.26.0
+requests>=2.31.0
+pyyaml>=6.0.1
+pydantic>=2.6.0
+ultralytics>=8.2.0
+paho-mqtt>=2.0.0
+python-dotenv>=1.0.0
+structlog>=24.1.0
+
+# 可选：腾讯云 COS 证据长期归档（部署时按需取消注释并安装）
+# cos-python-sdk-v5>=1.9.0
