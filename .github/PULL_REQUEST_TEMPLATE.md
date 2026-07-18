@@ -20,4 +20,5 @@
 - [ ] `pytest tests/ -q` 全部通过
 - [ ] 文档已同步（如需）
 - [ ] 已写测试（新功能 / bug 修复）
+- [ ] 提交前已确认 `.gitignore` 覆盖新增产物（无凭证 / 大文件 / 缓存误提交）
 - [ ] commit message 含 `Task scope`
