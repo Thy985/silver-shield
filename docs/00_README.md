@@ -8,6 +8,7 @@
 
 | 编号 | 文件 | 职责 |
 | --- | --- | --- |
+| AGENTS | [`../AGENTS.md`](../AGENTS.md) | **AI 协作开发强制规范（顶层）** —— 所有 PR 须满足；Git 约定见其 §5 |
 | 00 | `00_README.md` | 本索引 |
 | 01 | `01_module_positioning.md` | 模块在系统中的定位、边界、上下游 |
 | 02 | `02_architecture.md` | 模块内部架构、数据流、与三层引擎的关系 |
