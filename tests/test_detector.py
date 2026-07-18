@@ -15,6 +15,7 @@ from home_perception.detection.detector import (
     DetectionResult,
     YOLODetector,
 )
+from home_perception.core.config import ImgszProfile
 
 
 # ---------------- 不依赖 torch 的契约测试 ----------------
@@ -68,6 +69,23 @@ def test_constructor_does_not_require_torch():
     assert det.model_path == "yolo11n.pt"
     assert det.imgsz == 640
     assert det.classes == [0, 24, 26, 67]
+
+
+def test_default_imgsz_is_balanced_480():
+    # P0-4 实测：CPU 边缘部署默认 480（balanced），满足 <100ms 且 >10FPS
+    det = YOLODetector()
+    assert det.imgsz == 480
+
+
+def test_imgsz_profile_resolution():
+    # 显式 imgsz 压过 profile
+    assert YOLODetector(imgsz=416, profile="accuracy").imgsz == 416
+    # profile 决定 imgsz：accuracy=640 / balanced=480 / realtime=416
+    assert YOLODetector(profile="accuracy").imgsz == 640
+    assert YOLODetector(profile=ImgszProfile.BALANCED).imgsz == 480
+    assert YOLODetector(profile="realtime").imgsz == 416
+    # 无 profile 无 explicit：回退 balanced(480)
+    assert YOLODetector().imgsz == 480
 
 
 def test_rejects_invalid_frame_without_loading_model():

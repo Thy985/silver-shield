@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import re
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -50,13 +51,48 @@ class IngestionConfig(BaseModel):
     fps_target: int = 8
 
 
+class ImgszProfile(str, Enum):
+    """推理分辨率预设（见 docs/09 / P0-4 实测结论）。
+
+    P0-4 在 CPU 边缘机实测（yolo11n / 1080p 合成帧）：
+    - accuracy(640)：推理 ~124ms / ~8FPS —— 精度收益有限但延迟高，不适合实时
+    - balanced(480)：推理 ~86ms / ~11.6FPS —— 满足 <100ms 且 >10FPS，门前场景折中
+    - realtime(416)：推理 ~47ms / ~21.5FPS —— 裕量大，但 cell phone 等小目标精度下降
+    """
+
+    ACCURACY = "accuracy"
+    BALANCED = "balanced"
+    REALTIME = "realtime"
+
+    @property
+    def imgsz(self) -> int:
+        return {"accuracy": 640, "balanced": 480, "realtime": 416}[self.value]
+
+    @classmethod
+    def resolve(cls, profile: "ImgszProfile | str | None", explicit_imgsz: Optional[int]) -> int:
+        """解析最终 imgsz：显式 imgsz 优先；否则用 profile；再否则回退 balanced(480)。"""
+        if explicit_imgsz:
+            return int(explicit_imgsz)
+        if profile is None:
+            return cls.BALANCED.imgsz
+        if isinstance(profile, ImgszProfile):
+            return profile.imgsz
+        try:
+            return cls(str(profile).lower()).imgsz
+        except ValueError:
+            return cls.BALANCED.imgsz
+
+
 class DetectionConfig(BaseModel):
     model: str = "yolo11n.pt"  # 第一阶段默认小模型：CPU 可跑、延迟低
     conf_threshold: float = 0.45
     # 仅第一阶段 4 类：person / backpack / handbag / cell phone（COCO id）
     classes: list[int] = Field(default_factory=lambda: [0, 24, 26, 67])
     device: str = "cpu"  # cpu | cuda:0
-    imgsz: int = 640  # 1080p 帧先 resize 到该尺寸再推理，控制 CPU 算力
+    # P0-4 实测结论：纯 CPU 边缘机 yolo11n@640 推理 ~124ms 未达实时目标；
+    # MVP 默认 480（balanced）满足 <100ms 且 >10FPS。详见 docs/09。
+    imgsz: int = ImgszProfile.BALANCED.imgsz  # 480
+    imgsz_profile: ImgszProfile = ImgszProfile.BALANCED  # accuracy=640 / balanced=480 / realtime=416
     enable_track: bool = False  # P0-3 关闭；P0-5 逗留/重复识别时开启
     tracker: str = "botsort"  # bytetrack | botsort（enable_track=True 时生效）
 
