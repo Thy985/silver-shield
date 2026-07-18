@@ -8,8 +8,9 @@
 ## 当前状态
 
 - ✅ 已验证：萤石摄像头接入、直播流获取、OpenCV 读取视频
-- 🚧 进行中：YOLO 检测闭环（P0-3，见 `docs/08_roadmap.md` 第一阶段）
-  - 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
+- ✅ P0-3：YOLO 检测闭环（萤石流 → OpenCV → 640 resize → YOLO11n → `DetectionResult`）
+- 🚧 P0-4：视频流稳定化 + FPS 基准（`benchmark/yolo_speed.py`，见下）
+- 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
 
 ## 快速开始
 
@@ -88,3 +89,42 @@ pytest tests/ -q
 ```
 
 普通电脑目标：**检测 15–30 FPS**（抽帧后 YOLO 推理预算；1080p 先降采样到 640 再推理，避免 CPU 直接跑满分辨率）。所有性能结论以实测为准（见 `docs/09_risks.md` 9.4）。
+
+## P0-4 · 性能基准（benchmark）
+
+量化 `萤石流 → OpenCV → YOLO → DetectionResult` 的端到端性能，为答辩与"门前踩点识别"落地提供硬数据，并为 P0-5 跟踪定基线。基准脚本**只测性能**，不生成事件、不判风险。
+
+```bash
+# 合成模式（默认，无需摄像头/网络，可复现；测纯推理+resize 开销）
+python benchmark/yolo_speed.py --synthetic --duration 30 --json out/bench.json
+
+# 调不同推理分辨率对比
+python benchmark/yolo_speed.py --synthetic --duration 15 --imgsz 480
+python benchmark/yolo_speed.py --synthetic --duration 15 --imgsz 416
+
+# 实时模式（接真实萤石流，测端到端；需 .env）
+python benchmark/yolo_speed.py --serial BK6415780 --duration 1800 --protocol rtsp
+```
+
+输出：Camera FPS / Inference FPS / 推理耗时(avg/p50/p95/max) / 端到端延迟 / CPU / 内存，并对照目标表自动判定达标。
+
+### 目标（roadmap P0-4）
+
+| 指标 | 目标 |
+| --- | --- |
+| 输入 FPS | 10–15 |
+| YOLO 推理耗时 | < 100 ms |
+| 端到端延迟 | < 300 ms |
+| 连续运行 | ≥ 30 分钟 |
+
+### 实测参考（开发机 CPU · yolo11n · 1080p 合成帧）
+
+> 数据来自本机合成基准（`--duration 30/15`），仅供**相对比较与调参**参考；实际以目标硬件实测为准。合成模式下每帧随机生成 1080p 图约耗 16 ms，会拉低 camera_fps，**推理耗时 / Inference FPS 才是硬件代表指标**。
+
+| imgsz | 推理 avg | Inference FPS | 端到端 avg | 达标 |
+| --- | --- | --- | --- | --- |
+| 640（默认） | 124 ms | 8.1 | 142 ms | ❌ 推理/FPS 未达标 |
+| 480 | 86 ms | 11.6 | 104 ms | ✅ 推理/端到端达标 |
+| 416 | 47 ms | 21.5 | 64 ms | ✅ 全部达标（有裕量） |
+
+**工程结论**：纯 CPU 开发机上 `yolo11n@640` 推理约 124 ms、未达 <100 ms/≥10 FPS 目标；**降到 imgsz=480 即满足推理目标，416 全达标且有裕量**。门口场景人目标占比大，480/416 精度足够。是否将默认 `imgsz` 从 640 下调由 Owner 决策（当前默认仍为 640，本 PR 不改配置默认值）。配合 `fps_target=8` 抽帧，链路可稳定实时。
