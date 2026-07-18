@@ -8,7 +8,7 @@
 
 推理流水线（门前异常行为感知，第一阶段）：
     萤石 1080p 帧
-        ↓ OpenCV resize 到 inference_size（默认 640）
+        ↓ OpenCV resize 到 inference_size（默认 480，可配 profile）
         ↓ YOLO11n 推理
         ↓ 检测框映射回原始帧坐标
         ↓ DetectionResult
@@ -16,7 +16,10 @@
 设计要点：
 - 模型惰性加载（`load()`），构造期不触发 torch/ultralytics 导入，便于无 GPU
   环境跑单元测试。
-- 显式 resize 到 640×640，避免 1080p 直接进 YOLO 造成 CPU 算力浪费。
+- 显式 resize 到推理尺寸（默认 480）再推理。P0-4 实测：纯 CPU 边缘机
+  yolo11n@640 推理 ~124ms 未达实时目标，故 MVP 默认 480（balanced），满足
+  <100ms 且 >10FPS；640 作 accuracy 精度模式，416 作 realtime 低延迟模式
+  （见 docs/09）。
 - 输出 bbox 一律映射回**原始帧像素坐标**，方便上层（ROI/事件）直接使用。
 - 仅关注第一阶段类别（COCO id）：person(0) / backpack(24) / handbag(26) /
   cell phone(67)，**不扩展更多类别**，避免检测器膨胀为"万能 AI 检测器"。
@@ -33,6 +36,7 @@ import numpy as np
 
 from ..common.logging import get_logger
 from ..common.timeutil import now_ts
+from ..core.config import ImgszProfile
 
 log = get_logger(__name__)
 
@@ -92,7 +96,8 @@ class YOLODetector(Detector):
         conf_threshold: float = 0.45,
         classes: Optional[List[int]] = None,
         device: str = "cpu",
-        imgsz: int = 640,
+        imgsz: Optional[int] = None,
+        profile: "ImgszProfile | str | None" = None,
         enable_track: bool = False,
         tracker: str = "botsort",
     ):
@@ -101,7 +106,12 @@ class YOLODetector(Detector):
         # 缺省关注第一阶段 4 类；显式传入时以传入为准
         self.classes = list(classes) if classes is not None else list(ALLOWED_CLASSES.keys())
         self.device = device
-        self.imgsz = imgsz
+        # profile 归一化为枚举（便于 resolve；YAML 里是字符串）
+        norm_profile = None
+        if profile is not None:
+            norm_profile = profile if isinstance(profile, ImgszProfile) else ImgszProfile(str(profile).lower())
+        # 解析最终推理分辨率：显式 imgsz 优先，否则用 profile，再否则 balanced(480)
+        self.imgsz = ImgszProfile.resolve(norm_profile, imgsz)
         self.enable_track = enable_track
         self.tracker = tracker
         self._model = None  # 惰性加载

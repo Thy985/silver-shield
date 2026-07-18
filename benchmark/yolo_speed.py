@@ -42,6 +42,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from home_perception.core.config import ImgszProfile
 from home_perception.detection.detector import Detector, DetectionResult, YOLODetector
 
 # ---- 目标阈值（与 roadmap P0-4 指标表一致）----
@@ -371,11 +372,17 @@ def render_report(report: BenchmarkReport) -> str:
 # CLI
 # =====================================================================
 def _build_detector(args: argparse.Namespace) -> YOLODetector:
+    # 推理分辨率解析：显式 --imgsz 优先；否则用 --profile；否则 balanced(480)。
+    # 默认 --imgsz 不传（=None），走 profile 解析，体现 P0-4 配置化结论。
+    profile = None
+    if getattr(args, "profile", None):
+        profile = ImgszProfile(args.profile)
     return YOLODetector(
         model=args.model,
         conf_threshold=args.conf,
         device=args.device,
         imgsz=args.imgsz,
+        profile=profile,
     )
 
 
@@ -394,7 +401,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--width", type=int, default=1920, help="合成帧宽")
     ap.add_argument("--height", type=int, default=1080, help="合成帧高")
     ap.add_argument("--model", default="yolo11n.pt")
-    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--imgsz", type=int, default=None,
+                    help="显式推理分辨率（优先于 --profile）；不传则走 profile")
+    ap.add_argument("--profile", default=None,
+                    choices=[p.value for p in ImgszProfile],
+                    help="推理分辨率预设：accuracy=640 / balanced=480 / realtime=416")
     ap.add_argument("--conf", type=float, default=0.45)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--json", dest="json_out", default=None, help="将报告写入 JSON 文件")
@@ -402,13 +413,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     mode = "live" if args.serial else "synthetic"
     detector = _build_detector(args)
+    eff_imgsz = detector.imgsz
 
     if mode == "live":
         frames: Iterable[Tuple[float, np.ndarray]] = live_frames(args.serial, args.protocol)
     else:
         frames = synthetic_frames(args.width, args.height, max_frames=args.max_frames)
 
-    print(f"[benchmark] mode={mode} model={args.model} imgsz={args.imgsz} "
+    print(f"[benchmark] mode={mode} model={args.model} imgsz={eff_imgsz} "
           f"device={args.device} duration={args.duration}s ...")
     report = run_benchmark(
         frames,

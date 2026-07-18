@@ -88,7 +88,7 @@ python scripts/eval_stream.py --serial BK6415780 --duration 30 --protocol rtsp
 pytest tests/ -q
 ```
 
-普通电脑目标：**检测 15–30 FPS**（抽帧后 YOLO 推理预算；1080p 先降采样到 640 再推理，避免 CPU 直接跑满分辨率）。所有性能结论以实测为准（见 `docs/09_risks.md` 9.4）。
+普通电脑目标：**检测 15–30 FPS**（抽帧后 YOLO 推理预算；1080p 默认降采样到 480 再推理，避免 CPU 直接跑满分辨率；精度优先场景可切 accuracy=640）。所有性能结论以实测为准（见 `docs/09_risks.md` 9.4）。
 
 ## P0-4 · 性能基准（benchmark）
 
@@ -98,9 +98,10 @@ pytest tests/ -q
 # 合成模式（默认，无需摄像头/网络，可复现；测纯推理+resize 开销）
 python benchmark/yolo_speed.py --synthetic --duration 30 --json out/bench.json
 
-# 调不同推理分辨率对比
-python benchmark/yolo_speed.py --synthetic --duration 15 --imgsz 480
-python benchmark/yolo_speed.py --synthetic --duration 15 --imgsz 416
+# 调不同推理分辨率对比（--profile 对应 accuracy=640 / balanced=480 / realtime=416）
+python benchmark/yolo_speed.py --synthetic --duration 15 --profile balanced
+python benchmark/yolo_speed.py --synthetic --duration 15 --profile accuracy
+python benchmark/yolo_speed.py --synthetic --duration 15 --profile realtime
 
 # 实时模式（接真实萤石流，测端到端；需 .env）
 python benchmark/yolo_speed.py --serial BK6415780 --duration 1800 --protocol rtsp
@@ -121,10 +122,20 @@ python benchmark/yolo_speed.py --serial BK6415780 --duration 1800 --protocol rts
 
 > 数据来自本机合成基准（`--duration 30/15`），仅供**相对比较与调参**参考；实际以目标硬件实测为准。合成模式下每帧随机生成 1080p 图约耗 16 ms，会拉低 camera_fps，**推理耗时 / Inference FPS 才是硬件代表指标**。
 
-| imgsz | 推理 avg | Inference FPS | 端到端 avg | 达标 |
-| --- | --- | --- | --- | --- |
-| 640（默认） | 124 ms | 8.1 | 142 ms | ❌ 推理/FPS 未达标 |
-| 480 | 86 ms | 11.6 | 104 ms | ✅ 推理/端到端达标 |
-| 416 | 47 ms | 21.5 | 64 ms | ✅ 全部达标（有裕量） |
+| imgsz | profile | 推理 avg | Inference FPS | 端到端 avg | 达标 |
+| --- | --- | --- | --- | --- | --- |
+| 640 | accuracy | 124 ms | 8.1 | 142 ms | ❌ 推理/FPS 未达标 |
+| 480（默认） | balanced | 86 ms | 11.6 | 104 ms | ✅ 推理/端到端达标 |
+| 416 | realtime | 47 ms | 21.5 | 64 ms | ✅ 全部达标（有裕量） |
 
-**工程结论**：纯 CPU 开发机上 `yolo11n@640` 推理约 124 ms、未达 <100 ms/≥10 FPS 目标；**降到 imgsz=480 即满足推理目标，416 全达标且有裕量**。门口场景人目标占比大，480/416 精度足够。是否将默认 `imgsz` 从 640 下调由 Owner 决策（当前默认仍为 640，本 PR 不改配置默认值）。配合 `fps_target=8` 抽帧，链路可稳定实时。
+**工程结论（P0-4 实测推翻原假设）**：原设计假设"YOLO11n@640 可实时"被实验推翻——纯 CPU 边缘机推理 ~124ms、未达 <100ms/≥10FPS。基于 CPU 边缘部署测试，**MVP 默认采用 `yolo11n@480`（balanced）**，在保证门前人员检测需求的同时满足实时性能约束；`640` 作 accuracy 精度模式（GPU/算力充足时），`416` 作 realtime 低延迟模式（预留算力给 Tracker/ROI/事件，小目标精度略降）。这正是工程开发区别于 PPT 方案之处。
+
+**配置化（不写死分辨率）**：用 `imgsz_profile` 切换，而非改死 `imgsz`：
+
+```yaml
+# config/default.yaml · detection
+imgsz: 480                # 默认 = balanced；显式赋值即覆盖 profile
+imgsz_profile: balanced   # accuracy(640) / balanced(480) / realtime(416)
+```
+
+> GPU 不是当前阻塞点：现阶段最缺的是"从检测结果生成连续事件"（P0-5/6），而非 YOLO 精度。故不为 640 引入 GPU。配合 `fps_target=8` 抽帧，链路可稳定实时。

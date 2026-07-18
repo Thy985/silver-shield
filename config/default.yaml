@@ -22,7 +22,14 @@ detection:
   conf_threshold: 0.45
   classes: [0, 24, 26, 67]   # person, backpack, handbag, cell phone（仅第一阶段 4 类）
   device: cpu                 # cpu | cuda:0
-  imgsz: 640                 # 1080p 帧先 resize 到 640 再推理，控制 CPU 算力
+  # P0-4 实测结论：纯 CPU 边缘机 yolo11n@640 推理 ~124ms 未达实时目标（<100ms / >10FPS）。
+  # MVP 默认 480（balanced）：满足实时约束且门前场景精度足够。
+  # 三档推理分辨率预设（见 ImgszProfile）：
+  #   accuracy  = 640  # 精度优先（GPU 或算力充足时）
+  #   balanced  = 480  # 默认，实时折中（门前人物占比大）
+  #   realtime  = 416  # 低延迟，预留算力给 Tracker/ROI/事件（小目标精度略降）
+  imgsz: 480                 # 默认推理分辨率（= balanced）；显式改此值即覆盖 profile
+  imgsz_profile: balanced    # 可设为 accuracy / balanced / realtime
   enable_track: false        # P0-3 关闭；P0-5 逗留/重复识别时开启
   tracker: botsort           # bytetrack | botsort（enable_track=True 时生效）
 
