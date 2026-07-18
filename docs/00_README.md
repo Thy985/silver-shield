@@ -19,6 +19,7 @@
 | 07 | `07_event_schema.md` | 感知事件（VisitorEvent）字段与取值说明 |
 | 08 | `08_roadmap.md` | 分阶段研发路线与第一阶段任务拆解 |
 | 09 | `09_risks.md` | 技术 / 项目风险与缓解 |
+| ADR | [`ADR/`](ADR/) | **架构决策记录**（为什么这样设计，可追溯）；编写规则见 [`ADR/README.md`](ADR/README.md) |
 
 ## 设计依据
 
