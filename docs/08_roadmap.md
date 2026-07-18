@@ -28,38 +28,60 @@
   参数化 `quality/channel`，断流指数退避重连（沿用 `prototypes/` 已验证逻辑）。
 - 验收：模拟断网可自动恢复；输出 FPS/延迟基线报告（`scripts/eval_stream.py`）。
 
-### P0-3 YOLO 人员检测（detection）
-- 任务：实现 `YOLODetector`（ultralytics YOLOv8n/s）+ ByteTrack/BotSORT 跟踪，
-  仅 `classes=[0]`（person），输出带 `track_id` 的 Detection。
-- 验收：单帧检测正确；1080p 下满足准入帧率（参考 `prototypes/` 的 FPS 门槛）。
+### P0-3 YOLO 人员/物品检测（detection）（✅ 已完成 · v0.1）
+- 任务：实现 `YOLODetector`（ultralytics **YOLO11n**，CPU），1080p 帧**显式 resize 640×640**
+  再推理，bbox 映射回原始帧坐标；仅第一阶段 4 类 `person/backpack/handbag/cell phone`
+  （COCO 0/24/26/67）；模型惰性加载。
+- 边界：输出 `DetectionResult`（事实），**不判诈骗、不输出 risk score、不调 LLM**。
+- 验收：`tests/test_detector.py` 8/8 全过（含模型加载/空图/正常图/输出 Schema）；
+  `ruff`/`compileall` 干净。
+- 注：跟踪（`track_id`）本阶段**未开启**（`enable_track=False`），留待 P0-5。
 
-### P0-4 门前规则（analysis）
-- 任务：实现 5 类标签规则：`OddHourRule`（已实现示例）、`DwellRule`、`RepeatVisitRule`、
-  `PendingVerifyRule`、`HighRiskApproachRule`；并落地 `CooldownGate` 防刷。
-- 验收：`test_rules.py` 确定性通过；阈值集中在 `config/default.yaml`。
+### P0-4 视频流稳定化 + FPS Benchmark（benchmark）【下一步】
+- 任务：建立 `benchmark/yolo_speed.py`，实测真实运行
+  `萤石流 → OpenCV → YOLO → DetectionResult` 的端到端性能，量化：
+  | 指标 | 目标 |
+  | --- | --- |
+  | 输入 FPS | 10–15 |
+  | YOLO 推理耗时 | <100ms |
+  | 端到端延迟 | <300ms |
+  | 连续运行 | ≥30 分钟（稳定性） |
+  输出：Camera FPS / Inference FPS / Average latency / CPU usage / Memory。
+- 价值：答辩与"门前踩点识别"创新点落地的硬数据；为 P0-5 跟踪的帧一致性要求定基线。
+- 验收：可复现基准脚本；在目标硬件上产出上述指标报告。
 
-### P0-5 取证采集（evidence）
-- 任务：触发中/高风险时存快照 + 短片段（前后各 `clip_seconds/2`），敏感区遮挡后落盘/可选 COS。
-- 验收：事件能回挂 `EvidenceRef`；非高风险不落像素。
+### P0-5 目标跟踪（Tracker → VisitorTrack）【后续】
+- 任务：开启 `enable_track=true`，用 ByteTrack / BoT-SORT（ultralytics 内置）跨帧关联，
+  回填 `track_id`；形成 `VisitorTrack`（同一个人跨帧稳定 ID）。
+- 为何现在才做：当前每帧 YOLO 独立，无法判断"是否为同一人"；门前踩点需要
+  `Person ID=001 @ 09:10 enter / 09:15 leave / 09:20 enter …` 的连续性。
+- 验收：同人跨帧 ID 一致；遮挡降级可接受；开销在 P0-4 基线内。
 
-### P0-6 事件上报（output）
-- 任务：实现 `MQTTPublisher`，按 `06_api_contract.md` 信封上报；离线环形缓冲补发。
-- 验收：本地起 mosquitto 后能订阅到合规 `VisitorEvent`。
+### P0-6 生成 VisitorEvent（事件层）【后续】
+- 任务：在 `DetectionResult` + `VisitorTrack` 之上生成第一个对银龄盾有意义的数据对象
+  `VisitorEvent`：`visitor_id / enter_time / leave_time / duration / source`。
+- 边界：仍只是"有人在门口停留 X 分钟"的事实，**不是诈骗结论**；风险标签由后续规则/引擎产生。
+- 验收：`VisitorEvent` 结构经契约测试；可被中心消费。
 
-### P0-7 装配与联调（main/pipeline）
-- 任务：在 `main.py` 装配 EZVIZClient+FrameSource+Detector+Rules+Collector+Publisher，
-  单设备端到端跑通；对接中心模拟消费者。
-- 验收：真实/模拟流 → 事件 → 证据 → 上报 全链路打通。
+### 后续横向能力（P0-7+，按原架构补全）
+> 下列为原 P0-4~P0-7 的横向交付，须叠加在感知深度链路上：
+- **P0-7 门前规则（analysis）**：5 类标签 `OddHourRule`(已实现)/`DwellRule`/`RepeatVisitRule`/
+  `PendingVerifyRule`/`HighRiskApproachRule` + `CooldownGate` 防刷。
+- **P0-8 取证采集（evidence）**：中/高风险存快照+短片段，敏感区遮挡后落盘/可选 COS。
+- **P0-9 事件上报（output）**：`MQTTPublisher` 按 `06_api_contract.md` 信封上报 + 离线环形缓冲。
+- **P0-10 装配与联调（main/pipeline）**：单设备端到端；对接中心模拟消费者。
 
-### P1-8 测试与可复现
+### P1-11 测试与可复现
 - 任务：补充契约/规则单测；提供 `docker compose up` 一键演示；消融实验数据收集脚本。
 - 验收：CI 绿；评委可本地复现核心闭环。
 
-### P2-9 增强（比赛后/增强版）
+### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。
 
-## 8.3 里程碑建议
+## 8.3 里程碑建议（修订）
 
-- **M1（第 1–2 周）**：P0-1~P0-4 完成，本地能产出门前标签事件（无上报）。
-- **M2（第 3 周）**：P0-5~P0-7 完成，端到端上报 + 取证。
-- **M3（第 4 周）**：P1-8 完成，演示闭环 + 单测 + 消融数据。
+- **M1（第 1–2 周）**：P0-1~P0-3 完成，本地能产出结构化 `DetectionResult`
+  （**Home Perception v0.1：视觉事实采集能力可运行**，已达成）。
+- **M1.5**：P0-4 基准 + P0-5 跟踪，确定"门前踩点识别"可落地的性能与连续性基线。
+- **M2（第 3 周）**：P0-6~P0-9 完成，`VisitorEvent` → 门前规则 → 取证 → 上报 全链路。
+- **M3（第 4 周）**：P0-10 + P1/P2 完成，演示闭环 + 单测 + 消融数据。
