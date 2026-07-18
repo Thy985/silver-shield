@@ -1,8 +1,8 @@
 # 05 · Git 工作流（对齐 AGENTS.md §5）
 
-> 本文件是团队 `AGENTS.md` 第 5 章《Git 工作流》在本模块（Python 包 `home_perception`）的**落地适配版**。
+> 本文件是顶层 `AGENTS.md` 第 5 章《Git 提交规范》在 Home 感知模块（Python 包 `home_perception`）的**详细落地版**。
 > 权威来源以 `AGENTS.md` 为准；本文件仅把 scope / ROADMAP 任务编号 / 命令替换为适配本仓库的取值。
-> 若未来仓库建立顶层 `AGENTS.md` 或 `CONTRIBUTING.md`，以顶层文件为准。
+> `AGENTS.md` 已建立（仓库根）；`CONTRIBUTING.md` 暂未单独建立，以 `AGENTS.md` 为准。
 
 ## 0. AI / Human 提交分工
 
@@ -36,7 +36,7 @@
 - `docs/02_architecture.md`（= 顶层架构文档 ARCHITECTURE）
 - `docs/08_roadmap.md`（= 顶层路线图 ROADMAP）
 - `docs/ADR/*.md`（架构决策记录，若建立）
-- `AGENTS.md` / `CONTRIBUTING.md`（若建立）
+- `AGENTS.md`（已建立，仓库根）/ `CONTRIBUTING.md`（暂未单独建立）
 - 例外：Human Owner 在任务中明确授权时，AI 可改该次涉及的具体文件，但仍须走 branch + PR，且不得自行 merge。
 
 > 注意：`docs/06_api_contract.md` 与 `docs/07_event_schema.md` 是对外接口契约，

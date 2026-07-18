@@ -31,6 +31,7 @@ python scripts/run.py
 ## 目录与文档
 
 - 代码：`src/home_perception/`
+- AI 协作规范：`AGENTS.md`（所有 PR 须满足）
 - 设计文档：`docs/`（见 `docs/00_README.md` 索引）
 - 阶段任务与风险：`docs/08_roadmap.md`、`docs/09_risks.md`
 
