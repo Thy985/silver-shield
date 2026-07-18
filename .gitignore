@@ -21,6 +21,9 @@ config/devices.yaml
 
 # --- 模型权重 / 证据数据（体积大，不入库）---
 data/models/*.pt
+
+# --- 设计思路草稿（团队研究稿，非模块交付；终稿已沉淀到 docs/）---
+.doc/
 data/evidence/**
 data/cache/**
 *.mp4

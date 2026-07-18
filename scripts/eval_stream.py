@@ -24,7 +24,7 @@ from home_perception.ingestion.frame_source import FrameSource
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--serial", required=True)
+    ap.add_argument("--serial", required=True, help="萤石设备序列号（来自 config/devices.yaml）")
     ap.add_argument("--duration", type=int, default=30)
     ap.add_argument("--protocol", default="rtsp", choices=["rtsp", "hls"])
     args = ap.parse_args()
