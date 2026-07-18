@@ -177,7 +177,8 @@ common/       横切（logging / timeutil）
 6. ❌ 删除 / 改坏测试以通过 CI；
 7. ❌ 跳过 CI 直推 `main`；
 8. ❌ 在仓库根遗留一次性文件（CI 日志 / 调试输出 / 临时压缩包）—— 用完即删，不入库；
-9. ❌ 在 commit message / 代码 / 日志里写入密钥 / token。
+9. ❌ 在 commit message / 代码 / 日志里写入密钥 / token；
+10. ❌ 提交本应忽略的文件：模型权重 `*.pt`、证据片段 `data/evidence/**`、venv、缓存、构建产物 —— **提交前须确认 `.gitignore` 已覆盖**，不得用 `git add -f` 强加。
 
 ### 6.3 AI 协作禁区（编程约束扩展）
 
@@ -223,7 +224,7 @@ common/       横切（logging / timeutil）
 5. **最小改动**：能改一行不改两行；
 6. **写测试**：新功能必须有测试；bug 修复必须有回归测试；
 7. **写文档**：架构决策必须落 ADR；
-8. **自检**：对照 §6 逐条确认。
+8. **自检**：对照 §6 逐条确认；**提交前审视本次改动是否产生需忽略的新文件**（凭证 / 模型权重 `*.pt` / 证据片段 / 缓存 / venv / 构建产物），必要时先更新 `.gitignore` 再 `git add`。
 
 ### 9.2 编码前必须回答的四个问题（Task Contract）
 
@@ -253,6 +254,7 @@ AI Agent 在开始编码前，必须明确回答：
 - [ ] `ruff check src tests` 无 error
 - [ ] `pytest tests/ -q` 全部通过
 - [ ] commit message 含 `Task scope`
+- [ ] 提交前已确认 `.gitignore` 覆盖本次新增产物（无凭证 / 大文件 / 缓存误提交；必要时已先更新 `.gitignore`）
 
 ---
 

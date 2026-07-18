@@ -27,6 +27,10 @@
 5. 通知 Human Owner review + merge
 ```
 
+**提交前 `.gitignore` 决策（必备步骤）**：在 `git add` 之前，必须审视本次改动是否引入需要忽略的文件——
+凭证（`.env` / `config/devices.yaml`）、模型权重（`*.pt`）、证据片段（`data/evidence/**`）、venv、缓存、构建产物等。
+若 `.gitignore` 尚未覆盖，**先更新 `.gitignore` 再提交**；禁止用 `git add -f` 强加应忽略的文件。
+
 **禁止**：`git push origin main` · `git merge` / `gh pr merge` · 修改 `main` 分支。
 
 ### 0.3 架构决策类文件清单（本仓库）
@@ -157,7 +161,7 @@ Task scope: governance (AGENTS.md §5)
 ### 2.8 禁止
 
 `update` / `misc` / `wip` 等无信息 type；无意义 subject；一 commit 多无关改动；
-commit message 含密钥/token。
+commit message 含密钥/token；提交未被 `.gitignore` 覆盖的敏感 / 大文件（模型权重 `*.pt`、证据片段、venv、缓存）。
 
 ## 3. PR 流程
 
@@ -170,6 +174,7 @@ commit message 含密钥/token。
 - CI：lint（ruff）+ test（pytest）全绿。
 - 人工：描述清晰、范围一致、测试覆盖充分、文档同步、commit 合规。
 - Phase：当前 PR 是否在允许范围内（Phase 0 不接受业务大改动）；不跨阶段混改。
+- **提交前 `.gitignore` 检查**：本次新增产物（凭证 / 模型权重 / 证据片段 / 缓存 / venv / 构建产物）均已被 `.gitignore` 覆盖，无敏感 / 大文件误提交。
 
 ### 3.3 合并策略
 
