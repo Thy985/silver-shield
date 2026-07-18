@@ -51,11 +51,14 @@ class IngestionConfig(BaseModel):
 
 
 class DetectionConfig(BaseModel):
-    model: str = "yolov8n.pt"
+    model: str = "yolo11n.pt"  # 第一阶段默认小模型：CPU 可跑、延迟低
     conf_threshold: float = 0.45
-    classes: list[int] = Field(default_factory=lambda: [0])
-    device: str = "cpu"
-    tracker: str = "botsort"
+    # 仅第一阶段 4 类：person / backpack / handbag / cell phone（COCO id）
+    classes: list[int] = Field(default_factory=lambda: [0, 24, 26, 67])
+    device: str = "cpu"  # cpu | cuda:0
+    imgsz: int = 640  # 1080p 帧先 resize 到该尺寸再推理，控制 CPU 算力
+    enable_track: bool = False  # P0-3 关闭；P0-5 逗留/重复识别时开启
+    tracker: str = "botsort"  # bytetrack | botsort（enable_track=True 时生效）
 
 
 class AnalysisConfig(BaseModel):

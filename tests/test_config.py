@@ -5,7 +5,10 @@ from home_perception.core.config import Settings
 def test_default_config_loads():
     s = Settings.load("config/default.yaml")
     assert s.ingestion.fps_target > 0
-    assert s.detection.classes == [0]
+    # 第一阶段仅关注 4 类：person / backpack / handbag / cell phone
+    assert s.detection.classes == [0, 24, 26, 67]
+    assert s.detection.model == "yolo11n.pt"
+    assert s.detection.imgsz == 640
     assert s.output.transport in {"mqtt", "http"}
 
 

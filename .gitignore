@@ -20,7 +20,11 @@ prototypes/
 config/devices.yaml
 
 # --- 模型权重 / 证据数据（体积大，不入库）---
-data/models/*.pt
+# YOLO 权重（含根目录误落下的 yolo11n.pt）；权重应放 ~/.cache 或 data/models/ 并下载，不入库
+*.pt
+*.onnx
+*.engine
+data/models/
 
 # --- 设计思路草稿（团队研究稿，非模块交付；终稿已沉淀到 docs/）---
 .doc/

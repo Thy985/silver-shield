@@ -6,8 +6,6 @@
 """
 from __future__ import annotations
 
-from typing import Any
-
 from ..analysis.rules import Rule, RuleContext
 from ..common.logging import get_logger
 from ..detection.detector import Detector
@@ -39,13 +37,14 @@ class Pipeline:
 
     def run(self, source: FrameSource) -> None:
         for ts, frame in source:
-            detections = self.detector.detect(frame)
+            result = self.detector.detect(frame)
+            detections = result.detections
             if not detections:
                 continue
             ctx = RuleContext(
                 device_id=self.device["id"],
                 location=self.device.get("location"),
-                timestamp=ts,
+                timestamp=result.timestamp,
                 detections=detections,
             )
             for rule in self.rules:
