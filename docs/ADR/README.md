@@ -59,3 +59,4 @@
 | [0003](0003-yolo11n-explicit-resize-imgsz-profiles.md) | 检测采用 YOLO11n + 显式 resize，imgsz 配置化（默认 480） | Accepted | 2026-07-18 |
 | [0004](0004-rtsp-over-hls-for-realtime-stream.md) | 实时取流 RTSP 优先、HLS 回退 | Accepted | 2026-07-18 |
 | [0005](0005-event-schema-mqtt-contract-stability.md) | 事件 Schema 与 MQTT 契约作为稳定对外接口 | Accepted | 2026-07-18 |
+| [0006](0006-yolo-trackid-wrapped-as-visitor-track.md) | YOLO track_id 封装为银龄盾自己的 VisitorTrack 领域对象（P0-5） | Accepted | 2026-07-19 |
