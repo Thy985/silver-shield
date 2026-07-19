@@ -53,6 +53,22 @@ WarningEvent（P0-8/P0-9 · 决策层事件，中心最终消费）
 **不**生成"进入"事件、**不**生成"在场"周期快照、**不**生成"reenter"事件 —— 那些是
 P0-7 特征抽取的输入需求，不是事实事件。
 
+**关键 ID 边界**：`visitor_id` 是 UUID4，**不是** ByteTrack 的 `track_id`：
+- 原因：ByteTrack ID 是局部、会话内的稳定 ID，但**程序重启 / 视频切换后可能复用**
+  （从 0/1 重新计数）。若直接暴露 track_id 给中心，中心会用 visitor_id 做 RiskTwin
+  关联 / 去重，会把两次不同时段的"track_id=3"误关联为同一人。
+- 实现：`VisitorEventBuilder` 内部维护 `track_id → UUID` 映射；track 首次 active 时
+  分配 UUID，reenter 复用，程序重启/视频切换后新 track 视为新访客分配新 UUID。
+  `reset()` 清空映射（新会话不复用旧 UUID，避免跨会话误关联）。
+- 测试：`test_byte_track_id_reuse_after_reset` 显式覆盖"同 track_id=0 在两会话分配不同 UUID"。
+
+**关键时间边界**：所有时间字段 (`enter_time` / `leave_time` / `created_at`) 均为
+**UTC timezone-aware datetime**：
+- 原因：跨设备/跨服务器部署时，本地时间不可靠；中心侧做归一需要明确 UTC。
+- 实现：`VisitorEvent.__post_init__` 强制校验 `tzinfo is not None`，naive datetime 拒绝。
+  展示层（CLI / Web / 报告）按需转 `Asia/Shanghai`，**不**在本模块做时区转换。
+- 测试：`test_naive_datetime_rejected` 守住边界。
+
 **职责约束（写入 `VisitorEvent` docstring 强制）**：
 1. P0-6 范围内，`VisitorEventBuilder` **不允许**新增任何"判断"类字段（违反则 CI/contract test
    `test_no_business_judgment_fields` 立即报警）。
