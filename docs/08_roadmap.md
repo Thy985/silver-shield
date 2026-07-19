@@ -73,14 +73,14 @@
   `VisitorEvent`：`event_id / visitor_id / enter_time / leave_time / duration_seconds / source_video / created_at`。
 - 边界（见 ADR-0007 · **事实事件层 vs 风险语义层**）：仍只是"有人在门口停留 X 秒"的事实，
   **不包含** `event_type` / `score` / `risk_level` / `visit_type` / `is_suspicious` / `repeat_count`
-  / `is_odd_hour` / `evidence` 等任何业务判断字段 —— 那些是 P0-7 Rule Engine + P0-8 取证的事。
+  / `is_odd_hour` / `evidence` 等任何业务判断字段 —— 那些是 P0-7 Rule Engine + P0-8 决策层的事。
 - 触发时机：`VisitorTrack.status` 从 `active` 转 `left`（absence_gap 兜底）时，由
   `VisitorEventBuilder` 生成；同一 track 离场后**重新进入 → 再离场**会生成第二个事件。
 - 交付：
   - `analysis/event.py`：`VisitorEvent` 领域对象（UUID event_id + structlog-safe `to_dict` /
     `to_json`，无 datetime 序列化问题）。
   - `analysis/event_builder.py`：`VisitorEventBuilder` 包裹 `VisitorTracker`，监听
-    `active→left` 状态翻转，生成 `VisitorEvent`；含 `pending()` / `ack()` 供 P0-9 MQTT 失败重发。
+    `active→left` 状态翻转，生成 `VisitorEvent`；含 `pending()` / `ack()` 供 P0-9 行动层失败重发。
   - `tests/test_event.py`：6 个 `VisitorEvent` 字段/序列化/边界测试 + 7 个 `VisitorEventBuilder`
     状态机测试（enter/leave/track interruption/revisit/multi-visitor/source/ack/reset）
     + 1 个 CAVIAR `OneStopEnter1cor` 端到端真实链路。
@@ -138,9 +138,39 @@
   - `tests/test_rule.py`：**40 个测试**（ThresholdConfig / RuleResult / 4 条基础 Rule 独立 / CompositeRule / CooldownGate 状态机 5 个转移 / PerceptionEvent 校验 / RuleEngine 编排含 Cooldown 抑制 / 契约边界 / CAVIAR 端到端）
 - 验收：`pytest` **132 全绿**（之前 92 + 40）；`ruff` 全绿；CAVIAR 端到端 `detector → tracker → event → feature → rule → perception` 全链路跑通。
 
-- **P0-8 取证采集（evidence）**：中/高风险存快照+短片段，敏感区遮挡后落盘/可选 COS。
-- **P0-9 事件上报（output）**：`MQTTPublisher` 按 `06_api_contract.md` 信封上报 + 离线环形缓冲。
-- **P0-10 装配与联调（main/pipeline）**：单设备端到端；对接中心模拟消费者。
+### P0-8 决策层（WarningEvent + DecisionPolicy）【✅ 已完成】
+- 任务：消费 `PerceptionEvent[]`（P0-7b），按 `DecisionPolicy` 决策，输出 `WarningEvent`。
+  决策层 **不**直接执行任何动作（MQTT / 通知 / 升级 → P0-9 行动层）。
+- 边界（见 ADR-0010 5 条决策）：
+  - `PerceptionEvent` **不**直接触发通知 → 必须先经 `DecisionEngine` → `WarningEvent`
+  - `WarningEvent` 是决策层对象（`risk_level` + `recommended_action` + `status`），**不**含最终判定
+  - `risk_level` 是**决策严重度**（LOW/MEDIUM/HIGH），**不是诈骗概率**
+  - `DecisionPolicy` 独立于 `Rule`（不复算 Feature / 不重新组合 Rule），可替换为 ML/LLM
+  - Action 执行（MQTT / 通知 / 升级）延迟到 P0-9 行动层
+- 路由表（per-event `(level, action, reason)`）：
+  - `high_risk_approach` → HIGH / `ESCALATE_COMMUNITY`（CompositeRule 产物）
+  - `abnormal_dwell` → LOW / `NOTIFY_FAMILY`
+  - `repeat_visit` → LOW / `NOTIFY_FAMILY`
+  - `visit_pending_verify` → LOW / `MONITOR`
+  - `visit_normal` + `is_odd_hour=true` → LOW / `MONITOR`（异常时段访问）
+  - `visit_normal` 单独 → 抑制（不警告）
+- 组合规则：max wins（HIGH + LOW = HIGH + HIGH 的 action；reason_summary 合并去重）
+- 严格黑名单（决策层不做最终判定）：`fraud_result` / `fraud_probability` / `is_fraud` /
+  `is_scammer` / `verdict` / `crime_probability` / `final_decision` / `guilt_score` / `arrest_probability`
+- 交付：
+  - `analysis/warning.py`：`WarningEvent` 领域对象（UUID warning_id + 3 类 risk_level +
+    3 类 recommended_action + 4 类 status + UTC 强制 + 黑名单校验 + `to_dict()` structlog-safe）
+  - `analysis/decision_policy.py`：`DecisionContext` + `DecisionPolicy` 抽象基类 +
+    `RuleBasedDecisionPolicy`（routing_table 查表 + max wins 聚合 + 定制支持）
+  - `analysis/decision_engine.py`：`DecisionEngine` 编排器（注入 elder_id + policy + now_provider）
+  - `tests/test_warning.py`：**65 个测试**（WarningEvent 字段/UUID/UTC/枚举/黑名单 +
+    DecisionPolicy 单事件/组合/抑制 + DecisionEngine 编排 + RuleEngine→DecisionEngine 集成 +
+    决策层字段无业务判定 + CAVIAR 端到端）
+- 验收：`pytest` **197 全绿**（之前 132 + 65）；`ruff` 全绿；CAVIAR 端到端
+  `detector → tracker → event → feature → rule → perception → decision` 全链路跑通。
+
+> **P0-9 行动层（Action Executor + MQTT + 通知 + 升级）** —— 按 `WarningEvent.recommended_action`
+> 路由执行，详见 ADR-0011（待写）。
 
 ### P1-11 测试与可复现
 - 任务：补充契约/规则单测；提供 `docker compose up` 一键演示；消融实验数据收集脚本。
@@ -154,5 +184,5 @@
 - **M1（第 1–2 周）**：P0-1~P0-3 完成，本地能产出结构化 `DetectionResult`
   （**Home Perception v0.1：视觉事实采集能力可运行**，已达成）。
 - **M1.5**：P0-4 基准 + P0-5 跟踪，确定"门前踩点识别"可落地的性能与连续性基线。
-- **M2（第 3 周）**：P0-6~P0-9 完成，`VisitorEvent` → 门前规则 → 取证 → 上报 全链路。
+- **M2（第 3 周）**：P0-6~P0-9 完成，`VisitorEvent` → 门前规则 → 决策 → 行动 全链路。
 - **M3（第 4 周）**：P0-10 + P1/P2 完成，演示闭环 + 单测 + 消融数据。
