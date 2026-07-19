@@ -22,6 +22,14 @@ detection:
   conf_threshold: 0.45
   classes: [0, 24, 26, 67]   # person, backpack, handbag, cell phone（仅第一阶段 4 类）
   device: cpu                 # cpu | cuda:0
+  # P0-5 跨帧跟踪：固定摄像头 / 单区域 / CPU / 停留分析 → bytetrack 足够（轻量、无 ReID）
+  # botsort 的 ReID 价值（人离开又回来 / 长遮挡 / 多摄）不在 MVP 范围
+  tracking:
+    enabled: true
+    algorithm: bytetrack       # bytetrack | botsort
+  # 向后兼容字段（值优先取自 tracking 段，将被后续版本移除）
+  enable_track: true
+  tracker: bytetrack
   # P0-4 实测结论：纯 CPU 边缘机 yolo11n@640 推理 ~124ms 未达实时目标（<100ms / >10FPS）。
   # MVP 默认 480（balanced）：满足实时约束且门前场景精度足够。
   # 三档推理分辨率预设（见 ImgszProfile）：
@@ -30,8 +38,6 @@ detection:
   #   realtime  = 416  # 低延迟，预留算力给 Tracker/ROI/事件（小目标精度略降）
   imgsz: 480                 # 默认推理分辨率（= balanced）；显式改此值即覆盖 profile
   imgsz_profile: balanced    # 可设为 accuracy / balanced / realtime
-  enable_track: false        # P0-3 关闭；P0-5 逗留/重复识别时开启
-  tracker: botsort           # bytetrack | botsort（enable_track=True 时生效）
 
 analysis:
   dwell_threshold_s: 30       # 门口逗留超过该时长触发告警
