@@ -70,7 +70,7 @@ def make_warning(
     elder_id: str = "elder_001",
     device_id: str = "home_entry_01",
     warning_id: Optional[uuid.UUID] = None,
-    status: str = "PENDING",
+    status: str = "CREATED",
     meta: Optional[dict] = None,
 ) -> WarningEvent:
     """构造一个用于决策层测试的最小 WarningEvent。"""
@@ -110,7 +110,7 @@ class TestWarningEventFieldValidation:
         assert w.elder_id == "elder_001"
         assert w.risk_level == "MEDIUM"
         assert w.recommended_action == "NOTIFY_FAMILY"
-        assert w.status == "PENDING"
+        assert w.status == "CREATED"  # Owner P0-8 review：默认 CREATED（决策刚生成未下发）
 
     def test_auto_warning_id_is_uuid(self):
         w = make_warning()
@@ -446,12 +446,13 @@ class TestRuleBasedDecisionPolicy:
         assert "decided_at" in w.meta
         assert "trigger_event_types" in w.meta
 
-    def test_warning_event_default_status_is_pending(self):
+    def test_warning_event_default_status_is_created(self):
+        """Owner P0-8 review：WarningEvent 默认 status = CREATED（决策刚生成，未下发）。"""
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="e1")
         events = [make_perception(event_type="abnormal_dwell")]
         w = policy.decide(events, ctx)
-        assert w.status == "PENDING"
+        assert w.status == "CREATED"
 
     def test_warning_event_no_fraud_field(self):
         """决策层输出 WarningEvent 不含任何"最终判定"字段。"""

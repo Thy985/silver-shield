@@ -68,7 +68,7 @@ MQTT / 协同处置 (P0-9 行动层)          ← 后续 ADR
 | 性质 | 风险语义标签 | 决策事件 |
 | 等级 | `score` ∈ [0,1]（**规则命中强度**）| `risk_level` ∈ {LOW, MEDIUM, HIGH}（**决策严重度**）|
 | 动作 | 不携带 | `recommended_action` ∈ {MONITOR, NOTIFY_FAMILY, ESCALATE_COMMUNITY} |
-| 状态 | 单次（`created_at`）| 生命周期（`status` ∈ {PENDING, ACKNOWLEDGED, RESOLVED, EXPIRED}）|
+| 状态 | 单次（`created_at`）| 生命周期（`status` ∈ {CREATED, PENDING, CONFIRMED, RESOLVED, REJECTED}）|
 | 主语 | "观察到 X 类现象"| "决定执行 Y 级别响应"|
 
 字段：
@@ -77,7 +77,8 @@ MQTT / 协同处置 (P0-9 行动层)          ← 后续 ADR
 - `device_id`：触发决策的 Home 端设备 ID
 - `risk_level` ∈ {`LOW`, `MEDIUM`, `HIGH`}
 - `recommended_action` ∈ {`MONITOR`, `NOTIFY_FAMILY`, `ESCALATE_COMMUNITY`}
-- `status` ∈ {`PENDING`, `ACKNOWLEDGED`, `RESOLVED`, `EXPIRED`}
+- `status` ∈ {`CREATED`, `PENDING`, `CONFIRMED`, `RESOLVED`, `REJECTED`}（默认 `CREATED`；P0-9 行动层翻转）
+  - 语义约定：**这些状态描述决策生命周期，不描述执行结果**（"NOTIFY_FAMILY 已完成"不是状态，是 P0-9 内部日志）
 - `trigger_events`：触发本次决策的 PerceptionEvent 摘要（仅 dict 引用，不存对象）
 - `reason_summary`：人话可读的触发原因（中文，**不**含 fraud/scam/verdict 等字样）
 - `perception_score` ∈ [0,1]（聚合 = max(trigger_events.score)）

@@ -47,8 +47,22 @@ RECOMMENDED_ACTIONS: tuple = (
     "ESCALATE_COMMUNITY",   # 升级到社区/物业/警方
 )
 
-# 警告状态（P0-9 行动层会管理状态翻转：PENDING → ACKNOWLEDGED → RESOLVED/EXPIRED）
-WARNING_STATUSES: tuple = ("PENDING", "ACKNOWLEDGED", "RESOLVED", "EXPIRED")
+# 警告状态（P0-9 行动层会管理状态翻转）
+# 语义约定（Owner P0-8 review）：
+# - "CREATED"：决策已生成（WarningEvent 刚由 DecisionEngine 产出，**尚未下发**）
+# - "PENDING"：已下发 ActionDispatcher，**等待下游确认**（MQTT/通知通道正在处理）
+# - "CONFIRMED"：下游已确认收到（MQTT ACK / 家属端 ACK / 社区端 ACK）
+# - "RESOLVED"：处理完毕（家属核实 / 社区介入 / 标记误报已闭环）
+# - "REJECTED"：拒绝 / 撤销（误报、重复、用户主动关闭）
+# 关键边界：这些状态**描述决策生命周期**，**不**描述执行结果
+# （"NOTIFY_FAMILY 已完成"不是状态，是 P0-9 行动层的内部日志）
+WARNING_STATUSES: tuple = (
+    "CREATED",      # 初始态：决策已生成
+    "PENDING",      # 已下发，等待确认
+    "CONFIRMED",    # 下游已确认
+    "RESOLVED",     # 已闭环
+    "REJECTED",     # 已拒绝/撤销
+)
 
 
 # ============================================================================
@@ -109,7 +123,7 @@ class WarningEvent:
     trigger_events: List[Dict[str, Any]]
     reason_summary: List[str]
     warning_id: UUID = field(default_factory=uuid4)
-    status: str = "PENDING"
+    status: str = "CREATED"  # 默认 CREATED（决策刚生成，未下发）
     perception_score: float = 0.0
     evidence: List[Dict[str, Any]] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)

@@ -159,7 +159,8 @@
   `is_scammer` / `verdict` / `crime_probability` / `final_decision` / `guilt_score` / `arrest_probability`
 - 交付：
   - `analysis/warning.py`：`WarningEvent` 领域对象（UUID warning_id + 3 类 risk_level +
-    3 类 recommended_action + 4 类 status + UTC 强制 + 黑名单校验 + `to_dict()` structlog-safe）
+    3 类 recommended_action + 5 类 status（CREATED→PENDING→CONFIRMED→RESOLVED/REJECTED，
+    描述决策生命周期而非执行结果）+ UTC 强制 + 黑名单校验 + `to_dict()` structlog-safe）
   - `analysis/decision_policy.py`：`DecisionContext` + `DecisionPolicy` 抽象基类 +
     `RuleBasedDecisionPolicy`（routing_table 查表 + max wins 聚合 + 定制支持）
   - `analysis/decision_engine.py`：`DecisionEngine` 编排器（注入 elder_id + policy + now_provider）
@@ -169,8 +170,42 @@
 - 验收：`pytest` **197 全绿**（之前 132 + 65）；`ruff` 全绿；CAVIAR 端到端
   `detector → tracker → event → feature → rule → perception → decision` 全链路跑通。
 
-> **P0-9 行动层（Action Executor + MQTT + 通知 + 升级）** —— 按 `WarningEvent.recommended_action`
-> 路由执行，详见 ADR-0011（待写）。
+### P0-9 行动层（ActionCommand + ActionDispatcher + ActionExecutor）【✅ 已完成】
+- 任务：消费 `WarningEvent`（P0-8），按 `ActionDispatcher` 路由 → `ActionCommand` →
+  通过 `MQTTPublisher` / `NotificationAdapter` 执行。
+  MVP 收敛：**不**接真实萤石 / **不**做完整 App / **不**做社区系统（先用 Mock 跑通骨架）。
+- 边界（见 ADR-0011 5 条核心决策）：
+  - `MQTTPublisher` / `NotificationAdapter` **Protocol** 接口（可替换；MVP Mock）
+  - 幂等基于 `warning_id`（in-memory set；同 warning_id 重复 execute → publish 次数=1）
+  - 失败可重试（`max_retries` 默认 3；总尝试 = 1+max_retries；Warning 失败时保持 `PENDING` 不丢）
+  - 状态描述决策生命周期不描述执行结果（WarningEvent.status 5 类 + ActionCommand.status 5 类）
+  - **不**直接调真实设备（MVP Mock；v1 接 paho-mqtt / 短信网关）
+- 三大必验证（Owner 强调）：
+  1. **消费正确**：`HIGH → ESCALATE_COMMUNITY` 真的走社区通道（`command_type=CREATE_COMMUNITY_TASK`）
+  2. **幂等**：同 `warning_id` 重复 execute → `publisher.publish_count == 1`
+  3. **失败保护**：publisher fail → `command.status=FAILED` + `warning.status=PENDING`（不丢）；
+     超过 `max_retries` → `command.status=GIVEN_UP` + `warning.status=REJECTED`
+- 路由表（per `WarningEvent.recommended_action`）：
+  - `MONITOR`              → `LOG_ONLY`（仅记录，不下发）
+  - `NOTIFY_FAMILY`        → `SEND_FAMILY_MESSAGE`（发短信/App 通知家属）
+  - `ESCALATE_COMMUNITY`   → `CREATE_COMMUNITY_TASK`（创建社区工单）
+- 严格黑名单（行动层不做最终判定）：与 WarningEvent 一致（fraud/verdict/crime_probability 等）
+- 交付：
+  - `action/command.py`：`ActionCommand` 领域对象（UUID command_id + warning_id 关联 +
+    3 类 command_type + 5 类 status + UTC 强制 + 黑名单校验 + 状态翻转规则）
+  - `action/dispatcher.py`：`DispatcherConfig` + `ActionDispatcher`（3 类路由 + family_contact 缺失降级）
+  - `action/publisher.py`：`MQTTPublisher` Protocol + `MockPublisher`（写本地 JSONL + fail_next 模拟）
+  - `action/notifier.py`：`NotificationAdapter` Protocol + `MockNotifier` + `FamilyContact`
+  - `action/executor.py`：`ActionExecutor` 编排器（in-memory 幂等 + 失败重试 + 状态翻转）
+  - `action/__init__.py`：模块导出
+  - `tests/test_action.py`：**59 个测试**（ActionCommand 字段/UUID/UTC/枚举/黑名单 +
+    状态翻转 + 3 类 Dispatcher 路由 + MockPublisher/Notifier 失败模拟 +
+    Executor 3 类 action 执行 + **幂等测试** + **失败保护测试**（重试成功/重试耗尽）+ 警告无业务判定 +
+    CAVIAR 端到端）
+  - `docs/ADR/0011-action-layer-architecture.md`：5 条核心决策完整文档
+  - `docs/ADR/README.md`：新增 ADR-0011 条目
+- 验收：`pytest` **256 全绿**（之前 197 + 59 新增）；`ruff` 全绿；CAVIAR 端到端
+  `detector → tracker → event → feature → rule → perception → decision → action` 全链路跑通
 
 ### P1-11 测试与可复现
 - 任务：补充契约/规则单测；提供 `docker compose up` 一键演示；消融实验数据收集脚本。
