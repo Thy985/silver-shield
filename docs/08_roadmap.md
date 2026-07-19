@@ -88,9 +88,41 @@
   `test_no_business_judgment_fields` 守住 P0-7 边界（强制不含任何业务字段）。
 
 ### 后续横向能力（P0-7+，按原架构补全）
-> 下列为原 P0-4~P0-7 的横向交付，须叠加在感知深度链路上：
-- **P0-7 门前规则（analysis）**：5 类标签 `OddHourRule`(已实现)/`DwellRule`/`RepeatVisitRule`/
-  `PendingVerifyRule`/`HighRiskApproachRule` + `CooldownGate` 防刷。
+> 按 Owner P0-6 review 决策，原"P0-7 门前规则"拆为两步：**P0-7a Feature Extraction + P0-7b Rule Engine**。
+> 反对"规则层直接读 event"模式 —— 阈值变了要回头改 event，违反 ADR-0005 契约稳定。
+
+### P0-7a Feature Extraction（结构化数值信号层）【✅ 已完成】
+- 任务：从 `VisitorEvent` 流提取结构化数值特征 `DurationFeature` / `VisitFrequencyFeature` /
+  `TimeFeature` / `TrajectoryFeature`，聚合成 `RiskFeature` 供 P0-7b Rule Engine 消费。
+- 边界（见 ADR-0008）：**Feature 是"被测量的数值"，不是"判断的标签"**。禁止出现
+  `is_long_visit` / `is_odd_hour` / `is_suspicious` / `risk_level` / `score` /
+  `visit_type` / `event_type` / `is_repeat` 等任何判断/阈值字段 —— 留给 P0-7b Rule Engine。
+- 允许的字段类型：数值（int/float）、类别（enum/str）、日历事实（`is_weekend` 由
+  `day_of_week in (5, 6)` 派生，本身是事实不是判断）。
+- 交付：
+  - `analysis/feature.py`：`Feature` 基类 + 4 个具体 Feature + `RiskFeature` 聚合容器。
+    所有 datetime 字段 UTC timezone-aware（`__post_init__` 校验，naive 拒绝）；
+    `to_dict()` structlog-safe；`RiskFeature` 4 个 Feature 可空（缺某 Feature 时 Rule 跳过）。
+  - `analysis/feature_extractor.py`：4 个具体 `*FeatureExtractor`（纯函数为主，
+    `VisitFrequencyFeatureExtractor` 需滑动窗口）+ `FeatureExtractor` 编排器
+    （维护 `visitor_id → 历史事件 deque`，默认 30 分钟窗口 / 上限 100 条/visitor）。
+  - `tests/test_feature.py`：36 个测试（4 个 Feature 子类字段 + 4 个 Extractor 纯函数 +
+    RiskFeature 聚合 + FeatureExtractor 编排 + 滑动窗口 + 契约边界
+    `test_feature_contract_boundary` + CAVIAR `OneStopEnter1cor` 端到端）。
+- 验收：`pytest` 92 全绿（之前 56 + 36）；`ruff` 全绿；CAVIAR 真实链路
+  `detector → tracker → event → feature` 端到端跑通。
+- Trajectory 占位：MVP 单摄像头 `bbox_center_displacement=0` / `segment_count=1`，
+  P1 多摄扩展时按 schema_version 评审（ADR-0005）。
+
+### P0-7b Rule Engine（风险语义层）【后续】
+- 任务：消费 `RiskFeature`，按 5 类规则（`DwellRule` / `RepeatVisitRule` / `OddHourRule` /
+  `PendingVerifyRule` / `HighRiskApproachRule`）+ `CooldownGate` 防刷，输出 §7.2 的
+  `PerceptionEvent`（含 `event_type` / `score` / `is_odd_hour` / `repeat_count` /
+  `evidence` 引用）。
+- 边界：Rule Engine **是** 业务判断层（前面所有层都"不判断"），它的职责是给 Feature 套阈值
+  生成 5 类标签 + score。
+- 验收：每条规则独立单测 + 端到端 CAVIAR 链路。
+
 - **P0-8 取证采集（evidence）**：中/高风险存快照+短片段，敏感区遮挡后落盘/可选 COS。
 - **P0-9 事件上报（output）**：`MQTTPublisher` 按 `06_api_contract.md` 信封上报 + 离线环形缓冲。
 - **P0-10 装配与联调（main/pipeline）**：单设备端到端；对接中心模拟消费者。
