@@ -31,6 +31,7 @@ data/models/
 data/evidence/**
 data/cache/**
 *.mp4
+*.mpg
 *.avi
 *.jpg
 !data/evidence/.gitkeep
