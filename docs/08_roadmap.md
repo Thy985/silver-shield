@@ -114,14 +114,29 @@
 - Trajectory 占位：MVP 单摄像头 `bbox_center_displacement=0` / `segment_count=1`，
   P1 多摄扩展时按 schema_version 评审（ADR-0005）。
 
-### P0-7b Rule Engine（风险语义层）【后续】
-- 任务：消费 `RiskFeature`，按 5 类规则（`DwellRule` / `RepeatVisitRule` / `OddHourRule` /
-  `PendingVerifyRule` / `HighRiskApproachRule`）+ `CooldownGate` 防刷，输出 §7.2 的
-  `PerceptionEvent`（含 `event_type` / `score` / `is_odd_hour` / `repeat_count` /
-  `evidence` 引用）。
-- 边界：Rule Engine **是** 业务判断层（前面所有层都"不判断"），它的职责是给 Feature 套阈值
-  生成 5 类标签 + score。
-- 验收：每条规则独立单测 + 端到端 CAVIAR 链路。
+### P0-7b Rule Engine（风险语义层）【✅ 已完成】
+- 任务：消费 `RiskFeature`（P0-7a），按 4 条基础 Rule + 1 条 CompositeRule 输出
+  `PerceptionEvent`（§7.2 5 类）+ `score`；`CooldownGate` 防重复触发；`ThresholdConfig` 配置化阈值。
+- 边界（见 ADR-0009 6 条决策）：
+  - Rule 消费 `RiskFeature`，**不**直接读 VisitorEvent
+  - Rule 输出 `PerceptionEvent`，**不**直接输出 WarningEvent（不跳级）
+  - `score` = 规则命中强度（0-1），**不是诈骗概率**
+  - CompositeRule 消费 `RuleResult[]` 组合（不复算 Feature）
+  - `CooldownGate` 防同 (visitor_id, rule_name) 短时重复触发（30fps 关键防御）
+  - 阈值与权重全部在 `ThresholdConfig` 配置化（不硬编码）
+- 5 条 Rule 状态（按 §7.2 5 类对齐）：
+  - `LongDurationRule` → `abnormal_dwell`（duration > 300s）✅
+  - `RepeatVisitRule` → `repeat_visit`（visits > 3）✅
+  - `OddHourRule` → `visit_normal` + `is_odd_hour=true` 叠加标记 ✅
+  - `PendingVerifyRule` → `visit_pending_verify` ⏸ **留接口不实现**（需 Whitelist 数据源，v2 接入）
+  - `HighRiskApproachRule`（Composite）→ `high_risk_approach`（长+重复+异常时间 组合）✅
+- 交付：
+  - `analysis/rule.py`：`Rule` 抽象基类 + `CompositeRule` 基类 + `RuleContext` + `RuleResult` 领域对象
+  - `analysis/perception.py`：`PerceptionEvent` 领域对象（§7.2 字段 + `event_type` 枚举校验 + `meta.rule` 必填）
+  - `analysis/cooldown.py`：`CooldownGate` 状态机（`INACTIVE` → `ACTIVE` → `COOLDOWN` → 循环 + `reset_gap` 重置）
+  - `analysis/rule_engine.py`：`ThresholdConfig` + `WhitelistProvider` protocol + 4 条基础 Rule + 1 条 CompositeRule + `RuleEngine` 编排器
+  - `tests/test_rule.py`：**40 个测试**（ThresholdConfig / RuleResult / 4 条基础 Rule 独立 / CompositeRule / CooldownGate 状态机 5 个转移 / PerceptionEvent 校验 / RuleEngine 编排含 Cooldown 抑制 / 契约边界 / CAVIAR 端到端）
+- 验收：`pytest` **132 全绿**（之前 92 + 40）；`ruff` 全绿；CAVIAR 端到端 `detector → tracker → event → feature → rule → perception` 全链路跑通。
 
 - **P0-8 取证采集（evidence）**：中/高风险存快照+短片段，敏感区遮挡后落盘/可选 COS。
 - **P0-9 事件上报（output）**：`MQTTPublisher` 按 `06_api_contract.md` 信封上报 + 离线环形缓冲。
