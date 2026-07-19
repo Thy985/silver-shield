@@ -45,7 +45,8 @@ def main() -> None:
         classes=det_cfg.classes,
         device=det_cfg.device,
         imgsz=det_cfg.imgsz,
-        enable_track=det_cfg.enable_track,
+        enable_track=det_cfg.tracking.enabled,
+        tracker=det_cfg.tracking.algorithm,
     )
     detector.load()
     print(f"[detect] model={detector.model_path} imgsz={detector.imgsz} "

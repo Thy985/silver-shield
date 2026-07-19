@@ -20,6 +20,12 @@
   yolo11n@640 推理 ~124ms 未达实时目标，故 MVP 默认 480（balanced），满足
   <100ms 且 >10FPS；640 作 accuracy 精度模式，416 作 realtime 低延迟模式
   （见 docs/09）。
+- **P0-5 起 `enable_track=True`（默认 bytetrack）**：`detect()` 内部调用 `model.track(persist=True)`，
+  `persist=True` 保证跟踪器在多次 `detect()` 调用间保持内部状态，相机循环里**复用同一
+  `YOLODetector` 实例**即可得一致的 `track_id`（见 `detection/tracker.py` 的 `VisitorTracker` /
+  `schemas.VisitorTrack`）。固定摄像头/单区域/CPU/停留分析场景下 bytetrack 足够（BoT-SORT 的 ReID
+  价值不在 MVP）。遮挡降级导致 ID 跳变属可接受范围。跨帧 `track_id` 一致性由
+  `tests/test_tracker.py`（含 `tests/fixtures/person.jpg` 真实链路）验证。
 - 输出 bbox 一律映射回**原始帧像素坐标**，方便上层（ROI/事件）直接使用。
 - 仅关注第一阶段类别（COCO id）：person(0) / backpack(24) / handbag(26) /
   cell phone(67)，**不扩展更多类别**，避免检测器膨胀为"万能 AI 检测器"。
@@ -27,6 +33,7 @@
 from __future__ import annotations
 
 import time
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -99,7 +106,7 @@ class YOLODetector(Detector):
         imgsz: Optional[int] = None,
         profile: "ImgszProfile | str | None" = None,
         enable_track: bool = False,
-        tracker: str = "botsort",
+        tracker: str = "bytetrack",
     ):
         self.model_path = model
         self.conf_threshold = conf_threshold
@@ -162,13 +169,21 @@ class YOLODetector(Detector):
 
         t0 = time.perf_counter()
         if self.enable_track:
+            tracker = self.tracker
+            # ultralytics 内置跟踪器需带 .yaml 后缀（botsort/bytetrack 等）；
+            # 若传入的是已知名（非路径、无后缀），自动补 .yaml，配置里写 "bytetrack" 即可。
+            if not tracker.endswith(".yaml") and not os.path.isabs(tracker) and "/" not in tracker:
+                tracker = f"{tracker}.yaml"
+            # persist=True 是 P0-5 的关键：保证跟踪器在多次 detect() 调用间保持内部状态，
+            # 跨帧 track_id 才稳定。因此 YOLODetector 实例必须在相机循环里复用，不得每帧重建。
             results = self._model.track(
                 resized,
                 conf=self.conf_threshold,
                 classes=self.classes,
                 imgsz=self.imgsz,
                 device=self.device,
-                tracker=self.tracker,
+                tracker=tracker,
+                persist=True,
                 verbose=False,
             )
         else:

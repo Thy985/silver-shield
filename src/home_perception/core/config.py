@@ -83,6 +83,17 @@ class ImgszProfile(str, Enum):
             return cls.BALANCED.imgsz
 
 
+class TrackingConfig(BaseModel):
+    """P0-5 跨帧跟踪配置（见 Owner 决策：固定摄像头/单区域/CPU/停留分析 → bytetrack 足够）。
+
+    - enabled：是否开启跨帧跟踪（回填 track_id）。关闭时 detector 走 predict、VisitorTrack 无 ID。
+    - algorithm：跟踪算法。MVP 用 bytetrack（轻量、无 ReID，契合固定单摄 CPU 部署）；
+      botsort 的 ReID 价值（人离开又回来/长遮挡/多摄）不在 MVP 范围。
+    """
+    enabled: bool = True
+    algorithm: str = "bytetrack"  # bytetrack | botsort
+
+
 class DetectionConfig(BaseModel):
     model: str = "yolo11n.pt"  # 第一阶段默认小模型：CPU 可跑、延迟低
     conf_threshold: float = 0.45
@@ -93,8 +104,9 @@ class DetectionConfig(BaseModel):
     # MVP 默认 480（balanced）满足 <100ms 且 >10FPS。详见 docs/09。
     imgsz: int = ImgszProfile.BALANCED.imgsz  # 480
     imgsz_profile: ImgszProfile = ImgszProfile.BALANCED  # accuracy=640 / balanced=480 / realtime=416
-    enable_track: bool = False  # P0-3 关闭；P0-5 逗留/重复识别时开启
-    tracker: str = "botsort"  # bytetrack | botsort（enable_track=True 时生效）
+    tracking: TrackingConfig = TrackingConfig()  # P0-5 跨帧跟踪（默认开启 bytetrack）
+    enable_track: bool = True  # 向后兼容：值优先取自 tracking.enabled
+    tracker: str = "bytetrack"  # 向后兼容：值优先取自 tracking.algorithm
 
 
 class AnalysisConfig(BaseModel):

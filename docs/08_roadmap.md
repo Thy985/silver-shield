@@ -50,12 +50,23 @@
 - 价值：答辩与"门前踩点识别"创新点落地的硬数据；为 P0-5 跟踪的帧一致性要求定基线。
 - 验收：可复现基准脚本；在目标硬件上产出上述指标报告。
 
-### P0-5 目标跟踪（Tracker → VisitorTrack）【后续】
-- 任务：开启 `enable_track=true`，用 ByteTrack / BoT-SORT（ultralytics 内置）跨帧关联，
-  回填 `track_id`；形成 `VisitorTrack`（同一个人跨帧稳定 ID）。
-- 为何现在才做：当前每帧 YOLO 独立，无法判断"是否为同一人"；门前踩点需要
-  `Person ID=001 @ 09:10 enter / 09:15 leave / 09:20 enter …` 的连续性。
-- 验收：同人跨帧 ID 一致；遮挡降级可接受；开销在 P0-4 基线内。
+### P0-5 目标跟踪（Tracker → VisitorTrack）【✅ 已完成】
+- 任务：开启跨帧跟踪，把 YOLO 的 frame-level `track_id` **封装成银龄盾自己的 `VisitorTrack` 领域对象**
+  （访客生命周期状态），而非仅调用 ByteTrack。
+- 方案（见 Owner 决策）：固定摄像头 / 单区域 / CPU / 停留分析 → **ByteTrack**（轻量、无 ReID，
+  BoT-SORT 的 ReID 价值不在 MVP）。`model.track(persist=True)` 保证 `YOLODetector` 实例在相机循环里
+  **复用**、跨帧 ID 稳定（不能每帧 new model）。
+- 交付：
+  - `detection/schemas.py`：`VisitorTrack` 领域对象（track_id / first_seen / last_seen / frame_count /
+    bbox / confidence / status∈{active,left}，含 to_log 供结构化日志）。**只代表当前摄像头会话内的同一人，
+    不引入跨天身份**（跨天重识别属 P0-6/P1）。
+  - `detection/tracker.py`：`VisitorTracker`（职责单一：仅维护在场/离场状态，不做风险/重复/陌生人判断）；
+    输入单帧 `Detection` 列表、输出活跃 `VisitorTrack`；离场判定用 `absence_gap_s` 兜底漏检闪烁。
+  - `config`：新增 `tracking.enabled` / `tracking.algorithm=bytetrack`（保留 `enable_track`/`tracker` 向后兼容）。
+- 验收：真实 `tests/fixtures/person.jpg` 链路验证 person 检出 + 跨帧 `track_id` 一致；纯单测覆盖
+  在场/离场/重访/多访客/无 ID 跳过/非法 gap。基准对比：**开启 ByteTrack 开销 ≈ 0ms（<10ms 目标）**，
+  ID 稳定性连续。
+- 注意：本沙箱 CPU 弱于 P0-4 目标硬件，绝对推理/FPS 数值受环境限制；趋势结论（480 实时 + 跟踪零开销）不变。
 
 ### P0-6 生成 VisitorEvent（事件层）【后续】
 - 任务：在 `DetectionResult` + `VisitorTrack` 之上生成第一个对银龄盾有意义的数据对象

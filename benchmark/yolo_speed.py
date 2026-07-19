@@ -377,12 +377,16 @@ def _build_detector(args: argparse.Namespace) -> YOLODetector:
     profile = None
     if getattr(args, "profile", None):
         profile = ImgszProfile(args.profile)
+    enable_track = bool(getattr(args, "track", False))
+    tracker = getattr(args, "tracker", "bytetrack") or "bytetrack"
     return YOLODetector(
         model=args.model,
         conf_threshold=args.conf,
         device=args.device,
         imgsz=args.imgsz,
         profile=profile,
+        enable_track=enable_track,
+        tracker=tracker,
     )
 
 
@@ -408,6 +412,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="推理分辨率预设：accuracy=640 / balanced=480 / realtime=416")
     ap.add_argument("--conf", type=float, default=0.45)
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--track", action="store_true",
+                    help="开启跨帧跟踪（P0-5）：enable_track=True，对比 Tracking 开销")
+    ap.add_argument("--tracker", default="bytetrack",
+                    choices=["bytetrack", "botsort"],
+                    help="跟踪算法（--track 时生效；MVP 默认 bytetrack）")
     ap.add_argument("--json", dest="json_out", default=None, help="将报告写入 JSON 文件")
     args = ap.parse_args(argv)
 
@@ -421,7 +430,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         frames = synthetic_frames(args.width, args.height, max_frames=args.max_frames)
 
     print(f"[benchmark] mode={mode} model={args.model} imgsz={eff_imgsz} "
-          f"device={args.device} duration={args.duration}s ...")
+          f"device={args.device} track={detector.enable_track}({detector.tracker}) "
+          f"duration={args.duration}s ...")
     report = run_benchmark(
         frames,
         detector,
