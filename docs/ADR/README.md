@@ -62,3 +62,5 @@
 | [0006](0006-yolo-trackid-wrapped-as-visitor-track.md) | YOLO track_id 封装为银龄盾自己的 VisitorTrack 领域对象（P0-5） | Accepted | 2026-07-19 |
 | [0007](0007-p0-6-facts-vs-p0-7-semantics.md) | P0-6 事实事件层 vs P0-7 风险语义层 —— 领域对象边界固化 | Accepted | 2026-07-19 |
 | [0008](0008-feature-extraction-architecture.md) | P0-7a Feature Extraction 体系：结构化数值信号层 | Accepted | 2026-07-19 |
+| [0009](0009-rule-engine-architecture.md) | P0-7b Rule Engine 架构：风险语义层与五类规则 | Accepted | 2026-07-19 |
+| [0010](0010-warning-event-decision-architecture.md) | P0-8 WarningEvent 决策架构：决策层与执行层分离 | Accepted | 2026-07-19 |
