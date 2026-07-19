@@ -159,7 +159,8 @@
   `is_scammer` / `verdict` / `crime_probability` / `final_decision` / `guilt_score` / `arrest_probability`
 - 交付：
   - `analysis/warning.py`：`WarningEvent` 领域对象（UUID warning_id + 3 类 risk_level +
-    3 类 recommended_action + 4 类 status + UTC 强制 + 黑名单校验 + `to_dict()` structlog-safe）
+    3 类 recommended_action + 5 类 status（CREATED→PENDING→CONFIRMED→RESOLVED/REJECTED，
+    描述决策生命周期而非执行结果）+ UTC 强制 + 黑名单校验 + `to_dict()` structlog-safe）
   - `analysis/decision_policy.py`：`DecisionContext` + `DecisionPolicy` 抽象基类 +
     `RuleBasedDecisionPolicy`（routing_table 查表 + max wins 聚合 + 定制支持）
   - `analysis/decision_engine.py`：`DecisionEngine` 编排器（注入 elder_id + policy + now_provider）
