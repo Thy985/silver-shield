@@ -68,11 +68,24 @@
   ID 稳定性连续。
 - 注意：本沙箱 CPU 弱于 P0-4 目标硬件，绝对推理/FPS 数值受环境限制；趋势结论（480 实时 + 跟踪零开销）不变。
 
-### P0-6 生成 VisitorEvent（事件层）【后续】
+### P0-6 生成 VisitorEvent（事实事件层）【✅ 已完成】
 - 任务：在 `DetectionResult` + `VisitorTrack` 之上生成第一个对银龄盾有意义的数据对象
-  `VisitorEvent`：`visitor_id / enter_time / leave_time / duration / source`。
-- 边界：仍只是"有人在门口停留 X 分钟"的事实，**不是诈骗结论**；风险标签由后续规则/引擎产生。
-- 验收：`VisitorEvent` 结构经契约测试；可被中心消费。
+  `VisitorEvent`：`event_id / visitor_id / enter_time / leave_time / duration_seconds / source_video / created_at`。
+- 边界（见 ADR-0007 · **事实事件层 vs 风险语义层**）：仍只是"有人在门口停留 X 秒"的事实，
+  **不包含** `event_type` / `score` / `risk_level` / `visit_type` / `is_suspicious` / `repeat_count`
+  / `is_odd_hour` / `evidence` 等任何业务判断字段 —— 那些是 P0-7 Rule Engine + P0-8 取证的事。
+- 触发时机：`VisitorTrack.status` 从 `active` 转 `left`（absence_gap 兜底）时，由
+  `VisitorEventBuilder` 生成；同一 track 离场后**重新进入 → 再离场**会生成第二个事件。
+- 交付：
+  - `analysis/event.py`：`VisitorEvent` 领域对象（UUID event_id + structlog-safe `to_dict` /
+    `to_json`，无 datetime 序列化问题）。
+  - `analysis/event_builder.py`：`VisitorEventBuilder` 包裹 `VisitorTracker`，监听
+    `active→left` 状态翻转，生成 `VisitorEvent`；含 `pending()` / `ack()` 供 P0-9 MQTT 失败重发。
+  - `tests/test_event.py`：6 个 `VisitorEvent` 字段/序列化/边界测试 + 7 个 `VisitorEventBuilder`
+    状态机测试（enter/leave/track interruption/revisit/multi-visitor/source/ack/reset）
+    + 1 个 CAVIAR `OneStopEnter1cor` 端到端真实链路。
+- 验收：`pytest` 51 全绿；`ruff` 全绿；CAVIAR 真实监控数据端到端跑通；
+  `test_no_business_judgment_fields` 守住 P0-7 边界（强制不含任何业务字段）。
 
 ### 后续横向能力（P0-7+，按原架构补全）
 > 下列为原 P0-4~P0-7 的横向交付，须叠加在感知深度链路上：
