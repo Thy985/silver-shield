@@ -207,9 +207,34 @@
 - 验收：`pytest` **256 全绿**（之前 197 + 59 新增）；`ruff` 全绿；CAVIAR 端到端
   `detector → tracker → event → feature → rule → perception → decision → action` 全链路跑通
 
-### P1-11 测试与可复现
-- 任务：补充契约/规则单测；提供 `docker compose up` 一键演示；消融实验数据收集脚本。
-- 验收：CI 绿；评委可本地复现核心闭环。
+### P0-Integration 系统级冻结前验收【✅ 已完成 · 2026-07-19】
+- 任务：在进入 P0-10 装配联调之前，把 P0-3~P0-9 模块串成完整链路做端到端验证，
+  避免 P0-10 装配时混淆"逻辑问题"和"装配问题"。
+- 触发：Owner P0-9 review 后明确"建议顺序：先做一次完整测试，再开 P0-10 装配联调"。
+- 6 个 Golden Scenarios（系统级 e2e，详见 `docs/test-report/P0-integration-validation.md`）：
+  1. **正常访客**（30s + 上午）→ 无 PerceptionEvent / 无 Warning / 无 Action（"看到人不报警"边界）
+  2. **异常停留**（600s）→ `abnormal_dwell` → LOW / NOTIFY_FAMILY / SEND_FAMILY_MESSAGE
+  3. **重复访问**（3 次 / 5 分钟间隔）→ `repeat_visit` → LOW / NOTIFY_FAMILY
+  4. **高风险组合**（长停留 + odd_hour + frequency=3）→ CompositeRule → HIGH / ESCALATE_COMMUNITY / CREATE_COMMUNITY_TASK
+  5. **误报抑制**（白名单命中）→ 不升级到 HIGH；publisher 调用 0 次
+  6. **重复消息**（同 warning_id execute 5 次）→ `publisher.publish_count == 1`（幂等）
+- 状态机完整验证：
+  - WarningEvent：CREATED → PENDING → CONFIRMED（happy）+ PENDING → REJECTED（failure）
+  - ActionCommand：PENDING → DONE / FAILED → RETRYING → DONE / FAILED → GIVEN_UP
+  - **双状态机独立 / 互不污染**（改 cmd.status 不影响 warning.status，反之亦然）
+- 故障注入：Publisher 失败 → Warning PENDING（不丢）+ retry → CONFIRMED / REJECTED
+- CAVIAR 真实场景回归：OneStopEnter1cor / OneLeaveShopReenter1cor / Meet_WalkTogether1
+  从 frame → ActionCommand 全链路跑通（无 exception + 无字段污染）
+- 验收：`pytest` **274 全绿**（256 + 18 新增集成测试）；`ruff` 全绿；详见
+  `docs/test-report/P0-integration-validation.md`；ADR-0012 决策固化
+- **准入条件**：✅ 全部满足，可进入 P0-10 装配联调阶段
+
+### P0-10 装配与联调（main/pipeline）【⏳ 下一步】
+- 任务：把 P0-3~P0-9 组件装配成 main.py / pipeline.py；接入 devices.yaml / .env；
+  实现启动 / 重启 / 优雅关闭；日志 / 指标 / 健康检查；Demo 录制。
+- 边界：P0-10 是**工程层问题**（"怎么启动系统"），**不**应再验证逻辑正确性
+  —— 逻辑已由 P0 Integration Validation 充分验证（`docs/test-report/P0-integration-validation.md`）。
+- 验收：main.py 跑通 → 跑 CAVIAR 三个场景 → 录 Demo 视频 → 评委可一键复现。
 
 ### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。
