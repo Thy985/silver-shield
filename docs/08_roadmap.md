@@ -281,7 +281,7 @@
 
 ### P0-10.5.3 Developer Experience / API Surface Documentation【✅ 已完成 · 2026-07-20】
 - 任务：项目进入「平台化阶段」后，补齐**开发者可用性（DX）文档层**，把「个人项目」提升到「团队可协作项目」，
-  直接降低 P0-11 三端 Demo（Dashboard / Agent / 设备）的接入复杂度。
+  直接降低 P0-11 三端观察窗口（Dashboard）及未来 Agent / 设备的接入复杂度。
 - 动因：最大风险不再是算法错误，而是新成员不知道稳定入口 / 可替换模块 / 禁止依赖，接外部系统时易绕过架构。
 - 交付（Owner 授权，建立 DX 文档层）：
   - `docs/API_REFERENCE.md`：**团队第一入口**。运行时入口（`PerceptionPipeline` / `run_demo`）、
@@ -295,25 +295,56 @@
   `CONTRACTS.md` = 什么不能改；`ARCHITECTURE.md` = 一张图总览。四者分工，互不复制。
 - 验收：`docs/API_REFERENCE.md` 所有路径 / 签名与代码一致（已对照 `src/home_perception/` 实际实现核对）；
   `ruff` / `pytest` 不受影响（纯文档 PR）。
-- 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
+- 后续：P0-11 产品层（API Gateway → 三端观察窗口（Dashboard））经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）仅实现 FrameSource / Protocol。
 
-### P0-10.5.4 仓库卫生清理（Repository Hygiene）【🚧 进行中 · 本任务】
+### P0-10.5.4 仓库卫生清理（Repository Hygiene）【✅ 已完成 · 2026-07-20】
 - 任务：RC 前最后整理，把"代码完成"提升为"仓库治理达标"。
-- 交付（PR #31，纯治理 0 行为变化）：
+- 交付（PR #31，纯治理 0 行为变化，3 commits 合入 origin/main 46f40ed）：
   - `.gitignore` 增加 `.workbuddy/`；解除 `.doc/` 与 `.workbuddy/` 的 Git 跟踪（本地文件保留）
   - 重写 `docs/03_directory_layout.md`（对齐收敛后结构，补齐 `rule.py` / `cooldown.py` 等）
   - `AGENTS.md` 新增 §6.4 仓库卫生纪律
   - 修正 `README.md` 过时状态 + 移除 CI 噪声残留；`docs/08_roadmap.md` 补齐 P0-10.5 链与 RC 里程碑
-  - **物理删除** `analysis/anomaly.py`（弃用死代码：同名 `CooldownGate` 原型，全仓 0 引用，已被 `cooldown.py` 取代；删除后 `ruff`/`pytest` 无回归）
-- 验收：仓库无 tracked 非源码文件；文档与代码一致；RC tag 可直接打。
+  - **物理删除** `analysis/anomaly.py`（弃用死代码：同名 `CooldownGate` 原型，全仓 0 引用，已被 `cooldown.py` 取代；删除后 `ruff`/`pytest` 无回归，exit 0）
+- 验收：仓库无 tracked 非源码文件；文档与代码一致；RC tag 已可打。
 
-### Release Candidate Tag（v0.1.0-mvp-rc）【⏳ 待 P0-10.5.4 合入后由 Owner 执行】
-- 触发：Freeze Gate 7/7 + 仓库卫生达标。
+### Release Candidate Tag（v0.1.0-mvp-rc）【✅ 已完成 · 2026-07-20】
+- 触发：Freeze Gate 7/7 + 仓库卫生达标（PR #31 合入）。
 - 含义：「Silver Shield MVP 的架构、接口、测试、文档、仓库治理均达到 Release Candidate 状态」——
   不是"代码完成"，而是"可协作、可接入、可评审"。
-- 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
+- 后续：P0-11 产品层（API Gateway → 三端观察窗口（Dashboard））经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）。
+
+### P0-11 三端风险闭环展示层（MVP Demo）【📋 设计中 · ADR-0015 v3 · 三审 7 项建议已修订】
+- 任务：把 v0.1.0-mvp-rc 冻结架构的价值**对外可验证**——定位是「翻译能力」而非「再造能力」：
+  把已冻结的 AI 链路翻译成一次可信的**风险发现 → 解释 → 干预 → 闭环**故事
+  （老人门口 → AI 感知 → 异常访问 → 风险解释 → 家属/社区干预 → 人工确认闭环）。
+- 原则（Owner 定调）：**不要让 Demo 反过来污染系统。Demo 是消费者，不是架构参与者。**
+  很多比赛项目走反路（先做页面→数据不够→硬改模型→架构崩）；本项目路线是
+  事实层→事件层→特征层→规则层→决策层→行动层→冻结→展示层，接近真实工业研发流程。
+  **HTML 可视化 ≠ 产品前端系统**——P0-11 是给冻结 AI 链路增加一个「观察窗口」，非完整前端应用。
+- 收敛结论（v3，基于 Owner 二审决策）：
+  - **三端逻辑拆分，渲染为单页 HTML 观察窗口**：AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）；摄像头端不独立成页。
+  - **展示层 = 单页 HTML + Vanilla JS（不用 Vue/Vite）**：FastAPI `StaticFiles` 托管 `silver_demo/dashboard/`；零前端构建；未来 RTSP/EZVIZ/MQTT/Agent 接入时 Dashboard 零重写。
+  - **帧传输 = base64 JPEG over WebSocket**（稳定性 > 性能；单摄像头/单浏览器/CAVIAR）。
+  - **依赖 = `pyproject` optional extra `[demo]`**（核心 `home_perception` 零 Web 依赖）。
+  - 技术压缩第一版：仅 `DemoStateStore`（进程内 dict），**不做** Vue/复杂前端 / 多用户连接管理 / 权限 / 登录 / 数据库 / 历史查询 / 真反馈系统 / 完整状态同步 / Monitor 独立页 / LLM 解释 / Agent / 真实 App。
+  - 核心交付物是 **5 分钟风险闭环故事**，不是页面/框架数量。
+  - **新增 Demo 数据真实性声明**（ADR §2.8）：CAVIAR fixture 为确定性输入，不代表真实部署性能、不证明模型泛化；Demo 仅验证闭环与契约消费。
+- 设计文档：`docs/ADR/0015-p0-11-demo-architecture.md`（v3：目标「三端风险闭环展示层」+ HTML 观察窗口提前 + 数据真实性声明）。
+- 消费边界：仅 `PerceptionPipeline` / `FrameResult` / `WarningEvent` / `ActionCommand`（白名单见 ADR §2.1），零改 `home_perception`。
+- 场景（Owner 拍板）：主选 `OneLeaveShopReenter1cor`（重复访问易解释）；辅选 `OneStopEnter1cor`（长停留）；
+  最终剧本 = `OneLeaveShopReenter1cor` + 夜间 `DemoClock` + 阈值调低 → 组合触发 `HighRiskApproachRule` → `HIGH_RISK_APPROACH`。
+- 冻结合规：`tests/demo/test_freeze_boundary.py`（importlib 攻击性契约测试）证明展示层不穿透 7 层内部。
+- 分阶段（每阶段独立 PR，均不修改 home_perception；Dashboard 提前至 P0-11.2）：
+  | 阶段 | 目标 | 验收 |
+  | --- | --- | --- |
+  | **P0-11.1** | FastAPI Gateway + `CaviarFrameSource` 驱动 `process_frame` + WebSocket 广播（JSON + base64 JPEG） | WS 推送 `FrameResult` 流 + 视频帧可达 |
+  | **P0-11.2** | **HTML Dashboard MVP** ⭐（区域1 视频 + 区域2 时间线 + 区域5 架构图） | 单页即见实时视频 + 感知时间线；快速验证冻结架构可作产品接口 |
+  | **P0-11.3** | 风险解释卡片（区域3 消费 `WarningEvent`）+ 行动区骨架（区域4 消费 `ActionCommand`） | 风险等级 + 人话原因（无"诈骗概率"）+ 家属/社区任务卡 |
+  | **P0-11.4** | 家属/社区交互模拟：按钮写入 `DemoStateStore` + 闭环状态广播 | 点击后三端状态翻转（已处理/已核验/已闭环） |
+  | **P0-11.5** | 5 分钟演示脚本 + demo README（含数据真实性声明）+ `night_visit` 阈值调优触发 HIGH | 单故事讲完：23:30 陌生人→停留→重复→HIGH→三端联动→闭环 |
+  - **到此停止**，不做 P0-11.6+（Agent/LLM解释/真实App/数据库/用户体系归 P1/P2；见 ADR §6 明确不做）。
 
 ### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。
