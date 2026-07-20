@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from home_perception.action.dispatcher import ActionDispatcher, DispatcherConfig
 from home_perception.action.executor import ActionExecutor
 from home_perception.action.notifier import MockNotifier, NotificationAdapter
@@ -23,6 +25,7 @@ from home_perception.detection.detector import Detector, YOLODetector
 from home_perception.detection.tracker import VisitorTracker
 from home_perception.evidence.clip_collector import EvidenceCollector
 from home_perception.evidence.storage import EvidenceStorage
+from home_perception.ingestion.frame_source import CaviarFrameSource, FrameSource
 from home_perception.runtime.pipeline import (
     NowProvider,
     PerceptionPipeline,
@@ -130,3 +133,17 @@ def test_perception_pipeline_entry_from_settings():
         ],
     )
     _assert_method(PerceptionPipeline, "run", ["frames", "scenario"])
+
+
+def test_frame_source_is_abstract_contract():
+    """Freeze Gate（ADR-0014 Level 3）：FrameSource 为抽象接口，具体源实现之。
+
+    Pipeline 仅依赖本抽象；CAVIAR / RTSP / EZVIZ 各实现同一契约（P0-12）。
+    """
+    assert inspect.isabstract(FrameSource), "FrameSource 必须是抽象接口（ABC）"
+    assert hasattr(FrameSource, "__iter__"), "FrameSource 必须声明 __iter__ 抽象方法"
+    # 具体实现存在且实现抽象接口
+    assert issubclass(CaviarFrameSource, FrameSource)
+    # 抽象接口不可直接实例化
+    with pytest.raises(TypeError):
+        FrameSource()
