@@ -1,0 +1,194 @@
+"""Schema Contract（ADR-0014 Level 1）— 锁定 5 类核心消息对象的契约。
+
+只测"系统承诺"，不测实现。测试须对当前代码全绿（CI 不破）。
+
+这些测试构成冻结前置清理（P0-10.5.2）的安全网：
+- 收敛 PerceptionEvent 双定义后，本文件断言的"权威定义"不变；
+- 删除 legacy ``analysis/rules.py`` + ``core/pipeline.py`` 后，drift 检测测试须同步更新。
+"""
+from __future__ import annotations
+
+import dataclasses
+import importlib
+from uuid import uuid4
+
+import pytest
+
+from home_perception.analysis.event import VisitorEvent
+from home_perception.analysis.perception import EVENT_TYPES, PerceptionEvent
+from home_perception.analysis.warning import (
+    RECOMMENDED_ACTIONS,
+    RISK_LEVELS,
+    WARNING_STATUSES,
+    WarningEvent,
+)
+from home_perception.action.command import COMMAND_STATUSES, COMMAND_TYPES, ActionCommand
+
+# 模块边界铁律（ADR-0001/0007/0010/0011）：任何消息对象不得携带"最终判定"字段
+FORBIDDEN_FIELDS = frozenset(
+    {
+        "fraud_result",
+        "fraud_probability",
+        "is_fraud",
+        "is_scammer",
+        "is_criminal",
+        "verdict",
+        "final_decision",
+        "crime_probability",
+        "guilt_score",
+        "arrest_probability",
+        "deception_score",
+    }
+)
+
+
+def test_forbidden_fields_not_in_any_schema():
+    """5 类消息对象的 dataclass 字段集中不得出现任何"最终判定"字段。"""
+    for cls in (VisitorEvent, PerceptionEvent, WarningEvent, ActionCommand):
+        field_names = {f.name for f in dataclasses.fields(cls)}
+        leaked = FORBIDDEN_FIELDS & field_names
+        assert not leaked, f"{cls.__name__} 含禁止字段 {leaked}"
+
+
+def test_event_type_enum_frozen():
+    """EventType 5 类严格冻结，且不得出现任何"诈骗/犯罪"语义标签。"""
+    assert set(EVENT_TYPES) == {
+        "visit_normal",
+        "visit_pending_verify",
+        "abnormal_dwell",
+        "repeat_visit",
+        "high_risk_approach",
+    }
+    for name in EVENT_TYPES:
+        assert "fraud" not in name and "scam" not in name and "crime" not in name
+
+
+def test_visitor_event_required_fields():
+    """VisitorEvent（事实事件层）必含字段。"""
+    f = {x.name for x in dataclasses.fields(VisitorEvent)}
+    for required in (
+        "visitor_id",
+        "enter_time",
+        "leave_time",
+        "duration_seconds",
+        "source_video",
+        "event_id",
+        "created_at",
+    ):
+        assert required in f
+
+
+def test_perception_event_required_fields():
+    """PerceptionEvent（权威定义 = analysis/perception.py）必含字段，且含 visitor_id /
+    source_video / created_at（区别于 core/event.py 旧定义，见 ADR-0014 前置 #1）。"""
+    f = {x.name for x in dataclasses.fields(PerceptionEvent)}
+    for required in (
+        "device_id",
+        "event_type",
+        "score",
+        "visitor_id",
+        "source_video",
+        "timestamp",
+        "meta",
+        "created_at",
+    ):
+        assert required in f
+    assert {"visitor_id", "source_video", "created_at"} <= f
+
+
+def test_perception_event_rejects_forbidden_meta():
+    """WarningEvent / ActionCommand 主动拒绝 meta / payload 中的判定字段（防御性）；
+    PerceptionEvent 的契约由 test_forbidden_fields_not_in_any_schema 覆盖（字段集本身不含）。"""
+    with pytest.raises(ValueError):
+        WarningEvent(
+            elder_id="e1",
+            device_id="d1",
+            risk_level="LOW",
+            recommended_action="MONITOR",
+            trigger_events=[{"event_type": "visit_normal", "score": 0.1, "timestamp": 1.0}],
+            reason_summary=["x"],
+            meta={"fraud_result": "no"},
+        )
+    with pytest.raises(ValueError):
+        ActionCommand(
+            command_type="LOG_ONLY",
+            warning_id=uuid4(),
+            payload={"fraud_probability": 0.9},
+        )
+
+
+def test_warning_event_enums():
+    """WarningEvent 枚举冻结。"""
+    assert set(RISK_LEVELS) == {"LOW", "MEDIUM", "HIGH"}
+    assert set(RECOMMENDED_ACTIONS) == {"MONITOR", "NOTIFY_FAMILY", "ESCALATE_COMMUNITY"}
+    assert set(WARNING_STATUSES) == {
+        "CREATED",
+        "PENDING",
+        "CONFIRMED",
+        "RESOLVED",
+        "REJECTED",
+    }
+
+
+def test_action_command_enums():
+    """ActionCommand 枚举冻结。"""
+    assert set(COMMAND_TYPES) == {
+        "LOG_ONLY",
+        "SEND_FAMILY_MESSAGE",
+        "CREATE_COMMUNITY_TASK",
+    }
+    assert set(COMMAND_STATUSES) == {
+        "PENDING",
+        "DONE",
+        "FAILED",
+        "RETRYING",
+        "GIVEN_UP",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Drift 检测：暴露真实依赖图（P0-10.5.2 收敛目标）
+# 这些测试现在通过并"文档化"当前漂移；收敛后它们会失败 → 提示安全网触发。
+# ---------------------------------------------------------------------------
+
+
+def test_authoritative_perception_event_wired_in_engine():
+    """RuleEngine / DecisionPolicy 必须引用权威 analysis.perception.PerceptionEvent，
+    而非 core/event.py 旧定义。收敛双定义后的安全网。"""
+    import home_perception.analysis.decision_policy as dp_mod
+    import home_perception.analysis.rule_engine as re_mod
+
+    assert re_mod.PerceptionEvent is PerceptionEvent
+    assert dp_mod.PerceptionEvent is PerceptionEvent
+
+
+def test_stale_perception_event_import_locations():
+    """文档化：以下模块当前仍绑定 core/event.py 旧 PerceptionEvent。
+    它们是 P0-10.5.2 收敛时要切换的对象。收敛后本测试会失败 → 同步更新安全网。"""
+    from home_perception.core import event as core_event
+
+    for modname in (
+        "home_perception.output.publisher",
+        "home_perception.output.schemas",
+        "home_perception.evidence.clip_collector",
+        "home_perception.core.pipeline",
+    ):
+        mod = importlib.import_module(modname)
+        assert getattr(mod, "PerceptionEvent", None) is core_event.PerceptionEvent, (
+            f"{modname} 应仍引用 core/event.py 旧 PerceptionEvent（drift 文档化）；"
+            f"若已收敛请同步更新本测试"
+        )
+
+
+def test_legacy_rules_only_bound_to_stale_core_pipeline():
+    """文档化：legacy analysis/rules.py 的 Rule 当前仅被 dead 的 core/pipeline 引用；
+    活跃 RuleEngine 使用 analysis/rule.py 的 Rule（具体子类定义在 rule_engine.py，
+    但基类是 analysis.rule.Rule）。删除 legacy 时本测试会失败 → 提示清理。"""
+    import home_perception.analysis.rule_engine as re_mod
+    from home_perception.analysis.rule import Rule as CurrentRule
+    from home_perception.core import pipeline as cp
+
+    assert cp.Rule.__module__ == "home_perception.analysis.rules"
+    eng = re_mod.RuleEngine(device_id="x")
+    for r in eng._basic_rules:
+        assert isinstance(r, CurrentRule)

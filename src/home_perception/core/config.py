@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from enum import Enum
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
@@ -53,6 +54,15 @@ class IngestionConfig(BaseModel):
     channel_no: int = 1
     reconnect: ReconnectConfig = ReconnectConfig()
     fps_target: int = 8
+
+    # 枚举约束（用户建议 · ADR-0014 前置 #5 扩展）：protocol 即"帧源传输类型"，
+    # 未知 source 不应静默接受（P0-12 接入 RTSPSource/EZVIZSource 时在此扩展白名单）。
+    @field_validator("protocol")
+    @classmethod
+    def _known_protocol(cls, v: str) -> str:
+        if v not in ("rtsp", "hls"):
+            raise ValueError(f"ingestion.protocol 必须是 rtsp 或 hls，收到 {v!r}")
+        return v
 
 
 class ImgszProfile(str, Enum):
@@ -99,6 +109,16 @@ class TrackingConfig(BaseModel):
     enabled: bool = True
     algorithm: str = "bytetrack"  # bytetrack | botsort
     absence_gap_s: float = 5.0  # 离场判定宽限（容忍漏检闪烁）
+
+    @field_validator("absence_gap_s")
+    @classmethod
+    def _absence_gap_positive(cls, v: float) -> float:
+        # 配置攻击防护（ADR-0014 前置 #5）：负值 / NaN 必须明确报错，不得静默运行
+        if isinstance(v, float) and math.isnan(v):
+            raise ValueError("absence_gap_s 不能是 NaN")
+        if v <= 0:
+            raise ValueError(f"absence_gap_s 必须 > 0，收到 {v!r}")
+        return v
 
 
 class DetectionConfig(BaseModel):
@@ -178,6 +198,41 @@ class RuleConfig(BaseModel):
             "HighRiskApproachRule": 0.90,
         }
     )
+
+    # 配置攻击防护（ADR-0014 前置 #5）：阈值 / 计数必须 > 0 且非 NaN，
+    # 否则规则层会静默流入负时长 / 负窗口，污染下游 Feature / Rule / ML。
+    @field_validator(
+        "long_duration_seconds",
+        "cooldown_seconds",
+        "reset_gap_seconds",
+        "frequency_window_s",
+    )
+    @classmethod
+    def _positive_float_threshold(cls, v: float) -> float:
+        if isinstance(v, float) and math.isnan(v):
+            raise ValueError(f"阈值配置不能是 NaN，收到 {v!r}")
+        if v <= 0:
+            raise ValueError(f"阈值配置必须 > 0，收到 {v!r}")
+        return v
+
+    @field_validator("repeat_visit_count")
+    @classmethod
+    def _positive_int_count(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"repeat_visit_count 必须 > 0，收到 {v!r}")
+        return v
+
+    # 范围约束（用户建议 · ADR-0014 前置 #5 扩展）：权重即"规则命中强度占比"，
+    # 语义上必须在 [0, 1]；越界（如 2.5）或 NaN 必须明确报错，不得静默流入规则层。
+    @field_validator("rule_weights")
+    @classmethod
+    def _weights_in_unit_range(cls, v: "Dict[str, float]") -> "Dict[str, float]":
+        for name, w in v.items():
+            if isinstance(w, float) and math.isnan(w):
+                raise ValueError(f"rule_weights[{name!r}] 不能是 NaN，收到 {w!r}")
+            if not (0.0 <= w <= 1.0):
+                raise ValueError(f"rule_weights[{name!r}] 必须在 [0, 1]，收到 {w!r}")
+        return v
 
     def to_threshold_config(self) -> "ThresholdConfig":
         """转换为 RuleEngine 内部阈值配置（懒导入，避免 core→analysis 加载期耦合）。"""
