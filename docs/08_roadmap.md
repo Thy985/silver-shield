@@ -298,22 +298,44 @@
 - 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）仅实现 FrameSource / Protocol。
 
-### P0-10.5.4 仓库卫生清理（Repository Hygiene）【🚧 进行中 · 本任务】
+### P0-10.5.4 仓库卫生清理（Repository Hygiene）【✅ 已完成 · 2026-07-20】
 - 任务：RC 前最后整理，把"代码完成"提升为"仓库治理达标"。
-- 交付（PR #31，纯治理 0 行为变化）：
+- 交付（PR #31，纯治理 0 行为变化，3 commits 合入 origin/main 46f40ed）：
   - `.gitignore` 增加 `.workbuddy/`；解除 `.doc/` 与 `.workbuddy/` 的 Git 跟踪（本地文件保留）
   - 重写 `docs/03_directory_layout.md`（对齐收敛后结构，补齐 `rule.py` / `cooldown.py` 等）
   - `AGENTS.md` 新增 §6.4 仓库卫生纪律
   - 修正 `README.md` 过时状态 + 移除 CI 噪声残留；`docs/08_roadmap.md` 补齐 P0-10.5 链与 RC 里程碑
-  - **物理删除** `analysis/anomaly.py`（弃用死代码：同名 `CooldownGate` 原型，全仓 0 引用，已被 `cooldown.py` 取代；删除后 `ruff`/`pytest` 无回归）
-- 验收：仓库无 tracked 非源码文件；文档与代码一致；RC tag 可直接打。
+  - **物理删除** `analysis/anomaly.py`（弃用死代码：同名 `CooldownGate` 原型，全仓 0 引用，已被 `cooldown.py` 取代；删除后 `ruff`/`pytest` 无回归，exit 0）
+- 验收：仓库无 tracked 非源码文件；文档与代码一致；RC tag 已可打。
 
-### Release Candidate Tag（v0.1.0-mvp-rc）【⏳ 待 P0-10.5.4 合入后由 Owner 执行】
-- 触发：Freeze Gate 7/7 + 仓库卫生达标。
+### Release Candidate Tag（v0.1.0-mvp-rc）【✅ 已完成 · 2026-07-20】
+- 触发：Freeze Gate 7/7 + 仓库卫生达标（PR #31 合入）。
 - 含义：「Silver Shield MVP 的架构、接口、测试、文档、仓库治理均达到 Release Candidate 状态」——
   不是"代码完成"，而是"可协作、可接入、可评审"。
-- 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
+- 后续：P0-11 产品层（API Gateway → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）。
+
+### P0-11 三端风险闭环展示层（MVP Demo）【📋 设计中 · ADR-0015 v2 收敛版待评审】
+- 任务：把 v0.1.0-mvp-rc 冻结架构的价值**对外可验证**——不是再做几个页面，而是证明一次完整的风险闭环故事成立
+  （老人门口 → AI 感知 → 异常访问 → 风险解释 → 家属/社区干预 → 人工确认闭环）。
+- 原则（Owner 初审定调）：**不要让 Demo 反过来污染系统。Demo 是消费者，不是架构参与者。**
+  很多比赛项目走反路（先做页面→数据不够→硬改模型→架构崩）；本项目路线是
+  事实层→事件层→特征层→规则层→决策层→行动层→冻结→展示层，接近真实工业研发流程。
+- 收敛结论（v2，基于 Owner 初审）：
+  - **三端**，非四端：AI 风险中心（核心，含视频左屏大屏）+ 家属端 + 社区端；摄像头端不独立成页（视频并入 AI 中心）。
+  - 技术压缩第一版：仅 `DemoStateStore`（进程内 dict），**不做**多用户连接管理 / 权限 / 登录 / 数据库 / 历史查询 / 真反馈系统 / 完整状态同步 / Monitor 独立页。
+  - 核心交付物是 **5 分钟风险闭环故事**，不是页面数量。
+- 设计文档：`docs/ADR/0015-p0-11-demo-architecture.md`（v2 收敛版，目标从「四端产品展示层」改为「三端风险闭环展示层」）。
+- 消费边界：仅 `PerceptionPipeline` / `FrameResult` / `WarningEvent` / `ActionCommand`（白名单见 ADR §2.1），零改 `home_perception`。
+- 冻结合规：`tests/demo/test_freeze_boundary.py`（importlib 攻击性契约测试）证明展示层不穿透 7 层内部。
+- 分阶段（每阶段独立 PR，均不修改 home_perception）：
+  | 阶段 | 目标 | 验收 |
+  | --- | --- | --- |
+  | **P0-11.1** | Gateway + WebSocket + AI 风险中心（视频左屏 + 实时事件 + 风险解释） | 中心实时出现 `WarningEvent` 流；左屏显示帧 + 检测数 + 人话原因 |
+  | **P0-11.2** | 家属端（消费 `SEND_FAMILY_MESSAGE`）+ `[认识][通知社区]` 写入 `DemoStateStore` | 推送文案 + 按钮；点击后状态翻转广播"已处理" |
+  | **P0-11.3** | 社区端（消费 `CREATE_COMMUNITY_TASK`）+ `[接受][完成]`；三端闭环状态可见 | 任务卡 + 按钮；完成后三端显示"已核验 / 已闭环" |
+  | **P0-11.4** | 5 分钟故事脚本 + demo README + 串联三端状态 | 单故事讲完：23:30 陌生人→停留→重复→HIGH→三端联动→闭环 |
+  - **到此停止**，不做 P0-11.5+（多端同步/历史/登录等；见 ADR §6 明确不做）。
 
 ### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。
