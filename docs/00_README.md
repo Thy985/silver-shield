@@ -10,6 +10,10 @@
 | --- | --- | --- |
 | AGENTS | [`../AGENTS.md`](../AGENTS.md) | **AI 协作开发强制规范（顶层）** —— 所有 PR 须满足；Git 约定见其 §5 |
 | 00 | `00_README.md` | 本索引 |
+| API | `API_REFERENCE.md` | **团队第一入口**：稳定公共 API 表面（入口 / 可替换接口 / 禁止依赖） |
+| CONTRACT | `CONTRACTS.md` | 冻结契约（三级冻结 + Freeze Gate + 黑名单字段） |
+| ARCH | `ARCHITECTURE.md` | 系统架构总览（数据流图 + 分层映射 + 红线摘要） |
+| CONTRIB | `CONTRIBUTING.md` | 贡献指南（分支 / 提交 / 测试 / 冻结纪律） |
 | 01 | `01_module_positioning.md` | 模块在系统中的定位、边界、上下游 |
 | 02 | `02_architecture.md` | 模块内部架构、数据流、与三层引擎的关系 |
 | 03 | `03_directory_layout.md` | 目录树与每个目录的职责 |

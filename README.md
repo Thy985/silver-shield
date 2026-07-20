@@ -12,6 +12,36 @@
 - 🚧 P0-4：视频流稳定化 + FPS 基准（`benchmark/yolo_speed.py`，见下）
 - 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
 
+## 架构总览（团队入口）
+
+```
+External Device / Video
+        │
+   [稳定]     FrameSource (ABC)
+        │  (timestamp, frame)
+   [可替换]   YOLODetector (Detector)
+        │  DetectionResult
+   [可替换]   VisitorTracker
+        │  List[VisitorTrack]
+   [稳定]     VisitorEventBuilder
+        │  VisitorEvent
+   [可替换]   FeatureExtractor
+        │  RiskFeature
+   [可替换]   RuleEngine (4 Rule + 1 Composite + Cooldown)
+        │  PerceptionEvent (5 类标签 + score)
+   [可替换]   DecisionEngine + DecisionPolicy
+        │  WarningEvent (risk_level + recommended_action)
+   [可替换]   ActionExecutor + ActionDispatcher
+        │  ActionCommand
+   [稳定]     MQTTPublisher / NotificationAdapter (Protocol)
+        │
+   MQTT / App / Community
+```
+
+图例：**\[稳定\]** = 接口 / 装配入口（签名冻结）；**\[可替换\]** = 换实现不改契约；**\[禁止\]** = 红线（跨层跳级 / 最终判定 / 绕过 Pipeline）。
+
+> **团队第一入口**：接 Dashboard / 新设备 / AI Agent 前，先读 [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)（公共 API 表面）与 [`docs/CONTRACTS.md`](docs/CONTRACTS.md)（冻结契约，什么不能改）。
+
 ## 快速开始
 
 ```bash
@@ -35,6 +65,7 @@ python scripts/run.py
 - 代码：`src/home_perception/`
 - AI 协作规范：`AGENTS.md`（所有 PR 须满足）
 - 设计文档：`docs/`（见 `docs/00_README.md` 索引）
+- **团队第一入口（API 表面 / 冻结契约）**：`docs/API_REFERENCE.md` · `docs/CONTRACTS.md` · `docs/ARCHITECTURE.md` · `docs/CONTRIBUTING.md`
 - 阶段任务与风险：`docs/08_roadmap.md`、`docs/09_risks.md`
 
 > ⚠️ `prototypes/` 下为早期验证脚本，含真实凭证，**已被 gitignore，切勿提交**。
