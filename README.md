@@ -5,11 +5,12 @@
 基于萤石（EZVIZ）摄像头视频流，对家庭入口区域做实时感知，生成结构化异常事件并采集风险证据，
 上报至 SilverShield 中心风控引擎，支撑家庭数字孪生与协同预警。
 
-## 当前状态
+## 当前状态（MVP 接近 Release Candidate）
 
-- ✅ 已验证：萤石摄像头接入、直播流获取、OpenCV 读取视频
-- ✅ P0-3：YOLO 检测闭环（萤石流 → OpenCV → 640 resize → YOLO11n → `DetectionResult`）
-- 🚧 P0-4：视频流稳定化 + FPS 基准（`benchmark/yolo_speed.py`，见下）
+- ✅ P0-3~P0-10：检测 → 跟踪 → 事件 → 特征 → 规则 → 决策 → 行动 → 装配 全链路完成（289 测试全绿）
+- ✅ P0-10.5 架构冻结治理（ADR-0014 三级冻结 + 契约测试 + 收敛清理），架构漂移清零
+- ✅ P0-10.5.3 Developer API Surface 文档层（DX）已建立（见下方「团队第一入口」）
+- 🚧 P0-10.5.4 仓库卫生清理（本文档所在 PR）+ Release Candidate tag 评审中
 - 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
 
 ## 架构总览（团队入口）
@@ -170,5 +171,3 @@ imgsz_profile: balanced   # accuracy(640) / balanced(480) / realtime(416)
 ```
 
 > GPU 不是当前阻塞点：现阶段最缺的是"从检测结果生成连续事件"（P0-5/6），而非 YOLO 精度。故不为 640 引入 GPU。配合 `fps_target=8` 抽帧，链路可稳定实时。
-# review v2 test
-# v5

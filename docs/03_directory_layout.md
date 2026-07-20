@@ -47,11 +47,13 @@ home_perception/
 │   ├── feature.py       #   RiskFeature 数值特征
 │   ├── feature_extractor.py # FeatureExtractor：VisitorEvent → RiskFeature
 │   ├── perception.py    #   PerceptionEvent（规则发现的异常感知事件，唯一权威）
-│   ├── rule_engine.py   #   RuleEngine：RiskFeature → PerceptionEvent（5 类 + 1 复合 + CooldownGate）
+│   ├── rule.py          #   Rule 抽象基类 + CompositeRule + RuleResult/RuleContext（可组合规则）
+│   ├── cooldown.py      #   CooldownGate 状态机（防同 visitor+rule 短时重复触发，被 rule_engine 使用）
+│   ├── rule_engine.py   #   RuleEngine：编排 4 基础 Rule + 1 复合 + CooldownGate
 │   ├── warning.py       #   WarningEvent（决策层状态机）
 │   ├── decision_engine.py   # DecisionEngine：PerceptionEvent → WarningEvent
 │   ├── decision_policy.py   # DecisionPolicy（可替换决策策略）
-│   └── anomaly.py       #   CooldownGate 等聚合/冷却工具
+│   └── anomaly.py       #   ⚠️ 弃用遗留：同名 CooldownGate 原型，全仓 0 引用，已被 cooldown.py 取代（待删）
 ├── evidence/            # 风险证据采集（副作用）
 │   ├── clip_collector.py #  触发式快照/片段采集
 │   └── storage.py       #  本地/COS 存储

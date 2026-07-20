@@ -255,7 +255,31 @@
   2. `DemoClock not callable` → 加 `__call__()` 兼容 now_provider() 约定
   3. 测试断言 long_duration_seconds == 300.0 → 更新为 1.5（匹配 Demo YAML）
 
-### P0-10.5.3 Developer Experience / API Surface Documentation【下一步 · 本任务】
+### P0-10.5 架构冻结治理（ADR-0014 三级冻结）【✅ 已完成 · 2026-07-20】
+- 任务：项目进入「平台化阶段」前，把"稳定契约"从口头约定升级为**可执行的三级冻结 + 冻结前置 + Freeze Gate**，防止展示开发期架构腐化。
+- 交付（`docs/ADR/0014-freeze-governance-three-levels.md`，PR #26）：
+  - Frozen L1（Schema）：VisitorEvent/PerceptionEvent/WarningEvent/ActionCommand/Envelope 字段名/类型/语义/时间格式/枚举冻结
+  - Frozen L2（Interface）：Detector 等 ABC/Protocol 签名 + 异常语义冻结，实现可替换
+  - Frozen L3（Runtime Assembly）：`PerceptionPipeline.from_settings()` 入口 + Source→Pipeline→Consumer 三段解耦
+  - 5 项冻结前置（双定义/缺失接口/无校验等，由 P0-10.5.2 清零）+ Freeze Gate 7 项验收清单（RC 门禁）
+- 验收：ADR 落地；后续收敛 / 契约测试 / DX 文档均以此为准。
+
+### P0-10.5.1 契约测试（Contract Test）+ 配置校验【✅ 已完成 · 2026-07-20】
+- 任务：建立攻击性 Contract Test 骨架，暴露真实依赖图，并把配置校验前置落地。
+- 交付（PR #27）：
+  - `tests/contract/` 5 文件（schema / interface / state-machine / input-attack / config），77 例
+  - `core/config.py` 增强 pydantic 校验（类型 / 范围 / 枚举 + bool 防护 mode="before"）
+- 验收：Contract Test 跑绿；成功暴露双定义依赖图（收敛后改写为 Freeze Gate 不变量）。
+
+### P0-10.5.2 架构收敛清理（Convergence）【✅ 已完成 · 2026-07-20】
+- 任务：清零 ADR-0014 五项冻结前置，消除架构漂移。
+- 交付（PR #29）：
+  - `core/event.py` 删除旧 `PerceptionEvent`（唯一权威收敛到 `analysis/perception.py`）
+  - 删除 `analysis/rules.py`（legacy，硬耦合旧 PerceptionEvent）+ `core/pipeline.py`（死代码，0 引用）
+  - `ingestion/frame_source.py` 抽出 `FrameSource(ABC)`，原 OpenCV 实现重命名 `CaviarFrameSource`
+- 验收：Freeze Gate 7/7 达成（无重复领域对象 / 无 legacy import / ABC 唯一 / config 校验 / ruff / integration）。
+
+### P0-10.5.3 Developer Experience / API Surface Documentation【✅ 已完成 · 2026-07-20】
 - 任务：项目进入「平台化阶段」后，补齐**开发者可用性（DX）文档层**，把「个人项目」提升到「团队可协作项目」，
   直接降低 P0-11 三端 Demo（Dashboard / Agent / 设备）的接入复杂度。
 - 动因：最大风险不再是算法错误，而是新成员不知道稳定入口 / 可替换模块 / 禁止依赖，接外部系统时易绕过架构。
@@ -273,6 +297,23 @@
   `ruff` / `pytest` 不受影响（纯文档 PR）。
 - 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）仅实现 FrameSource / Protocol。
+
+### P0-10.5.4 仓库卫生清理（Repository Hygiene）【🚧 进行中 · 本任务】
+- 任务：RC 前最后整理，把"代码完成"提升为"仓库治理达标"。
+- 交付（PR #31，纯治理 0 行为变化）：
+  - `.gitignore` 增加 `.workbuddy/`；解除 `.doc/` 与 `.workbuddy/` 的 Git 跟踪（本地文件保留）
+  - 重写 `docs/03_directory_layout.md`（对齐收敛后结构，补齐 `rule.py` / `cooldown.py` 等）
+  - `AGENTS.md` 新增 §6.4 仓库卫生纪律
+  - 修正 `README.md` 过时状态 + 移除 CI 噪声残留；`docs/08_roadmap.md` 补齐 P0-10.5 链与 RC 里程碑
+  - 标记 `analysis/anomaly.py` 为弃用死代码（同名 `CooldownGate` 原型，全仓 0 引用，已被 `cooldown.py` 取代），待删
+- 验收：仓库无 tracked 非源码文件；文档与代码一致；RC tag 可直接打。
+
+### Release Candidate Tag（v0.1.0-mvp-rc）【⏳ 待 P0-10.5.4 合入后由 Owner 执行】
+- 触发：Freeze Gate 7/7 + 仓库卫生达标。
+- 含义：「Silver Shield MVP 的架构、接口、测试、文档、仓库治理均达到 Release Candidate 状态」——
+  不是"代码完成"，而是"可协作、可接入、可评审"。
+- 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
+  P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）。
 
 ### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。
