@@ -208,11 +208,13 @@ class HighRiskApproachRule(CompositeRule):
         required = ctx.thresholds.high_risk_required_rules
         if required.issubset(matched_names):
             # 计算 perception_score = 子 Rule weight 之和（封顶 1.0）
+            # round 固定精度：消除浮点累加顺序 / 平台差异导致的 0.8999... 抖动
+            # （set 迭代顺序受 PYTHONHASHSEED 影响，不同顺序累加结果可能差 1 ULP）
             sub_score = sum(
                 ctx.thresholds.weight_for(name)
                 for name in required
             )
-            score = min(1.0, sub_score)
+            score = round(min(1.0, sub_score), 4)
             return [RuleResult(
                 rule_name=self.name, matched=True,
                 event_type="high_risk_approach",

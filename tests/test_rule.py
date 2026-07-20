@@ -249,8 +249,8 @@ class TestHighRiskApproachRule:
         assert len(results) == 1
         assert results[0].matched is True
         assert results[0].event_type == "high_risk_approach"
-        # score = sum of sub-scores capped at 1.0
-        assert results[0].perception_score == 0.9
+        # score = sum of sub-scores capped at 1.0（浮点比较用 approx，避免严格 == 抖动）
+        assert results[0].perception_score == pytest.approx(0.9)
 
     def test_not_triggered_when_partial_match(self):
         rule = HighRiskApproachRule(weight=0.9)
