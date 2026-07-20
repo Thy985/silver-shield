@@ -122,7 +122,9 @@ Source  →  Pipeline  →  Consumer
   - 生产：`RTSPSource` / `EZVIZSource`（Phase 1 P0-12）
   - Pipeline 对以上一律无感知 —— 换源不改 Pipeline。
 
-**当前缺口（前置条件 #4）**：`ingestion/frame_source.py::FrameSource` 是**具体类**，尚无抽象 `Source`/`FrameSource` 接口（ABC/Protocol）。Level 3 真正可冻结的前提是先抽出该接口，让 CAVIAR / RTSP / EZVIZ 三种源实现同一契约。
+**当前缺口（前置条件 #4）**：`ingestion/frame_source.py::FrameSource` 是**具体类**，尚无抽象接口（ABC/Protocol）。Level 3 真正可冻结的前提是先抽出该接口，让 CAVIAR / RTSP / EZVIZ 三种源实现同一契约。
+
+**命名决议（消除 `FrameSource` / `Source` 二义）**：未来抽象接口统一命名为 **`FrameSource(ABC)`**（沿用既有类名，最小化命名 churn）；现有具体类 `ingestion/frame_source.py::FrameSource`（CAVIAR 读取器）重命名为 **`CaviarFrameSource`** 并实现 `FrameSource`；P0-12 的 `RtspFrameSource` / `EzvizFrameSource` 同样实现 `FrameSource`。Pipeline 仅依赖 `FrameSource` 抽象，对具体子类无感知。
 
 ---
 
@@ -161,6 +163,8 @@ Contract Test **与实现解耦**：只断言契约（字段/枚举/状态机/�
 | 新增 optional 字段 / 新增枚举值 / 新增接口实现 | **MINOR** | 新增 `meta.camera_id` 约定字段 |
 | 实现内部变化（算法/阈值默认值/性能） | **PATCH** | YOLO11n → 云端推理 |
 
+**`meta` 逃生舱的晋升条款（防"事实上的不稳定 Schema"）**：`meta: Dict[str, Any]` 仅承载实验性 / 调试性 / 单端私有信息（见 §Level 1 注意）。若某 `meta` 子字段被 **≥2 个消费方稳定依赖**，或**跨 ≥2 个 MINOR 周期**仍以 `meta` 形式存在，则**必须晋升为正式 optional 字段**（走"新增 optional 字段 + 升 MINOR"流程），不得长期停留在 `meta` 中。该条款防止 `meta` 悄无声息变成事实上的不稳定 Schema。
+
 - **`schema_version`**：当前代码未落地（仅文档策略）。随 `Envelope` 于 Phase 1 落地时，作为 payload 顶层字段承载 Level 1 契约版本。
 - **MVP Release Candidate**：满足全部冻结前置条件后，从干净 `main` 打 tag `v0.1.0-silver-shield-mvp`，作为三级契约的第一个冻结基线。
 
@@ -170,10 +174,13 @@ Contract Test **与实现解耦**：只断言契约（字段/枚举/状态机/�
 
 以下缺口若不先修，"冻结"将冻结到不一致的定义上。列为 P0-10.5 的强制门禁：
 
-1. **`PerceptionEvent` 双定义冲突**：`core/event.py`（少字段、`event_type` 为枚举）与 `analysis/perception.py`（多字段、`event_type` 为 str、含 `visitor_id/source_video/created_at`）并存。Pipeline 实际依赖后者，`output/schemas.py` 却再导出前者。→ **定 `analysis/perception.py` 为唯一权威，删/收敛另一份。**
-2. **`Rule` 基类双定义冲突**：`analysis/rule.py`（现役：`evaluate(ctx, risk)->List[RuleResult]`）与 `analysis/rules.py`（残留：`evaluate(ctx)->PerceptionEvent|None`）签名不兼容。→ **废弃 `rules.py`。**
+1. **`PerceptionEvent` 双定义冲突**：`core/event.py`（少字段、`event_type` 为枚举）与 `analysis/perception.py`（多字段、`event_type` 为 str、含 `visitor_id/source_video/created_at`）并存。Pipeline 实际依赖后者，但 `output/schemas.py` 再导出前者、`output/publisher.py` 的类型标注也引用前者。→ **定 `analysis/perception.py` 为唯一权威，收敛另一份**，并执行以下显式收敛动作：
+   - 删除 `output/schemas.py:4` 对 `core/event.PerceptionEvent` 的再导出，改为 `from ..analysis.perception import PerceptionEvent`（或连同 `EventType`/`EvidenceRef` 一并迁移到权威定义）；
+   - 将 `output/publisher.py:9` 的 `from ..core.event import PerceptionEvent` 改为 `from ..analysis.perception import PerceptionEvent`，消除 `publish(event: PerceptionEvent)`（第 14 行）与运行时实际产出类型的**标注不匹配**——当前 Python 无编译期检查不报错，但会误导 mypy/pyright，并为契约测试引入假阴性；
+   - 收敛后由 `tests/contract/test_schema_contract.py` 的"双定义漂移检测"测试守护（收敛会使该测试翻红，证明旧引用已清零）。
+2. **`Rule` 基类双定义冲突**：`analysis/rule.py`（现役：`evaluate(ctx, risk)->List[RuleResult]`）与 `analysis/rules.py`（残留：`evaluate(ctx)->PerceptionEvent|None`）签名不兼容。→ **废弃 `rules.py`**。执行前约束：先用 `git grep -n "from.*rules import\|import.*rules"` 确认无隐藏引用（现场确认仅 dead 的 `core/pipeline.py` 引用，与活跃 `RuleEngine` 无关），删除后确保 CI 不断。
 3. **`Envelope` / `schema_version` 未落地**：代码无该类/字段。→ 本 ADR 明确标注为**计划态**；Phase 1（P0-12）落地后才纳入 Level 1 冻结。
-4. **抽象 `Source` 接口缺失**：`FrameSource` 是具体类而非 ABC/Protocol。→ Level 3 冻结前抽出接口，供 CAVIAR/RTSP/EZVIZ 共同实现。
+4. **抽象 `Source` 接口缺失**：`FrameSource` 是具体类而非 ABC/Protocol。→ Level 3 冻结前抽出 **`FrameSource(ABC)`** 抽象接口（现有 CAVIAR 具体类重命名为 `CaviarFrameSource` 并实现之），供 CAVIAR/RTSP/EZVIZ 共同实现（命名决议见 §Level 3）。
 5. **配置无取值校验**：`RuleConfig.long_duration_seconds` 等阈值无 `>0` / 非 NaN 守卫，负值/NaN 会静默流入规则。→ 补 pydantic `field_validator`（配置攻击 Contract Test 守护）。
 
 ## 后果（Consequences）

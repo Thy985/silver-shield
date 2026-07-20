@@ -266,9 +266,8 @@
   4. 抽出抽象 `Source`/`FrameSource` 接口（当前是具体类）。
   5. 补配置取值校验（`long_duration_seconds` 等 `>0` / 非 NaN，pydantic `field_validator`）。
 - 交付：
-  - `docs/ADR/0014-freeze-governance-three-levels.md`（三级冻结定义）✅
-  - `tests/contract/` Contract Test 套件（时间异常 / 脏输入 / 高频压力 / 状态机攻击 / 配置攻击 /
-    通道失败 / 空源，见 ADR-0014 §Contract Test 矩阵）
+  - `docs/ADR/0014-freeze-governance-three-levels.md`（三级冻结定义）✅（本文件，ADR Accepted 即代表契约定义被正式采纳）
+  - `tests/contract/` Contract Test 套件：**由 P0-10.5.1（PR #27）增量提交，不在 ADR Accepted 时即存在**；ADR Accepted ≠ "Contract Test 已落地"。矩阵见 ADR-0014 §Contract Test（时间异常 / 脏输入 / 高频压力 / 状态机攻击 / 配置攻击 / 通道失败 / 空源）
   - 版本策略落地：满足前置条件后从干净 `main` 打 tag `v0.1.0-silver-shield-mvp`。
 - 验收：Contract Test 全绿；前置条件 5 项清零；RC tag 打出。
 
