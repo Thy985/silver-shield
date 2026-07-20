@@ -139,3 +139,4 @@ imgsz_profile: balanced   # accuracy(640) / balanced(480) / realtime(416)
 ```
 
 > GPU 不是当前阻塞点：现阶段最缺的是"从检测结果生成连续事件"（P0-5/6），而非 YOLO 精度。故不为 640 引入 GPU。配合 `fps_target=8` 抽帧，链路可稳定实时。
+# review v2 test
