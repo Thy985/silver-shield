@@ -19,7 +19,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         env:
-          ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic"
+          ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
           ANTHROPIC_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
