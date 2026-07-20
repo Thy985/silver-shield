@@ -78,34 +78,27 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           track_progress: true
           prompt: |
-            REPO: ${{ github.repository }}
-            PR: ${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}
+            你是一个代码审查助手。请严格按以下步骤执行，不要跳过任何步骤。
 
-            Changes: ${{ steps.analyze.outputs.added }}+/${{ steps.analyze.outputs.deleted }}- in ${{ steps.analyze.outputs.files }} files
-            New dirs: ${{ steps.analyze.outputs.new_dirs }}, Infra: ${{ steps.analyze.outputs.has_infra }}, Tests: ${{ steps.analyze.outputs.has_tests }}
-            Level: ${{ steps.analyze.outputs.level_name }}
+            第一步：运行 `gh pr diff ${{ github.event.pull_request.number }}` 查看代码变更。
+            第二步：逐个阅读变更的文件，理解代码逻辑。
+            第三步：按以下维度审查并输出结果。
 
-            ---
+            审查级别：${{ steps.analyze.outputs.level_name }}
+            变更规模：${{ steps.analyze.outputs.added }} 行新增，${{ steps.analyze.outputs.deleted }} 行删除，${{ steps.analyze.outputs.files }} 个文件
 
-            [Level 0] Quick check: solves the problem? introduces bugs? tests pass? code style OK? Reply in 10 lines max.
+            审查维度：
+            1. 代码质量：是否清晰、无重复、易维护
+            2. 潜在 Bug：是否有逻辑错误、边界问题、空指针
+            3. 安全风险：是否有注入、泄露、权限问题
+            4. 测试覆盖：关键路径是否有测试
+            5. 接口兼容：是否破坏已有接口
 
-            [Level 1] Code Review:
-            Code: clear? duplicate? maintainable?
-            Test: core paths covered? edge cases?
-            Interface: breaks existing APIs? data structure OK?
-            Use inline comment for specific issues.
-
-            [Level 2] Design Review (add to Level 1):
-            Design: module boundaries? data ownership? extensibility? need ADR?
-            Impact: scope? data migration? phased rollout?
-            Output design review first, then code review.
-
-            [Level 3] Architecture Review (add to Level 1+2):
-            Architecture: scalability? resilience? performance? security? ops cost?
-            Output full architecture review with risk matrix.
-
-            Reply in Chinese.
-            Final verdict: pass / revise / reject
+            输出格式（用中文）：
+            ## 审查结果
+            [逐项列出发现的问题，每个问题包含文件名、行号、问题描述、修改建议]
+            ## 最终结论
+            ✅ 可以合并 / ⚠️ 建议修改后合并 / ❌ 需要重大修改
           claude_args: |
             --model deepseek-v4-flash
             --max-turns ${{ steps.analyze.outputs.max_turns }}
