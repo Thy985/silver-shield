@@ -326,7 +326,9 @@ def test_load_night_visit_scenario() -> None:
 
     scenario = load_scenario("config/demo/scenarios/night_visit.yaml")
     assert scenario.scenario_id == "night_visit"
-    assert scenario.source == "OneLeaveShopReenter1cor"
+    # 注意：source 是本地 fixture 目录名（对应 CAVIAR 公开序列 OneLeaveShopReenter1cor），
+    # 必须与 settings.runtime.caviar_base_dir 下的真实目录一致（tests/fixtures/doorway/one_leave_reenter）。
+    assert scenario.source == "one_leave_reenter"
     assert scenario.start_time.year == 2026
     assert scenario.start_time.month == 7
     assert scenario.frame_interval_s == 0.5

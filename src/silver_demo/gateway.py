@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -257,9 +258,7 @@ def create_app(
                 raw = await ws.receive_text()
                 ack = await handle_upstream(ws, raw, gateway.store)
                 if ack is not None:
-                    await ws.send_text(
-                        __import__("json").dumps(ack, ensure_ascii=False)
-                    )
+                    await ws.send_text(json.dumps(ack, ensure_ascii=False))
                     # action 处理后广播最新 state 快照给所有连接
                     state_snap = await gateway.store.snapshot()
                     await gateway.hub.broadcast({"type": "state_update", "state": state_snap})
