@@ -255,6 +255,25 @@
   2. `DemoClock not callable` → 加 `__call__()` 兼容 now_provider() 约定
   3. 测试断言 long_duration_seconds == 300.0 → 更新为 1.5（匹配 Demo YAML）
 
+### P0-10.5.3 Developer Experience / API Surface Documentation【下一步 · 本任务】
+- 任务：项目进入「平台化阶段」后，补齐**开发者可用性（DX）文档层**，把「个人项目」提升到「团队可协作项目」，
+  直接降低 P0-11 三端 Demo（Dashboard / Agent / 设备）的接入复杂度。
+- 动因：最大风险不再是算法错误，而是新成员不知道稳定入口 / 可替换模块 / 禁止依赖，接外部系统时易绕过架构。
+- 交付（Owner 授权，建立 DX 文档层）：
+  - `docs/API_REFERENCE.md`：**团队第一入口**。运行时入口（`PerceptionPipeline` / `run_demo`）、
+    `FrameSource`(ABC)、Detector/Tracker、事件层（VisitorEvent/PerceptionEvent）、Feature/Rule、
+    Decision、Action、外部接入点表（需求→实现接口→禁止修改）、架构红线、配置入口、调用链总图（颜色编码）。
+  - `docs/CONTRACTS.md`：冻结契约开发者视图（ADR-0014 三级冻结 L1/L2/L3 + Freeze Gate 7 项 + 黑名单字段 + 契约测试索引）。
+  - `docs/ARCHITECTURE.md`：系统架构总览（数据流图 + 分层包映射 + 红线摘要 + 文档导航），指向 `02_architecture.md` 详述。
+  - `docs/CONTRIBUTING.md`：贡献指南（分支/提交/测试/冻结纪律/提交前自检）。
+  - `README.md` 顶部新增颜色编码架构图 + 「团队第一入口」链接；`docs/00_README.md` 索引新增 4 个条目。
+- 与既有文档关系（不重复）：`02_architecture.md` = 分层设计详述；`API_REFERENCE.md` = 怎么接；
+  `CONTRACTS.md` = 什么不能改；`ARCHITECTURE.md` = 一张图总览。四者分工，互不复制。
+- 验收：`docs/API_REFERENCE.md` 所有路径 / 签名与代码一致（已对照 `src/home_perception/` 实际实现核对）；
+  `ruff` / `pytest` 不受影响（纯文档 PR）。
+- 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
+  P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）仅实现 FrameSource / Protocol。
+
 ### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。
 
