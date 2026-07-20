@@ -1,0 +1,29 @@
+# night_visit 场景配置（P0-11 Demo 主剧本 · ADR-0015 §2.6）
+#
+# 主选 OneLeaveShopReenter1cor：天然体现「出现 → 离开 → 再次出现」，
+# 对应 RepeatVisitRule，最容易讲清"AI 理解访问模式而非看到人就报警"。
+# 辅选 OneStopEnter1cor：展示「进入 → 停留 → 异常停留」（LongDurationRule）。
+#
+# 最终比赛剧本（P0-11.5 调优）：OneLeaveShopReenter1cor + 夜间 DemoClock + 阈值调低
+#   → 「夜间 + 重复出现 + 长停留」组合触发 HighRiskApproachRule → HIGH_RISK_APPROACH。
+#
+# 场景参数：
+#   - source: CAVIAR fixture 目录名（位于 settings.runtime.caviar_base_dir 下）
+#   - start_time: DemoClock 起点（ISO 8601，必须带时区；夜间让 OddHourRule 自然触发）
+#   - frame_interval_s: 每帧推进的模拟时间（秒），复现视频帧率驱动离场判定
+#   - fps_target: 网关帧循环目标速率（0 = 不限速，尽快推送）
+#   - loop: 帧列表耗尽后是否循环（Demo 演示常驻）
+#   - description: 人类可读说明（demo README / Dashboard 展示用）
+
+scenario_id: night_visit
+description: |
+  夜间重复访问风险闭环主剧本。OneLeaveShopReenter1cor + 夜间 23:30 起点 +
+  调低阈值，组合触发「夜间访问 + 长时间停留 + 重复出现」→ HIGH_RISK_APPROACH，
+  驱动家属端提醒与社区端任务，形成 5 分钟可讲完的风险闭环故事。
+  （P0-11.5 做最终阈值调优；本配置定方向。）
+
+source: OneLeaveShopReenter1cor
+start_time: "2026-07-19T23:30:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true

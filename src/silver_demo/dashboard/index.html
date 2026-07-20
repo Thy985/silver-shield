@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SilverShield Demo · P0-11.1</title>
+  <style>
+    body {
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      margin: 0;
+      padding: 2rem;
+      background: #f7f8fa;
+      color: #1f2933;
+    }
+    h1 { margin-top: 0; }
+    .card {
+      background: #fff;
+      border: 1px solid #e3e7ec;
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1rem;
+    }
+    .muted { color: #6b7280; }
+    code { background: #eef1f4; padding: 0.1em 0.35em; border-radius: 3px; }
+    .status { font-weight: 600; }
+    .ok { color: #15803d; }
+    .warn { color: #b45309; }
+  </style>
+</head>
+<body>
+  <h1>SilverShield Demo Gateway</h1>
+  <div class="card">
+    <p><strong>P0-11.1 网关已启动</strong>。完整 5 区域 Dashboard 将在 P0-11.2 落地。</p>
+    <p class="muted">WebSocket 端点：<code id="ws-path"></code></p>
+    <p>连接状态：<span id="ws-status" class="status warn">未连接</span></p>
+    <p>最近一帧：<span id="last-frame" class="muted">等待数据…</span></p>
+  </div>
+  <div class="card">
+    <p class="muted">
+      Demo 数据真实性声明：P0-11 使用 CAVIAR 公开 fixture 作为确定性输入，
+      不代表真实部署环境的性能指标，亦不用于证明模型泛化能力。
+      Demo 目标是验证系统闭环与架构消费契约（ADR-0015 §2.8）。
+    </p>
+  </div>
+  <script>
+    // 极简 WS 占位：P0-11.2 替换为完整 5 区域渲染
+    (function () {
+      var wsPath = window.location.pathname.replace(/\/$/, "") + "/ws";
+      document.getElementById("ws-path").textContent = wsPath;
+      var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      var url = proto + "//" + window.location.host + wsPath;
+      var statusEl = document.getElementById("ws-status");
+      var frameEl = document.getElementById("last-frame");
+      try {
+        var ws = new WebSocket(url);
+        ws.onopen = function () {
+          statusEl.textContent = "已连接";
+          statusEl.className = "status ok";
+        };
+        ws.onmessage = function (ev) {
+          var msg = JSON.parse(ev.data);
+          if (msg.type === "frame" && msg.view) {
+            var v = msg.view;
+            frameEl.textContent =
+              "帧 #" + v.frame_index +
+              " @ " + (v.demo_time || "?") +
+              " | 检测 " + v.n_detections +
+              " | 访客事件 " + v.n_visitor_events +
+              " | 告警 " + (v.warnings ? v.warnings.length : 0) +
+              " | 命令 " + (v.commands ? v.commands.length : 0);
+          } else if (msg.type === "state_update") {
+            frameEl.textContent = "状态更新：" + JSON.stringify(msg.state);
+          }
+        };
+        ws.onclose = function () {
+          statusEl.textContent = "已断开";
+          statusEl.className = "status warn";
+        };
+      } catch (e) {
+        statusEl.textContent = "连接失败：" + e.message;
+      }
+    })();
+  </script>
+</body>
+</html>

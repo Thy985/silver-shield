@@ -9,6 +9,16 @@ description = "SilverShield Home 感知模块 - 基于萤石摄像头的家庭�
 readme = "README.md"
 requires-python = ">=3.11"
 
+# P0-11 展示层依赖（ADR-0015 §2.3）：fastapi / uvicorn / websockets 仅用于 Demo 网关，
+# 核心 home_perception 包保持零 Web 依赖（设备端 / 边缘部署 / 模型测试不受污染）。
+# 安装：pip install -e ".[demo]"
+[project.optional-dependencies]
+demo = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
