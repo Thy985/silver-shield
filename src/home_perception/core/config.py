@@ -55,6 +55,15 @@ class IngestionConfig(BaseModel):
     reconnect: ReconnectConfig = ReconnectConfig()
     fps_target: int = 8
 
+    # 枚举约束（用户建议 · ADR-0014 前置 #5 扩展）：protocol 即"帧源传输类型"，
+    # 未知 source 不应静默接受（P0-12 接入 RTSPSource/EZVIZSource 时在此扩展白名单）。
+    @field_validator("protocol")
+    @classmethod
+    def _known_protocol(cls, v: str) -> str:
+        if v not in ("rtsp", "hls"):
+            raise ValueError(f"ingestion.protocol 必须是 rtsp 或 hls，收到 {v!r}")
+        return v
+
 
 class ImgszProfile(str, Enum):
     """推理分辨率预设（见 docs/09 / P0-4 实测结论）。
@@ -211,6 +220,18 @@ class RuleConfig(BaseModel):
     def _positive_int_count(cls, v: int) -> int:
         if v <= 0:
             raise ValueError(f"repeat_visit_count 必须 > 0，收到 {v!r}")
+        return v
+
+    # 范围约束（用户建议 · ADR-0014 前置 #5 扩展）：权重即"规则命中强度占比"，
+    # 语义上必须在 [0, 1]；越界（如 2.5）或 NaN 必须明确报错，不得静默流入规则层。
+    @field_validator("rule_weights")
+    @classmethod
+    def _weights_in_unit_range(cls, v: "Dict[str, float]") -> "Dict[str, float]":
+        for name, w in v.items():
+            if isinstance(w, float) and math.isnan(w):
+                raise ValueError(f"rule_weights[{name!r}] 不能是 NaN，收到 {w!r}")
+            if not (0.0 <= w <= 1.0):
+                raise ValueError(f"rule_weights[{name!r}] 必须在 [0, 1]，收到 {w!r}")
         return v
 
     def to_threshold_config(self) -> "ThresholdConfig":
