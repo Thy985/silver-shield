@@ -255,6 +255,38 @@
   2. `DemoClock not callable` → 加 `__call__()` 兼容 now_provider() 约定
   3. 测试断言 long_duration_seconds == 300.0 → 更新为 1.5（匹配 Demo YAML）
 
+### P0-10.5 冻结治理（Freeze Governance）【进行中 · 2026-07-20】
+- 背景（见 ADR-0014）：P0-10 后最大风险不是功能不足，而是"进入展示开发后快速修改导致架构腐化"。
+  在堆产品层之前，先把"稳定契约"从口头约定升级为**可执行的三级冻结 + Contract Test + 版本策略**。
+- 边界：**不新增业务功能**，只做契约固化与守护；本阶段刻意"慢下来"。
+- 冻结前置条件（打 RC tag 前必须清零，见 ADR-0014 §冻结前置条件）：
+  1. 收敛 `PerceptionEvent` 双定义（`core/event.py` vs `analysis/perception.py`）→ 定唯一权威。
+  2. 废弃 `Rule` 残留双定义（`analysis/rules.py`，保留 `analysis/rule.py`）。
+  3. `Envelope`/`schema_version` 明确标"计划态"（Phase 1 落地）。
+  4. 抽出抽象 `Source`/`FrameSource` 接口（当前是具体类）。
+  5. 补配置取值校验（`long_duration_seconds` 等 `>0` / 非 NaN，pydantic `field_validator`）。
+- 交付：
+  - `docs/ADR/0014-freeze-governance-three-levels.md`（三级冻结定义）✅（本文件，ADR Accepted 即代表契约定义被正式采纳）
+  - `tests/contract/` Contract Test 套件：**由 P0-10.5.1（PR #27）增量提交，不在 ADR Accepted 时即存在**；ADR Accepted ≠ "Contract Test 已落地"。矩阵见 ADR-0014 §Contract Test（时间异常 / 脏输入 / 高频压力 / 状态机攻击 / 配置攻击 / 通道失败 / 空源）
+  - 版本策略落地：满足前置条件后从干净 `main` 打 tag `v0.1.0-silver-shield-mvp`。
+- 验收：Contract Test 全绿；前置条件 5 项清零；RC tag 打出。
+
+### P0-11 产品层（API Gateway → Dashboard → 三端 Demo）【计划】
+- 任务：在**不修改核心链路**的前提下，新增产品展示层：
+  ```
+  API Gateway  →  Dashboard  →  三端 Demo（家属端 / 社区端 / 老人端）
+  ```
+- 铁律（见 ADR-0014）：产品层**只消费已冻结的 Schema（Level 1）**，通过入口/接口（Level 2/3）取数，
+  **绝不**前端直连模型、后端绕过接口、规则写死、字段乱加。
+- 验收：Dashboard 展示 `WarningEvent`/`PerceptionEvent` 流；三端 Demo 走契约不越层；核心链路 0 改动。
+
+### P0-12 设备适配（RTSPSource / EZVIZSource / MQTTPublisher）【计划】
+- 任务：通过 P0-10.5 抽出的 `Source` Protocol + 已冻结的 `Publisher`/`MQTTPublisher` 接口接入真实设备：
+  - `RTSPSource` / `EZVIZSource`：实现抽象 `Source` 接口（Pipeline 无感知，换源不改核心）。
+  - 真实 `MQTTPublisher`（paho-mqtt）+ `Envelope`/`schema_version` 落地（Level 1 计划态转正）。
+- 铁律：一律通过已有 Protocol 接入；替换实现不破坏 Level 2 接口签名与异常语义。
+- 验收：真实 RTSP/EZVIZ 帧源跑通 Pipeline；MQTT 上报走 `Envelope`；契约测试仍全绿。
+
 ### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。
 

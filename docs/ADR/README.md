@@ -67,3 +67,4 @@
 | [0011](0011-action-layer-architecture.md) | P0-9 ActionLayer 行动层架构：决策的执行与外部通道 | Accepted | 2026-07-19 |
 | [0012](0012-p0-integration-validation.md) | P0 Integration Validation 系统级冻结前验收：6 Golden Scenarios + 状态机独立 + 故障注入 + CAVIAR 端到端 | Accepted | 2026-07-19 |
 | [0013](0013-p0-10-assembly-integration.md) | P0-10 装配联调：runtime/ 包 / DemoClock 模拟时序 / Demo 专用配置覆盖 / 保持 Mock | Accepted | 2026-07-20 |
+| [0014](0014-freeze-governance-three-levels.md) | 契约冻结治理：三级冻结（Schema/Interface/Runtime Assembly）+ Contract Test + 版本策略 | Proposed | 2026-07-20 |
