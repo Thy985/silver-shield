@@ -20,25 +20,55 @@ jobs:
       - name: Analyze PR size
         id: analyze
         shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set +e
           DIFF=$(git diff --shortstat origin/$BASE_REF...HEAD 2>/dev/null)
-          A=$(echo "$DIFF" | awk -F' ' '{for(i=1;i<=NF;i++) if($i~/insertion/) print $(i-1)}')
-          D=$(echo "$DIFF" | awk -F' ' '{for(i=1;i<=NF;i++) if($i~/deletion/) print $(i-1)}')
-          F=$(echo "$DIFF" | awk -F' ' '{for(i=1;i<=NF;i++) if($i~/file/) print $(i-1)}')
+          ADDED=$(echo "$DIFF" | awk -F' ' '{for(i=1;i<=NF;i++) if($i~/insertion/) print $(i-1)}')
+          DELETED=$(echo "$DIFF" | awk -F' ' '{for(i=1;i<=NF;i++) if($i~/deletion/) print $(i-1)}')
+          FILES=$(echo "$DIFF" | awk -F' ' '{for(i=1;i<=NF;i++) if($i~/file/) print $(i-1)}')
           set -e
-          A=${A:-0}; D=${D:-0}; F=${F:-0}; T=$((A+D))
-          echo "added=$A" >> "$GITHUB_OUTPUT"
-          echo "deleted=$D" >> "$GITHUB_OUTPUT"
-          echo "files=$F" >> "$GITHUB_OUTPUT"
-          echo "total=$T" >> "$GITHUB_OUTPUT"
-          if [ "$T" -le 30 ] && [ "$F" -le 3 ]; then MT=10
-          elif [ "$T" -le 300 ] && [ "$F" -le 15 ]; then MT=20
-          elif [ "$T" -le 1000 ] && [ "$F" -le 30 ]; then MT=30
-          else MT=40; fi
-          echo "max_turns=$MT" >> "$GITHUB_OUTPUT"
-        env:
-          BASE_REF: ${{ github.base_ref }}
+          ADDED=${ADDED:-0}; DELETED=${DELETED:-0}; FILES=${FILES:-0}
+          TOTAL=$((ADDED + DELETED))
+
+          {
+            echo "files=$FILES"
+            echo "added=$ADDED"
+            echo "deleted=$DELETED"
+            echo "total=$TOTAL"
+          } >> "$GITHUB_OUTPUT"
+
+          CHANGED=$(git diff --name-only origin/$BASE_REF...HEAD || true)
+
+          HAS_INFRA="false"
+          echo "$CHANGED" | grep -qE '(schema|migration|architecture|infra|docker|k8s|deploy|\.github/workflows)' && HAS_INFRA="true" || true
+          echo "has_infra=$HAS_INFRA" >> "$GITHUB_OUTPUT"
+
+          NEW_DIRS=$(git diff --diff-filter=A --name-only origin/$BASE_REF...HEAD 2>/dev/null | xargs -I{} dirname {} 2>/dev/null | sort -u | grep -v '^\.$' | wc -l || echo 0)
+          echo "new_dirs=$NEW_DIRS" >> "$GITHUB_OUTPUT"
+
+          HAS_TESTS="false"
+          echo "$CHANGED" | grep -qE '(test|spec|__tests__)' && HAS_TESTS="true" || true
+          echo "has_tests=$HAS_TESTS" >> "$GITHUB_OUTPUT"
+
+          if [ "$TOTAL" -le 30 ] && [ "$FILES" -le 3 ]; then
+            echo "level=0" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 0" >> "$GITHUB_OUTPUT"
+            echo "max_turns=10" >> "$GITHUB_OUTPUT"
+          elif [ "$TOTAL" -le 300 ] && [ "$FILES" -le 15 ]; then
+            echo "level=1" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 1" >> "$GITHUB_OUTPUT"
+            echo "max_turns=20" >> "$GITHUB_OUTPUT"
+          elif [ "$TOTAL" -le 1000 ] && [ "$FILES" -le 30 ]; then
+            echo "level=2" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 2" >> "$GITHUB_OUTPUT"
+            echo "max_turns=30" >> "$GITHUB_OUTPUT"
+          else
+            echo "level=3" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 3" >> "$GITHUB_OUTPUT"
+            echo "max_turns=40" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: anthropics/claude-code-action@v1
         env:
@@ -48,11 +78,34 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           track_progress: true
           prompt: |
-            PR: ${{ github.event.pull_request.title }}
-            Changes: ${{ steps.analyze.outputs.added }}+/${{ steps.analyze.outputs.deleted }}- in ${{ steps.analyze.outputs.files }} files.
+            REPO: ${{ github.repository }}
+            PR: ${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}
 
-            Review this PR with focus on: code quality, bugs, security, tests, interfaces.
-            Reply in Chinese. End with verdict: pass / revise / reject.
+            Changes: ${{ steps.analyze.outputs.added }}+/${{ steps.analyze.outputs.deleted }}- in ${{ steps.analyze.outputs.files }} files
+            New dirs: ${{ steps.analyze.outputs.new_dirs }}, Infra: ${{ steps.analyze.outputs.has_infra }}, Tests: ${{ steps.analyze.outputs.has_tests }}
+            Level: ${{ steps.analyze.outputs.level_name }}
+
+            ---
+
+            [Level 0] Quick check: solves the problem? introduces bugs? tests pass? code style OK? Reply in 10 lines max.
+
+            [Level 1] Code Review:
+            Code: clear? duplicate? maintainable?
+            Test: core paths covered? edge cases?
+            Interface: breaks existing APIs? data structure OK?
+            Use inline comment for specific issues.
+
+            [Level 2] Design Review (add to Level 1):
+            Design: module boundaries? data ownership? extensibility? need ADR?
+            Impact: scope? data migration? phased rollout?
+            Output design review first, then code review.
+
+            [Level 3] Architecture Review (add to Level 1+2):
+            Architecture: scalability? resilience? performance? security? ops cost?
+            Output full architecture review with risk matrix.
+
+            Reply in Chinese.
+            Final verdict: pass / revise / reject
           claude_args: |
             --model deepseek-v4-flash
             --max-turns ${{ steps.analyze.outputs.max_turns }}
