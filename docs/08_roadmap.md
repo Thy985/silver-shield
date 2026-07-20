@@ -281,7 +281,7 @@
 
 ### P0-10.5.3 Developer Experience / API Surface Documentation【✅ 已完成 · 2026-07-20】
 - 任务：项目进入「平台化阶段」后，补齐**开发者可用性（DX）文档层**，把「个人项目」提升到「团队可协作项目」，
-  直接降低 P0-11 三端 Demo（Dashboard / Agent / 设备）的接入复杂度。
+  直接降低 P0-11 三端观察窗口（Dashboard）及未来 Agent / 设备的接入复杂度。
 - 动因：最大风险不再是算法错误，而是新成员不知道稳定入口 / 可替换模块 / 禁止依赖，接外部系统时易绕过架构。
 - 交付（Owner 授权，建立 DX 文档层）：
   - `docs/API_REFERENCE.md`：**团队第一入口**。运行时入口（`PerceptionPipeline` / `run_demo`）、
@@ -295,7 +295,7 @@
   `CONTRACTS.md` = 什么不能改；`ARCHITECTURE.md` = 一张图总览。四者分工，互不复制。
 - 验收：`docs/API_REFERENCE.md` 所有路径 / 签名与代码一致（已对照 `src/home_perception/` 实际实现核对）；
   `ruff` / `pytest` 不受影响（纯文档 PR）。
-- 后续：P0-11 产品层（API Gateway → Dashboard → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
+- 后续：P0-11 产品层（API Gateway → 三端观察窗口（Dashboard））经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）仅实现 FrameSource / Protocol。
 
 ### P0-10.5.4 仓库卫生清理（Repository Hygiene）【✅ 已完成 · 2026-07-20】
@@ -312,10 +312,10 @@
 - 触发：Freeze Gate 7/7 + 仓库卫生达标（PR #31 合入）。
 - 含义：「Silver Shield MVP 的架构、接口、测试、文档、仓库治理均达到 Release Candidate 状态」——
   不是"代码完成"，而是"可协作、可接入、可评审"。
-- 后续：P0-11 产品层（API Gateway → 三端 Demo）经已冻结契约接入，核心链路 0 改动；
+- 后续：P0-11 产品层（API Gateway → 三端观察窗口（Dashboard））经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）。
 
-### P0-11 三端风险闭环展示层（MVP Demo）【📋 设计中 · ADR-0015 v3 待评审】
+### P0-11 三端风险闭环展示层（MVP Demo）【📋 设计中 · ADR-0015 v3 · 三审 7 项建议已修订】
 - 任务：把 v0.1.0-mvp-rc 冻结架构的价值**对外可验证**——定位是「翻译能力」而非「再造能力」：
   把已冻结的 AI 链路翻译成一次可信的**风险发现 → 解释 → 干预 → 闭环**故事
   （老人门口 → AI 感知 → 异常访问 → 风险解释 → 家属/社区干预 → 人工确认闭环）。

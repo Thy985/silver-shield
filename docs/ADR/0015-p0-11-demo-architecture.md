@@ -1,8 +1,10 @@
 # ADR-0015: P0-11 MVP Demo 架构（三端风险闭环展示层）
 
-- **状态**：Draft（v3 · Owner 二审决策已落实：4 项开放问题拍板 + HTML 观察窗口提前 + 数据真实性声明）
+- **状态**：Proposed（Owner 评审中 · v3：三端风险闭环展示层 + 单页 HTML 观察窗口）
+- **日期**：2026-07-20
+- **决策者**：Owner
 - **作者**：AI（design pass，v3）
-- **依赖**：ADR-0014（三级冻结）、P0-10 Runtime Assembly、P0-10.5.x 治理、v0.1.0-mvp-rc tag
+- **相关**：ADR-0014（三级冻结）、P0-10 Runtime Assembly、P0-10.5.x 治理、v0.1.0-mvp-rc tag、PR #32
 - **范围**：ROADMAP P0-11（MVP Demo v0.1）
 
 ---
@@ -104,7 +106,7 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
   无需 MJPEG server / WebRTC / 独立视频流服务。
 - **依赖隔离**：`fastapi` / `uvicorn[standard]` / `websockets` 放入 `pyproject.toml` 的
   **可选 extra `[demo]`**（`pip install -e ".[demo]"`），核心 `home_perception` 仍零 Web 依赖。
-- **运行时**：网关进程内 `load_detector()` 加载 YOLO（与 pipeline 同进程，torch 已随 home_perception 引入）。
+- **运行时**：网关经 `PerceptionPipeline.from_settings(...)` 装配流水线，并调用 `pipeline.load_detector()` 懒加载 YOLO 权重（与 pipeline 同进程，torch 已随 home_perception 引入；`load_detector()` 是 `PerceptionPipeline` 的实例方法，非独立函数）。
 
 ### 2.4 三端数据流（摄像机不独立成端，帧经 base64 推送）
 
@@ -155,7 +157,7 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
 
 ### 2.6 场景驱动（确定性、可复现）
 
-- 网关持有 `DemoClock(start=23:30, interval_s=0.5)`，每帧 `clock.tick(interval_s)`（在网关循环内，不在 pipeline 内）。
+- 网关持有 `DemoClock(start=datetime(2026, 7, 20, 23, 30, tzinfo=timezone.utc), interval_s=0.5)`，每帧 `clock.tick(interval_s)`（在网关循环内，不在 pipeline 内）。实际签名 `DemoClock(start: Optional[datetime] = None, interval_s: float = 0.5)`，故 `start` 须传 `datetime` 而非时间字符串。
 - **`night_visit` fixture 选定（Owner 拍板）**：
   - **主选 `OneLeaveShopReenter1cor`**：天然体现「出现 → 离开 → 再次出现」，对应 `RepeatVisitRule`，
     最容易解释 *"AI 不是看到一个人就报警，而是理解访问模式"*。
@@ -305,3 +307,43 @@ tests/demo/
 - Dashboard 作为统一观察窗口，未来 RTSP / EZVIZ / MQTT / Agent 接入时**零重写**即可复用。
 - 后续 P0-12（设备适配）/ P1（DDD 大迁移）/ P2（数字孪生）接入时，展示层代码**零改动**即可对接新实现，
   因为边界是契约而非实现。
+
+---
+
+## 9. 替代方案（Alternatives）
+
+本 ADR 在收敛过程中否决了以下方案，记录以留存决策脉络（对应 §7 已拍板项与 §1 收敛过程）。
+
+### 9.1 四端产品展示层（独立 Camera / Center / Family / Community / Monitor 页）
+- **思路**：为每个视角建立独立 SPA 页面，摄像头端独立展示实时视频。
+- **否决原因**：比赛投入产出比低——评委关心的是"风险闭环是否成立"而非页面齐全；拆出独立摄像头页
+  会分散评委对"为什么不是普通摄像头"这一核心价值的注意力；五个前端视角对 MVP 是过度设计
+  （Owner 一审即指出"四端对于 MVP 太多"）。故摄像头视频并入 AI 风险中心单页大屏。
+
+### 9.2 MJPEG 独立视频流服务
+- **思路**：另起 MJPEG / WebRTC 视频流服务推送摄像头画面，HTML 通过 `<img>` / `<video>` 消费。
+- **否决原因**：稳定性优先于性能；单摄像头 / 单浏览器 / CAVIAR fixture 的演示场景下，
+  base64 JPEG 嵌入 WebSocket 消息即可满足，无需额外流媒体服务进程与协议复杂度；
+  未来 P0-12 接真实设备时展示层零改变（帧仍经 `FrameResult` → base64）。此为 §7 开放问题①的备选。
+
+### 9.3 WebSocket 二进制帧（而非 base64 JSON）
+- **思路**：WebSocket 直接传二进制 JPEG，不 base64。
+- **否决原因**：演示首要目标是"让评委看懂数据在流动"，JSON + base64 JPEG 与 `FrameResult` 文本字段
+  同包推送，便于在浏览器 DevTools 直接观察契约结构；二进制帧虽省带宽但牺牲可读性，对单演示连接收益可忽略。
+
+### 9.4 Vue / Vite 三端 SPA 前端
+- **思路**：用 Vue 组件化构建三端仪表盘。
+- **否决原因**：冻结架构的核心优势是分层 / 契约 / 解释 / 闭环，前端框架复杂度不增加评分；
+  单页 HTML + Vanilla JS 更快验证"冻结架构确实适合做产品接口"，且零前端构建步骤；
+  未来 RTSP / EZVIZ / MQTT / Agent 接入时 Dashboard 零重写（见 §2.3）。
+
+### 9.5 真 MQTT / 真短信 / 真 EZVIZ 接入
+- **思路**：P0-11 直接接真实消息总线、短信网关、萤石设备。
+- **否决原因**：P0-11 定位是**消费者而非重构者**，目标是验证冻结架构的对外价值闭环；
+  `ActionExecutor` 的 `MockPublisher` / `MockNotifier` 已足够驱动家属 / 社区面板；
+  真通道属 P0-12（设备适配）/ P1（真实通信）范畴，提前引入会污染冻结链路。
+
+### 9.6 「先做页面 → 硬改模型」反路
+- **思路**：先搭漂亮前端，发现数据不够再回头改检测 / 规则模型。
+- **否决原因**：这恰是比赛项目常见的架构崩塌路径（见 §1）。本项目选择"先冻结再展示"，
+  Demo 只消费契约、零改 `home_perception`，从根上避免架构腐化。
