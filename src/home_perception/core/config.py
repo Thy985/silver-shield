@@ -10,12 +10,16 @@ import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+if TYPE_CHECKING:
+    # 仅类型标注用，避免 core 在加载期 eager 引入 analysis（运行期仍走方法内懒导入）
+    from ..analysis.rule_engine import ThresholdConfig
 
 
 def _expand_env(value: Any) -> Any:
@@ -89,9 +93,12 @@ class TrackingConfig(BaseModel):
     - enabled：是否开启跨帧跟踪（回填 track_id）。关闭时 detector 走 predict、VisitorTrack 无 ID。
     - algorithm：跟踪算法。MVP 用 bytetrack（轻量、无 ReID，契合固定单摄 CPU 部署）；
       botsort 的 ReID 价值（人离开又回来/长遮挡/多摄）不在 MVP 范围。
+    - absence_gap_s：离场判定宽限（见 detection.tracker.DEFAULT_ABSENCE_GAP_S 注释）；
+      同 track_id 连续该秒数未出现 → 视为本次在场 visit 结束。
     """
     enabled: bool = True
     algorithm: str = "bytetrack"  # bytetrack | botsort
+    absence_gap_s: float = 5.0  # 离场判定宽限（容忍漏检闪烁）
 
 
 class DetectionConfig(BaseModel):
@@ -140,6 +147,95 @@ class OutputConfig(BaseModel):
     buffer: BufferConfig = BufferConfig()
 
 
+class FamilyContactConfig(BaseModel):
+    """家属联系方式（P0-10 行动层；MVP 从 config 读，v2 从中心 RiskTwin 拉）。"""
+    elder_id: str
+    name: str = ""
+    phone: str = ""
+    relation: str = "family"
+
+
+class RuleConfig(BaseModel):
+    """P0-10 运行时规则阈值配置；直接映射到 analysis.rule_engine.ThresholdConfig。
+
+    把阈值/权重集中到 YAML，规则逻辑不硬编码（ADR-0009 Decision 6：阈值配置化）。
+    """
+
+    long_duration_seconds: float = 300.0
+    repeat_visit_count: int = 3
+    odd_hour_set: List[int] = Field(default_factory=lambda: [23, 0, 1, 2, 3, 4])
+    cooldown_seconds: float = 600.0
+    reset_gap_seconds: float = 1800.0
+    frequency_window_s: float = 1800.0
+    high_risk_required_rules: List[str] = Field(
+        default_factory=lambda: ["LongDurationRule", "RepeatVisitRule", "OddHourRule"]
+    )
+    rule_weights: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "LongDurationRule": 0.50,
+            "RepeatVisitRule": 0.30,
+            "OddHourRule": 0.10,
+            "HighRiskApproachRule": 0.90,
+        }
+    )
+
+    def to_threshold_config(self) -> "ThresholdConfig":
+        """转换为 RuleEngine 内部阈值配置（懒导入，避免 core→analysis 加载期耦合）。"""
+        from ..analysis.rule_engine import ThresholdConfig
+
+        return ThresholdConfig(
+            long_duration_seconds=self.long_duration_seconds,
+            repeat_visit_count=self.repeat_visit_count,
+            odd_hour_set=set(self.odd_hour_set),
+            cooldown_seconds=self.cooldown_seconds,
+            reset_gap_seconds=self.reset_gap_seconds,
+            high_risk_required_rules=set(self.high_risk_required_rules),
+            rule_weights=dict(self.rule_weights),
+        )
+
+
+class DecisionConfig(BaseModel):
+    """P0-10 决策层配置。MVP 仅 rule_based（RuleBasedDecisionPolicy）。
+
+    v2 可扩展 ml / llm 策略（替换 DecisionPolicy 实现，不改变 WarningEvent 契约）。
+    """
+
+    policy: str = "rule_based"  # rule_based | (v2: ml, llm)
+
+
+class ActionConfig(BaseModel):
+    """P0-10 行动层配置（MVP 用 Mock；v1 接真实 paho-mqtt / 短信网关 / 社区工单）。"""
+
+    family_contact: Optional[FamilyContactConfig] = None
+    community_endpoint: Optional[str] = None
+    mqtt_topic_prefix: str = "silvershield/home"
+    max_retries: int = 3
+    # MockPublisher 落盘 JSONL 路径；None = 仅内存收集（不落盘）
+    mock_publisher_output: Optional[str] = None
+
+
+class RuntimeConfig(BaseModel):
+    """P0-10 运行模式配置。MVP 仅 demo（CAVIAR fixtures）；realtime 留待 v1。
+
+    demo 模式不接真实萤石摄像头（Owner 决策：比赛 Demo 用公开数据集复现，隐私安全）。
+    """
+
+    mode: str = "demo"  # demo | realtime (realtime 留待 v1)
+    caviar_base_dir: str = "tests/fixtures/doorway"
+    frame_glob: str = "frame_*.jpg"
+    demo_scenarios: List[str] = Field(
+        default_factory=lambda: [
+            "one_stop_enter",
+            "one_leave_reenter",
+            "meet_walk_together",
+        ]
+    )
+    # 覆盖 detection 段（demo 可用更轻量模型/分辨率提速）
+    detector_model: Optional[str] = None
+    detector_imgsz: Optional[int] = None
+    detector_conf: Optional[float] = None
+
+
 class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     ingestion: IngestionConfig = IngestionConfig()
@@ -147,6 +243,10 @@ class Settings(BaseModel):
     analysis: AnalysisConfig = AnalysisConfig()
     evidence: EvidenceConfig = EvidenceConfig()
     output: OutputConfig = OutputConfig()
+    rule: RuleConfig = RuleConfig()
+    decision: DecisionConfig = DecisionConfig()
+    action: ActionConfig = ActionConfig()
+    runtime: RuntimeConfig = RuntimeConfig()
 
     @classmethod
     def load(cls, path: str | os.PathLike = "config/default.yaml") -> "Settings":

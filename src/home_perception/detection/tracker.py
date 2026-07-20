@@ -49,7 +49,7 @@ class VisitorTracker:
         if absence_gap_s <= 0:
             raise ValueError(f"absence_gap_s 必须 > 0，收到 {absence_gap_s}")
         self.absence_gap_s = absence_gap_s
-        self._now = now_provider
+        self._now = now_provider or now_dt
         # track_id -> VisitorTrack（持续维护，离场后保留以便 revisit 计数）
         self.active_tracks: dict[int, VisitorTrack] = {}
 

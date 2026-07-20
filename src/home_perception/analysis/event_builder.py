@@ -68,7 +68,7 @@ class VisitorEventBuilder:
             raise ValueError("tracker 不能为空")
         self._tracker = tracker
         self._source_video = source_video
-        self._now = now_provider
+        self._now = now_provider or now_dt
         # 已为本 track_id 生成过事件（离场后未重新进入前不再生成）
         self._emitted_track_ids: set[int] = set()
         # 上一轮各 track_id 的 status（用于检测 active→left / left→active 状态翻转）
