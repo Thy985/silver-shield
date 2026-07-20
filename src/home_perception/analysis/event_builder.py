@@ -186,5 +186,5 @@ class VisitorEventBuilder:
             leave_time=vt.leave_time,
             duration_seconds=vt.duration_s,
             source_video=self._source_video,
-            created_at=self._now(),
+            created_at=self._now(),  # 事件创建时间（≈处理时间）；事件发生时间见 leave_time
         )

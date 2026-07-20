@@ -18,6 +18,7 @@ from typing import List
 
 from ..common.logging import get_logger
 from ..core.config import Settings
+from ..detection.detector import YOLODetector
 from .config import read_caviar_frames
 from .pipeline import DemoClock, PerceptionPipeline, RunSummary
 
@@ -71,7 +72,17 @@ def run_demo(settings: Settings) -> List[RunSummary]:
     _install_shutdown_handler()
 
     # detector 跨场景复用：同一实例保证 track_id 跨帧一致（model.track persist=True 要求）
-    shared_detector = PerceptionPipeline.from_settings(settings).detector
+    # 直接构造 YOLODetector，避免仅为"提取 detector"白白装配一次完整 7 层流水线（审查 #2）
+    shared_detector = YOLODetector(
+        model=settings.runtime.detector_model or settings.detection.model,
+        conf_threshold=settings.runtime.detector_conf or settings.detection.conf_threshold,
+        classes=settings.detection.classes,
+        device=settings.detection.device,
+        imgsz=settings.runtime.detector_imgsz or settings.detection.imgsz,
+        profile=settings.detection.imgsz_profile,
+        enable_track=settings.detection.enable_track,
+        tracker=settings.detection.tracker,
+    )
     log.info(
         "demo.start",
         mode=settings.runtime.mode,
@@ -136,4 +147,10 @@ def _emit_demo_summary(summaries: List[RunSummary]) -> None:
         "total_publish": sum(s.publish_count for s in summaries),
         "total_errors": sum(s.errors for s in summaries),
     }
+    if totals["scenarios_run"] == 0:
+        # 审查 #7：所有场景 fixtures 缺失 / cv2 未装 → 0 帧，需更强提示避免"看似启动正常"
+        log.warning(
+            "demo.all_scenarios_skipped",
+            reason="所有场景 fixtures 缺失或 cv2 未装，未处理任何帧",
+        )
     log.info("demo.summary", **totals)

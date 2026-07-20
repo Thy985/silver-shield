@@ -131,16 +131,16 @@ def _person_detections(track_id: int = 1, n: int = 1) -> List[Detection]:
 def _build_pipeline(detector, now_provider=None, family_contact=None, max_retries=3):
     """用确定性组件构造 PerceptionPipeline（不依赖真实 YOLO）。"""
     clock = now_provider
-    tracker = VisitorTracker(absence_gap_s=5.0, now_provider=clock.now if clock else None)
-    builder = VisitorEventBuilder(tracker, source_video="demo/test", now_provider=clock.now if clock else None)
+    tracker = VisitorTracker(absence_gap_s=5.0, now_provider=clock)
+    builder = VisitorEventBuilder(tracker, source_video="demo/test", now_provider=clock)
     feat = FeatureExtractor(frequency_window_s=1800.0)
     rule_engine = RuleEngine(
         device_id="demo/test", location="入户门",
-        thresholds=ThresholdConfig(), now_provider=clock.now if clock else None,
+        thresholds=ThresholdConfig(), now_provider=clock,
     )
     decision = DecisionEngine(
         elder_id="elder_001", policy=RuleBasedDecisionPolicy(),
-        now_provider=clock.now if clock else None,
+        now_provider=clock,
     )
     dispatcher = ActionDispatcher(DispatcherConfig(family_contact=family_contact))
     publisher = MockPublisher()

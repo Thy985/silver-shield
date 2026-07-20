@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from ..action.dispatcher import DispatcherConfig
 from ..action.notifier import FamilyContact
-from ..core.config import ActionConfig, RuleConfig, Settings
+from ..core.config import ActionConfig, RuleConfig
 from ..analysis.rule_engine import ThresholdConfig
 
 
@@ -77,8 +77,3 @@ def read_caviar_frames(
         if img is not None:
             frames.append(img)
     return frames
-
-
-def demo_scenario_paths(settings: Settings) -> List[str]:
-    """返回 demo 模式要跑的场景名列表（来自 runtime.demo_scenarios）。"""
-    return list(settings.runtime.demo_scenarios)

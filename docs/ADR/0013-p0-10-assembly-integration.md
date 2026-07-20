@@ -131,6 +131,22 @@ Owner 评审 P0-10 交付后提出的改进项，已在本分支追加提交修�
 
 加固验收：`ruff` 全绿 / `compileall` OK / `pytest` **289 passed** / `scripts/run.py` EXIT=0（130 帧 / 9 事件 / 8 告警 / 8 指令 / 0 错误）。Demo 全链路行为一致（各场景稳定产出事件/感知/告警/指令）；具体感知计数因 YOLO 推理在 CPU 上的微小浮动在 10–12 间，属正常区间。
 
+### 第二轮审查（2026-07-20 · 7 项：3 中 + 4 轻）
+
+Owner 第二轮代码审查提出的改进项，已在本分支追加提交修复，**未改变 Demo 行为**（全链路计数稳定；YOLO 在 CPU 上微小浮动属正常区间）：
+
+| # | 严重度 | 文件 | 问题 | 修复 |
+|---|---|---|---|---|
+| 1 | 🟡 | `runtime/config.py` | `demo_scenario_paths` 死代码（未导出/未调用） | 彻底删除该函数及已无用的 `Settings` 导入 |
+| 2 | 🟡 | `runtime/lifecycle.py` | `from_settings(settings).detector` 浪费式构造完整 7 层流水线只为取 detector | 直接 `YOLODetector(...)` 按相同参数构造复用实例（demo 少构造 1 次完整流水线） |
+| 3 | 🟡 | `tests/test_runtime.py` | `_build_pipeline` 传 `clock.now`（bound method）而非协议实例 | 统一改传 `clock`（ManualClock 已具 `__call__`，满足 `NowProvider`） |
+| 4 | 🟢 | `runtime/pipeline.py` | `process_frame` `except Exception` 只记 `str(exc)`，丢 traceback | 改用 `log.exception(...)` 保留完整堆栈（仍按 AGENTS §2.5 不崩溃流水线） |
+| 5 | 🟢 | `runtime/pipeline.py` | `DemoClock` 起点 `None` 静默回退墙钟，破坏 Demo 确定性 | 回退分支加 `log.warning("demo_clock.start_unset_fallback_wallclock")` 暴露配置缺失 |
+| 6 | 🟢 | `analysis/event_builder.py` | `created_at=self._now()` 与事件时间语义混淆 | 补注释：创建时间（≈处理时间）；事件发生时间见 `leave_time` |
+| 7 | 🟢 | `runtime/lifecycle.py` | 全部场景缺失时仅 INFO skip，看似"启动正常" | `_emit_demo_summary` 在 `scenarios_run==0` 时升级为 `log.warning("demo.all_scenarios_skipped")` |
+
+第二轮验收：`ruff` 全绿 / `compileall` OK / `pytest` **289 passed** / `scripts/run.py` EXIT=0（130 帧 / 9 事件 / 8 告警 / 8 指令 / 0 错误）。
+
 ## 已知限制
 
 1. **meet_walk_together 0 visitor events**: 人物仍在视频末尾被检测到（从未正式 "left"），

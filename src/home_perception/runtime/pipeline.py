@@ -88,6 +88,9 @@ class DemoClock:
     """
 
     def __init__(self, start: Optional[datetime] = None, interval_s: float = 0.5):
+        if start is None:
+            # 未显式传入起点 → 静默回退墙钟会破坏 Demo 确定性；告警以便发现配置问题（审查 #5）
+            log.warning("demo_clock.start_unset_fallback_wallclock")
         self._t = start or datetime.now(timezone.utc)
         self.interval_s = interval_s
 
@@ -289,9 +292,9 @@ class PerceptionPipeline:
         self.metrics.detection_calls += 1
         try:
             result: DetectionResult = self.detector.detect(frame)
-        except Exception as exc:  # 检测器异常：记日志 + 计数，跳过本帧
+        except Exception:  # 检测器异常：记日志（保留 traceback）+ 计数，跳过本帧
             self.metrics.errors += 1
-            log.error("pipeline.detect_failed", frame_index=frame_index, error=str(exc))
+            log.exception("pipeline.detect_failed", frame_index=frame_index)
             return FrameResult(frame_index=frame_index, n_detections=0, n_visitor_events=0)
 
         dets: List[Detection] = result.detections
