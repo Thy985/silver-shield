@@ -24,8 +24,11 @@ def build_threshold_config(rule_cfg: RuleConfig) -> ThresholdConfig:
     return rule_cfg.to_threshold_config()
 
 
-def build_family_contact(action_cfg: ActionConfig) -> Optional[FamilyContact]:
-    """ActionConfig.family_contact → FamilyContact（未配置返回 None）。"""
+def _build_family_contact(action_cfg: ActionConfig) -> Optional[FamilyContact]:
+    """ActionConfig.family_contact → FamilyContact（未配置返回 None）。
+
+    模块私有：仅 build_dispatcher_config 内部使用，不进 runtime 公共 API 表面积。
+    """
     fc = action_cfg.family_contact
     if fc is None:
         return None
@@ -40,7 +43,7 @@ def build_family_contact(action_cfg: ActionConfig) -> Optional[FamilyContact]:
 def build_dispatcher_config(action_cfg: ActionConfig) -> DispatcherConfig:
     """ActionConfig → ActionDispatcher 的 DispatcherConfig。"""
     return DispatcherConfig(
-        family_contact=build_family_contact(action_cfg),
+        family_contact=_build_family_contact(action_cfg),
         community_endpoint=action_cfg.community_endpoint,
         mqtt_topic_prefix=action_cfg.mqtt_topic_prefix,
     )

@@ -234,6 +234,10 @@ class RuntimeConfig(BaseModel):
     detector_model: Optional[str] = None
     detector_imgsz: Optional[int] = None
     detector_conf: Optional[float] = None
+    # Demo 模拟时钟起点（ISO 8601，必须带时区）。默认 23:30 UTC：
+    # 让 OddHourRule 在 CAVIAR 短片（~25s）自然触发，同时把 Demo 时间线交由 YAML 控制，
+    # 更换场景 / 调整异常时段无需改源码（见 ADR-0013）。
+    demo_clock_start: str = "2026-07-19T23:30:00+00:00"
 
 
 class Settings(BaseModel):

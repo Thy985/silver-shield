@@ -45,7 +45,8 @@ CAVIAR fixtures 是静态 JPG 抽帧，无真实帧率/时间戳。若用墙钟�
 - `__call__() -> datetime` 兼容组件 `now_provider()` 约定（组件调 `self._now()` 即可）
 - `tick(dt)` 推进模拟时间
 - `run()` 每帧调用 `self._clock.tick(0.5)` → 50 帧 = 25 秒模拟时间线
-- DemoClock 设在 **23:30 UTC**（真实异常时段）→ OddHourRule 自然触发
+- DemoClock 起点由 `runtime.demo_clock_start`（ISO 8601，默认 `2026-07-19T23:30:00+00:00`）
+  **配置驱动** → 更换场景 / 调整异常时段无需改源码；默认值落在 odd_hour_set 内 → OddHourRule 自然触发
 
 ### 决策 3：保持 Mock Publisher / Notifier（MVP 不接真实通道）
 
@@ -62,7 +63,7 @@ Owner 在 P0-9 已决策保持 Mock。P0-10 继承此约束：
 |---|---|---|---|
 | `runtime.detector_conf` | null（用 detection.conf_threshold=0.45） | **0.10** | 鱼眼俯拍小目标需低阈值；class_filter 过滤噪声类 |
 | `rule.long_duration_seconds` | 300.0 | **1.5** | CAVIAR 片段 ~25s 总长，生产阈值永远不触发 |
-| DemoClock start time | — | **23:30 UTC** | 属 odd_hour_set {23,0,1,2,3,4} → OddHourRule 自然触发 |
+| `runtime.demo_clock_start` | — | **2026-07-19T23:30:00+00:00** | 配置驱动；属 odd_hour_set → OddHourRule 自然触发 |
 
 这些值仅在 `mode: demo` 下生效；realtime 模式用 production 默认。
 
@@ -95,6 +96,7 @@ Owner 在 P0-9 已决策保持 Mock。P0-10 继承此约束：
 - `config/default.yaml`（rule/action/runtime 段 + Demo 调优值）
 - `src/home_perception/detection/tracker.py`（now_provider fallback fix）
 - `src/home_perception/analysis/event_builder.py`（now_provider fallback fix）
+- `src/home_perception/detection/detector.py`（新增 `unload()` 公共方法）
 - `.gitignore`（var/）
 
 ### Demo 验收结果（scripts/run.py EXIT=0）
@@ -110,6 +112,24 @@ Owner 在 P0-9 已决策保持 Mock。P0-10 继承此约束：
 - `ruff check src tests`: All checks passed ✅
 - `compileall -q src/home_perception`: OK ✅
 - `pytest tests/ -q`: **289 passed** ✅（274 prior + 15 runtime）
+
+## 修订记录
+
+### 2026-07-20（代码评审加固 · 7 项）
+
+Owner 评审 P0-10 交付后提出的改进项，已在本分支追加提交修复，未改变 Demo 行为：
+
+| # | 严重度 | 文件 | 问题 | 修复 |
+|---|---|---|---|---|
+| 1 | 🟡 | `lifecycle.py` / `core/config.py` / `default.yaml` | DemoClock 起始时间硬编码 | 新增 `runtime.demo_clock_start`（ISO 8601，默认 23:30 UTC），`lifecycle._parse_demo_clock_start()` 解析，YAML 可覆盖 |
+| 2 | 🟡 | `pipeline.py` | `hasattr(self._clock,"tick")` duck-typing 脆弱 | 定义 `NowProvider` / `TickableNowProvider`（`runtime_checkable` Protocol），`run()` 改用 `isinstance(self._clock, TickableNowProvider)`；`now_provider` 类型标注 `Optional[NowProvider]` |
+| 3 | 🟡 | `detector.py` / `lifecycle.py` / `pipeline.py` | 直接写 `detector._model` 私有属性 | `YOLODetector.unload()` 公共方法；`lifecycle.finally` 与 `pipeline.close()` 改调 `unload()` |
+| 4 | 🟢 | `pipeline.py` | `FrameResult` 仅存首个 warning | `warning` → `warnings: List[WarningEvent]`，`process_frame` 收集全部（运维可追迹） |
+| 5 | 🟢 | `pipeline.py` | `process_frame` 4 层嵌套 | 抽取 `_act_on_event()` 私有方法，单帧逻辑降到 1 层循环 |
+| 6 | 🟢 | `config.py` / `__init__.py` | `build_family_contact` 暴露为公共 API | 改名 `_build_family_contact`（模块私有），移出 `runtime.__all__` |
+| 7 | 🟢 | `tests/test_runtime.py` | `ManualClock` 无 `__call__` | 增加 `__call__()`，统一 `now_provider` 签名为 `Callable[[], datetime]` |
+
+加固验收：`ruff` 全绿 / `compileall` OK / `pytest` **289 passed** / `scripts/run.py` EXIT=0（130 帧 / 9 事件 / 8 告警 / 8 指令 / 0 错误）。Demo 全链路行为一致（各场景稳定产出事件/感知/告警/指令）；具体感知计数因 YOLO 推理在 CPU 上的微小浮动在 10–12 间，属正常区间。
 
 ## 已知限制
 

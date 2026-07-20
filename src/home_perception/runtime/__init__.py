@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from .config import (
     build_dispatcher_config,
-    build_family_contact,
     build_threshold_config,
     read_caviar_frames,
 )
@@ -23,10 +22,9 @@ __all__ = [
     "DemoClock",
     # 指标
     "PipelineMetrics",
-    # 配置转换
+    # 配置转换（仅导出对外的公共转换函数）
     "build_threshold_config",
     "build_dispatcher_config",
-    "build_family_contact",
     "read_caviar_frames",
     # 生命周期 / Demo
     "run_demo",

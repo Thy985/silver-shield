@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import signal as _signal
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List
 
 from ..common.logging import get_logger
@@ -22,6 +22,20 @@ from .config import read_caviar_frames
 from .pipeline import DemoClock, PerceptionPipeline, RunSummary
 
 log = get_logger(__name__)
+
+
+def _parse_demo_clock_start(value: str) -> datetime:
+    """解析 runtime.demo_clock_start（ISO 8601，支持 'Z' 或 '+00:00' 时区后缀）。
+
+    失败抛出 ValueError，让配置错误在启动时即暴露（不静默回退到错误时间线）。
+    """
+    s = value.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError as exc:
+        raise ValueError(f"runtime.demo_clock_start 非法 ISO 时间: {value!r}") from exc
 
 
 def _install_shutdown_handler() -> None:
@@ -72,7 +86,7 @@ def run_demo(settings: Settings) -> List[RunSummary]:
             # 每场景独立 tracker/builder/feature/rule/decision/executor（状态隔离，互不污染）
             # 注入 DemoClock：模拟 2fps 视频时序（0.5s/帧），让离场判定确定可复现
             clock = DemoClock(
-                start=datetime(2026, 7, 19, 23, 30, 0, tzinfo=timezone.utc),
+                start=_parse_demo_clock_start(settings.runtime.demo_clock_start),
                 interval_s=0.5,
             )
             pipeline = PerceptionPipeline.from_settings(
@@ -102,7 +116,7 @@ def run_demo(settings: Settings) -> List[RunSummary]:
     finally:
         # 释放 detector 模型引用（跨场景复用实例，退出前统一清理）
         try:
-            shared_detector._model = None
+            shared_detector.unload()
         except Exception:  # pragma: no cover - 防御性
             pass
 

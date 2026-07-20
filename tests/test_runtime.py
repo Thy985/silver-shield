@@ -65,6 +65,10 @@ class ManualClock:
     def now(self) -> datetime:
         return self._t
 
+    def __call__(self) -> datetime:
+        """使 ManualClock 可作为 now_provider() 直接调用（与组件约定 / NowProvider 协议一致）。"""
+        return self.now()
+
     def advance(self, seconds: float = 1.0) -> None:
         self._t = self._t + timedelta(seconds=seconds)
 

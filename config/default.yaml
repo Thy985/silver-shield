@@ -97,3 +97,4 @@ runtime:
   detector_model: null           # 覆盖 detection.model
   detector_imgsz: null           # 覆盖 detection.imgsz
   detector_conf: 0.10            # Demo 调优：CAVIAR 鱼眼俯拍人物小，需降低阈值（class_filter 过滤噪声）
+  demo_clock_start: "2026-07-19T23:30:00+00:00"  # Demo 模拟时钟起点（ISO 8601，带时区）；23:30 UTC 让 OddHourRule 自然触发

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from ..action.dispatcher import ActionDispatcher
 from ..action.executor import ActionExecutor
@@ -53,6 +53,27 @@ from .config import build_dispatcher_config, build_threshold_config
 from .observability import PipelineMetrics
 
 log = get_logger(__name__)
+
+
+@runtime_checkable
+class NowProvider(Protocol):
+    """时序源协议：返回当前（模拟/真实）时间，供 tracker / event_builder / rule / decision 读取。
+
+    仅要求可被调用 `()` 并返回 datetime；不要求可推进（真实墙钟、pytest 用 bound method 都满足）。
+    """
+
+    def __call__(self) -> datetime: ...
+
+
+@runtime_checkable
+class TickableNowProvider(NowProvider, Protocol):
+    """可推进的时序源：在 NowProvider 基础上增加 ``tick(dt)``，供 run() 每帧推进模拟时间。
+
+    Demo 用 DemoClock 实现此协议（复现视频帧率驱动 tracker 离场判定）；
+    传入不可推进的 now_provider（如墙钟 / bound method）时 run() 静默跳过推进，不报错。
+    """
+
+    def tick(self, dt: Optional[float] = None) -> None: ...
 
 
 class DemoClock:
@@ -89,7 +110,7 @@ class FrameResult:
     n_detections: int = 0
     n_visitor_events: int = 0
     perception_events: List[PerceptionEvent] = field(default_factory=list)
-    warning: Optional[WarningEvent] = None
+    warnings: List[WarningEvent] = field(default_factory=list)
     commands: List[Any] = field(default_factory=list)
 
 
@@ -164,7 +185,7 @@ class PerceptionPipeline:
         decision_engine: DecisionEngine,
         executor: ActionExecutor,
         metrics: Optional[PipelineMetrics] = None,
-        now_provider: Optional[Callable[[], Any]] = None,
+        now_provider: Optional[NowProvider] = None,
         frame_interval_s: float = 0.0,
     ):
         self.detector = detector
@@ -191,7 +212,7 @@ class PerceptionPipeline:
         device_id: str = "home_entry_01",
         location: str = "入户门",
         elder_id: str = "elder_001",
-        now_provider: Optional[Callable[[], Any]] = None,
+        now_provider: Optional[NowProvider] = None,
         frame_interval_s: float = 0.0,
     ) -> "PerceptionPipeline":
         """从 `Settings` 构造完整流水线（各组件按 YAML 配置装配）。
@@ -278,37 +299,51 @@ class PerceptionPipeline:
 
         events: List[VisitorEvent] = self.event_builder.update(dets)
         perception_events: List[PerceptionEvent] = []
-        warning: Optional[WarningEvent] = None
+        warnings: List[WarningEvent] = []
         commands: List[Any] = []
 
         for ev in events:
             self.metrics.visitor_events += 1
-            risk = self.feature_extractor.extract(ev)
-            percs = self.rule_engine.evaluate(risk)
-            if not percs:
-                continue
+            # 抽出的下游链路（feature→rule→decision→action）见 _act_on_event，降低本函数嵌套层级
+            percs, ev_warnings, cmds = self._act_on_event(ev)
             perception_events.extend(percs)
-            for p in percs:
-                self.metrics.record_perception(p.event_type)
-            w = self.decision_engine.evaluate(percs)
-            if w is None:
-                continue
-            self.metrics.record_warning(w.risk_level)
-            cmds = self.executor.execute(w)
+            warnings.extend(ev_warnings)
             commands.extend(cmds)
-            for c in cmds:
-                self.metrics.record_command(c.command_type)
-            if warning is None:
-                warning = w  # 编排层只向上暴露首个 warning（监控用）
 
         return FrameResult(
             frame_index=frame_index,
             n_detections=len(dets),
             n_visitor_events=len(events),
             perception_events=perception_events,
-            warning=warning,
+            warnings=warnings,
             commands=commands,
         )
+
+    def _act_on_event(
+        self, ev: VisitorEvent
+    ) -> Tuple[List[PerceptionEvent], List[WarningEvent], List[Any]]:
+        """处理单个 VisitorEvent 的下游链路（feature → rule → decision → action）。
+
+        从 process_frame 抽取，避免 4 层嵌套；返回本事件产出的感知事件 / 告警 / 行动指令。
+        无感知（规则未命中）或（命中但）决策层不产出告警时返回对应空列表，调用方安全 extend。
+        """
+        risk = self.feature_extractor.extract(ev)
+        percs = self.rule_engine.evaluate(risk)
+        if not percs:
+            return [], [], []
+        for p in percs:
+            self.metrics.record_perception(p.event_type)
+        warnings: List[WarningEvent] = []
+        commands: List[Any] = []
+        w = self.decision_engine.evaluate(percs)
+        if w is not None:
+            self.metrics.record_warning(w.risk_level)
+            warnings.append(w)
+            cmds = self.executor.execute(w)
+            commands.extend(cmds)
+            for c in cmds:
+                self.metrics.record_command(c.command_type)
+        return percs, warnings, commands
 
     def run(self, frames: List["object"], scenario: str = "unknown") -> RunSummary:
         """处理一整个帧序列（单场景 / 单视频源），返回汇总。
@@ -319,7 +354,8 @@ class PerceptionPipeline:
         interrupted = False
         for i, frame in enumerate(frames):
             # Demo：每帧推进模拟时间（复现视频帧率，驱动 tracker 离场判定）
-            if self._frame_interval_s > 0 and self._clock is not None and hasattr(self._clock, "tick"):
+            # 仅对实现 TickableNowProvider 的时钟推进；不可推进的 now_provider 静默跳过
+            if self._frame_interval_s > 0 and isinstance(self._clock, TickableNowProvider):
                 self._clock.tick(self._frame_interval_s)
             try:
                 self.process_frame(frame, frame_index=i)
@@ -350,5 +386,5 @@ class PerceptionPipeline:
     def close(self) -> None:
         """释放资源（模型显存 / 内存）。detector 实例可复用，这里只置空内部模型。"""
         det = self.detector
-        if hasattr(det, "_model"):
-            det._model = None
+        if hasattr(det, "unload"):
+            det.unload()
