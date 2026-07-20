@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -31,7 +31,7 @@ from home_perception.action.command import ActionCommand
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.perception import PerceptionEvent
 from home_perception.analysis.warning import WarningEvent
-from home_perception.runtime.pipeline import PerceptionPipeline
+from home_perception.runtime.pipeline import PerceptionPipeline, RunSummary
 
 
 def _utc(offset_s: int = 0) -> datetime:
@@ -153,26 +153,28 @@ def test_action_command_illegal_status_rejected():
 
 
 def _build_minimal_pipeline() -> PerceptionPipeline:
-    """用轻量 stub 装配 PerceptionPipeline，仅验证 run([]) 的空源边界
-    （run 在空帧序列下不触碰 detector/tracker 等，故 stub 足够）。"""
-    publisher = SimpleNamespace(publish_count=0)
-    notifier = SimpleNamespace(family_count=0, community_count=0)
-    executor = SimpleNamespace(publisher=publisher, notifier=notifier)
+    """用 MagicMock 装配 PerceptionPipeline，**仅**用于验证 run([]) 的空源边界。
+
+    ⚠️ 约束：此桩只在空帧序列（run 循环体不执行）下有效。run([]) 不会触碰
+    detector/tracker/executor 的任何属性，故用 MagicMock。若未来 run() 在循环前
+    引用这些依赖的属性，MagicMock 会返回一个新的 Mock（而非 AttributeError），
+    需要为对应组件换成真实/契约级 fake 并显式设定返回值，否则断言可能被静默满足。
+    """
     return PerceptionPipeline(
-        detector=SimpleNamespace(),
-        tracker=SimpleNamespace(),
-        event_builder=SimpleNamespace(),
-        feature_extractor=SimpleNamespace(),
-        rule_engine=SimpleNamespace(),
-        decision_engine=SimpleNamespace(),
-        executor=executor,
+        detector=MagicMock(),
+        tracker=MagicMock(),
+        event_builder=MagicMock(),
+        feature_extractor=MagicMock(),
+        rule_engine=MagicMock(),
+        decision_engine=MagicMock(),
+        executor=MagicMock(),
     )
 
 
 def test_empty_video_returns_empty_summary():
     """空视频（0 帧）→ 返回空 RunSummary，0 错误（不崩溃）。"""
     pipeline = _build_minimal_pipeline()
-    summary = pipeline.run([], scenario="empty")
+    summary: RunSummary = pipeline.run([], scenario="empty")
     assert summary.frames_processed == 0
     assert summary.n_visitor_events == 0
     assert summary.errors == 0

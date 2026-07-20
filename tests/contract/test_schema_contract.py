@@ -96,9 +96,12 @@ def test_perception_event_required_fields():
     assert {"visitor_id", "source_video", "created_at"} <= f
 
 
-def test_perception_event_rejects_forbidden_meta():
-    """WarningEvent / ActionCommand 主动拒绝 meta / payload 中的判定字段（防御性）；
-    PerceptionEvent 的契约由 test_forbidden_fields_not_in_any_schema 覆盖（字段集本身不含）。"""
+def test_warning_and_action_reject_forbidden_fields_in_meta_payload():
+    """WarningEvent（meta）/ ActionCommand（payload）主动拒绝"最终判定"字段（防御性）。
+
+    注意：本测试断言的是 WarningEvent 与 ActionCommand 两个对象，并非 PerceptionEvent —
+    PerceptionEvent 的禁止字段契约由 test_forbidden_fields_not_in_any_schema 覆盖
+    （其字段集本身就不含判定字段）。"""
     with pytest.raises(ValueError):
         WarningEvent(
             elder_id="e1",

@@ -53,6 +53,30 @@ def test_rule_config_accepts_valid() -> None:
     assert cfg.repeat_visit_count == 2
 
 
+def test_rule_config_defaults_are_valid() -> None:
+    """默认构造必须全绿：所有受校验字段（阈值/计数/权重）的默认值本身合法。
+
+    守护"未来有人把默认值改成非法值（如 cooldown_seconds: float = -1.0）"——
+    因这些字段在默认构造时不会被显式传入，只有默认构造成功才能证明默认值合法。
+    """
+    cfg = RuleConfig()  # 若任一默认值非法，validator 会在此抛 ValidationError
+    for field in (
+        "long_duration_seconds",
+        "cooldown_seconds",
+        "reset_gap_seconds",
+        "frequency_window_s",
+    ):
+        assert getattr(cfg, field) > 0
+    assert cfg.repeat_visit_count > 0
+    assert all(0.0 <= w <= 1.0 for w in cfg.rule_weights.values())
+
+
+def test_rule_config_rejects_bool_repeat_count() -> None:
+    # 类型防护（用户建议）：bool 是 int 子类，不得被静默当作 1/0
+    with pytest.raises(ValidationError):
+        RuleConfig(repeat_visit_count=True)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize("bad_weight", [2.5, -0.1, float("nan")])
 def test_rule_config_rejects_out_of_range_weights(bad_weight: float) -> None:
     # 范围约束（用户建议）：权重必须在 [0, 1]，否则规则命中强度语义被破坏
