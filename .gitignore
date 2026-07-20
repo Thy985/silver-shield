@@ -50,3 +50,4 @@ htmlcov/
 
 # --- 基准 / 运行产物（benchmark JSON、临时输出，不入库）---
 out/
+var/

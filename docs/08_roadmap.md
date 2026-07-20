@@ -229,12 +229,31 @@
   `docs/test-report/P0-integration-validation.md`；ADR-0012 决策固化
 - **准入条件**：✅ 全部满足，可进入 P0-10 装配联调阶段
 
-### P0-10 装配与联调（main/pipeline）【⏳ 下一步】
-- 任务：把 P0-3~P0-9 组件装配成 main.py / pipeline.py；接入 devices.yaml / .env；
-  实现启动 / 重启 / 优雅关闭；日志 / 指标 / 健康检查；Demo 录制。
-- 边界：P0-10 是**工程层问题**（"怎么启动系统"），**不**应再验证逻辑正确性
-  —— 逻辑已由 P0 Integration Validation 充分验证（`docs/test-report/P0-integration-validation.md`）。
-- 验收：main.py 跑通 → 跑 CAVIAR 三个场景 → 录 Demo 视频 → 评委可一键复现。
+### P0-10 装配与联调（runtime/ 包 + DemoClock + Demo 端到端）【✅ 已完成 · 2026-07-20】
+- 任务：新建 `src/home_perception/runtime/` 包，把 P0-3~P0-9 组件装配成可运行 Demo；
+  接入 CAVIAR fixtures；实现启动 / 优雅关闭；Demo 汇总日志。
+- 边界（见 ADR-0013 6 条决策）：**工程层问题**（"怎么启动系统"），不验证逻辑正确性
+  —— 逻辑已由 P0 Integration Validation（274 测试）充分验证。
+- 核心交付：
+  - `PerceptionPipeline`（7 层装配器，`from_settings()` 从 YAML 一键构建）
+  - `DemoClock`（模拟 2fps 时序，驱动 tracker 离场判定；`__call__()` 兼容 now_provider 约定）
+  - `run_demo(settings)`（CAVIAR 三场景端到端 + SIGINT 优雅关闭 + 结构化汇总）
+  - `PipelineMetrics` / `FrameResult` / `RunSummary`（可观测性数据对象）
+- Demo 调优（`config/default.yaml` runtime/rule 段）：
+  - `detector_conf: 0.10`（鱼眼俯拍小目标低阈值；class_filter 过噪声）
+  - `long_duration_seconds: 1.5`（CAVIAR 短片 ~25s 总长适配）
+  - DemoClock 设 **23:30 UTC**（OddHourRule 自然触发）
+- 验收：
+  - `scripts/run.py` EXIT=0：130 帧 / 114 检测 / 9 访客事件 / 12 感知事件 / 8 告警 / 8 指令 / **0 错误**
+  - `pytest` **289 全绿**（274 prior + 15 runtime）；`ruff` 全绿
+  - one_stop_enter: 8 events → 10 perception → 7 warnings → 7 commands (LOW/LOG_ONLY)
+  - one_leave_reenter: 1 event → 2 perception → 1 warning → 1 command
+  - meet_walk_together: 7 detections, tracking active（人物未离场 = 语义正确）
+  - 详见 `docs/ADR/0013-p0-10-assembly-integration.md`
+- Bug 修复记录：
+  1. lifecycle.py try/for 缩进损坏（Edit 工具丢失缩进）→ 手动修正全块
+  2. `DemoClock not callable` → 加 `__call__()` 兼容 now_provider() 约定
+  3. 测试断言 long_duration_seconds == 300.0 → 更新为 1.5（匹配 Demo YAML）
 
 ### P2-12 增强（比赛后/增强版）
 - 多摄像头协同、ROI 自动标定、个体作息基线、与中心白名单实时回写联调、COS 长期归档。

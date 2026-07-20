@@ -60,3 +60,41 @@ output:
   buffer:
     enabled: true             # 中心不可达时本地落盘，恢复后补发
     max_items: 200
+
+# ============================================================================
+# P0-10 运行时装配配置（Demo 模式）
+# 阈值/权重集中此处，规则逻辑不硬编码（ADR-0009 Decision 6）
+# ============================================================================
+rule:
+  long_duration_seconds: 1.5      # Demo 调优：CAVIAR 短片（~25s）需降低阈值；生产用 300s
+  repeat_visit_count: 3             # 窗口内同访客进出次数超该值 → repeat_visit
+  odd_hour_set: [23, 0, 1, 2, 3, 4] # 异常时段（含 23、不含 5）
+  cooldown_seconds: 600.0           # 同 (visitor_id, rule) 冷却
+  reset_gap_seconds: 1800.0         # 超过该时长重置冷却窗口
+  frequency_window_s: 1800.0        # 重复来访滑动窗口（30 分钟）
+  high_risk_required_rules: [LongDurationRule, RepeatVisitRule, OddHourRule]
+  rule_weights:
+    LongDurationRule: 0.50
+    RepeatVisitRule: 0.30
+    OddHourRule: 0.10
+    HighRiskApproachRule: 0.90
+
+decision:
+  policy: rule_based              # rule_based | (v2: ml, llm)
+
+action:
+  family_contact: null            # 家属联系方式（Demo 不配 → 降级 LOG_ONLY，不丢）
+  community_endpoint: ${COMMUNITY_ENDPOINT:-https://community.example.com/api/v1/tasks}
+  mqtt_topic_prefix: silvershield/home
+  max_retries: 3
+  mock_publisher_output: var/mock_mqtt_demo.jsonl   # Mock 落盘 JSONL；null=仅内存
+
+runtime:
+  mode: demo                      # demo（CAVIAR 复现）| realtime（v1 接真实萤石）
+  caviar_base_dir: tests/fixtures/doorway
+  frame_glob: frame_*.jpg
+  demo_scenarios: [one_stop_enter, one_leave_reenter, meet_walk_together]
+  detector_model: null           # 覆盖 detection.model
+  detector_imgsz: null           # 覆盖 detection.imgsz
+  detector_conf: 0.10            # Demo 调优：CAVIAR 鱼眼俯拍人物小，需降低阈值（class_filter 过滤噪声）
+  demo_clock_start: "2026-07-19T23:30:00+00:00"  # Demo 模拟时钟起点（ISO 8601，带时区）；23:30 UTC 让 OddHourRule 自然触发

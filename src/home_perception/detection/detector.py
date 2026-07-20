@@ -148,6 +148,14 @@ class YOLODetector(Detector):
     def is_loaded(self) -> bool:
         return self._model is not None
 
+    def unload(self) -> None:
+        """释放已加载的模型引用（退出 / 换场景前统一清理）。
+
+        跨场景复用同一 detector 实例时由 run_demo 在 finally 调用（见 runtime/lifecycle.py）；
+        单场景短跑也可调。置空后下次 detect() 自动重新惰性加载。
+        """
+        self._model = None
+
     def detect(self, frame: np.ndarray) -> DetectionResult:
         # --- 输入校验（在惰性加载之前，保证非法输入不触发 torch 导入）---
         if frame is None:
