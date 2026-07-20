@@ -195,6 +195,15 @@ common/       横切（logging / timeutil）
 
 ---
 
+### 6.4 仓库卫生（Repository Hygiene）
+
+1. ❌ 提交 `.workbuddy/`（本地 Agent 工作记忆：架构决策 / 约定 / 笔记）—— 它是本地状态，已在 `.gitignore` 中排除，**永不入库**；
+2. ❌ 提交 `.doc/`（团队研究草稿、AI-Risk-Agent 调研等）—— 终稿已沉淀到 `docs/`，研究稿属版本控制外产物；
+3. 引入"本应忽略"的新文件（凭证 / 模型权重 `*.pt` / 证据片段 / 缓存 / venv / 构建产物 / 本地 Agent 状态）时，**先更新 `.gitignore` 再 `git add`**，不得用 `git add -f` 强加；
+4. PR 不得夹带一次性文件（CI 日志 / 调试输出 / 临时压缩包）—— 用完即删。
+
+---
+
 ## 7. 文档体系
 
 - 顶层 `AGENTS.md`（本文件）+ `docs/00`~`docs/09` + `docs/ADR/*`；
