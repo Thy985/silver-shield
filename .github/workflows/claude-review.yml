@@ -19,7 +19,7 @@ jobs:
 
       - name: Analyze PR size
         id: analyze
-        shell: bash
+        shell: bash --noprofile --norc {0}
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
