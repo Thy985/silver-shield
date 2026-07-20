@@ -1,13 +1,17 @@
-"""感知事件模型（模块对外输出的最小契约）。
+"""感知事件基础类型（模块对外输出的最小契约基底）。
 
-事件经 output 层序列化后上报至中心风控引擎；evidence 字段携带取证引用。
-完整字段说明见 docs/07_event_schema.md。
+> **P0-10.5.2 收敛**：`PerceptionEvent` 的唯一权威定义已迁移至
+> `analysis/perception.py`（风险语义层对外契约），本模块**不再重复定义**，
+> 以避免双定义架构漂移。本模块保留：
+> - `EventType`：§7.2 五类标签枚举（向后兼容引用）
+> - `EvidenceRef`：取证引用
+>
+> 完整字段说明见 docs/07_event_schema.md。
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 
 class EventType(str, Enum):
@@ -25,23 +29,3 @@ class EvidenceRef:
     kind: str  # snapshot | clip
     uri: str  # 本地路径或对象存储 URL
     timestamp: float
-
-
-@dataclass
-class PerceptionEvent:
-    device_id: str
-    event_type: EventType
-    score: float  # 风险置信度 0~1
-    timestamp: float
-    track_id: int | None = None
-    bbox: list[float] | None = None  # [x1, y1, x2, y2] 归一化前像素坐标
-    location: str | None = None
-    repeat_count: int | None = None  # 短时内同一访客出现次数（重复来访判定用）
-    is_odd_hour: bool = False  # 是否处于异常时段（夜间/独处）
-    evidence: list[EvidenceRef] = field(default_factory=list)
-    meta: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict:
-        d = asdict(self)
-        d["event_type"] = self.event_type.value
-        return d

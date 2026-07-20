@@ -1,19 +1,23 @@
-"""感知流水线编排。
+"""[DEPRECATED] 感知流水线编排（旧路径）。
 
-职责：拉流 -> 抽帧 -> 检测 -> 规则分析 -> 取证 -> 上报。
+> **P0-10.5.2 Step4 将删除本模块。** 当前活跃流水线为 `runtime/pipeline.py`
+> 的 `PerceptionPipeline`（from_settings 入口 + Source→Pipeline→Consumer 三段解耦）。
+> 本文件仅作为迁移参考保留，不被任何运行时/测试代码依赖。
+
+职责（旧）：拉流 -> 抽帧 -> 检测 -> 规则分析 -> 取证 -> 上报。
 各阶段以接口（Detector / Rule / EvidenceCollector / Publisher）解耦，便于替换与测试。
 入口由 main 注入已初始化的 EZVIZClient 与 FrameSource（见 run）。
 """
 from __future__ import annotations
 
-from ..analysis.rules import Rule, RuleContext
+from ..analysis.rule import Rule, RuleContext  # [DEPRECATED] 收敛后引用权威 Rule/RuleContext
 from ..common.logging import get_logger
 from ..detection.detector import Detector
 from ..evidence.clip_collector import EvidenceCollector
 from ..ingestion.frame_source import FrameSource
 from ..output.publisher import Publisher
 from .config import Settings
-from .event import PerceptionEvent
+from ..analysis.perception import PerceptionEvent  # [DEPRECATED] 收敛后引用权威定义
 
 log = get_logger(__name__)
 

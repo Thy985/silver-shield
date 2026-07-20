@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..core.event import EvidenceRef, PerceptionEvent
+from ..core.event import EvidenceRef
+from ..analysis.perception import PerceptionEvent
 
 
 class EvidenceCollector(ABC):

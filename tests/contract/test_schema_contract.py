@@ -165,33 +165,41 @@ def test_authoritative_perception_event_wired_in_engine():
     assert dp_mod.PerceptionEvent is PerceptionEvent
 
 
-def test_stale_perception_event_import_locations():
-    """文档化：以下模块当前仍绑定 core/event.py 旧 PerceptionEvent。
-    它们是 P0-10.5.2 收敛时要切换的对象。收敛后本测试会失败 → 同步更新安全网。"""
-    from home_perception.core import event as core_event
+def test_perception_event_single_authority():
+    """Freeze Gate：PerceptionEvent 单一权威（analysis/perception.py）。
 
+    - core/event.py 不再定义 PerceptionEvent（无重复领域对象）
+    - output/publisher、output/schemas、evidence/clip_collector 均引用权威版
+    """
+    from home_perception.core import event as core_event
+    from home_perception.analysis import perception as ap_mod
+
+    assert not hasattr(core_event, "PerceptionEvent"), (
+        "core/event.py 不应再定义 PerceptionEvent；收敛到 analysis/perception.py"
+    )
     for modname in (
         "home_perception.output.publisher",
         "home_perception.output.schemas",
         "home_perception.evidence.clip_collector",
-        "home_perception.core.pipeline",
     ):
         mod = importlib.import_module(modname)
-        assert getattr(mod, "PerceptionEvent", None) is core_event.PerceptionEvent, (
-            f"{modname} 应仍引用 core/event.py 旧 PerceptionEvent（drift 文档化）；"
-            f"若已收敛请同步更新本测试"
+        assert getattr(mod, "PerceptionEvent", None) is ap_mod.PerceptionEvent, (
+            f"{modname} 必须引用 analysis/perception.py 权威 PerceptionEvent"
         )
 
 
-def test_legacy_rules_only_bound_to_stale_core_pipeline():
-    """文档化：legacy analysis/rules.py 的 Rule 当前仅被 dead 的 core/pipeline 引用；
-    活跃 RuleEngine 使用 analysis/rule.py 的 Rule（具体子类定义在 rule_engine.py，
-    但基类是 analysis.rule.Rule）。删除 legacy 时本测试会失败 → 提示清理。"""
+def test_rule_single_authority():
+    """Freeze Gate：Rule 单一权威（analysis/rule.py）。
+
+    - legacy ``analysis/rules.py`` 已删除（无 legacy import / 无重复领域对象）
+    - 活跃 RuleEngine 内置规则均为 ``analysis.rule.Rule`` 子类
+    """
     import home_perception.analysis.rule_engine as re_mod
     from home_perception.analysis.rule import Rule as CurrentRule
-    from home_perception.core import pipeline as cp
 
-    assert cp.Rule.__module__ == "home_perception.analysis.rules"
+    with pytest.raises(ImportError):
+        importlib.import_module("home_perception.analysis.rules")
+
     eng = re_mod.RuleEngine(device_id="x")
     for r in eng._basic_rules:
         assert isinstance(r, CurrentRule)

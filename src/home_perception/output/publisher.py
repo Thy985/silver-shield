@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..core.event import PerceptionEvent
+from ..analysis.perception import PerceptionEvent
 
 
 class Publisher(ABC):
