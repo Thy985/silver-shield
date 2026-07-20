@@ -1,11 +1,12 @@
-"""帧源：从视频流按目标帧率抽帧，带断流自动重连。
+"""帧源抽象与实现（ADR-0014 Level 3 Runtime Assembly Contract）。
 
-复用已验证的 OpenCV CAP_FFMPEG 读取逻辑，把重连/限速封装成可迭代对象，
-便于后续检测/分析阶段以 `for ts, frame in source:` 方式消费。
+所有视频源（CAVIAR / RTSP / EZVIZ）实现同一 ``FrameSource`` 抽象接口，
+Pipeline 仅依赖该抽象，不感知具体来源类型（Source → Pipeline → Consumer 三段解耦）。
 """
 from __future__ import annotations
 
 import time
+from abc import ABC, abstractmethod
 
 import cv2
 
@@ -14,7 +15,28 @@ from ..common.logging import get_logger
 log = get_logger(__name__)
 
 
-class FrameSource:
+class FrameSource(ABC):
+    """帧源抽象接口（Level 3 Runtime Assembly Contract）。
+
+    约定：以 ``for ts, frame in source:`` 方式产出 ``(timestamp, frame)`` 元组流。
+    具体实现负责抽帧速率控制、断流重连与取证环形缓冲。
+
+    Pipeline 仅依赖本抽象，不感知 CAVIAR / RTSP / EZVIZ 差异（P0-12 各实现本接口）。
+    """
+
+    @abstractmethod
+    def __iter__(self):
+        """产出 ``(timestamp: float, frame)`` 元组流。"""
+        ...
+
+
+class CaviarFrameSource(FrameSource):
+    """CAVIAR demo 帧源（OpenCV 读取，带断流重连）。
+
+    复用已验证的 OpenCV CAP_FFMPEG 读取逻辑，把重连/限速封装成可迭代对象，
+    便于后续检测/分析阶段以 ``for ts, frame in source:`` 方式消费。
+    """
+
     def __init__(
         self,
         url: str,
