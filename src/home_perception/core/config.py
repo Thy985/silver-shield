@@ -215,6 +215,15 @@ class RuleConfig(BaseModel):
             raise ValueError(f"阈值配置必须 > 0，收到 {v!r}")
         return v
 
+    # 类型防护（用户建议）：bool 是 int 的子类，pydantic 会把 True/False 静默当作 1/0，
+    # 语义上是类型错误。用 before 校验器在强转前显式拒绝 bool（after 模式此时已丢失原类型）。
+    @field_validator("repeat_visit_count", mode="before")
+    @classmethod
+    def _reject_bool_count(cls, v: object) -> object:
+        if isinstance(v, bool):
+            raise ValueError(f"repeat_visit_count 必须是整数，收到 bool {v!r}")
+        return v
+
     @field_validator("repeat_visit_count")
     @classmethod
     def _positive_int_count(cls, v: int) -> int:
