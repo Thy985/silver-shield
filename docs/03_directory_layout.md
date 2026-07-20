@@ -52,8 +52,7 @@ home_perception/
 │   ├── rule_engine.py   #   RuleEngine：编排 4 基础 Rule + 1 复合 + CooldownGate
 │   ├── warning.py       #   WarningEvent（决策层状态机）
 │   ├── decision_engine.py   # DecisionEngine：PerceptionEvent → WarningEvent
-│   ├── decision_policy.py   # DecisionPolicy（可替换决策策略）
-│   └── anomaly.py       #   ⚠️ 弃用遗留：同名 CooldownGate 原型，全仓 0 引用，已被 cooldown.py 取代（待删）
+│   └── decision_policy.py   # DecisionPolicy（可替换决策策略）
 ├── evidence/            # 风险证据采集（副作用）
 │   ├── clip_collector.py #  触发式快照/片段采集
 │   └── storage.py       #  本地/COS 存储

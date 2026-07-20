@@ -305,7 +305,7 @@
   - 重写 `docs/03_directory_layout.md`（对齐收敛后结构，补齐 `rule.py` / `cooldown.py` 等）
   - `AGENTS.md` 新增 §6.4 仓库卫生纪律
   - 修正 `README.md` 过时状态 + 移除 CI 噪声残留；`docs/08_roadmap.md` 补齐 P0-10.5 链与 RC 里程碑
-  - 标记 `analysis/anomaly.py` 为弃用死代码（同名 `CooldownGate` 原型，全仓 0 引用，已被 `cooldown.py` 取代），待删
+  - **物理删除** `analysis/anomaly.py`（弃用死代码：同名 `CooldownGate` 原型，全仓 0 引用，已被 `cooldown.py` 取代；删除后 `ruff`/`pytest` 无回归）
 - 验收：仓库无 tracked 非源码文件；文档与代码一致；RC tag 可直接打。
 
 ### Release Candidate Tag（v0.1.0-mvp-rc）【⏳ 待 P0-10.5.4 合入后由 Owner 执行】
