@@ -57,8 +57,8 @@ class DemoStateStore:
         async with self._lock:
             entry = self._state.get(warning_id)
             if entry is None:
-                # 首次：初始化为 pending（忽略传入的 status，强制从起点开始）
-                entry = {"warning_id": warning_id, "status": "pending", "operator": ""}
+                # 首次：初始化为 pending（业务意义：新 warning 默认未处理）
+                entry = {"warning_id": warning_id, "status": "pending", "operator": operator}
                 self._state[warning_id] = entry
                 return dict(entry)
 

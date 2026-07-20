@@ -129,9 +129,16 @@ class DemoGateway:
 
         self._running = True
         n = len(self.frames)
+        # 帧循环间隔：DemoSettings.frame_loop_interval_s 显式设置优先；
+        # 若为 0（不限速），回退到 scenario.fps_target（1.0 / fps）。
         interval = self.demo_settings.frame_loop_interval_s
+        if interval <= 0 and self.scenario.fps_target > 0:
+            interval = 1.0 / self.scenario.fps_target
 
         while self._running:
+            if not self.scenario.loop and self._frame_index >= n:
+                # 单次播放：帧列表耗尽后退出循环（不回绕）
+                break
             i = self._frame_index % n  # loop 或单次
             frame = self.frames[i]
 
