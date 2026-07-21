@@ -21,13 +21,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
 import structlog
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
@@ -112,19 +114,8 @@ class DemoGateway:
         self.frame_source = build_frame_source(self.scenario, self.hp_settings)
         self.n_frames = self.frame_source.frame_count
 
-        # CAVIAR 无帧（fixture 缺失或 cv2 未装）→ 启动即失败，给出清晰错误
-        if self.scenario.source_type == "caviar_jpg" and self.n_frames == 0:
-            raise RuntimeError(
-                f"CAVIAR 场景 {self.scenario.source!r} 无可用帧（base_dir="
-                f"{self.hp_settings.runtime.caviar_base_dir!r}，fixture 缺失或 cv2 未装）"
-            )
-        # 真实 MP4 文件缺失 → 启动即失败（清晰提示；文件建议放 data/demo/，gitignore 不入库）
-        if self.scenario.source_type == "video_file":
-            mp = self.scenario.media_path
-            if not mp or not Path(mp).is_file():
-                raise RuntimeError(
-                    f"video_file 源文件缺失: {mp!r}（请将真实门口 MP4 放到该路径，建议 data/demo/real_doorway.mp4）"
-                )
+        # 帧源可用性校验（CAVIAR / video_file 共用，见 _validate_frame_source）
+        self._validate_frame_source(self.scenario)
 
     # ------------------------------------------------------------------
     # 帧循环（后台 task）
@@ -154,8 +145,12 @@ class DemoGateway:
             try:
                 _, frame = next(frame_iter)
             except StopIteration:
-                # 帧源耗尽：loop=True 时重放（重新迭代，MP4 重新打开文件 / CAVIAR 回到第 0 帧）
+                # 帧源耗尽：loop=True 时重放（重新迭代，MP4 重新打开文件 / CAVIAR 回到第 0 帧）。
+                # 关键：重建流水线状态组件（复用已加载 YOLO detector，免重载权重）以清空跨循环累积的
+                # 追踪/窗口/决策状态——否则多循环后状态饱和，warning 不再产生（演示区 ②③④ 变空白）。
                 if self.scenario.loop:
+                    self._rebuild_pipeline(self.scenario)
+                    self._frame_index = 0
                     frame_iter = iter(self.frame_source)
                     continue
                 break
@@ -213,10 +208,90 @@ class DemoGateway:
                 structlog.get_logger(__name__).warning("pipeline.close 失败", exc_info=exc)
             self.pipeline = None
 
+    def _validate_frame_source(self, scenario: "ScenarioConfig") -> None:
+        """校验帧源可用性（assemble 与 switch_source 共用，避免损坏场景静默空循环）。
 
-# ======================================================================
-# FastAPI app 工厂
-# ======================================================================
+        - ``caviar_jpg``：n_frames == 0 即 fixture 缺失 / cv2 未装 → 启动即失败
+        - ``video_file``：文件不存在 → 启动即失败；n_frames == 0（编码不支持 / 时长为 0）→ 启动即失败
+        """
+        if scenario.source_type == "caviar_jpg" and self.n_frames == 0:
+            raise RuntimeError(
+                f"CAVIAR 场景 {scenario.source!r} 无可用帧（base_dir="
+                f"{self.hp_settings.runtime.caviar_base_dir!r}，fixture 缺失或 cv2 未装）"
+            )
+        if scenario.source_type == "video_file":
+            mp = scenario.media_path
+            if not mp or not Path(mp).is_file():
+                raise RuntimeError(f"video_file 源文件缺失: {mp!r}")
+            if self.n_frames == 0:
+                raise RuntimeError(f"视频无可用帧: {mp!r}（可能编码不支持或时长为 0）")
+
+    # ------------------------------------------------------------------
+    # 输入源热切换（P0-11.4 视频输入适配层）
+    # ------------------------------------------------------------------
+
+    async def switch_source(self, scenario: "ScenarioConfig") -> None:
+        """热切换输入源（P0-11.4 视频输入适配）：停旧循环 → 重建帧源/时钟 → 清空跨帧状态 → 重开循环。
+
+        不重建 pipeline（昂贵的 YOLO 加载只做一次），严格复用已装配的 ``pipeline`` / ``hp_settings``。
+        切换后清空 ``DemoStateStore``（新视频 = 新会话），并广播 ``source_switched``，
+        前端据此清空跨帧累积（warningMap / behaviorEvents / commandMap 等），避免旧视频数据串场。
+        """
+        # 1. 停旧循环
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+        # 2. 重建帧源 + 流水线状态（复用已加载 detector，清空跨场景/跨循环累积状态）
+        self.scenario = scenario
+        self._rebuild_pipeline(scenario)
+        self.frame_source = build_frame_source(scenario, self.hp_settings)
+        self.n_frames = self.frame_source.frame_count
+
+        # 帧源可用性校验（CAVIAR / video_file 共用，含 caviar_jpg 无帧保护）
+        self._validate_frame_source(scenario)
+
+        self._frame_index = 0
+        self.store = DemoStateStore()  # 新会话：清空历史闭环状态
+
+        # 3. 重开循环
+        self._task = asyncio.create_task(self.run_loop())
+
+        # 4. 广播切换事件（前端清空跨帧累积状态）
+        await self.hub.broadcast({
+            "type": "source_switched",
+            "scenario": scenario.scenario_id,
+            "source": scenario.source,
+            "source_type": scenario.source_type,
+            "frames": self.n_frames,
+        })
+
+
+    def _rebuild_pipeline(self, scenario: "ScenarioConfig") -> None:
+        """重建流水线状态组件（复用已加载的 YOLO detector，避免重载权重）。
+
+        清空跨循环/跨场景累积的追踪（VisitorTracker）/ 时间窗口（FeatureExtractor）/
+        规则计数（RuleEngine）/ 决策状态（DecisionEngine）等，使每次分析都从干净状态开始，
+        保证循环重放 / 切换场景后风险能重新触发（否则演示区 ②③④ 在多轮循环后变空白）。
+        仅重建组件，detector 实例复用（model.track(persist=True) 要求同一实例保证 track_id 一致）。
+        """
+        self.clock = DemoClock(start=scenario.start_time, interval_s=scenario.frame_interval_s)
+        self.pipeline = PerceptionPipeline.from_settings(
+            self.hp_settings,
+            detector=self.pipeline.detector,
+            device_id=scenario.source,
+            now_provider=self.clock,
+            frame_interval_s=scenario.frame_interval_s,
+        )
+
+    # ======================================================================
+    # FastAPI app 工厂
+    # ======================================================================
 
 def create_app(
     demo_settings: Optional[DemoSettings] = None,
@@ -241,7 +316,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # 启动：装配 + 起帧循环后台 task
+        # 启动：确保上传目录存在 + 装配 + 起帧循环后台 task
+        Path(demo_settings.upload_dir).mkdir(parents=True, exist_ok=True)
         gateway.assemble()
         gateway._task = asyncio.create_task(gateway.run_loop())
         try:
@@ -285,8 +361,9 @@ def create_app(
     async def health() -> Dict[str, Any]:
         return {
             "status": "ok",
-            "scenario": scenario.scenario_id,
-            "source": scenario.source,
+            "scenario": gateway.scenario.scenario_id,
+            "source": gateway.scenario.source,
+            "source_type": gateway.scenario.source_type,
             "n_frames": gateway.n_frames,
             "frame_index": gateway._frame_index,
             "active_connections": len(gateway.hub.active),
@@ -309,6 +386,126 @@ def create_app(
             pass
         finally:
             await gateway.hub.disconnect(ws)
+
+    # ------------------------------------------------------------------
+    # P0-11.4 视频输入适配层：场景输入 / 视频源接入
+    # ------------------------------------------------------------------
+
+    @app.post("/demo/upload")
+    async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
+        """P0-11.4 视频输入适配：接收本地视频 → 落盘 → 热切换 VideoFileFrameSource → 重开帧循环。
+
+        视频只是"传感器"：经冻结 Pipeline 产出 身份→轨迹→行为→风险→解释→干预 全链，
+        不调用任何视觉大模型 API（工程闭环验证，非模型性能评测）。
+        """
+        allowed = {".mp4", ".mpg", ".mpeg", ".avi", ".mov", ".mkv", ".webm"}
+        fname = file.filename or ""
+        ext = Path(fname).suffix.lower()
+        if ext not in allowed:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"不支持的视频格式 {ext or '(无扩展名)'}，仅允许 {sorted(allowed)}"},
+            )
+
+        upload_dir = Path(demo_settings.upload_dir)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = f"{uuid.uuid4().hex}{ext}"
+        dest = upload_dir / safe_name
+
+        # 流式写入，避免大文件占满内存；同时累计字节数，超 max_upload_mb 则 413 拒绝并清理
+        max_bytes = int(demo_settings.max_upload_mb * 1024 * 1024)
+        written = 0
+        try:
+            with dest.open("wb") as out:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        out.close()
+                        try:
+                            dest.unlink()
+                        except OSError:
+                            pass
+                        return JSONResponse(
+                            status_code=413,
+                            content={
+                                "error": (
+                                    f"视频过大（{written / 1024 / 1024:.1f} MB），"
+                                    f"上限 {demo_settings.max_upload_mb:.0f} MB"
+                                )
+                            },
+                        )
+                    out.write(chunk)
+        except Exception as exc:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            return JSONResponse(status_code=500, content={"error": f"文件写入失败：{exc}"})
+
+        # 构造 video_file 场景（复用当前 scenario 的播放参数，保证观感一致）
+        base = gateway.scenario
+        new_scenario = ScenarioConfig(
+            scenario_id="uploaded_video",
+            source=dest.stem,
+            source_type="video_file",
+            media_path=str(dest),
+            start_time=datetime.now(timezone.utc),
+            frame_interval_s=base.frame_interval_s,
+            fps_target=base.fps_target,
+            loop=True,
+            description=f"用户上传：{fname}",
+        )
+        try:
+            await gateway.switch_source(new_scenario)
+        except Exception as exc:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            return JSONResponse(status_code=422, content={"error": f"视频接入失败：{exc}"})
+
+        return {
+            "status": "ok",
+            "source_id": safe_name,
+            "filename": fname,
+            "frames": gateway.n_frames,
+            "message": "已开始分析，Dashboard 实时刷新（身份→轨迹→行为→风险→干预）",
+        }
+
+    @app.post("/demo/scenario")
+    async def switch_scenario(req: Request) -> Dict[str, Any]:
+        """P0-11.4 场景输入：按 scenario_id（或路径）热切换到预置场景（模拟场景 / CAVIAR 工程验证）。"""
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+        scn_id = (body.get("scenario_id") or "").strip()
+        if not scn_id:
+            return JSONResponse(status_code=400, content={"error": "缺少 scenario_id"})
+        # 仅允许 scenarios_dir 内的预置场景；解析后校验归属，杜绝 ../ 路径穿越（评审 #4）
+        scenarios_root = Path(demo_settings.scenarios_dir).resolve()
+        candidate = (scenarios_root / f"{scn_id}.yaml").resolve()
+        if not candidate.is_relative_to(scenarios_root) or not candidate.is_file():
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"场景不存在: {scn_id}（应在 {demo_settings.scenarios_dir}/ 下）"},
+            )
+        found = candidate
+        try:
+            sc = load_scenario(found)
+            await gateway.switch_source(sc)
+        except Exception as exc:
+            return JSONResponse(status_code=422, content={"error": f"场景切换失败：{exc}"})
+        return {
+            "status": "ok",
+            "scenario": sc.scenario_id,
+            "source": sc.source,
+            "source_type": sc.source_type,
+            "frames": gateway.n_frames,
+        }
 
     # 把 gateway 挂到 app.state，便于测试 / 调试访问
     app.state.gateway = gateway

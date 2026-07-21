@@ -100,9 +100,6 @@
     .risk-card:last-child { margin-bottom: 0; }
     .rc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .rc-id { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .rc-reason { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; }
-    .rc-reason li { margin: 2px 0; }
-    .rc-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 11px; color: var(--muted); }
     .bar { flex: 1 1 auto; height: 6px; background: #eef2f7; border-radius: 999px; overflow: hidden; max-width: 140px; }
     .bar > i { display: block; height: 100%; border-radius: 999px; }
     .rlevel { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
@@ -115,7 +112,6 @@
     .cl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .cl-wid { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
     .cl-rl { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
-    .cl-rec { font-size: 11.5px; color: var(--muted); margin: 6px 0; }
     .stepper { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
     .step { flex: 1 1 0; text-align: center; font-size: 11px; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--line); background: #f8fafc; color: var(--muted); font-weight: 600; }
     .step.done { background: #ecfdf5; border-color: #a7f3d0; color: var(--ok); }
@@ -138,6 +134,50 @@
     .route-list { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
     .route-list code { font-size: 11px; }
 
+    /* ---------- Region 3 deepen: 风险解释卡片 ---------- */
+    .rc-section { margin-top: 10px; }
+    .rc-label { font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 5px; letter-spacing: .3px; }
+    .rc-reason { margin: 0; padding-left: 18px; }
+    .rc-reason li { margin: 2px 0; font-size: 12.5px; }
+    .rc-triggers { display: flex; flex-wrap: wrap; gap: 6px; }
+    .trig-chip { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; border: 1px solid; }
+    .trig-chip b { font-weight: 800; margin-left: 3px; }
+    .rc-time { font-size: 11px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .rc-foot2 { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+    .meter { flex: 1 1 160px; min-width: 140px; }
+    .meter-label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+    .meter-label b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .rc-rec { font-size: 12px; }
+    .rc-meta { margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .rc-meta code { font-size: 11px; background: #f1f5f9; padding: 1px 5px; border-radius: 5px; }
+    .rc-ev { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .ev-chip2 { font-size: 10.5px; color: #475569; background: #f1f5f9; border: 1px solid var(--line); padding: 1px 7px; border-radius: 6px; }
+    .rc-link { margin-top: 10px; font-size: 11px; color: var(--brand); font-weight: 600; }
+
+    /* ---------- Region 4 deepen: 三端任务卡联动 ---------- */
+    .cl-reasons { font-size: 12px; color: var(--ink); margin: 6px 0; font-weight: 600; }
+    .cl-rec2 { font-size: 11.5px; color: var(--muted); margin-left: auto; }
+    .tasks { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
+    .task { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: #fff; }
+    .task.family { border-left: 3px solid var(--brand); }
+    .task.community { border-left: 3px solid var(--ok); }
+    .task.log { border-left: 3px solid #94a3b8; background: #fafafa; }
+    .task-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
+    .task-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .task-dot.f { background: var(--brand); }
+    .task-dot.c { background: var(--ok); }
+    .task-dot.l { background: #94a3b8; }
+    .task-status { margin-left: auto; font-size: 10.5px; font-weight: 700; color: #475569; background: #f1f5f9; padding: 1px 7px; border-radius: 6px; }
+    .task-body { font-size: 12px; color: var(--ink); margin-top: 5px; line-height: 1.45; }
+    .task-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+    .task-empty { font-size: 11.5px; color: var(--muted); margin-top: 4px; font-style: italic; }
+
+    /* ---------- Route panel deepen: 实际 payload 预览 ---------- */
+    .route-item { padding: 5px 0; border-bottom: 1px dashed var(--line); }
+    .route-item:last-child { border-bottom: 0; }
+    .route-cmd { font-size: 11.5px; font-weight: 700; }
+    .route-hint { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+
     /* ---------- Region 5: Architecture ---------- */
     .arch .body { padding: 8px; }
     .arch svg { width: 100%; height: auto; display: block; }
@@ -146,6 +186,34 @@
     /* ---------- Disclaimer footer ---------- */
     .disclaimer { margin-top: 16px; font-size: 11.5px; color: var(--muted); background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 14px; }
     .disclaimer b { color: #92400e; }
+
+    /* ---------- P0-11.4 场景输入 / 视频源接入 ---------- */
+    .source-panel { margin-bottom: 16px; }
+    .source-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch; }
+    .src-controls { flex: 1 1 420px; min-width: 300px; }
+    .mode-tabs { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+    .mode-tabs label { font-size: 13px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+    .src-sub { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .src-sub[hidden] { display: none; }
+    .src-btn {
+      border: 1px solid var(--line); background: #fff; color: var(--ink);
+      border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: .15s;
+    }
+    .src-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+    .src-btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .src-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+    .src-btn:disabled { opacity: .5; cursor: not-allowed; }
+    #video-file { font-size: 12px; max-width: 240px; }
+    .src-status { font-size: 12px; color: var(--muted); }
+    .src-hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+
+    /* AI 状态卡（工程成熟度，非准确率） */
+    .ai-status { flex: 1 1 280px; min-width: 260px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafbff; }
+    .ai-status h4 { margin: 0 0 8px; font-size: 12.5px; }
+    .ai-row { display: flex; align-items: center; gap: 7px; font-size: 12px; margin: 4px 0; color: var(--ink); }
+    .ai-row .ck { width: 16px; text-align: center; color: var(--ok); font-weight: 700; }
+    .ai-model { margin-top: 8px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+    .ai-model code { font-size: 11px; background: #f1f5f9; padding: 1px 5px; border-radius: 5px; }
 
     /* ---------- Toasts ---------- */
     #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
@@ -166,6 +234,42 @@
       <span class="pill offline" id="ws-pill"><span class="dot"></span><span id="ws-text">未连接</span></span>
     </header>
 
+    <!-- P0-11.4 场景输入 / 视频源接入 -->
+    <section class="region source-panel">
+      <h2>⚙ 场景输入 / 视频源接入 <span class="tag">入口适配验证</span></h2>
+      <div class="body source-body">
+        <div class="src-controls">
+          <div class="mode-tabs">
+            <label><input type="radio" name="srcmode" value="sim" checked /> 模拟场景</label>
+            <label><input type="radio" name="srcmode" value="local" /> 本地视频测试</label>
+            <label><input type="radio" name="srcmode" value="cam" disabled /> 摄像头接入 (Coming Soon)</label>
+          </div>
+          <div class="src-sub" id="sim-panel">
+            <button class="src-btn" data-scn="cctv_surveillance_suspicious">CCTV 夜间异常</button>
+            <button class="src-btn" data-scn="delivery_courier_normal">Delivery 白天正常</button>
+            <button class="src-btn" data-scn="night_visit">CAVIAR 工程验证</button>
+          </div>
+          <div class="src-sub" id="local-panel" hidden>
+            <input type="file" id="video-file" accept="video/mp4,video/*,.mp4,.mpg,.mov,.avi" />
+            <button class="src-btn primary" id="btn-analyze">开始分析</button>
+            <span class="src-status" id="upload-status"></span>
+          </div>
+          <div class="src-sub" id="cam-panel" hidden>
+            <span class="src-hint">RTSP / EZVIZ 摄像头接入将在 P1 多模态感知层提供（视频 + 语音 + 门铃 + 通信）。</span>
+          </div>
+          <div class="src-hint">视频只是<b>传感器</b>：经冻结架构持续观察，建立「访客连续身份 → 访问轨迹 → 时间行为模式 → 风险累积 → 解释 → 干预」全链，而非调用视觉大模型判断「是否诈骗」。</div>
+        </div>
+        <aside class="ai-status">
+          <h4>AI 状态 · 工程闭环验证</h4>
+          <div class="ai-row"><span class="ck">✓</span> 人体检测（YOLO）</div>
+          <div class="ai-row"><span class="ck">✓</span> 轨迹跟踪（ReID 连续身份）</div>
+          <div class="ai-row"><span class="ck">✓</span> 行为建模（停留 / 再现 / 升级）</div>
+          <div class="ai-row"><span class="ck">✓</span> 风险解释（规则命中强度）</div>
+          <div class="ai-model">模型版本：<code>Demo-YOLO11n</code> · 当前为<b>端到端链路验证</b>，模型采用基础检测器，后续经真实居家数据持续优化。</div>
+        </aside>
+      </div>
+    </section>
+
     <div class="grid">
       <!-- Region 1: Live Video -->
       <section class="region video">
@@ -185,17 +289,17 @@
         </div>
       </section>
 
-      <!-- Region 2: AI Timeline -->
+      <!-- Region 2: AI 行为时间线 -->
       <section class="region timeline">
-        <h2>② AI 时间线 <span class="tag">PerceptionEvent 流</span></h2>
+        <h2>② AI 行为时间线 <span class="tag">访客行为演化</span></h2>
         <div class="body" id="timeline-body">
-          <div class="tl-empty">暂无 AI 事件</div>
+          <div class="tl-empty">等待访客行为…</div>
         </div>
       </section>
 
       <!-- Region 3: Risk cards -->
       <section class="region risk">
-        <h2>③ 风险解释卡片 <span class="tag">活跃 WarningEvent</span></h2>
+        <h2>③ 风险解释卡片 <span class="tag">人话原因 · 触发规则</span></h2>
         <div class="body" id="risk-body">
           <div class="tl-empty">当前无活跃风险</div>
         </div>
@@ -203,7 +307,7 @@
 
       <!-- Region 4: Action closure -->
       <section class="region closure">
-        <h2>④ 行动闭环 <span class="tag">家属 / 社区 人工确认</span></h2>
+        <h2>④ 行动闭环 <span class="tag">家属 / 社区 任务卡联动</span></h2>
         <div class="body">
           <div class="closure-cards" id="closure-cards">
             <div class="tl-empty">暂无待闭环风险</div>
@@ -223,7 +327,7 @@
               <div class="route-list" id="rc-log-list"><span class="muted">—</span></div>
             </div>
             <div class="route-list" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
-              路由由 <code>bridge.route_commands</code> 按 <code>command_type</code> 分发（ADR-0015 §2.2）。
+              跨帧累积三端命令（含实际 payload 预览），由 <code>bridge.route_commands</code> 按 <code>command_type</code> 分发（ADR-0015 §2.2）。
             </div>
           </aside>
         </div>
@@ -313,6 +417,15 @@
       MEDIUM: { t: "中", c: "#d97706" },
       HIGH:   { t: "高", c: "#dc2626" }
     };
+    var RISK_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+    // 区域② 行为里程碑：event_type → 图标/人话标签/颜色（体现 Tracking/Event 演化价值）
+    var BEHAV = {
+      visit_normal:         { icon: "🌙", label: "异常时段到访", color: "#0891b2" },
+      visit_pending_verify: { icon: "🔍", label: "待核实到访",   color: "#0ea5e9" },
+      abnormal_dwell:       { icon: "⏱", label: "停留超过阈值", color: "#d97706" },
+      repeat_visit:         { icon: "🔁", label: "再次出现",     color: "#7c3aed" },
+      high_risk_approach:   { icon: "⚠", label: "高风险逼近",   color: "#dc2626" }
+    };
     var EVT = {
       visit_normal: "正常到访",
       visit_pending_verify: "待核到访",
@@ -329,8 +442,27 @@
     };
     var ACT = {
       MONITOR: "仅监测",
-      NOTIFY_FAMILY: "通知家属",
-      ESCALATE_COMMUNITY: "升级社区"
+      NOTIFY_FAMILY: "通知家属核实",
+      ESCALATE_COMMUNITY: "升级社区处置"
+    };
+    // 触发规则标签（贴近 reason_summary，给人话解释；与 EVT_COLOR 区分使用）
+    var TRIG = {
+      high_risk_approach: "高风险逼近",
+      abnormal_dwell: "异常停留",
+      repeat_visit: "重复访问",
+      visit_pending_verify: "未在白名单",
+      visit_normal: "异常时段访问"
+    };
+    var TRIG_COLOR = {
+      high_risk_approach: "#dc2626",
+      abnormal_dwell: "#d97706",
+      repeat_visit: "#7c3aed",
+      visit_pending_verify: "#0ea5e9",
+      visit_normal: "#0891b2"
+    };
+    // ActionCommand 执行层状态 → 中文（系统侧是否发出，区别于人工确认状态）
+    var CMD_STATUS = {
+      PENDING: "待执行", DONE: "已执行", FAILED: "执行失败", RETRYING: "重试中", GIVEN_UP: "已放弃"
     };
     var CLOSURE = {
       pending:        { t: "待处理", c: "#64748b" },
@@ -341,20 +473,31 @@
       CREATED: "已生成", PENDING: "已下发", CONFIRMED: "已确认", RESOLVED: "已闭环", REJECTED: "已拒绝"
     };
 
-    // ---------- state ----------
+    // ---------- state（P0-11.3 Dashboard 状态层：从"事实生产"聚合出"用户认知"）----------
     var state = {
       frame: null,
-      stateMap: {},            // warning_id -> {status, operator}
-      activeWarnings: [],
+      stateMap: {},            // warning_id -> {status, operator}（闭环人工状态）
+      // ── Warning 保活（修复区域③④"闪现即消失"）──
+      // 网关每帧只广播"当前帧"的 active_warnings（98%+ 为空），逐帧覆盖会让风险卡闪现。
+      // warningMap 按 warning_id 跨帧 upsert 保活，status 终态时移除，超上限按 created_at 修剪。
+      warningMap: {},          // warning_id -> warning dict（最新快照，跨帧保活）
+      warningMax: 30,
       routed: { family: [], community: [], log_only: [] },
-      timeline: [],            // capped
-      timelineMax: 160
+      commandMap: {},          // warning_id -> {family, community, log_only: Map(command_id->command)}（跨帧累积，O(1) 去重，供区域④联动）
+      // ── AI 行为时间线（区域②：把稀疏 perception_events/warnings 累积成行为演化叙事）──
+      behaviorEvents: [],      // 行为里程碑（最新在上，跨帧去重累积）
+      behaviorSeen: {},        // 去重键集合
+      behaviorMax: 120,
+      behaviorN: 0,
+      visitorSeq: {},          // visitor_id(UUID) -> "访客#N" 友好名
+      visitorSeqN: 0,
+      visitorFirst: {}         // visitor_id -> 是否已记"首次出现"
     };
 
     // ---------- helpers ----------
     function $(id) { return document.getElementById(id); }
     function esc(s) {
-      if (s == null) return "";
+      if (s === null || s === undefined) return "";
       return String(s).replace(/[&<>"']/g, function (c) {
         return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
       });
@@ -373,6 +516,76 @@
         el.classList.remove("show");
         setTimeout(function () { el.remove(); }, 250);
       }, 2600);
+    }
+
+    // ---------- P0-11.4 联动辅助 ----------
+    // 三端命令按 warning_id 跨帧累积（同一 warning 的 家属/社区 任务卡借此与风险卡片联动）
+    function mergeCommands(routed) {
+      var types = ["family", "community", "log_only"];
+      for (var i = 0; i < types.length; i++) {
+        var arr = (routed && routed[types[i]]) || [];
+        for (var j = 0; j < arr.length; j++) {
+          var c = arr[j];
+          var wid = c.warning_id;
+          if (!wid) continue;
+          if (!state.commandMap[wid]) state.commandMap[wid] = { family: new Map(), community: new Map(), log_only: new Map() };
+          var map = state.commandMap[wid][types[i]];
+          var cid = c.command_id;
+          if (cid === null || cid === undefined) cid = "__null__";  // 缺 id 的命令按同一键去重（与原数组语义一致）
+          if (!map.has(cid)) {                          // O(1) 去重，避免大帧线性扫描抖动
+            map.set(cid, c);
+            if (map.size > 24) { var old = map.keys().next().value; map.delete(old); }
+          }
+        }
+      }
+    }
+    function lookupCommands(wid) {
+      var m = state.commandMap[wid];
+      if (!m) return { family: [], community: [], log_only: [] };
+      return {
+        family: Array.from(m.family.values()),
+        community: Array.from(m.community.values()),
+        log_only: Array.from(m.log_only.values())
+      };
+    }
+    function allRouted() {
+      var fam = [], com = [], log = [];
+      for (var wid in state.commandMap) {
+        var m = state.commandMap[wid];
+        fam = fam.concat(Array.from(m.family.values()));
+        com = com.concat(Array.from(m.community.values()));
+        log = log.concat(Array.from(m.log_only.values()));
+      }
+      return { family: fam, community: com, log_only: log };
+    }
+    function cmdStatusLabel(s) { return CMD_STATUS[s] || s || "—"; }
+    function maskPhone(p) {
+      p = String(p === null || p === undefined ? "" : p);
+      if (p.length >= 7) return p.slice(0, 3) + "****" + p.slice(-4);
+      return "***";
+    }
+    function hhmmss(iso) {
+      if (!iso) return "—";
+      var t = String(iso).replace("T", " ");
+      var m = t.match(/(\d{2}:\d{2}:\d{2})/);
+      return m ? m[1] : t.slice(0, 19);
+    }
+    function hintPayload(c) {
+      var p = c.payload || {};
+      var ct = c.command_type;
+      if (ct === "SEND_FAMILY_MESSAGE") {
+        var msg = String(p.message || "");
+        return msg.length > 48 ? msg.slice(0, 48) + "…" : msg;
+      }
+      if (ct === "CREATE_COMMUNITY_TASK") {
+        var rs = (p.reasons || []).join("、");
+        return "工单：" + (rs || "—") + " · 风险 " + (p.risk_level || "?");
+      }
+      if (ct === "LOG_ONLY") {
+        var rr = (p.reason_summary || []).join("、");
+        return "记入：" + (rr || p.risk_level || "—");
+      }
+      return c.command_type || "?";
     }
 
     // ---------- WebSocket ----------
@@ -412,13 +625,17 @@
         state.frame = msg.view;
         // 合并闭环状态快照（每帧都带全量 state）
         if (msg.state) Object.assign(state.stateMap, msg.state);
-        state.activeWarnings = msg.active_warnings || [];
+        var activeNow = msg.active_warnings || [];
+        ingestWarnings(activeNow);     // 跨帧保活（修复区域③④闪现）
         state.routed = msg.routed_commands || { family: [], community: [], log_only: [] };
-        pushTimeline(msg.view);
+        mergeCommands(state.routed);   // 跨帧累积三端命令，供区域④按 warning_id 联动
+        ingestBehavior(msg.view, activeNow);  // 累积访客行为里程碑（区域② 行为演化）
         renderAll();
       } else if (msg.type === "state_update") {
         if (msg.state) Object.assign(state.stateMap, msg.state);
         renderClosure();
+      } else if (msg.type === "source_switched") {
+        resetSession(msg.scenario, msg.source, msg.source_type, msg.frames);
       } else if (msg.type === "action_ack") {
         toast("已记录：" + (msg.action || "操作"));
       } else if (msg.type === "error") {
@@ -426,16 +643,127 @@
       }
     }
 
-    function pushTimeline(view) {
-      var events = (view && view.perception_events) || [];
-      state.timeline.unshift({
-        frame_index: view.frame_index,
-        demo_time: view.demo_time,
-        n_det: view.n_detections,
-        events: events
+    // ---------- P0-11.3 状态层：Warning 保活 ----------
+    // 每帧把当前 active_warnings upsert 进 warningMap（按 warning_id 保活），
+    // status 终态（RESOLVED/REJECTED）时移除，超上限按 created_at 修剪。
+    function ingestWarnings(list) {
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
+        if (!w || !w.warning_id) continue;
+        state.warningMap[w.warning_id] = w;   // upsert 最新快照
+      }
+      // 终态移除
+      for (var wid in state.warningMap) {
+        var st = state.warningMap[wid].status;
+        if (st === "RESOLVED" || st === "REJECTED") delete state.warningMap[wid];
+      }
+      pruneWarnings(state.warningMax);
+    }
+    function pruneWarnings(max) {
+      var ids = Object.keys(state.warningMap);
+      if (ids.length <= max) return;
+      ids.sort(function (a, b) {
+        return String(state.warningMap[a].created_at || "").localeCompare(String(state.warningMap[b].created_at || ""));
       });
-      if (state.timeline.length > state.timelineMax) {
-        state.timeline.length = state.timelineMax;
+      var remove = ids.length - max;
+      for (var i = 0; i < remove; i++) delete state.warningMap[ids[i]];  // 移除最旧
+    }
+    // 聚合出稳定的活跃风险列表（区域③④ 共用，替代逐帧 activeWarnings）
+    function activeWarningList() {
+      var arr = [];
+      for (var wid in state.warningMap) arr.push(state.warningMap[wid]);
+      arr.sort(function (a, b) {
+        var ra = RISK_RANK[a.risk_level] || 0, rb = RISK_RANK[b.risk_level] || 0;
+        if (rb !== ra) return rb - ra;  // 风险高者在前
+        return String(b.created_at || "").localeCompare(String(a.created_at || ""));  // 新者在前
+      });
+      return arr;
+    }
+
+    // ---------- P0-11.4 视频输入：切换输入源后清空跨帧累积（新视频 = 新会话） ----------
+    function resetSession(scenario, source, sourceType, frames) {
+      state.frame = null;
+      state.stateMap = {};
+      state.warningMap = {};
+      state.routed = { family: [], community: [], log_only: [] };
+      state.commandMap = {};
+      state.behaviorEvents = [];
+      state.behaviorSeen = {};
+      state.behaviorN = 0;
+      state.visitorSeq = {};
+      state.visitorSeqN = 0;
+      state.visitorFirst = {};
+      // 清空视频帧与各区
+      $("video-img").style.display = "none";
+      $("video-ph").style.display = "block";
+      $("video-ph").textContent = "已切换输入源，等待新画面…";
+      renderAll();
+      toast("已切换输入源 → " + (scenario || "?") + (source ? "（" + source + "）" : ""));
+      // 更新顶部场景标签
+      $("scenario-sub").textContent = "P0-11 视频输入适配 · 场景 " + (scenario || "?")
+        + " · 源 " + (source || "?") + " · 类型 " + (sourceType || "?") + " · 帧数 " + (frames || 0);
+    }
+
+    // ---------- P0-11.3 状态层：AI 行为时间线 ----------
+    function friendlyVisitor(vid) {
+      if (!vid) return "访客";
+      if (!state.visitorSeq[vid]) {
+        state.visitorSeqN += 1;
+        state.visitorSeq[vid] = "访客#" + state.visitorSeqN;
+      }
+      return state.visitorSeq[vid];
+    }
+    function addBehavior(ev) {
+      if (!ev || !ev.key || state.behaviorSeen[ev.key]) return;
+      state.behaviorSeen[ev.key] = true;
+      ev.seq = (state.behaviorN += 1);
+      state.behaviorEvents.unshift(ev);   // 最新在上
+      if (state.behaviorEvents.length > state.behaviorMax) {
+        state.behaviorEvents.length = state.behaviorMax;
+      }
+    }
+    // 从稀疏的 perception_events + warnings 累积去重出「行为里程碑」，
+    // 展现 Tracking/Event/Feature 的演化价值（visitor 进入→停留→再现→升级）。
+    function ingestBehavior(view, warns) {
+      var pes = (view && view.perception_events) || [];
+      for (var i = 0; i < pes.length; i++) {
+        var pe = pes[i];
+        var vid = pe.visitor_id || "";
+        var who = friendlyVisitor(vid);
+        // 首次出现（该 visitor 第一次进入时间线）
+        if (vid && state.visitorFirst[vid] !== true) {
+          state.visitorFirst[vid] = true;
+          addBehavior({
+            key: "enter|" + vid,
+            time: pe.created_at || null,
+            icon: "👤", label: "首次出现", color: "#0891b2",
+            who: who, detail: "进入" + (pe.location || "门口") + "画面"
+          });
+        }
+        var bm = BEHAV[pe.event_type] || { icon: "•", label: pe.event_type || "事件", color: "#64748b" };
+        addBehavior({
+          key: "pe|" + vid + "|" + pe.event_type + "|" + (pe.repeat_count != null ? pe.repeat_count : 0),
+          time: pe.created_at || null,
+          icon: bm.icon, label: bm.label, color: bm.color,
+          who: who,
+          score: (typeof pe.score === "number") ? pe.score : null,
+          repeat: (pe.repeat_count != null ? pe.repeat_count : null),
+          detail: pe.location ? ("位置 " + pe.location) : ""
+        });
+      }
+      // 风险升级/生成（首次出现某 warning_id 时记一条）
+      warns = warns || [];
+      for (var k = 0; k < warns.length; k++) {
+        var w = warns[k];
+        if (!w || !w.warning_id) continue;
+        var wk = "warn|" + w.warning_id;
+        if (state.behaviorSeen[wk]) continue;
+        var rl = riskOf(w.risk_level);
+        addBehavior({
+          key: wk, time: w.created_at || null,
+          icon: "⚠", label: "生成风险预警（" + rl.t + "）", color: rl.c,
+          who: "", detail: (w.reason_summary || []).join("、")
+        });
       }
     }
 
@@ -475,42 +803,35 @@
 
     function renderTimeline() {
       var body = $("timeline-body");
-      if (!state.timeline.length) {
-        body.innerHTML = '<div class="tl-empty">暂无 AI 事件</div>';
+      var evs = state.behaviorEvents;
+      if (!evs.length) {
+        body.innerHTML = '<div class="tl-empty">等待访客行为…</div>';
         return;
       }
       var html = "";
-      for (var i = 0; i < state.timeline.length; i++) {
-        var t = state.timeline[i];
-        var time = t.demo_time ? t.demo_time.replace("T", " ").slice(11, 19) : ("#" + t.frame_index);
-        html += '<div class="tl-item"><div class="tl-time">' + esc(time) + '</div><div class="tl-main">';
-        if (!t.events.length) {
-          html += '<div class="tl-row"><span class="score">帧 #' + t.frame_index + ' · 检测 ' + (t.n_det || 0) + ' · 无触发事件</span></div>';
-        } else {
-          for (var j = 0; j < t.events.length; j++) {
-            var e = t.events[j];
-            var et = e.event_type || "?";
-            var col = EVT_COLOR[et] || "#64748b";
-            var label = EVT[et] || et;
-            var score = (typeof e.score === "number") ? e.score.toFixed(2) : "?";
-            var loc = e.location ? esc(e.location) : "";
-            var rule = (e.meta && e.meta.rule) ? esc(e.meta.rule) : "";
-            html += '<div class="tl-row">'
-              + '<span class="ev-chip" style="background:' + col + '">' + esc(label) + '</span>'
-              + '<span class="score">强度 ' + score + '</span>'
-              + (loc ? '<span class="score">位置 ' + loc + '</span>' : '')
-              + '</div>';
-            if (rule) html += '<div class="tl-meta">规则：' + rule + '</div>';
-          }
-        }
-        html += '</div></div>';
+      for (var i = 0; i < evs.length; i++) {
+        var e = evs[i];
+        var time = e.time ? hhmmss(e.time) : "—";
+        var extra = [];
+        if (typeof e.score === "number") extra.push("强度 " + e.score.toFixed(2));
+        if (e.repeat != null) extra.push("第 " + e.repeat + " 次");
+        if (e.detail) extra.push(e.detail);
+        html += '<div class="tl-item">'
+          + '<div class="tl-time">' + esc(time) + '</div>'
+          + '<div class="tl-main">'
+          +   '<div class="tl-row">'
+          +     '<span class="ev-chip" style="background:' + e.color + '">' + esc(e.icon + " " + e.label) + '</span>'
+          +     (e.who ? '<span class="score">' + esc(e.who) + '</span>' : '')
+          +   '</div>'
+          +   (extra.length ? '<div class="tl-meta">' + esc(extra.join(" · ")) + '</div>' : '')
+          + '</div></div>';
       }
       body.innerHTML = html;
     }
 
     function renderRisks() {
       var body = $("risk-body");
-      var list = state.activeWarnings || [];
+      var list = activeWarningList();   // 跨帧保活聚合（不再逐帧被覆盖 → 不闪现）
       if (!list.length) {
         body.innerHTML = '<div class="tl-empty">当前无活跃风险</div>';
         return;
@@ -521,20 +842,39 @@
         var rl = riskOf(w.risk_level);
         var score = (typeof w.perception_score === "number") ? w.perception_score : 0;
         var reasons = (w.reason_summary || []).map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("");
+        var triggers = (w.trigger_events || []).map(function (t) {
+          var et = t.event_type || "?";
+          var col = TRIG_COLOR[et] || "#64748b";
+          var label = TRIG[et] || et;
+          var sc = (typeof t.score === "number") ? t.score.toFixed(2) : "?";
+          return '<span class="trig-chip" style="background:' + col + '1a;color:' + col + ';border-color:' + col + '55">'
+            + esc(label) + ' <b>' + sc + '</b></span>';
+        }).join("");
         var rec = ACT[w.recommended_action] || w.recommended_action || "—";
         var wstat = WARN_STATUS[w.status] || w.status || "—";
+        var evChips = "";
+        if (w.evidence && w.evidence.length) {
+          evChips = '<div class="rc-ev">'
+            + w.evidence.map(function (e, idx) { return '<span class="ev-chip2">证据 ' + (idx + 1) + '</span>'; }).join("")
+            + '</div>';
+        }
         html += '<div class="risk-card" style="border-left-color:' + rl.c + '">'
           + '<div class="rc-head">'
-          + '<span class="rlevel" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
-          + '<span class="rc-id">' + esc(shortId(w.warning_id)) + '</span>'
-          + '<span class="cl-status" style="color:' + rl.c + ';background:' + rl.c + '1a">' + esc(wstat) + '</span>'
+          +   '<span class="rlevel" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="rc-id">' + esc(shortId(w.warning_id)) + '</span>'
+          +   '<span class="rc-time">生成 ' + esc(hhmmss(w.created_at)) + '</span>'
+          +   '<span class="cl-status" style="color:' + rl.c + ';background:' + rl.c + '1a">' + esc(wstat) + '</span>'
           + '</div>'
-          + (reasons ? '<ul class="rc-reason">' + reasons + '</ul>' : '')
-          + '<div class="rc-foot">'
-          + '<span>建议：<b>' + esc(rec) + '</b></span>'
-          + '<span class="bar"><i style="width:' + (score * 100).toFixed(0) + '%;background:' + rl.c + '"></i></span>'
-          + '<span>强度 ' + score.toFixed(2) + '</span>'
+          + '<div class="rc-section"><div class="rc-label">人话原因</div><ul class="rc-reason">' + reasons + '</ul></div>'
+          + (triggers ? '<div class="rc-section"><div class="rc-label">触发规则</div><div class="rc-triggers">' + triggers + '</div></div>' : '')
+          + '<div class="rc-foot2">'
+          +   '<div class="meter"><div class="meter-label">规则命中强度 <b>' + score.toFixed(2) + '</b></div>'
+          +   '<div class="bar"><i style="width:' + (score * 100).toFixed(0) + '%;background:' + rl.c + '"></i></div></div>'
+          +   '<div class="rc-rec">建议：<b>' + esc(rec) + '</b></div>'
           + '</div>'
+          + (w.elder_id || w.device_id ? '<div class="rc-meta">设备 <code>' + esc(w.device_id || "—") + '</code> · 老人 <code>' + esc(w.elder_id || "—") + '</code></div>' : '')
+          + evChips
+          + '<div class="rc-link">→ 处置见区域④ 行动闭环</div>'
           + '</div>';
       }
       body.innerHTML = html;
@@ -542,43 +882,90 @@
 
     function renderClosure() {
       var wrap = $("closure-cards");
-      var warnings = (state.frame && state.frame.warnings) || [];
-      if (!warnings.length) {
+      var list = activeWarningList();   // 跨帧保活聚合（与区域③同源 → 联动稳定）
+      if (!list.length) {
         wrap.innerHTML = '<div class="tl-empty">暂无待闭环风险</div>';
         return;
       }
       var html = "";
-      for (var i = 0; i < warnings.length; i++) {
-        var w = warnings[i];
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
         var wid = w.warning_id;
+        var rl = riskOf(w.risk_level);
+        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
+        var cm = lookupCommands(wid);   // 本 warning 的三端命令（跨帧累积）
+
         var closure = state.stateMap[wid] ? state.stateMap[wid].status : "pending";
         if (!CLOSURE[closure]) closure = "pending";
         var cs = CLOSURE[closure];
-        var rl = riskOf(w.risk_level);
-        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
-
         var famDone = (closure === "family_handled" || closure === "community_done");
         var comDone = (closure === "community_done");
-        var famDisabled = famDone;                       // 家属已处理则不能再点
+        var famDisabled = famDone;                        // 家属已处理则不能再点
         var comDisabled = (closure !== "family_handled"); // 须先家属处理
+
+        // 家属端任务卡
+        var famTask = '<div class="task family"><div class="task-h"><span class="task-dot f"></span>家属端任务'
+          + (cm.family.length ? '<span class="task-status">' + cmdStatusLabel(cm.family[0].status) + '</span>' : '')
+          + '</div>';
+        if (cm.family.length) {
+          var fp = cm.family[0].payload || {};
+          var contact = fp.contact || {};
+          famTask += '<div class="task-body">' + esc(fp.message || "(无消息内容)") + '</div>'
+            + '<div class="task-sub">收件人：' + esc(contact.name || "—")
+            + (contact.relation ? '（' + esc(contact.relation) + '）' : '')
+            + ' · ' + esc(maskPhone(contact.phone)) + '</div>';
+        } else {
+          famTask += '<div class="task-empty">本风险未触发家属通知（建议：' + esc(rec) + '）</div>';
+        }
+        famTask += '</div>';
+
+        // 社区端任务卡
+        var comTask = '<div class="task community"><div class="task-h"><span class="task-dot c"></span>社区端任务'
+          + (cm.community.length ? '<span class="task-status">' + cmdStatusLabel(cm.community[0].status) + '</span>' : '')
+          + '</div>';
+        if (cm.community.length) {
+          var cp = cm.community[0].payload || {};
+          var reasons = (cp.reasons || []).join("、");
+          comTask += '<div class="task-body">工单原因：' + esc(reasons || "—") + '</div>'
+            + '<div class="task-sub">风险 ' + esc(cp.risk_level || "—") + ' · 端点 '
+            + esc(cp.endpoint || "—") + ' · 强度 '
+            + (typeof cp.perception_score === "number" ? cp.perception_score.toFixed(2) : "—") + '</div>';
+        } else {
+          comTask += '<div class="task-empty">本风险未触发社区工单</div>';
+        }
+        comTask += '</div>';
+
+        // 仅记录任务卡（与家属/社区端一致：无命令时也渲染占位卡片）
+        var logTask = '<div class="task log"><div class="task-h"><span class="task-dot l"></span>风险日志</div>';
+        if (cm.log_only.length) {
+          var lp = cm.log_only[0].payload || {};
+          var lrs = (lp.reason_summary || []).join("、");
+          logTask += '<div class="task-body">' + esc(lrs || lp.risk_level || "已记入风险日志")
+            + (lp.risk_level ? ' · 风险 ' + esc(lp.risk_level) : '') + '</div>';
+        } else {
+          logTask += '<div class="task-empty">本风险无日志记录</div>';
+        }
+        logTask += '</div>';
 
         html += '<div class="cl-card">'
           + '<div class="cl-top">'
-          + '<span class="cl-wid">' + esc(shortId(wid)) + '</span>'
-          + '<span class="cl-rl" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="cl-wid">' + esc(shortId(wid)) + '</span>'
+          +   '<span class="cl-rl" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="cl-rec2">建议：' + esc(rec) + '</span>'
           + '</div>'
-          + '<div class="cl-rec">建议动作：<b>' + esc(rec) + '</b></div>'
+          + '<div class="cl-reasons">' + esc((w.reason_summary || []).join(" · ")) + '</div>'
+          + '<div class="tasks">' + famTask + comTask + logTask + '</div>'
           + '<div class="stepper">'
-          + '<div class="step ' + (famDone ? "done" : (closure === "pending" ? "cur" : "")) + '">家属</div>'
-          + '<span class="arrow">→</span>'
-          + '<div class="step ' + (comDone ? "done" : (closure === "family_handled" ? "cur" : "")) + '">社区</div>'
+          +   '<div class="step ' + (famDone ? "done" : (closure === "pending" ? "cur" : "")) + '">家属确认</div>'
+          +   '<span class="arrow">→</span>'
+          +   '<div class="step ' + (comDone ? "done" : (closure === "family_handled" ? "cur" : "")) + '">社区闭环</div>'
           + '</div>'
           + '<div class="cl-actions">'
-          + '<button class="btn family" data-wid="' + esc(wid) + '" data-op="family" ' + (famDisabled ? "disabled" : "") + '>家属已认识 / 通知</button>'
-          + '<button class="btn community" data-wid="' + esc(wid) + '" data-op="community" ' + (comDisabled ? "disabled" : "") + '>社区已接单 / 处置</button>'
+          +   '<button class="btn family" data-wid="' + esc(wid) + '" data-op="family" ' + (famDisabled ? "disabled" : "") + '>家属已认识 / 通知</button>'
+          +   '<button class="btn community" data-wid="' + esc(wid) + '" data-op="community" ' + (comDisabled ? "disabled" : "") + '>社区已接单 / 处置</button>'
           + '</div>'
           + '<div style="margin-top:8px;text-align:right">'
-          + '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
+          +   '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
           + '</div>'
           + '</div>';
       }
@@ -586,14 +973,18 @@
     }
 
     function renderRouting() {
-      var r = state.routed || { family: [], community: [], log_only: [] };
+      var r = allRouted();   // 跨帧累积，稳定反映本场 Demo 已下发的三端命令
       $("rc-family").textContent = (r.family || []).length;
       $("rc-community").textContent = (r.community || []).length;
       $("rc-log").textContent = (r.log_only || []).length;
       function listHtml(arr) {
         if (!arr || !arr.length) return '<span class="muted">—</span>';
         return arr.map(function (c) {
-          return '<div>· <code>' + esc((c.command_type || "?").replace(/_/g, " ")) + '</code> <span class="muted">' + esc(shortId(c.command_id)) + '</span></div>';
+          var wid = c.warning_id ? shortId(c.warning_id) : "?";
+          return '<div class="route-item">'
+            + '<div class="route-cmd">' + esc((c.command_type || "?").replace(/_/g, " ")) + ' <span class="muted">' + esc(wid) + '</span></div>'
+            + '<div class="route-hint">' + esc(hintPayload(c)) + '</div>'
+            + '</div>';
         }).join("");
       }
       $("rc-family-list").innerHTML = listHtml(r.family);
@@ -612,6 +1003,60 @@
     fetch("/health").then(function (r) { return r.json(); }).then(function (h) {
       $("scenario-sub").textContent = "P0-11 MVP Demo · 场景 " + (h.scenario || "?") + " · 源 " + (h.source || "?") + " · 帧数 " + (h.n_frames || 0);
     }).catch(function () { /* 网关未起时静默 */ });
+
+    // ---------- P0-11.4 场景输入 / 视频源接入 ----------
+    (function setupSourcePanel() {
+      var tabs = document.querySelectorAll('input[name="srcmode"]');
+      var panels = { sim: $("sim-panel"), local: $("local-panel"), cam: $("cam-panel") };
+      tabs.forEach(function (t) {
+        t.addEventListener("change", function () {
+          var mode = t.value;
+          for (var k in panels) panels[k].hidden = (k !== mode);
+        });
+      });
+
+      // 模拟场景按钮 → POST /demo/scenario
+      document.querySelectorAll("#sim-panel [data-scn]").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var id = b.getAttribute("data-scn");
+          b.disabled = true;
+          fetch("/demo/scenario", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scenario_id: id })
+          }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (res) {
+              if (!res.ok) toast("场景切换失败：" + (res.j.error || "未知"), true);
+              else toast("已切换到场景：" + (res.j.scenario || id));
+            })
+            .catch(function () { toast("场景切换请求失败", true); })
+            .then(function () { b.disabled = false; });
+        });
+      });
+
+      // 本地视频：选择文件 → 开始分析 → POST /demo/upload（multipart）
+      var fileInput = $("video-file");
+      var statusEl = $("upload-status");
+      $("btn-analyze").addEventListener("click", function () {
+        if (!fileInput.files || !fileInput.files.length) {
+          toast("请先选择视频文件", true); return;
+        }
+        var fd = new FormData();
+        fd.append("file", fileInput.files[0]);
+        var btn = $("btn-analyze");
+        btn.disabled = true; statusEl.textContent = "上传并接入中…";
+        fetch("/demo/upload", { method: "POST", body: fd })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (res) {
+            if (!res.ok) { toast("视频接入失败：" + (res.j.error || "未知"), true); statusEl.textContent = ""; }
+            else {
+              statusEl.textContent = "已接入：" + (res.j.filename || "") + " · " + (res.j.frames || 0) + " 帧";
+              toast(res.j.message || "已开始分析");
+            }
+          })
+          .catch(function () { toast("视频接入请求失败", true); statusEl.textContent = ""; })
+          .then(function () { btn.disabled = false; });
+      });
+    })();
 
     connect();
   })();

@@ -38,6 +38,9 @@ class DemoSettings(BaseModel):
     ws_path: str = "/ws"
     frame_loop_interval_s: float = 0.0
     jpeg_quality: int = 50
+    upload_dir: str = "data/demo/uploads"
+    scenarios_dir: str = "config/demo/scenarios"
+    max_upload_mb: float = 1024.0  # 上传视频软上限；超过则 413 拒绝（Demo 不做文件管理/存储）
 
     @classmethod
     def from_env(cls) -> "DemoSettings":

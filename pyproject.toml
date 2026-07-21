@@ -33,6 +33,7 @@ demo = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "websockets>=12.0",
+    "python-multipart>=0.0.9",  # P0-11.4 视频上传端点（UploadFile / multipart 表单）
 ]
 
 [tool.setuptools.packages.find]
