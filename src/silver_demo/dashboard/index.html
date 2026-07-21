@@ -229,11 +229,11 @@
         </div>
       </section>
 
-      <!-- Region 2: AI Timeline -->
+      <!-- Region 2: AI 行为时间线 -->
       <section class="region timeline">
-        <h2>② AI 时间线 <span class="tag">PerceptionEvent 流</span></h2>
+        <h2>② AI 行为时间线 <span class="tag">访客行为演化</span></h2>
         <div class="body" id="timeline-body">
-          <div class="tl-empty">暂无 AI 事件</div>
+          <div class="tl-empty">等待访客行为…</div>
         </div>
       </section>
 
@@ -357,6 +357,15 @@
       MEDIUM: { t: "中", c: "#d97706" },
       HIGH:   { t: "高", c: "#dc2626" }
     };
+    var RISK_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+    // 区域② 行为里程碑：event_type → 图标/人话标签/颜色（体现 Tracking/Event 演化价值）
+    var BEHAV = {
+      visit_normal:         { icon: "🌙", label: "异常时段到访", color: "#0891b2" },
+      visit_pending_verify: { icon: "🔍", label: "待核实到访",   color: "#0ea5e9" },
+      abnormal_dwell:       { icon: "⏱", label: "停留超过阈值", color: "#d97706" },
+      repeat_visit:         { icon: "🔁", label: "再次出现",     color: "#7c3aed" },
+      high_risk_approach:   { icon: "⚠", label: "高风险逼近",   color: "#dc2626" }
+    };
     var EVT = {
       visit_normal: "正常到访",
       visit_pending_verify: "待核到访",
@@ -404,15 +413,25 @@
       CREATED: "已生成", PENDING: "已下发", CONFIRMED: "已确认", RESOLVED: "已闭环", REJECTED: "已拒绝"
     };
 
-    // ---------- state ----------
+    // ---------- state（P0-11.3 Dashboard 状态层：从"事实生产"聚合出"用户认知"）----------
     var state = {
       frame: null,
-      stateMap: {},            // warning_id -> {status, operator}
-      activeWarnings: [],
+      stateMap: {},            // warning_id -> {status, operator}（闭环人工状态）
+      // ── Warning 保活（修复区域③④"闪现即消失"）──
+      // 网关每帧只广播"当前帧"的 active_warnings（98%+ 为空），逐帧覆盖会让风险卡闪现。
+      // warningMap 按 warning_id 跨帧 upsert 保活，status 终态时移除，超上限按 created_at 修剪。
+      warningMap: {},          // warning_id -> warning dict（最新快照，跨帧保活）
+      warningMax: 30,
       routed: { family: [], community: [], log_only: [] },
-      commandMap: {},            // warning_id -> {family, community, log_only}（跨帧累积，供区域④联动）
-      timeline: [],            // capped
-      timelineMax: 160
+      commandMap: {},          // warning_id -> {family, community, log_only}（跨帧累积，供区域④联动）
+      // ── AI 行为时间线（区域②：把稀疏 perception_events/warnings 累积成行为演化叙事）──
+      behaviorEvents: [],      // 行为里程碑（最新在上，跨帧去重累积）
+      behaviorSeen: {},        // 去重键集合
+      behaviorMax: 120,
+      behaviorN: 0,
+      visitorSeq: {},          // visitor_id(UUID) -> "访客#N" 友好名
+      visitorSeqN: 0,
+      visitorFirst: {}         // visitor_id -> 是否已记"首次出现"
     };
 
     // ---------- helpers ----------
@@ -538,10 +557,11 @@
         state.frame = msg.view;
         // 合并闭环状态快照（每帧都带全量 state）
         if (msg.state) Object.assign(state.stateMap, msg.state);
-        state.activeWarnings = msg.active_warnings || [];
+        var activeNow = msg.active_warnings || [];
+        ingestWarnings(activeNow);     // 跨帧保活（修复区域③④闪现）
         state.routed = msg.routed_commands || { family: [], community: [], log_only: [] };
         mergeCommands(state.routed);   // 跨帧累积三端命令，供区域④按 warning_id 联动
-        pushTimeline(msg.view);
+        ingestBehavior(msg.view, activeNow);  // 累积访客行为里程碑（区域② 行为演化）
         renderAll();
       } else if (msg.type === "state_update") {
         if (msg.state) Object.assign(state.stateMap, msg.state);
@@ -553,16 +573,103 @@
       }
     }
 
-    function pushTimeline(view) {
-      var events = (view && view.perception_events) || [];
-      state.timeline.unshift({
-        frame_index: view.frame_index,
-        demo_time: view.demo_time,
-        n_det: view.n_detections,
-        events: events
+    // ---------- P0-11.3 状态层：Warning 保活 ----------
+    // 每帧把当前 active_warnings upsert 进 warningMap（按 warning_id 保活），
+    // status 终态（RESOLVED/REJECTED）时移除，超上限按 created_at 修剪。
+    function ingestWarnings(list) {
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
+        if (!w || !w.warning_id) continue;
+        state.warningMap[w.warning_id] = w;   // upsert 最新快照
+      }
+      // 终态移除
+      for (var wid in state.warningMap) {
+        var st = state.warningMap[wid].status;
+        if (st === "RESOLVED" || st === "REJECTED") delete state.warningMap[wid];
+      }
+      pruneWarnings(state.warningMax);
+    }
+    function pruneWarnings(max) {
+      var ids = Object.keys(state.warningMap);
+      if (ids.length <= max) return;
+      ids.sort(function (a, b) {
+        return String(state.warningMap[a].created_at || "").localeCompare(String(state.warningMap[b].created_at || ""));
       });
-      if (state.timeline.length > state.timelineMax) {
-        state.timeline.length = state.timelineMax;
+      var remove = ids.length - max;
+      for (var i = 0; i < remove; i++) delete state.warningMap[ids[i]];  // 移除最旧
+    }
+    // 聚合出稳定的活跃风险列表（区域③④ 共用，替代逐帧 activeWarnings）
+    function activeWarningList() {
+      var arr = [];
+      for (var wid in state.warningMap) arr.push(state.warningMap[wid]);
+      arr.sort(function (a, b) {
+        var ra = RISK_RANK[a.risk_level] || 0, rb = RISK_RANK[b.risk_level] || 0;
+        if (rb !== ra) return rb - ra;  // 风险高者在前
+        return String(b.created_at || "").localeCompare(String(a.created_at || ""));  // 新者在前
+      });
+      return arr;
+    }
+
+    // ---------- P0-11.3 状态层：AI 行为时间线 ----------
+    function friendlyVisitor(vid) {
+      if (!vid) return "访客";
+      if (!state.visitorSeq[vid]) {
+        state.visitorSeqN += 1;
+        state.visitorSeq[vid] = "访客#" + state.visitorSeqN;
+      }
+      return state.visitorSeq[vid];
+    }
+    function addBehavior(ev) {
+      if (!ev || !ev.key || state.behaviorSeen[ev.key]) return;
+      state.behaviorSeen[ev.key] = true;
+      ev.seq = (state.behaviorN += 1);
+      state.behaviorEvents.unshift(ev);   // 最新在上
+      if (state.behaviorEvents.length > state.behaviorMax) {
+        state.behaviorEvents.length = state.behaviorMax;
+      }
+    }
+    // 从稀疏的 perception_events + warnings 累积去重出「行为里程碑」，
+    // 展现 Tracking/Event/Feature 的演化价值（visitor 进入→停留→再现→升级）。
+    function ingestBehavior(view, warns) {
+      var pes = (view && view.perception_events) || [];
+      for (var i = 0; i < pes.length; i++) {
+        var pe = pes[i];
+        var vid = pe.visitor_id || "";
+        var who = friendlyVisitor(vid);
+        // 首次出现（该 visitor 第一次进入时间线）
+        if (vid && state.visitorFirst[vid] !== true) {
+          state.visitorFirst[vid] = true;
+          addBehavior({
+            key: "enter|" + vid,
+            time: pe.created_at || null,
+            icon: "👤", label: "首次出现", color: "#0891b2",
+            who: who, detail: "进入" + (pe.location || "门口") + "画面"
+          });
+        }
+        var bm = BEHAV[pe.event_type] || { icon: "•", label: pe.event_type || "事件", color: "#64748b" };
+        addBehavior({
+          key: "pe|" + vid + "|" + pe.event_type + "|" + (pe.repeat_count != null ? pe.repeat_count : 0),
+          time: pe.created_at || null,
+          icon: bm.icon, label: bm.label, color: bm.color,
+          who: who,
+          score: (typeof pe.score === "number") ? pe.score : null,
+          repeat: (pe.repeat_count != null ? pe.repeat_count : null),
+          detail: pe.location ? ("位置 " + pe.location) : ""
+        });
+      }
+      // 风险升级/生成（首次出现某 warning_id 时记一条）
+      warns = warns || [];
+      for (var k = 0; k < warns.length; k++) {
+        var w = warns[k];
+        if (!w || !w.warning_id) continue;
+        var wk = "warn|" + w.warning_id;
+        if (state.behaviorSeen[wk]) continue;
+        var rl = riskOf(w.risk_level);
+        addBehavior({
+          key: wk, time: w.created_at || null,
+          icon: "⚠", label: "生成风险预警（" + rl.t + "）", color: rl.c,
+          who: "", detail: (w.reason_summary || []).join("、")
+        });
       }
     }
 
@@ -602,42 +709,35 @@
 
     function renderTimeline() {
       var body = $("timeline-body");
-      if (!state.timeline.length) {
-        body.innerHTML = '<div class="tl-empty">暂无 AI 事件</div>';
+      var evs = state.behaviorEvents;
+      if (!evs.length) {
+        body.innerHTML = '<div class="tl-empty">等待访客行为…</div>';
         return;
       }
       var html = "";
-      for (var i = 0; i < state.timeline.length; i++) {
-        var t = state.timeline[i];
-        var time = t.demo_time ? t.demo_time.replace("T", " ").slice(11, 19) : ("#" + t.frame_index);
-        html += '<div class="tl-item"><div class="tl-time">' + esc(time) + '</div><div class="tl-main">';
-        if (!t.events.length) {
-          html += '<div class="tl-row"><span class="score">帧 #' + t.frame_index + ' · 检测 ' + (t.n_det || 0) + ' · 无触发事件</span></div>';
-        } else {
-          for (var j = 0; j < t.events.length; j++) {
-            var e = t.events[j];
-            var et = e.event_type || "?";
-            var col = EVT_COLOR[et] || "#64748b";
-            var label = EVT[et] || et;
-            var score = (typeof e.score === "number") ? e.score.toFixed(2) : "?";
-            var loc = e.location ? esc(e.location) : "";
-            var rule = (e.meta && e.meta.rule) ? esc(e.meta.rule) : "";
-            html += '<div class="tl-row">'
-              + '<span class="ev-chip" style="background:' + col + '">' + esc(label) + '</span>'
-              + '<span class="score">强度 ' + score + '</span>'
-              + (loc ? '<span class="score">位置 ' + loc + '</span>' : '')
-              + '</div>';
-            if (rule) html += '<div class="tl-meta">规则：' + rule + '</div>';
-          }
-        }
-        html += '</div></div>';
+      for (var i = 0; i < evs.length; i++) {
+        var e = evs[i];
+        var time = e.time ? hhmmss(e.time) : "—";
+        var extra = [];
+        if (typeof e.score === "number") extra.push("强度 " + e.score.toFixed(2));
+        if (e.repeat != null) extra.push("第 " + e.repeat + " 次");
+        if (e.detail) extra.push(e.detail);
+        html += '<div class="tl-item">'
+          + '<div class="tl-time">' + esc(time) + '</div>'
+          + '<div class="tl-main">'
+          +   '<div class="tl-row">'
+          +     '<span class="ev-chip" style="background:' + e.color + '">' + esc(e.icon + " " + e.label) + '</span>'
+          +     (e.who ? '<span class="score">' + esc(e.who) + '</span>' : '')
+          +   '</div>'
+          +   (extra.length ? '<div class="tl-meta">' + esc(extra.join(" · ")) + '</div>' : '')
+          + '</div></div>';
       }
       body.innerHTML = html;
     }
 
     function renderRisks() {
       var body = $("risk-body");
-      var list = state.activeWarnings || [];
+      var list = activeWarningList();   // 跨帧保活聚合（不再逐帧被覆盖 → 不闪现）
       if (!list.length) {
         body.innerHTML = '<div class="tl-empty">当前无活跃风险</div>';
         return;
@@ -688,7 +788,7 @@
 
     function renderClosure() {
       var wrap = $("closure-cards");
-      var list = state.activeWarnings || [];
+      var list = activeWarningList();   // 跨帧保活聚合（与区域③同源 → 联动稳定）
       if (!list.length) {
         wrap.innerHTML = '<div class="tl-empty">暂无待闭环风险</div>';
         return;
