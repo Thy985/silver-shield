@@ -59,6 +59,17 @@ class ConnectionHub:
                 for ws in dead:
                     self.active.discard(ws)
 
+    async def send_to(self, ws: WebSocket, message: Dict[str, Any]) -> None:
+        """向单个连接推送 JSON 消息（用于新连接首连 ``snapshot`` 等）。
+
+        失败的连接静默移除（视为已断开）。
+        """
+        try:
+            await ws.send_text(json.dumps(message, ensure_ascii=False))
+        except Exception:
+            async with self._lock:
+                self.active.discard(ws)
+
 
 async def handle_upstream(
     ws: WebSocket,
