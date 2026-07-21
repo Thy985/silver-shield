@@ -17,11 +17,39 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Iterator, Tuple
+from typing import Any, Iterator, Optional, Tuple
 
 from home_perception.runtime.config import read_caviar_frames
 
 from .scenarios import ScenarioConfig
+
+
+class Source:
+    """轻量源抽象（P0-11.3.5 P1）：包裹 ``DemoFrameSource``，提供 ``load`` / ``__iter__`` 统一入口。
+
+    证明 Demo **不绑定 MP4**——消费者（网关）只依赖 ``Source`` 接口，具体实现
+    （CAVIAR jpg / 真实 MP4 / 未来 RTSP / EZVIZ）由 ``build_frame_source`` 分发。
+
+    本类**不做** RTSP / EZVIZ 设备协议（留 P0-12），仅为输入源切换提供一致的表面；
+    复用既有 ``DemoFrameSource`` ABC，零新增冻结依赖。
+    """
+
+    def __init__(self) -> None:
+        self._inner: Optional[DemoFrameSource] = None
+        self.scenario: Optional[ScenarioConfig] = None
+        self.frame_count: int = -1
+
+    def load(self, scenario: ScenarioConfig, hp_settings: Any) -> None:
+        """按场景配置装载底层帧源（CAVIAR jpg / 真实 MP4 等）。"""
+        self.scenario = scenario
+        self._inner = build_frame_source(scenario, hp_settings)
+        self.frame_count = self._inner.frame_count
+
+    def __iter__(self) -> Iterator[Tuple[float, Any]]:
+        """产出 ``(timestamp, frame)`` 元组流（委托底层帧源）。"""
+        if self._inner is None:
+            raise RuntimeError("Source 未 load，请先调用 load(scenario, hp_settings)")
+        return iter(self._inner)
 
 
 class DemoFrameSource(ABC):

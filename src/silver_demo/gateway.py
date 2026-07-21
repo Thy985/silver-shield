@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -45,8 +46,8 @@ from .bridge import (
 )
 from .config import DemoSettings
 from .scenarios import ScenarioConfig, load_scenario
-from .sources import build_frame_source
-from .state import DemoStateStore
+from .sources import Source
+from .state import DemoAggregateState, DemoStateStore
 from .ws import ConnectionHub, handle_upstream
 
 # 类型标注用（运行期不调构造器；仅用于 type hint 让代码可读）
@@ -74,17 +75,19 @@ class DemoGateway:
         # 冻结对象（装配后填充）
         self.pipeline: Optional[PerceptionPipeline] = None
         self.clock: Optional[DemoClock] = None
-        self.frame_source: Optional[Any] = None
+        self.source: Optional[Source] = None
         self.n_frames: int = -1
 
         # 展示层组件
         self.hub = ConnectionHub()
         self.store = DemoStateStore()
+        self.aggregate_state = DemoAggregateState()  # 服务端权威聚合状态（P0-11.3.5）
 
         # 循环控制
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._frame_index = 0
+        self.loop_count = 0  # 循环重放计数（P0-11.3.5 状态面板）
 
     # ------------------------------------------------------------------
     # 装配
@@ -111,8 +114,16 @@ class DemoGateway:
         self.pipeline.load_detector()
 
         # 构建帧源（P0-11.3：CAVIAR jpg 或 真实 MP4，按 scenario.source_type 分发）
-        self.frame_source = build_frame_source(self.scenario, self.hp_settings)
-        self.n_frames = self.frame_source.frame_count
+        self.source = Source()
+        self.source.load(self.scenario, self.hp_settings)
+        self.n_frames = self.source.frame_count
+
+        # 聚合状态会话信息（P0-11.3.5：供状态面板 / snapshot）
+        self.aggregate_state.started_at = time.time()
+        self.aggregate_state.scenario = self.scenario.scenario_id
+        self.aggregate_state.source = self.scenario.source
+        self.aggregate_state.source_type = self.scenario.source_type
+        self.aggregate_state.n_frames = self.n_frames
 
         # 帧源可用性校验（CAVIAR / video_file 共用，见 _validate_frame_source）
         self._validate_frame_source(self.scenario)
@@ -140,7 +151,7 @@ class DemoGateway:
             interval = 1.0 / self.scenario.fps_target
 
         # 迭代帧源抽象（P0-11.3：CAVIAR jpg 或 真实 MP4，均产出 (timestamp, frame) 流）
-        frame_iter = iter(self.frame_source)
+        frame_iter = iter(self.source)
         while self._running:
             try:
                 _, frame = next(frame_iter)
@@ -149,9 +160,10 @@ class DemoGateway:
                 # 关键：重建流水线状态组件（复用已加载 YOLO detector，免重载权重）以清空跨循环累积的
                 # 追踪/窗口/决策状态——否则多循环后状态饱和，warning 不再产生（演示区 ②③④ 变空白）。
                 if self.scenario.loop:
+                    self.loop_count += 1
                     self._rebuild_pipeline(self.scenario)
                     self._frame_index = 0
-                    frame_iter = iter(self.frame_source)
+                    frame_iter = iter(self.source)
                     continue
                 break
 
@@ -177,6 +189,15 @@ class DemoGateway:
             # 且避免在展示层 JS 里重复实现路由/过滤逻辑（守住 ADR-0015 §5 冻结边界）。
             active_warnings = collect_active_warnings(view["warnings"])
             routed_commands = route_commands(view["commands"])
+            # 服务端权威聚合状态（P0-11.3.5）：每帧累积 warning/behavior/command + 运行时元数据
+            self.aggregate_state.ingest(
+                active_warnings,
+                view["perception_events"],
+                view["warnings"],
+                routed_commands,
+                self._frame_index,
+                self.loop_count,
+            )
             state_snap = await self.store.snapshot()
             await self.hub.broadcast(
                 {
@@ -185,6 +206,7 @@ class DemoGateway:
                     "state": state_snap,
                     "active_warnings": active_warnings,
                     "routed_commands": routed_commands,
+                    "meta": self.aggregate_state.meta(),  # 状态面板 / 晚连恢复
                 }
             )
 
@@ -250,14 +272,22 @@ class DemoGateway:
         # 2. 重建帧源 + 流水线状态（复用已加载 detector，清空跨场景/跨循环累积状态）
         self.scenario = scenario
         self._rebuild_pipeline(scenario)
-        self.frame_source = build_frame_source(scenario, self.hp_settings)
-        self.n_frames = self.frame_source.frame_count
+        self.source = Source()
+        self.source.load(scenario, self.hp_settings)
+        self.n_frames = self.source.frame_count
 
         # 帧源可用性校验（CAVIAR / video_file 共用，含 caviar_jpg 无帧保护）
         self._validate_frame_source(scenario)
 
         self._frame_index = 0
+        self.loop_count = 0
         self.store = DemoStateStore()  # 新会话：清空历史闭环状态
+        # 服务端聚合状态清空（解决「切换视频源状态残留」服务端侧）；重置会话计时
+        self.aggregate_state.clear(reset_session=True)
+        self.aggregate_state.scenario = scenario.scenario_id
+        self.aggregate_state.source = scenario.source
+        self.aggregate_state.source_type = scenario.source_type
+        self.aggregate_state.n_frames = self.n_frames
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())
@@ -373,6 +403,12 @@ def create_app(
     async def websocket_endpoint(ws: WebSocket) -> None:
         """WebSocket 端点：下行 frame view + state；上行 action 写 store。"""
         await gateway.hub.connect(ws)
+        # 首连 snapshot：把服务端权威聚合状态推给新连接（晚连也能看到历史）
+        await gateway.hub.send_to(ws, {
+            "type": "snapshot",
+            **gateway.aggregate_state.snapshot(),
+            "meta": gateway.aggregate_state.meta(),
+        })
         try:
             while True:
                 raw = await ws.receive_text()
@@ -505,6 +541,26 @@ def create_app(
             "source": sc.source,
             "source_type": sc.source_type,
             "frames": gateway.n_frames,
+        }
+
+    @app.post("/demo/reset")
+    async def reset_demo() -> Dict[str, Any]:
+        """P0-11.3.5 Reset 生命周期：清空 pipeline / 状态 / 聚合，恢复干净会话。
+
+        复用 ``switch_source(同场景)``：停旧循环 → 重建流水线（复用已加载 YOLO detector）
+        → 清空闭环 store + 服务端聚合状态 → 重置帧索引 / 循环计数 / 会话计时 → 重开循环。
+        广播 ``source_switched``（前端据此 ``resetSession()`` 清空跨帧累积）。
+        比赛换组场景：点 Reset → ≤30s 内恢复干净状态可重跑。
+        """
+        try:
+            await gateway.switch_source(gateway.scenario)
+        except Exception as exc:  # 重置中 pipeline 重建失败
+            return JSONResponse(status_code=422, content={"error": f"重置失败：{exc}"})
+        return {
+            "status": "ok",
+            "frame_index": 0,
+            "session_status": gateway.aggregate_state.session_status,
+            "loop_count": 0,
         }
 
     # 把 gateway 挂到 app.state，便于测试 / 调试访问
