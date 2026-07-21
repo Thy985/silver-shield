@@ -100,9 +100,6 @@
     .risk-card:last-child { margin-bottom: 0; }
     .rc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .rc-id { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .rc-reason { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; }
-    .rc-reason li { margin: 2px 0; }
-    .rc-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 11px; color: var(--muted); }
     .bar { flex: 1 1 auto; height: 6px; background: #eef2f7; border-radius: 999px; overflow: hidden; max-width: 140px; }
     .bar > i { display: block; height: 100%; border-radius: 999px; }
     .rlevel { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
@@ -115,7 +112,6 @@
     .cl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .cl-wid { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
     .cl-rl { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
-    .cl-rec { font-size: 11.5px; color: var(--muted); margin: 6px 0; }
     .stepper { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
     .step { flex: 1 1 0; text-align: center; font-size: 11px; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--line); background: #f8fafc; color: var(--muted); font-weight: 600; }
     .step.done { background: #ecfdf5; border-color: #a7f3d0; color: var(--ok); }
@@ -267,7 +263,7 @@
               <div class="route-list" id="rc-log-list"><span class="muted">—</span></div>
             </div>
             <div class="route-list" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
-              路由由 <code>bridge.route_commands</code> 按 <code>command_type</code> 分发（ADR-0015 §2.2）。
+              跨帧累积三端命令（含实际 payload 预览），由 <code>bridge.route_commands</code> 按 <code>command_type</code> 分发（ADR-0015 §2.2）。
             </div>
           </aside>
         </div>
@@ -423,7 +419,7 @@
       warningMap: {},          // warning_id -> warning dict（最新快照，跨帧保活）
       warningMax: 30,
       routed: { family: [], community: [], log_only: [] },
-      commandMap: {},          // warning_id -> {family, community, log_only}（跨帧累积，供区域④联动）
+      commandMap: {},          // warning_id -> {family, community, log_only: Map(command_id->command)}（跨帧累积，O(1) 去重，供区域④联动）
       // ── AI 行为时间线（区域②：把稀疏 perception_events/warnings 累积成行为演化叙事）──
       behaviorEvents: [],      // 行为里程碑（最新在上，跨帧去重累积）
       behaviorSeen: {},        // 去重键集合
@@ -468,25 +464,33 @@
           var c = arr[j];
           var wid = c.warning_id;
           if (!wid) continue;
-          if (!state.commandMap[wid]) state.commandMap[wid] = { family: [], community: [], log_only: [] };
-          var bucket = state.commandMap[wid][types[i]];
+          if (!state.commandMap[wid]) state.commandMap[wid] = { family: new Map(), community: new Map(), log_only: new Map() };
+          var map = state.commandMap[wid][types[i]];
           var cid = c.command_id;
-          var exists = false;
-          for (var k = 0; k < bucket.length; k++) { if (bucket[k].command_id === cid) { exists = true; break; } }
-          if (!exists) { bucket.push(c); if (bucket.length > 24) bucket.shift(); }
+          if (cid == null) cid = "__null__";          // 缺 id 的命令按同一键去重（与原数组语义一致）
+          if (!map.has(cid)) {                          // O(1) 去重，避免大帧线性扫描抖动
+            map.set(cid, c);
+            if (map.size > 24) { var old = map.keys().next().value; map.delete(old); }
+          }
         }
       }
     }
     function lookupCommands(wid) {
       var m = state.commandMap[wid];
-      return m || { family: [], community: [], log_only: [] };
+      if (!m) return { family: [], community: [], log_only: [] };
+      return {
+        family: Array.from(m.family.values()),
+        community: Array.from(m.community.values()),
+        log_only: Array.from(m.log_only.values())
+      };
     }
     function allRouted() {
       var fam = [], com = [], log = [];
       for (var wid in state.commandMap) {
-        fam = fam.concat(state.commandMap[wid].family);
-        com = com.concat(state.commandMap[wid].community);
-        log = log.concat(state.commandMap[wid].log_only);
+        var m = state.commandMap[wid];
+        fam = fam.concat(Array.from(m.family.values()));
+        com = com.concat(Array.from(m.community.values()));
+        log = log.concat(Array.from(m.log_only.values()));
       }
       return { family: fam, community: com, log_only: log };
     }
@@ -841,15 +845,17 @@
         }
         comTask += '</div>';
 
-        // 仅记录任务卡
-        var logTask = "";
+        // 仅记录任务卡（与家属/社区端一致：无命令时也渲染占位卡片）
+        var logTask = '<div class="task log"><div class="task-h"><span class="task-dot l"></span>风险日志</div>';
         if (cm.log_only.length) {
           var lp = cm.log_only[0].payload || {};
           var lrs = (lp.reason_summary || []).join("、");
-          logTask = '<div class="task log"><div class="task-h"><span class="task-dot l"></span>风险日志</div>'
-            + '<div class="task-body">' + esc(lrs || lp.risk_level || "已记入风险日志")
-            + (lp.risk_level ? ' · 风险 ' + esc(lp.risk_level) : '') + '</div></div>';
+          logTask += '<div class="task-body">' + esc(lrs || lp.risk_level || "已记入风险日志")
+            + (lp.risk_level ? ' · 风险 ' + esc(lp.risk_level) : '') + '</div>';
+        } else {
+          logTask += '<div class="task-empty">本风险无日志记录</div>';
         }
+        logTask += '</div>';
 
         html += '<div class="cl-card">'
           + '<div class="cl-top">'
