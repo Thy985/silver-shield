@@ -4,9 +4,12 @@ on:
     types: [opened, synchronize, ready_for_review, reopened]
 
 permissions:
-  contents: write
+  # 只读收敛：去掉 contents: write，避免 workflow 以 github-actions 机器人身份
+  # 向受保护分支推送/绕过 PR 要求，从而触发分支保护的 allowed_bots 报错。
+  # contents: read 足以让 actions/checkout 克隆仓库；pull-requests: write 用于发 PR 评审评论；
+  # id-token: write 供 claude-code-action 安全换取令牌（不具推送能力，不会触发 allowed_bots）。
+  contents: read
   pull-requests: write
-  issues: write
   id-token: write
 
 jobs:
