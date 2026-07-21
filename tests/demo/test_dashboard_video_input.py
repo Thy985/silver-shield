@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = ROOT / "src" / "silver_demo" / "dashboard" / "index.html"
 GATEWAY = ROOT / "src" / "silver_demo" / "gateway.py"
