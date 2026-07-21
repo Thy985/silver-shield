@@ -3,83 +3,618 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SilverShield Demo · P0-11.1</title>
+  <title>银龄盾 · 三端风险闭环观察窗 (P0-11.2)</title>
   <style>
+    :root {
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #6b7280;
+      --line: #e3e8ef;
+      --brand: #2563eb;
+      --brand-soft: #e8f0fe;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --danger: #dc2626;
+      --radius: 12px;
+      --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1);
+    }
+    * { box-sizing: border-box; }
     body {
-      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
       margin: 0;
-      padding: 2rem;
-      background: #f7f8fa;
-      color: #1f2933;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.5;
     }
-    h1 { margin-top: 0; }
-    .card {
-      background: #fff;
-      border: 1px solid #e3e7ec;
-      border-radius: 8px;
-      padding: 1.25rem 1.5rem;
-      margin-bottom: 1rem;
+    .app { max-width: 1280px; margin: 0 auto; padding: 16px; }
+
+    /* ---------- Header ---------- */
+    header.topbar {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 12px 16px; box-shadow: var(--shadow); margin-bottom: 16px;
     }
-    .muted { color: #6b7280; }
-    code { background: #eef1f4; padding: 0.1em 0.35em; border-radius: 3px; }
-    .status { font-weight: 600; }
-    .ok { color: #15803d; }
-    .warn { color: #b45309; }
+    header.topbar h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: .3px; }
+    header.topbar .sub { color: var(--muted); font-size: 12px; }
+    .spacer { flex: 1 1 auto; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line);
+      background: #f8fafc;
+    }
+    .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .pill.online .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(22,163,74,.18); }
+    .pill.offline .dot { background: var(--danger); }
+    .badge-auth {
+      font-size: 11px; color: #92400e; background: #fef3c7; border: 1px solid #fde68a;
+      padding: 3px 9px; border-radius: 999px; font-weight: 600;
+    }
+
+    /* ---------- Grid ---------- */
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+    .region { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0; }
+    .region > h2 {
+      margin: 0; padding: 12px 16px; font-size: 14px; font-weight: 700;
+      border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px;
+    }
+    .region > h2 .tag { font-size: 11px; font-weight: 600; color: var(--brand); background: var(--brand-soft); padding: 2px 8px; border-radius: 999px; }
+    .region .body { padding: 14px 16px; overflow: auto; }
+    .video { grid-column: span 7; grid-row: 1; }
+    .timeline { grid-column: span 5; grid-row: 1 / span 2; }
+    .risk { grid-column: span 7; grid-row: 2; }
+    .closure { grid-column: span 12; grid-row: 3; }
+    .arch { grid-column: span 12; grid-row: 4; }
+    @media (max-width: 900px) {
+      .video, .timeline, .risk, .closure, .arch { grid-column: span 12; grid-row: auto; }
+    }
+
+    /* ---------- Region 1: Video ---------- */
+    .video .body { padding: 0; }
+    .stage { position: relative; background: #0b1220; border-radius: 0 0 var(--radius) var(--radius); aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .stage img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .stage .placeholder { color: #64748b; font-size: 13px; }
+    .stage .overlay { position: absolute; left: 10px; top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .ov-chip { background: rgba(15,23,42,.72); color: #e2e8f0; font-size: 11px; padding: 3px 8px; border-radius: 6px; backdrop-filter: blur(2px); }
+    .ov-chip b { color: #fff; }
+    .live { position: absolute; right: 10px; top: 10px; display: inline-flex; align-items: center; gap: 6px; background: rgba(15,23,42,.72); color: #fca5a5; font-size: 11px; padding: 3px 8px; border-radius: 6px; }
+    .live .ldot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; animation: pulse 1.4s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
+    /* ---------- Region 2: Timeline ---------- */
+    .timeline .body { max-height: 560px; }
+    .tl-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    .tl-item:last-child { border-bottom: 0; }
+    .tl-time { font-size: 11px; color: var(--muted); width: 64px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+    .tl-main { flex: 1 1 auto; min-width: 0; }
+    .tl-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ev-chip { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
+    .score { font-size: 11px; color: var(--muted); }
+    .tl-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .tl-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 0; }
+
+    /* ---------- Region 3: Risk cards ---------- */
+    .risk .body { max-height: 560px; }
+    .risk-card { border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #fcfdff; }
+    .risk-card:last-child { margin-bottom: 0; }
+    .rc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .rc-id { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .rc-reason { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; }
+    .rc-reason li { margin: 2px 0; }
+    .rc-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .bar { flex: 1 1 auto; height: 6px; background: #eef2f7; border-radius: 999px; overflow: hidden; max-width: 140px; }
+    .bar > i { display: block; height: 100%; border-radius: 999px; }
+    .rlevel { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
+
+    /* ---------- Region 4: Closure ---------- */
+    .closure .body { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+    @media (max-width: 760px) { .closure .body { grid-template-columns: 1fr; } }
+    .closure-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-content: start; }
+    .cl-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fcfdff; }
+    .cl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .cl-wid { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .cl-rl { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
+    .cl-rec { font-size: 11.5px; color: var(--muted); margin: 6px 0; }
+    .stepper { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
+    .step { flex: 1 1 0; text-align: center; font-size: 11px; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--line); background: #f8fafc; color: var(--muted); font-weight: 600; }
+    .step.done { background: #ecfdf5; border-color: #a7f3d0; color: var(--ok); }
+    .step.cur { background: var(--brand-soft); border-color: #bfdbfe; color: var(--brand); }
+    .step .arrow { color: var(--line); }
+    .cl-actions { display: flex; gap: 8px; }
+    .btn { flex: 1 1 0; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 8px; padding: 8px 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: .15s; }
+    .btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+    .btn.family:not(:disabled) { background: #eff6ff; }
+    .btn.community:not(:disabled) { background: #ecfdf5; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .cl-status { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; }
+
+    .route-panel { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafbff; align-self: start; }
+    .route-panel h3 { margin: 0 0 10px; font-size: 13px; }
+    .route-grp { margin-bottom: 12px; }
+    .route-grp:last-child { margin-bottom: 0; }
+    .route-grp .gh { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+    .route-grp .cnt { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .route-list { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+    .route-list code { font-size: 11px; }
+
+    /* ---------- Region 5: Architecture ---------- */
+    .arch .body { padding: 8px; }
+    .arch svg { width: 100%; height: auto; display: block; }
+    .arch .note { font-size: 11.5px; color: var(--muted); padding: 8px 8px 0; }
+
+    /* ---------- Disclaimer footer ---------- */
+    .disclaimer { margin-top: 16px; font-size: 11.5px; color: var(--muted); background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 14px; }
+    .disclaimer b { color: #92400e; }
+
+    /* ---------- Toasts ---------- */
+    #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+    .toast { background: #111827; color: #fff; font-size: 12.5px; padding: 9px 14px; border-radius: 8px; box-shadow: var(--shadow); opacity: 0; transform: translateY(6px); transition: .2s; }
+    .toast.show { opacity: 1; transform: none; }
+    .toast.err { background: #7f1d1d; }
   </style>
 </head>
 <body>
-  <h1>SilverShield Demo Gateway</h1>
-  <div class="card">
-    <p><strong>P0-11.1 网关已启动</strong>。完整 5 区域 Dashboard 将在 P0-11.2 落地。</p>
-    <p class="muted">WebSocket 端点：<code id="ws-path"></code></p>
-    <p>连接状态：<span id="ws-status" class="status warn">未连接</span></p>
-    <p>最近一帧：<span id="last-frame" class="muted">等待数据…</span></p>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>银龄盾 · 三端风险闭环观察窗</h1>
+        <div class="sub" id="scenario-sub">P0-11 MVP Demo · 加载中…</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="badge-auth">Demo 数据真实性声明</span>
+      <span class="pill offline" id="ws-pill"><span class="dot"></span><span id="ws-text">未连接</span></span>
+    </header>
+
+    <div class="grid">
+      <!-- Region 1: Live Video -->
+      <section class="region video">
+        <h2>① 实时视频 <span class="tag">Home 端入口画面</span></h2>
+        <div class="body">
+          <div class="stage">
+            <div class="placeholder" id="video-ph">等待第一帧…</div>
+            <img id="video-img" alt="live frame" style="display:none" />
+            <div class="overlay">
+              <span class="ov-chip">帧 <b id="ov-frame">–</b></span>
+              <span class="ov-chip">模拟时间 <b id="ov-time">–</b></span>
+              <span class="ov-chip">检测 <b id="ov-det">0</b></span>
+              <span class="ov-chip">访客事件 <b id="ov-ve">0</b></span>
+            </div>
+            <div class="live" id="live-badge" style="display:none"><span class="ldot"></span> LIVE</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Region 2: AI Timeline -->
+      <section class="region timeline">
+        <h2>② AI 时间线 <span class="tag">PerceptionEvent 流</span></h2>
+        <div class="body" id="timeline-body">
+          <div class="tl-empty">暂无 AI 事件</div>
+        </div>
+      </section>
+
+      <!-- Region 3: Risk cards -->
+      <section class="region risk">
+        <h2>③ 风险解释卡片 <span class="tag">活跃 WarningEvent</span></h2>
+        <div class="body" id="risk-body">
+          <div class="tl-empty">当前无活跃风险</div>
+        </div>
+      </section>
+
+      <!-- Region 4: Action closure -->
+      <section class="region closure">
+        <h2>④ 行动闭环 <span class="tag">家属 / 社区 人工确认</span></h2>
+        <div class="body">
+          <div class="closure-cards" id="closure-cards">
+            <div class="tl-empty">暂无待闭环风险</div>
+          </div>
+          <aside class="route-panel">
+            <h3>三端命令路由</h3>
+            <div class="route-grp">
+              <div class="gh"><span style="color:var(--brand)">●</span> 家属端 <span class="cnt" id="rc-family">0</span></div>
+              <div class="route-list" id="rc-family-list"><span class="muted">—</span></div>
+            </div>
+            <div class="route-grp">
+              <div class="gh"><span style="color:var(--ok)">●</span> 社区端 <span class="cnt" id="rc-community">0</span></div>
+              <div class="route-list" id="rc-community-list"><span class="muted">—</span></div>
+            </div>
+            <div class="route-grp">
+              <div class="gh"><span style="color:var(--muted)">●</span> 仅记录 <span class="cnt" id="rc-log">0</span></div>
+              <div class="route-list" id="rc-log-list"><span class="muted">—</span></div>
+            </div>
+            <div class="route-list" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+              路由由 <code>bridge.route_commands</code> 按 <code>command_type</code> 分发（ADR-0015 §2.2）。
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- Region 5: Architecture -->
+      <section class="region arch">
+        <h2>⑤ 架构图 <span class="tag">冻结消费边界</span></h2>
+        <div class="body">
+          <svg viewBox="0 0 960 250" role="img" aria-label="系统架构图">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,3 L0,6 Z" fill="#475569"></path>
+              </marker>
+            </defs>
+            <!-- boundaries -->
+            <rect x="14" y="20" width="280" height="210" rx="10" fill="#f1f5f9" stroke="#cbd5e1" stroke-dasharray="4 3"></rect>
+            <text x="154" y="14" text-anchor="middle" font-size="11" fill="#64748b">冻结内核 (home_perception)</text>
+
+            <rect x="346" y="20" width="268" height="210" rx="10" fill="#eff6ff" stroke="#bfdbfe"></rect>
+            <text x="480" y="14" text-anchor="middle" font-size="11" fill="#1d4ed8">Demo Gateway (silver_demo)</text>
+
+            <rect x="660" y="20" width="286" height="210" rx="10" fill="#ecfdf5" stroke="#a7f3d0"></rect>
+            <text x="803" y="14" text-anchor="middle" font-size="11" fill="#047857">三端观察窗口 (Dashboard)</text>
+
+            <!-- Home box -->
+            <rect x="34" y="44" width="240" height="74" rx="8" fill="#fff" stroke="#cbd5e1"></rect>
+            <text x="154" y="66" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">Home 端输入</text>
+            <text x="154" y="84" text-anchor="middle" font-size="10.5" fill="#475569">CAVIAR fixture (jpg 帧)</text>
+            <text x="154" y="101" text-anchor="middle" font-size="10.5" fill="#475569">read_caviar_frames（白名单）</text>
+
+            <rect x="34" y="138" width="240" height="80" rx="8" fill="#fff" stroke="#cbd5e1"></rect>
+            <text x="154" y="160" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">PerceptionPipeline</text>
+            <text x="154" y="178" text-anchor="middle" font-size="10.5" fill="#475569">process_frame →</text>
+            <text x="154" y="195" text-anchor="middle" font-size="10.5" fill="#475569">WarningEvent / ActionCommand</text>
+            <text x="154" y="211" text-anchor="middle" font-size="9.5" fill="#94a3b8">（to_dict 只读消费）</text>
+
+            <!-- Gateway box -->
+            <rect x="366" y="70" width="228" height="110" rx="8" fill="#fff" stroke="#bfdbfe"></rect>
+            <text x="480" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">网关核心</text>
+            <text x="480" y="110" text-anchor="middle" font-size="10.5" fill="#475569">DemoClock + load_detector</text>
+            <text x="480" y="127" text-anchor="middle" font-size="10.5" fill="#475569">bridge: base64 + to_dict</text>
+            <text x="480" y="144" text-anchor="middle" font-size="10.5" fill="#475569">collect_active_warnings</text>
+            <text x="480" y="161" text-anchor="middle" font-size="10.5" fill="#475569">route_commands</text>
+
+            <!-- Dashboard box -->
+            <rect x="680" y="50" width="246" height="160" rx="8" fill="#fff" stroke="#a7f3d0"></rect>
+            <text x="803" y="70" text-anchor="middle" font-size="11.5" font-weight="700" fill="#047857">5 区域</text>
+            <text x="803" y="90" text-anchor="middle" font-size="10.5" fill="#475569">① 实时视频</text>
+            <text x="803" y="107" text-anchor="middle" font-size="10.5" fill="#475569">② AI 时间线</text>
+            <text x="803" y="124" text-anchor="middle" font-size="10.5" fill="#475569">③ 风险解释卡片</text>
+            <text x="803" y="141" text-anchor="middle" font-size="10.5" fill="#475569">④ 行动闭环</text>
+            <text x="803" y="158" text-anchor="middle" font-size="10.5" fill="#475569">⑤ 架构图</text>
+            <text x="803" y="187" text-anchor="middle" font-size="9.5" fill="#94a3b8">WebSocket (base64 JPEG + view-model)</text>
+
+            <!-- arrows -->
+            <line x1="294" y1="120" x2="362" y2="120" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"></line>
+            <line x1="614" y1="120" x2="658" y2="120" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"></line>
+
+            <!-- boundary label -->
+            <text x="328" y="235" text-anchor="middle" font-size="9.5" fill="#94a3b8">冻结消费边界 (§2.1)</text>
+          </svg>
+          <div class="note">
+            Demo 仅消费白名单：<code>core.config.Settings</code> · <code>runtime.pipeline.{PerceptionPipeline, DemoClock, FrameResult}</code> ·
+            <code>runtime.config.read_caviar_frames</code> · <code>analysis.warning.WarningEvent</code> · <code>action.command.ActionCommand</code>（仅 to_dict 只读）。
+            不穿透 decision_engine / action.executor / dispatcher 等 7 层内部。
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="disclaimer">
+      <b>数据真实性声明（ADR-0015 §2.8）：</b>本 Demo 使用 CAVIAR 公开 fixture 作为<b>确定性输入</b>，用于验证系统闭环与架构消费契约，
+      不代表真实部署环境的性能指标，亦不用于证明模型泛化能力。风险等级（LOW/MEDIUM/HIGH）为<b>规则命中强度</b>，非诈骗概率判定。
+    </div>
   </div>
-  <div class="card">
-    <p class="muted">
-      Demo 数据真实性声明：P0-11 使用 CAVIAR 公开 fixture 作为确定性输入，
-      不代表真实部署环境的性能指标，亦不用于证明模型泛化能力。
-      Demo 目标是验证系统闭环与架构消费契约（ADR-0015 §2.8）。
-    </p>
-  </div>
+
+  <div id="toasts"></div>
+
   <script>
-    // 极简 WS 占位：P0-11.2 替换为完整 5 区域渲染
-    (function () {
-      var wsPath = window.location.pathname.replace(/\/$/, "") + "/ws";
-      document.getElementById("ws-path").textContent = wsPath;
-      var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      var url = proto + "//" + window.location.host + wsPath;
-      var statusEl = document.getElementById("ws-status");
-      var frameEl = document.getElementById("last-frame");
-      try {
-        var ws = new WebSocket(url);
-        ws.onopen = function () {
-          statusEl.textContent = "已连接";
-          statusEl.className = "status ok";
-        };
-        ws.onmessage = function (ev) {
-          var msg = JSON.parse(ev.data);
-          if (msg.type === "frame" && msg.view) {
-            var v = msg.view;
-            frameEl.textContent =
-              "帧 #" + v.frame_index +
-              " @ " + (v.demo_time || "?") +
-              " | 检测 " + v.n_detections +
-              " | 访客事件 " + v.n_visitor_events +
-              " | 告警 " + (v.warnings ? v.warnings.length : 0) +
-              " | 命令 " + (v.commands ? v.commands.length : 0);
-          } else if (msg.type === "state_update") {
-            frameEl.textContent = "状态更新：" + JSON.stringify(msg.state);
-          }
-        };
-        ws.onclose = function () {
-          statusEl.textContent = "已断开";
-          statusEl.className = "status warn";
-        };
-      } catch (e) {
-        statusEl.textContent = "连接失败：" + e.message;
+  (function () {
+    "use strict";
+
+    // ---------- labels & colors ----------
+    var RISK = {
+      LOW:    { t: "低", c: "#16a34a" },
+      MEDIUM: { t: "中", c: "#d97706" },
+      HIGH:   { t: "高", c: "#dc2626" }
+    };
+    var EVT = {
+      visit_normal: "正常到访",
+      visit_pending_verify: "待核到访",
+      abnormal_dwell: "异常逗留",
+      repeat_visit: "重复到访",
+      high_risk_approach: "高风险逼近"
+    };
+    var EVT_COLOR = {
+      visit_normal: "#16a34a",
+      visit_pending_verify: "#0ea5e9",
+      abnormal_dwell: "#d97706",
+      repeat_visit: "#7c3aed",
+      high_risk_approach: "#dc2626"
+    };
+    var ACT = {
+      MONITOR: "仅监测",
+      NOTIFY_FAMILY: "通知家属",
+      ESCALATE_COMMUNITY: "升级社区"
+    };
+    var CLOSURE = {
+      pending:        { t: "待处理", c: "#64748b" },
+      family_handled: { t: "家属已处理", c: "#2563eb" },
+      community_done: { t: "社区已闭环", c: "#16a34a" }
+    };
+    var WARN_STATUS = {
+      CREATED: "已生成", PENDING: "已下发", CONFIRMED: "已确认", RESOLVED: "已闭环", REJECTED: "已拒绝"
+    };
+
+    // ---------- state ----------
+    var state = {
+      frame: null,
+      stateMap: {},            // warning_id -> {status, operator}
+      activeWarnings: [],
+      routed: { family: [], community: [], log_only: [] },
+      timeline: [],            // capped
+      timelineMax: 160
+    };
+
+    // ---------- helpers ----------
+    function $(id) { return document.getElementById(id); }
+    function esc(s) {
+      if (s == null) return "";
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function shortId(id) { return id ? String(id).slice(0, 8) : "—"; }
+    function riskOf(level) { return RISK[level] || { t: level || "?", c: "#64748b" }; }
+
+    function toast(msg, isErr) {
+      var box = $("toasts");
+      var el = document.createElement("div");
+      el.className = "toast" + (isErr ? " err" : "");
+      el.textContent = msg;
+      box.appendChild(el);
+      requestAnimationFrame(function () { el.classList.add("show"); });
+      setTimeout(function () {
+        el.classList.remove("show");
+        setTimeout(function () { el.remove(); }, 250);
+      }, 2600);
+    }
+
+    // ---------- WebSocket ----------
+    var ws = null;
+    var wsPath = "/ws";
+    var reconnectTimer = null;
+
+    function wsUrl() {
+      var proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + wsPath;
+    }
+    function setWs(online) {
+      var pill = $("ws-pill");
+      pill.className = "pill " + (online ? "online" : "offline");
+      $("ws-text").textContent = online ? "已连接" : "未连接";
+      $("live-badge").style.display = online ? "inline-flex" : "none";
+    }
+    function connect() {
+      try { ws = new WebSocket(wsUrl()); }
+      catch (e) { scheduleReconnect(); return; }
+      ws.onopen = function () { setWs(true); };
+      ws.onmessage = function (ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        handle(msg);
+      };
+      ws.onclose = function () { setWs(false); scheduleReconnect(); };
+      ws.onerror = function () { setWs(false); };
+    }
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, 2500);
+    }
+
+    function handle(msg) {
+      if (msg.type === "frame") {
+        state.frame = msg.view;
+        // 合并闭环状态快照（每帧都带全量 state）
+        if (msg.state) Object.assign(state.stateMap, msg.state);
+        state.activeWarnings = msg.active_warnings || [];
+        state.routed = msg.routed_commands || { family: [], community: [], log_only: [] };
+        pushTimeline(msg.view);
+        renderAll();
+      } else if (msg.type === "state_update") {
+        if (msg.state) Object.assign(state.stateMap, msg.state);
+        renderClosure();
+      } else if (msg.type === "action_ack") {
+        toast("已记录：" + (msg.action || "操作"));
+      } else if (msg.type === "error") {
+        toast("操作失败：" + (msg.error || "未知错误"), true);
       }
-    })();
+    }
+
+    function pushTimeline(view) {
+      var events = (view && view.perception_events) || [];
+      state.timeline.unshift({
+        frame_index: view.frame_index,
+        demo_time: view.demo_time,
+        n_det: view.n_detections,
+        events: events
+      });
+      if (state.timeline.length > state.timelineMax) {
+        state.timeline.length = state.timelineMax;
+      }
+    }
+
+    function sendAction(wid, operator) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        toast("未连接，无法发送操作", true);
+        return;
+      }
+      var label = operator === "family" ? "家属已认识 / 通知社区" : "社区已接单 / 已处置";
+      ws.send(JSON.stringify({
+        type: "action", warning_id: wid, operator: operator, action: label
+      }));
+    }
+
+    // ---------- renderers ----------
+    function renderAll() {
+      renderVideo();
+      renderTimeline();
+      renderRisks();
+      renderClosure();
+      renderRouting();
+    }
+
+    function renderVideo() {
+      var v = state.frame;
+      if (!v) return;
+      $("ov-frame").textContent = v.frame_index;
+      $("ov-time").textContent = v.demo_time ? v.demo_time.replace("T", " ").slice(0, 19) : "–";
+      $("ov-det").textContent = v.n_detections;
+      $("ov-ve").textContent = v.n_visitor_events;
+      if (v.frame_base64) {
+        $("video-img").src = "data:image/jpeg;base64," + v.frame_base64;
+        $("video-img").style.display = "block";
+        $("video-ph").style.display = "none";
+      }
+    }
+
+    function renderTimeline() {
+      var body = $("timeline-body");
+      if (!state.timeline.length) {
+        body.innerHTML = '<div class="tl-empty">暂无 AI 事件</div>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < state.timeline.length; i++) {
+        var t = state.timeline[i];
+        var time = t.demo_time ? t.demo_time.replace("T", " ").slice(11, 19) : ("#" + t.frame_index);
+        html += '<div class="tl-item"><div class="tl-time">' + esc(time) + '</div><div class="tl-main">';
+        if (!t.events.length) {
+          html += '<div class="tl-row"><span class="score">帧 #' + t.frame_index + ' · 检测 ' + (t.n_det || 0) + ' · 无触发事件</span></div>';
+        } else {
+          for (var j = 0; j < t.events.length; j++) {
+            var e = t.events[j];
+            var et = e.event_type || "?";
+            var col = EVT_COLOR[et] || "#64748b";
+            var label = EVT[et] || et;
+            var score = (typeof e.score === "number") ? e.score.toFixed(2) : "?";
+            var loc = e.location ? esc(e.location) : "";
+            var rule = (e.meta && e.meta.rule) ? esc(e.meta.rule) : "";
+            html += '<div class="tl-row">'
+              + '<span class="ev-chip" style="background:' + col + '">' + esc(label) + '</span>'
+              + '<span class="score">强度 ' + score + '</span>'
+              + (loc ? '<span class="score">位置 ' + loc + '</span>' : '')
+              + '</div>';
+            if (rule) html += '<div class="tl-meta">规则：' + rule + '</div>';
+          }
+        }
+        html += '</div></div>';
+      }
+      body.innerHTML = html;
+    }
+
+    function renderRisks() {
+      var body = $("risk-body");
+      var list = state.activeWarnings || [];
+      if (!list.length) {
+        body.innerHTML = '<div class="tl-empty">当前无活跃风险</div>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
+        var rl = riskOf(w.risk_level);
+        var score = (typeof w.perception_score === "number") ? w.perception_score : 0;
+        var reasons = (w.reason_summary || []).map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("");
+        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
+        var wstat = WARN_STATUS[w.status] || w.status || "—";
+        html += '<div class="risk-card" style="border-left-color:' + rl.c + '">'
+          + '<div class="rc-head">'
+          + '<span class="rlevel" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          + '<span class="rc-id">' + esc(shortId(w.warning_id)) + '</span>'
+          + '<span class="cl-status" style="color:' + rl.c + ';background:' + rl.c + '1a">' + esc(wstat) + '</span>'
+          + '</div>'
+          + (reasons ? '<ul class="rc-reason">' + reasons + '</ul>' : '')
+          + '<div class="rc-foot">'
+          + '<span>建议：<b>' + esc(rec) + '</b></span>'
+          + '<span class="bar"><i style="width:' + (score * 100).toFixed(0) + '%;background:' + rl.c + '"></i></span>'
+          + '<span>强度 ' + score.toFixed(2) + '</span>'
+          + '</div>'
+          + '</div>';
+      }
+      body.innerHTML = html;
+    }
+
+    function renderClosure() {
+      var wrap = $("closure-cards");
+      var warnings = (state.frame && state.frame.warnings) || [];
+      if (!warnings.length) {
+        wrap.innerHTML = '<div class="tl-empty">暂无待闭环风险</div>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < warnings.length; i++) {
+        var w = warnings[i];
+        var wid = w.warning_id;
+        var closure = state.stateMap[wid] ? state.stateMap[wid].status : "pending";
+        if (!CLOSURE[closure]) closure = "pending";
+        var cs = CLOSURE[closure];
+        var rl = riskOf(w.risk_level);
+        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
+
+        var famDone = (closure === "family_handled" || closure === "community_done");
+        var comDone = (closure === "community_done");
+        var famDisabled = famDone;                       // 家属已处理则不能再点
+        var comDisabled = (closure !== "family_handled"); // 须先家属处理
+
+        html += '<div class="cl-card">'
+          + '<div class="cl-top">'
+          + '<span class="cl-wid">' + esc(shortId(wid)) + '</span>'
+          + '<span class="cl-rl" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          + '</div>'
+          + '<div class="cl-rec">建议动作：<b>' + esc(rec) + '</b></div>'
+          + '<div class="stepper">'
+          + '<div class="step ' + (famDone ? "done" : (closure === "pending" ? "cur" : "")) + '">家属</div>'
+          + '<span class="arrow">→</span>'
+          + '<div class="step ' + (comDone ? "done" : (closure === "family_handled" ? "cur" : "")) + '">社区</div>'
+          + '</div>'
+          + '<div class="cl-actions">'
+          + '<button class="btn family" data-wid="' + esc(wid) + '" data-op="family" ' + (famDisabled ? "disabled" : "") + '>家属已认识 / 通知</button>'
+          + '<button class="btn community" data-wid="' + esc(wid) + '" data-op="community" ' + (comDisabled ? "disabled" : "") + '>社区已接单 / 处置</button>'
+          + '</div>'
+          + '<div style="margin-top:8px;text-align:right">'
+          + '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
+          + '</div>'
+          + '</div>';
+      }
+      wrap.innerHTML = html;
+    }
+
+    function renderRouting() {
+      var r = state.routed || { family: [], community: [], log_only: [] };
+      $("rc-family").textContent = (r.family || []).length;
+      $("rc-community").textContent = (r.community || []).length;
+      $("rc-log").textContent = (r.log_only || []).length;
+      function listHtml(arr) {
+        if (!arr || !arr.length) return '<span class="muted">—</span>';
+        return arr.map(function (c) {
+          return '<div>· <code>' + esc((c.command_type || "?").replace(/_/g, " ")) + '</code> <span class="muted">' + esc(shortId(c.command_id)) + '</span></div>';
+        }).join("");
+      }
+      $("rc-family-list").innerHTML = listHtml(r.family);
+      $("rc-community-list").innerHTML = listHtml(r.community);
+      $("rc-log-list").innerHTML = listHtml(r.log_only);
+    }
+
+    // event delegation for action buttons
+    $("closure-cards").addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-op]");
+      if (!btn) return;
+      sendAction(btn.getAttribute("data-wid"), btn.getAttribute("data-op"));
+    });
+
+    // scenario label (fetched once)
+    fetch("/health").then(function (r) { return r.json(); }).then(function (h) {
+      $("scenario-sub").textContent = "P0-11 MVP Demo · 场景 " + (h.scenario || "?") + " · 源 " + (h.source || "?") + " · 帧数 " + (h.n_frames || 0);
+    }).catch(function () { /* 网关未起时静默 */ });
+
+    connect();
+  })();
   </script>
 </body>
 </html>

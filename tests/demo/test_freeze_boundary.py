@@ -263,6 +263,25 @@ def test_bridge_route_commands() -> None:
     assert len(routed["log_only"]) == 1
 
 
+def test_bridge_collect_active_warnings() -> None:
+    """断言 collect_active_warnings 过滤掉 RESOLVED/REJECTED 的告警（P0-11.2 区域 3 渲染）。"""
+    from silver_demo.bridge import collect_active_warnings
+
+    warnings = [
+        {"warning_id": "1", "status": "CREATED"},
+        {"warning_id": "2", "status": "PENDING"},
+        {"warning_id": "3", "status": "RESOLVED"},
+        {"warning_id": "4", "status": "REJECTED"},
+        {"warning_id": "5", "status": "CONFIRMED"},
+    ]
+    active = collect_active_warnings(warnings)
+    assert {w["warning_id"] for w in active} == {"1", "2", "5"}
+    # 缺 status 字段也视为活跃（防御性，不静默丢弃）
+    assert collect_active_warnings([{"warning_id": "x"}]) == [{"warning_id": "x"}]
+    # 空列表安全
+    assert collect_active_warnings([]) == []
+
+
 # ============================================================================
 # 测试 5：DemoStateStore 状态机
 # ============================================================================
