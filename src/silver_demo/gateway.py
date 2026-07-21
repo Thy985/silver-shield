@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -115,19 +114,8 @@ class DemoGateway:
         self.frame_source = build_frame_source(self.scenario, self.hp_settings)
         self.n_frames = self.frame_source.frame_count
 
-        # CAVIAR 无帧（fixture 缺失或 cv2 未装）→ 启动即失败，给出清晰错误
-        if self.scenario.source_type == "caviar_jpg" and self.n_frames == 0:
-            raise RuntimeError(
-                f"CAVIAR 场景 {self.scenario.source!r} 无可用帧（base_dir="
-                f"{self.hp_settings.runtime.caviar_base_dir!r}，fixture 缺失或 cv2 未装）"
-            )
-        # 真实 MP4 文件缺失 → 启动即失败（清晰提示；文件建议放 data/demo/，gitignore 不入库）
-        if self.scenario.source_type == "video_file":
-            mp = self.scenario.media_path
-            if not mp or not Path(mp).is_file():
-                raise RuntimeError(
-                    f"video_file 源文件缺失: {mp!r}（请将真实门口 MP4 放到该路径，建议 data/demo/real_doorway.mp4）"
-                )
+        # 帧源可用性校验（CAVIAR / video_file 共用，见 _validate_frame_source）
+        self._validate_frame_source(self.scenario)
 
     # ------------------------------------------------------------------
     # 帧循环（后台 task）
@@ -220,6 +208,24 @@ class DemoGateway:
                 structlog.get_logger(__name__).warning("pipeline.close 失败", exc_info=exc)
             self.pipeline = None
 
+    def _validate_frame_source(self, scenario: "ScenarioConfig") -> None:
+        """校验帧源可用性（assemble 与 switch_source 共用，避免损坏场景静默空循环）。
+
+        - ``caviar_jpg``：n_frames == 0 即 fixture 缺失 / cv2 未装 → 启动即失败
+        - ``video_file``：文件不存在 → 启动即失败；n_frames == 0（编码不支持 / 时长为 0）→ 启动即失败
+        """
+        if scenario.source_type == "caviar_jpg" and self.n_frames == 0:
+            raise RuntimeError(
+                f"CAVIAR 场景 {scenario.source!r} 无可用帧（base_dir="
+                f"{self.hp_settings.runtime.caviar_base_dir!r}，fixture 缺失或 cv2 未装）"
+            )
+        if scenario.source_type == "video_file":
+            mp = scenario.media_path
+            if not mp or not Path(mp).is_file():
+                raise RuntimeError(f"video_file 源文件缺失: {mp!r}")
+            if self.n_frames == 0:
+                raise RuntimeError(f"视频无可用帧: {mp!r}（可能编码不支持或时长为 0）")
+
     # ------------------------------------------------------------------
     # 输入源热切换（P0-11.4 视频输入适配层）
     # ------------------------------------------------------------------
@@ -247,13 +253,8 @@ class DemoGateway:
         self.frame_source = build_frame_source(scenario, self.hp_settings)
         self.n_frames = self.frame_source.frame_count
 
-        # 真实视频无可用帧（文件损坏 / 编码不支持 / 时长为 0）→ 启动即失败，给出清晰错误
-        if scenario.source_type == "video_file":
-            mp = scenario.media_path
-            if not mp or not Path(mp).is_file():
-                raise RuntimeError(f"video_file 源文件缺失: {mp!r}")
-            if self.n_frames == 0:
-                raise RuntimeError(f"视频无可用帧: {mp!r}（可能编码不支持或时长为 0）")
+        # 帧源可用性校验（CAVIAR / video_file 共用，含 caviar_jpg 无帧保护）
+        self._validate_frame_source(scenario)
 
         self._frame_index = 0
         self.store = DemoStateStore()  # 新会话：清空历史闭环状态
@@ -411,13 +412,31 @@ def create_app(
         safe_name = f"{uuid.uuid4().hex}{ext}"
         dest = upload_dir / safe_name
 
-        # 流式写入，避免大文件占满内存
+        # 流式写入，避免大文件占满内存；同时累计字节数，超 max_upload_mb 则 413 拒绝并清理
+        max_bytes = int(demo_settings.max_upload_mb * 1024 * 1024)
+        written = 0
         try:
             with dest.open("wb") as out:
                 while True:
                     chunk = await file.read(1024 * 1024)
                     if not chunk:
                         break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        out.close()
+                        try:
+                            dest.unlink()
+                        except OSError:
+                            pass
+                        return JSONResponse(
+                            status_code=413,
+                            content={
+                                "error": (
+                                    f"视频过大（{written / 1024 / 1024:.1f} MB），"
+                                    f"上限 {demo_settings.max_upload_mb:.0f} MB"
+                                )
+                            },
+                        )
                     out.write(chunk)
         except Exception as exc:
             try:
@@ -466,20 +485,15 @@ def create_app(
         scn_id = (body.get("scenario_id") or "").strip()
         if not scn_id:
             return JSONResponse(status_code=400, content={"error": "缺少 scenario_id"})
-        candidates = [
-            Path(demo_settings.scenarios_dir) / f"{scn_id}.yaml",
-            Path(scn_id),  # 允许绝对 / 相对路径
-        ]
-        found = None
-        for c in candidates:
-            if c.is_file():
-                found = c
-                break
-        if found is None:
+        # 仅允许 scenarios_dir 内的预置场景；解析后校验归属，杜绝 ../ 路径穿越（评审 #4）
+        scenarios_root = Path(demo_settings.scenarios_dir).resolve()
+        candidate = (scenarios_root / f"{scn_id}.yaml").resolve()
+        if not candidate.is_relative_to(scenarios_root) or not candidate.is_file():
             return JSONResponse(
                 status_code=404,
                 content={"error": f"场景不存在: {scn_id}（应在 {demo_settings.scenarios_dir}/ 下）"},
             )
+        found = candidate
         try:
             sc = load_scenario(found)
             await gateway.switch_source(sc)

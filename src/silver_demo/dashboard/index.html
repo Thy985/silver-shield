@@ -497,7 +497,7 @@
     // ---------- helpers ----------
     function $(id) { return document.getElementById(id); }
     function esc(s) {
-      if (s == null) return "";
+      if (s === null || s === undefined) return "";
       return String(s).replace(/[&<>"']/g, function (c) {
         return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
       });
@@ -531,7 +531,7 @@
           if (!state.commandMap[wid]) state.commandMap[wid] = { family: new Map(), community: new Map(), log_only: new Map() };
           var map = state.commandMap[wid][types[i]];
           var cid = c.command_id;
-          if (cid == null) cid = "__null__";          // 缺 id 的命令按同一键去重（与原数组语义一致）
+          if (cid === null || cid === undefined) cid = "__null__";  // 缺 id 的命令按同一键去重（与原数组语义一致）
           if (!map.has(cid)) {                          // O(1) 去重，避免大帧线性扫描抖动
             map.set(cid, c);
             if (map.size > 24) { var old = map.keys().next().value; map.delete(old); }
@@ -560,7 +560,7 @@
     }
     function cmdStatusLabel(s) { return CMD_STATUS[s] || s || "—"; }
     function maskPhone(p) {
-      p = String(p == null ? "" : p);
+      p = String(p === null || p === undefined ? "" : p);
       if (p.length >= 7) return p.slice(0, 3) + "****" + p.slice(-4);
       return "***";
     }
