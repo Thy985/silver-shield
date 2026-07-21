@@ -5,7 +5,7 @@
 2. 经 ``read_caviar_frames(base_dir, scenario, glob)`` 读取 fixture 帧（demo 真实路径）。
 3. 后台帧循环：``DemoClock.tick()`` → ``process_frame(frame, i)`` → bridge 翻译 → WS 广播。
 4. WebSocket 端点：下行推 frame view-model + state 快照；上行接 action 写 DemoStateStore。
-5. StaticFiles 托管 ``dashboard/``（P0-11.2 实现完整 HTML；本阶段占位）。
+5. StaticFiles 托管 ``dashboard/``（P0-11.2 实现完整 5 区域 HTML Dashboard）。
 
 冻结合规白名单（ADR-0015 §2.1，只 import 以下符号）：
 - ``PerceptionPipeline`` / ``DemoClock`` / ``FrameResult`` ← ``home_perception.runtime.pipeline``
@@ -35,7 +35,12 @@ from home_perception.runtime.config import read_caviar_frames
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 
 # === 本包内部 ===
-from .bridge import encode_frame_to_base64_jpeg, frame_result_to_view
+from .bridge import (
+    collect_active_warnings,
+    encode_frame_to_base64_jpeg,
+    frame_result_to_view,
+    route_commands,
+)
 from .config import DemoSettings
 from .scenarios import ScenarioConfig, load_scenario
 from .state import DemoStateStore
@@ -154,9 +159,22 @@ class DemoGateway:
             demo_time = self.clock.now().isoformat()
             view = frame_result_to_view(result, frame_index=i, frame_base64=frame_b64, demo_time=demo_time)
 
-            # 广播（frame view + state 快照）
+            # 广播（frame view + state 快照 + 衍生的三端聚合视图）
+            # active_warnings / routed_commands 由 bridge 消费 view-model 产出（P0-11.2 区域 3/4 直接渲染），
+            # 此处调用即"消费" collect_active_warnings / route_commands（消除孤儿代码），
+            # 且避免在展示层 JS 里重复实现路由/过滤逻辑（守住 ADR-0015 §5 冻结边界）。
+            active_warnings = collect_active_warnings(view["warnings"])
+            routed_commands = route_commands(view["commands"])
             state_snap = await self.store.snapshot()
-            await self.hub.broadcast({"type": "frame", "view": view, "state": state_snap})
+            await self.hub.broadcast(
+                {
+                    "type": "frame",
+                    "view": view,
+                    "state": state_snap,
+                    "active_warnings": active_warnings,
+                    "routed_commands": routed_commands,
+                }
+            )
 
             self._frame_index += 1
             if interval > 0:
@@ -193,7 +211,7 @@ def create_app(
 
     Returns:
         FastAPI app，已注册：
-        - ``GET /`` → Dashboard index.html（P0-11.2 完整 5 区域；本阶段占位）
+        - ``GET /`` → Dashboard index.html（P0-11.2 完整 5 区域）
         - ``GET /health`` → 健康检查
         - ``WS {ws_path}`` → WebSocket 端点（帧下行 + action 上行）
         - ``StaticFiles`` → dashboard/ 静态资源
@@ -235,7 +253,7 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
-        """Dashboard 入口（P0-11.2 实现完整 5 区域；本阶段占位）。"""
+        """Dashboard 入口（P0-11.2 完整 5 区域 HTML）。"""
         index_file = dash_dir / "index.html"
         if index_file.is_file():
             return HTMLResponse(index_file.read_text(encoding="utf-8"))
