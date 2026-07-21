@@ -105,7 +105,8 @@ def frame_result_to_view(
 def collect_active_warnings(warnings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """从 view-model 的 warnings 列表中筛出"待处理"的（status != RESOLVED/REJECTED）。
 
-    供 AI 风险中心"风险解释卡片"展示当前活跃风险。只做 dict 过滤，不触碰冻结对象。
+    供 AI 风险中心"风险解释卡片"展示当前活跃风险（P0-11.3 消费）。
+    只做 dict 过滤，不触碰冻结对象。
     """
     return [w for w in warnings if w.get("status") not in ("RESOLVED", "REJECTED")]
 
@@ -118,6 +119,8 @@ def route_commands(commands: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, A
         - family ← SEND_FAMILY_MESSAGE
         - community ← CREATE_COMMUNITY_TASK
         - log_only ← LOG_ONLY
+
+    由 P0-11.4 家属/社区交互层消费（当前 P0-11.1 网关仅广播原始 commands，未调用本函数）。
     """
     family: List[Dict[str, Any]] = []
     community: List[Dict[str, Any]] = []

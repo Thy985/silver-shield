@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -173,8 +174,8 @@ class DemoGateway:
         if self.pipeline is not None:
             try:
                 self.pipeline.close()
-            except Exception:
-                pass
+            except Exception as exc:  # 资源释放失败也要记日志，避免静默泄漏（AGENTS.md §2.5）
+                structlog.get_logger(__name__).warning("pipeline.close 失败", exc_info=exc)
             self.pipeline = None
 
 

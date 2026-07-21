@@ -51,7 +51,10 @@ class DemoSettings(BaseModel):
         if v := os.environ.get("DEMO_HOST"):
             kwargs["host"] = v
         if v := os.environ.get("DEMO_PORT"):
-            kwargs["port"] = int(v)
+            try:
+                kwargs["port"] = int(v)
+            except ValueError:
+                raise ValueError(f"DEMO_PORT 必须是整数，收到 {v!r}") from None
         if v := os.environ.get("DEMO_SCENARIO"):
             kwargs["scenario_path"] = v
         if v := os.environ.get("DEMO_HP_CONFIG"):

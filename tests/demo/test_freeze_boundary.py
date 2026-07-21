@@ -17,9 +17,7 @@
 """
 from __future__ import annotations
 
-import importlib
 import inspect
-import sys
 from pathlib import Path
 
 import pytest
@@ -79,24 +77,6 @@ def _collect_silver_demo_modules() -> list[str]:
         if parts:
             modules.append(".".join(parts))
     return modules
-
-
-def _module_dependencies(modname: str) -> set[str]:
-    """返回 modname 实际 import 的所有 home_perception.* 子模块完整限定名。
-
-    通过 importlib 真正导入模块后读 sys.modules，捕获其加载的 home_perception 子模块。
-    """
-    try:
-        importlib.import_module(modname)
-    except ImportError:
-        # 依赖缺失（如 fastapi 未装）→ 跳过运行期 import，改用 source 扫描
-        return set()
-
-    deps: set[str] = set()
-    for k in list(sys.modules.keys()):
-        if k.startswith("home_perception.") and k in sys.modules:
-            deps.add(k)
-    return deps
 
 
 def test_import_boundary_only_whitelist() -> None:
