@@ -120,27 +120,14 @@ def test_reset_endpoint_clears_aggregate(client, monkeypatch):
 def test_switch_source_clears_aggregate_real(monkeypatch):
     """真实 switch_source 在切换输入源时清空服务端聚合状态（解决切换残留）。
 
-    用 ``DemoGateway.__new__`` 跳过 ``__init__``（避免真实加载 Settings / 装配 pipeline），
-    手工补齐 ``switch_source`` 依赖的属性，并隔离 I/O 副作用：
+    用 ``DemoGateway.create_for_test()``（测试工厂，内部仍走 ``__init__``，避免手工
+    补齐一堆属性导致的脆弱性），并隔离 I/O 副作用：
     - ``_validate_frame_source`` 置桩：避免对假 mp4 路径做文件存在性校验
     - ``run_loop`` 置桩：避免后台 task 因 ``pipeline`` 为 None 而抛错
     - ``Source.load`` 置桩：避免真实读视频 / CAVIAR fixture
     其余逻辑（停旧循环 → 清 store → 清聚合 → 重置索引/计时 → 广播）走真实实现。
     """
-    gw = DemoGateway.__new__(DemoGateway)
-    gw.aggregate_state = DemoAggregateState()
-    gw.hub = ConnectionHub()
-    gw._task = None          # __init__ 未跑，手工补齐 switch_source 取消分支所需属性
-    gw._running = False
-    gw.pipeline = None
-    gw.clock = None
-    gw.source = None
-    gw.n_frames = -1
-    gw.store = None
-    gw.hp_settings = None
-    gw._frame_index = 0
-    gw.loop_count = 0
-    gw.scenario = None
+    gw = DemoGateway.create_for_test()  # 工厂：__init__ 已赋全部默认属性
 
     async def _noop_run(self):
         return

@@ -93,6 +93,8 @@
     .score { font-size: 11px; color: var(--muted); }
     .tl-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
     .tl-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 0; }
+    .tl-empty.observing { color: #dc2626; font-weight: 600; animation: obs-pulse 1.4s ease-in-out infinite; }
+    @keyframes obs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
     /* ---------- Region 3: Risk cards ---------- */
     .risk .body { max-height: 560px; }
@@ -866,7 +868,14 @@
       var body = $("timeline-body");
       var evs = state.behaviorEvents;
       if (!evs.length) {
-        body.innerHTML = '<div class="tl-empty">等待访客行为…</div>';
+        // 长视频前段：检测器已看见人、但「访问完成 / 异常停留」等里程碑事件尚未触发
+        // （如 CCTV 那人持续逗留 51s 才离开）。显示实时在场指示，消除「空白 = 没在工作」的观感。
+        var fv = state.frame;
+        if (fv && fv.n_detections > 0) {
+          body.innerHTML = '<div class="tl-empty observing">🔴 实时观察中 · 当前 ' + fv.n_detections + ' 人在场</div>';
+        } else {
+          body.innerHTML = '<div class="tl-empty">等待访客行为…</div>';
+        }
         return;
       }
       var html = "";
@@ -894,7 +903,13 @@
       var body = $("risk-body");
       var list = activeWarningList();   // 跨帧保活聚合（不再逐帧被覆盖 → 不闪现）
       if (!list.length) {
-        body.innerHTML = '<div class="tl-empty">当前无活跃风险</div>';
+        // 同 renderTimeline：有人在场但风险尚未触发时，给出即时反馈（消除长视频前段空窗观感）
+        var fv = state.frame;
+        if (fv && fv.n_detections > 0) {
+          body.innerHTML = '<div class="tl-empty observing">🔴 实时观察中 · 当前 ' + fv.n_detections + ' 人在场，风险尚未触发</div>';
+        } else {
+          body.innerHTML = '<div class="tl-empty">当前无活跃风险</div>';
+        }
         return;
       }
       var html = "";

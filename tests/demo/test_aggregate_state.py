@@ -131,3 +131,53 @@ def test_meta_shape():
     assert m["source"] == "x"
     assert m["started_at"] == 123.0
     assert m["last_warning"]["warning_id"] == "w2"
+
+
+def test_warning_prune_respects_max():
+    a = DemoAggregateState()
+    # 注入 35 条全 PENDING warning（无终态移除），应修剪到 _WARNING_MAX(30)
+    warns = [
+        {"warning_id": f"w{i}", "risk_level": "LOW", "status": "PENDING",
+         "created_at": f"2026-01-01T00:00:{i:02d}"}
+        for i in range(35)
+    ]
+    a.ingest(warns, [], [], {"family": [], "community": [], "log_only": []}, 0, 0)
+    assert len(a.warnings) == 30  # _WARNING_MAX
+    # 最旧的 5 条（created_at 最早）被移除
+    assert "w0" not in a.warnings and "w1" not in a.warnings
+    assert "w34" in a.warnings
+
+
+def test_behavior_prune_respects_max():
+    a = DemoAggregateState()
+    # 注入 125 条去重的行为里程碑（不同 visitor_id），应修剪到 _BEHAVIOR_MAX(120)
+    pes = [
+        {"visitor_id": f"v{i}", "event_type": "abnormal_dwell",
+         "created_at": f"2026-01-01T00:00:{i:02d}", "repeat_count": 1}
+        for i in range(125)
+    ]
+    a.ingest([], pes, [], {"family": [], "community": [], "log_only": []}, 0, 0)
+    assert len(a.behaviors) == 120  # _BEHAVIOR_MAX
+
+
+def test_merge_commands_single_bucket_capped_at_24():
+    a = DemoAggregateState()
+    # 同一 warning_id 同一 type 注入 30 条命令（不同 command_id），单桶应截断到 ≤24
+    cmds = [
+        {"command_id": f"c{i}", "warning_id": "w1", "command_type": "SEND_FAMILY_MESSAGE"}
+        for i in range(30)
+    ]
+    a.ingest([], [], [], {"family": cmds, "community": [], "log_only": []}, 0, 0)
+    assert len(a.commands["w1"]["family"]) == 24  # 单桶上限 24（与客户端一致）
+
+
+def test_snapshot_restores_warnings_into_fresh_state():
+    a = DemoAggregateState()
+    a.ingest(_sample()["active_warnings"], _sample()["perception_events"],
+             _sample()["all_warnings"], _sample()["routed"], 7, 2)
+    snap = a.snapshot()
+    # 晚连客户端（或新聚合实例）用 snapshot 重建：warnings 集合应与源一致
+    # （镜像前端 applySnapshot 用 snapshot.warnings 恢复 warningMap 的端到端可达性）
+    b = DemoAggregateState()
+    b.ingest(snap["warnings"], [], [], {"family": [], "community": [], "log_only": []}, 0, 0)
+    assert set(b.warnings.keys()) == set(a.warnings.keys()) == {"w1", "w2"}

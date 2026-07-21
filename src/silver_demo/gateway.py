@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -88,6 +89,17 @@ class DemoGateway:
         self._task: Optional[asyncio.Task] = None
         self._frame_index = 0
         self.loop_count = 0  # 循环重放计数（P0-11.3.5 状态面板）
+
+    @classmethod
+    def create_for_test(cls) -> "DemoGateway":
+        """测试用工厂：构造未装配的网关实例，跳过 YOLO 加载与场景解析。
+
+        避免测试用 ``DemoGateway.__new__`` 绕过 ``__init__`` 后手动补齐一堆属性
+        （脆弱、易漏属性导致 ``AttributeError``）。直接 ``cls(None, None, None)``
+        即获得 ``__init__`` 赋予的全部默认属性（hub / store / aggregate_state 等），
+        测试再按需 monkeypatch 隔离 I/O 副作用。
+        """
+        return cls(None, None, None)
 
     # ------------------------------------------------------------------
     # 装配
@@ -265,8 +277,10 @@ class DemoGateway:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception as exc:  # 非取消异常（如取消中 pipeline.close 抛错）需记录，避免静默丢失
+                structlog.get_logger(__name__).warning("帧循环任务取消时发生异常", exc_info=exc)
             self._task = None
 
         # 2. 重建帧源 + 流水线状态（复用已加载 detector，清空跨场景/跨循环累积状态）
@@ -323,6 +337,30 @@ class DemoGateway:
     # FastAPI app 工厂
     # ======================================================================
 
+def _resolve_inference_device(hp_settings: "Settings") -> str:
+    """解析推理设备：环境变量 > CUDA 可用性 > 配置默认值。
+
+    - ``SILVER_DEMO_DEVICE`` 非空时直接采用（``cpu`` / ``cuda:0`` / ``cuda:1``…），便于强制覆盖。
+    - 未设置且 ``torch.cuda.is_available()`` 为真 → ``cuda:0``：本机有 GPU，
+      把长视频首卡延迟从 CPU 的 ~0.5s/帧降到 ~30ms/帧，直接消减
+      「CCTV / 上传视频前段空窗、风险卡迟迟不出现」的观感问题。
+    - 否则保持 ``hp_settings.detection.device`` 原值（通常 ``cpu``）。
+
+    注意：延迟 ``import torch``，保持网关模块在无需判定设备时仍 torch-free。
+    """
+    env = os.environ.get("SILVER_DEMO_DEVICE", "").strip()
+    if env:
+        return env
+    try:
+        import torch  # 延迟导入：仅在真正需要判定设备时才引入 torch
+
+        if getattr(torch, "cuda", None) is not None and torch.cuda.is_available():
+            return "cuda:0"
+    except Exception:
+        pass
+    return getattr(getattr(hp_settings, "detection", None), "device", "cpu") or "cpu"
+
+
 def create_app(
     demo_settings: Optional[DemoSettings] = None,
 ) -> FastAPI:
@@ -340,6 +378,20 @@ def create_app(
     """
     demo_settings = demo_settings or DemoSettings.from_env()
     hp_settings = Settings.load(demo_settings.home_perception_config)
+
+    # 检测器设备选择（P0-11 后续 · 消减长视频前段空窗观感）：CUDA 可用时上 GPU。
+    # 复用同一 hp_settings 对象，使 assemble / _rebuild_pipeline 自动继承设备
+    # （不复制构造、不改冻结包；运行时首位消费者始终是 create_app 这条路径）。
+    desired = _resolve_inference_device(hp_settings)
+    cur = getattr(getattr(hp_settings, "detection", None), "device", None)
+    if cur != desired:
+        try:
+            hp_settings.detection.device = desired
+        except Exception:
+            # 冻结 / 不可变配置：复制后再改，保证 detector 继承设备选择
+            hp_settings = hp_settings.model_copy(deep=True)
+            hp_settings.detection.device = desired
+
     scenario = load_scenario(demo_settings.scenario_path)
 
     gateway = DemoGateway(demo_settings, hp_settings, scenario)
@@ -358,8 +410,10 @@ def create_app(
                 gateway._task.cancel()
                 try:
                     await gateway._task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass
+                except Exception as exc:  # 非取消异常需记录，避免静默丢失
+                    structlog.get_logger(__name__).warning("帧循环任务取消时发生异常", exc_info=exc)
             gateway.close()
 
     app = FastAPI(

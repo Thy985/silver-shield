@@ -121,7 +121,6 @@ class VideoFileFrameSource(DemoFrameSource):
         path: str,
         fps_target: int = 8,
         max_retries: int = 3,
-        backoff_s: float = 1.0,
     ) -> None:
         import cv2  # 延迟导入：仅本类需要 OpenCV
 
@@ -129,7 +128,6 @@ class VideoFileFrameSource(DemoFrameSource):
         self.path = path
         self.fps_target = fps_target
         self.max_retries = max_retries
-        self.backoff_s = backoff_s
         # 跳帧步长：使产出帧数 ≈ total / skip（读每 skip 帧产出 1 帧）。
         # 仅取元数据计算，不读全片；文件缺失则 _skip=1、frame_count=-1。
         self._skip = 1
@@ -163,7 +161,10 @@ class VideoFileFrameSource(DemoFrameSource):
                     if retries >= self.max_retries:
                         break
                     retries += 1
-                    time.sleep(self.backoff_s)
+                    # 不在此 sleep：本类 ``__iter__`` 是同步迭代器，被网关 ``run_loop`` 的
+                    # ``next()`` 在 asyncio 事件循环内同步调用；sleep 会阻塞事件循环
+                    # （冻住 WS 广播 / 上行 action / ``/health`` 响应，最多 3s）。
+                    # 改为立即重试，最多 ``max_retries`` 次后判定 EOF 退出（与正常 EOF 一致）。
                     continue
                 retries = 0
                 idx += 1

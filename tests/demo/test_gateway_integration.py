@@ -39,7 +39,7 @@ def _bare_gateway() -> DemoGateway:
 
     ds = DemoSettings.from_env()
     hp = Settings.load(ds.home_perception_config)
-    gw = DemoGateway.__new__(DemoGateway)
+    gw = DemoGateway.create_for_test()  # 测试工厂：跳过 YOLO / 场景解析，避免 __new__ 绕过 __init__
     gw.hp_settings = hp
     gw.n_frames = 0
     return gw
