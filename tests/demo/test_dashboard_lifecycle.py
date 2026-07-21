@@ -28,8 +28,6 @@ if str(REPO_ROOT) not in sys.path:
 from silver_demo.config import DemoSettings  # noqa: E402
 from silver_demo.gateway import DemoGateway, create_app  # noqa: E402
 from silver_demo.scenarios import ScenarioConfig  # noqa: E402
-from silver_demo.state import DemoAggregateState  # noqa: E402
-from silver_demo.ws import ConnectionHub  # noqa: E402
 
 
 @pytest.fixture
