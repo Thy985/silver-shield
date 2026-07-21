@@ -22,9 +22,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import sys
 from pathlib import Path
+
+import yaml  # 轻依赖，仅做场景解析，不触发 torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -38,8 +41,6 @@ HP_CONFIG = "config/default.yaml"
 
 
 def _read_yaml(path: Path) -> dict:
-    import yaml  # 轻依赖，仅做场景解析，不触发 torch
-
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
@@ -52,8 +53,12 @@ def _caviar_base_dir() -> Path:
     return p if p.is_absolute() else (ROOT / p)
 
 
-def resolve_scenario(args: argparse.Namespace) -> Path:
-    """解析最终要启动的场景 yaml 路径。"""
+def resolve_scenario(args: argparse.Namespace) -> tuple[Path, Path | None]:
+    """解析最终要启动的场景 yaml 路径。
+
+    返回 (场景路径, 临时文件或 None)：当使用了 ``--video`` 覆盖时，第二项指向
+    写入 ``data/demo/.run_demo_scenario.yaml`` 的临时文件，由调用方在退出时清理。
+    """
     if args.scenario:
         s = args.scenario
         if s.endswith(".yaml") or s.endswith(".yml"):
@@ -84,13 +89,11 @@ def resolve_scenario(args: argparse.Namespace) -> Path:
         out_dir = ROOT / "data" / "demo"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / ".run_demo_scenario.yaml"
-        import yaml
-
         with out_path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-        return out_path
+        return out_path, out_path
 
-    return base
+    return base, None
 
 
 def preflight_media(scenario_path: Path) -> None:
@@ -101,6 +104,12 @@ def preflight_media(scenario_path: Path) -> None:
     media_path = data.get("media_path", "")
 
     if source_type == "video_file":
+        if not media_path:
+            sys.stderr.write(
+                "❌ 场景 YAML 中 source_type=video_file 但 media_path 为空\n"
+                "   请在 YAML 中设置 media_path，或启动时用 --video <path> 指定本地视频。\n"
+            )
+            sys.exit(1)
         mp = Path(media_path) if Path(media_path).is_absolute() else (ROOT / media_path)
         if not mp.is_file():
             sys.stderr.write(
@@ -173,7 +182,12 @@ def main() -> None:
         sys.exit(0)
 
     # 2) 解析场景 + 3) 媒体/帧预检
-    scenario_path = resolve_scenario(args)
+    scenario_path, temp_path = resolve_scenario(args)
+    # --video 产生的临时点文件：启动失败（含 preflight_media 的 sys.exit）时清理，
+    # 避免 preflight 在落盘之后才报错、留下孤立文件。
+    if temp_path is not None:
+        atexit.register(lambda: temp_path.unlink(missing_ok=True))
+
     preflight_media(scenario_path)
 
     # 4) 注入环境变量并启动（此时 torch 已就绪，可安全加载 gateway）

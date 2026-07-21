@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from collections import defaultdict
 
 # (展示名, import 名, 类别, 安装提示)
 CHECKS = [
@@ -59,15 +60,15 @@ def _version(mod: object) -> str:
 
 def run_checks() -> tuple[bool, list[str], list[tuple[str, str, str]]]:
     """返回 (全部就绪?, 输出行列表, 缺失项列表[(展示名, 类别, 安装提示)])。"""
-    by_cat: dict[str, list[tuple[str, str, bool]]] = {}
+    by_cat: dict[str, list[tuple[str, str, bool]]] = defaultdict(list)
     missing: list[tuple[str, str, str]] = []
 
     for disp, imp, cat, hint in CHECKS:
         try:
             mod = importlib.import_module(imp)
-            by_cat.setdefault(cat, []).append((disp, _version(mod), True))
+            by_cat[cat].append((disp, _version(mod), True))
         except Exception:
-            by_cat.setdefault(cat, []).append((disp, "", False))
+            by_cat[cat].append((disp, "", False))
             missing.append((disp, cat, hint))
 
     lines: list[str] = []

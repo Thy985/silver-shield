@@ -149,6 +149,11 @@ tests/demo/test_freeze_boundary.py
 | `test-contracts` | 每 PR | 否（torch-free 子集） | §6 的 7 个文件 |
 | `test-runtime` | 仅 `main` / `workflow_dispatch` | 是（完整 AI 栈，CPU torch） | 完整 `pytest` |
 
+> **关于 CI 的 Python 版本**：CI 通过 `setup-python@v5` 安装 **Python 3.12**，
+> 这与本地 system Python 3.14（AI 运行时）和 managed venv Python 3.13（工具链）
+> 是**相互独立的第三个运行环境**。三个小版本不一致不影响功能——CI 只跑
+> 纯 Python 测试，不依赖任何特定小版本特性。
+
 **理由**：CI 的"契约 / 配置 / 状态机 / 仪表盘"测试不需要 GPU / torch；
 强行在每 PR 安装整个 AI 栈既慢又浪费。重型 runtime 测试仅在合入 `main` 或手动触发时跑。
 
@@ -172,6 +177,11 @@ tests/demo/test_freeze_boundary.py
 - **统一 Python 环境 / Docker 化**：等团队多人开发、服务器部署、7×24 运行时再考虑。
 - **摄像头 RTSP / EZVIZ 接入**：属 P0-12（真实设备源，非当前 Demo 传感器）。
 - **声音多模态感知**：属 P1 / P2（用户已明确当前不做）。
+- **AI 栈核心依赖独立分组**：当前 `opencv-python` / `ultralytics` 声明在 `[project.dependencies]`，
+  导致 `pip install -e .`（无 `[demo]`）仍要装重型 AI 包；CI 的 torch-free job 用 `--no-deps` 绕过。
+  若 torch-free 子集继续扩展，建议将 AI 栈（`opencv-python` / `ultralytics` 等）移至独立的
+  `optional-dependencies` 分组（如 `[runtime]`），使 torch-free 安装无需 `--no-deps`。
+  （本项非当前 PR 必需，仅记录为后续改进。）
 
 ---
 
