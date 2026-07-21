@@ -99,6 +99,7 @@ jobs:
             [逐项列出发现的问题，每个问题包含文件名、行号、问题描述、修改建议]
             ## 最终结论
             ✅ 可以合并 / ⚠️ 建议修改后合并 / ❌ 需要重大修改
+          allowed_bots: '*'
           claude_args: |
             --model deepseek-v4-flash
             --max-turns ${{ steps.analyze.outputs.max_turns }}
