@@ -157,8 +157,12 @@ class DemoGateway:
             try:
                 _, frame = next(frame_iter)
             except StopIteration:
-                # 帧源耗尽：loop=True 时重放（重新迭代，MP4 重新打开文件 / CAVIAR 回到第 0 帧）
+                # 帧源耗尽：loop=True 时重放（重新迭代，MP4 重新打开文件 / CAVIAR 回到第 0 帧）。
+                # 关键：重建流水线状态组件（复用已加载 YOLO detector，免重载权重）以清空跨循环累积的
+                # 追踪/窗口/决策状态——否则多循环后状态饱和，warning 不再产生（演示区 ②③④ 变空白）。
                 if self.scenario.loop:
+                    self._rebuild_pipeline(self.scenario)
+                    self._frame_index = 0
                     frame_iter = iter(self.frame_source)
                     continue
                 break
@@ -237,9 +241,9 @@ class DemoGateway:
                 pass
             self._task = None
 
-        # 2. 重建帧源（复用已装配 pipeline / hp_settings）
+        # 2. 重建帧源 + 流水线状态（复用已加载 detector，清空跨场景/跨循环累积状态）
         self.scenario = scenario
-        self.clock = DemoClock(start=scenario.start_time, interval_s=scenario.frame_interval_s)
+        self._rebuild_pipeline(scenario)
         self.frame_source = build_frame_source(scenario, self.hp_settings)
         self.n_frames = self.frame_source.frame_count
 
@@ -267,9 +271,26 @@ class DemoGateway:
         })
 
 
-# ======================================================================
-# FastAPI app 工厂
-# ======================================================================
+    def _rebuild_pipeline(self, scenario: "ScenarioConfig") -> None:
+        """重建流水线状态组件（复用已加载的 YOLO detector，避免重载权重）。
+
+        清空跨循环/跨场景累积的追踪（VisitorTracker）/ 时间窗口（FeatureExtractor）/
+        规则计数（RuleEngine）/ 决策状态（DecisionEngine）等，使每次分析都从干净状态开始，
+        保证循环重放 / 切换场景后风险能重新触发（否则演示区 ②③④ 在多轮循环后变空白）。
+        仅重建组件，detector 实例复用（model.track(persist=True) 要求同一实例保证 track_id 一致）。
+        """
+        self.clock = DemoClock(start=scenario.start_time, interval_s=scenario.frame_interval_s)
+        self.pipeline = PerceptionPipeline.from_settings(
+            self.hp_settings,
+            detector=self.pipeline.detector,
+            device_id=scenario.source,
+            now_provider=self.clock,
+            frame_interval_s=scenario.frame_interval_s,
+        )
+
+    # ======================================================================
+    # FastAPI app 工厂
+    # ======================================================================
 
 def create_app(
     demo_settings: Optional[DemoSettings] = None,

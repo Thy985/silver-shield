@@ -60,8 +60,28 @@ def test_gateway_has_upload_and_scenario_endpoints():
     gw = _read(GATEWAY)
     assert '"/demo/upload"' in gw
     assert '"/demo/scenario"' in gw
-    # 热切换逻辑（不重建 pipeline，仅替换帧源）
+    # 热切换逻辑：停旧循环→重建帧源+流水线状态（复用 detector）→重开循环
     assert "async def switch_source" in gw
     assert "source_switched" in gw
     # 上传落盘到 upload_dir（最小实现，无用户系统/文件管理/数据库）
     assert "upload_dir" in gw
+
+
+def test_gateway_rebuilds_pipeline_state_on_loop_and_switch():
+    """回归防线（修复 ②③④ 演示区多循环后变空白的根因）。
+
+    根因：PerceptionPipeline 内部追踪/窗口/规则/决策状态跨 loop 累积、从不重置，
+    首轮循环后 warning 不再产生。修复：loop 重放 & 切换源时调用 _rebuild_pipeline
+    重建状态组件（复用已加载 YOLO detector 免重载权重）。此测试锁住该调用点，
+    防止后续重构静默移除导致回归。
+    """
+    gw = _read(GATEWAY)
+    # 存在重建方法，且复用 detector（不重载 YOLO 权重）
+    assert "def _rebuild_pipeline" in gw
+    assert "detector=self.pipeline.detector" in gw
+    # loop 重放分支必须重建流水线（否则跨循环状态饱和→warning 断流）
+    assert gw.count("self._rebuild_pipeline(") >= 2, (
+        "应在 loop 重放与 switch_source 两处调用 _rebuild_pipeline"
+    )
+    # 重建同时重置帧序号，保证 frame_index 从 0 起（不影响冻结契约单调性约定）
+    assert "self._frame_index = 0" in gw
