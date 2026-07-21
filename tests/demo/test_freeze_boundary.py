@@ -282,6 +282,15 @@ def test_bridge_collect_active_warnings() -> None:
     assert collect_active_warnings([]) == []
 
 
+def test_bridge_collect_active_warnings_skips_non_dict() -> None:
+    """断言 collect_active_warnings 对 None / 非 dict 元素防御性跳过（不崩溃）。"""
+    from silver_demo.bridge import collect_active_warnings
+
+    # 非 dict 元素（None / 字符串 / 数字）被跳过，仅保留 dict
+    mixed = [None, "not-a-dict", 42, {"warning_id": "1"}, {"warning_id": "2", "status": "RESOLVED"}]
+    assert collect_active_warnings(mixed) == [{"warning_id": "1"}]
+
+
 # ============================================================================
 # 测试 5：DemoStateStore 状态机
 # ============================================================================

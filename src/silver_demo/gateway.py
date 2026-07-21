@@ -113,14 +113,14 @@ class DemoGateway:
         self.n_frames = self.frame_source.frame_count
 
         # CAVIAR 无帧（fixture 缺失或 cv2 未装）→ 启动即失败，给出清晰错误
-        if getattr(self.scenario, "source_type", "caviar_jpg") == "caviar_jpg" and self.n_frames == 0:
+        if self.scenario.source_type == "caviar_jpg" and self.n_frames == 0:
             raise RuntimeError(
                 f"CAVIAR 场景 {self.scenario.source!r} 无可用帧（base_dir="
                 f"{self.hp_settings.runtime.caviar_base_dir!r}，fixture 缺失或 cv2 未装）"
             )
         # 真实 MP4 文件缺失 → 启动即失败（清晰提示；文件建议放 data/demo/，gitignore 不入库）
-        if getattr(self.scenario, "source_type", "caviar_jpg") == "video_file":
-            mp = getattr(self.scenario, "media_path", None)
+        if self.scenario.source_type == "video_file":
+            mp = self.scenario.media_path
             if not mp or not Path(mp).is_file():
                 raise RuntimeError(
                     f"video_file 源文件缺失: {mp!r}（请将真实门口 MP4 放到该路径，建议 data/demo/real_doorway.mp4）"
@@ -164,6 +164,9 @@ class DemoGateway:
             self.clock.tick(self.scenario.frame_interval_s)
 
             # 消费冻结契约：process_frame（唯一出口）
+            # 注意：frame_index 单调递增、loop 重放时**不回绕**（与冻结 read_caviar_frames 的 i % n 不同）。
+            # 长 loop 下 frame_index 会超过 n_frames——Dashboard 不要用它作取模/进度条边界，
+            # 展示进度请用 clock.now()（demo_time）或 self.n_frames。
             result: FrameResult = self.pipeline.process_frame(frame, frame_index=self._frame_index)
 
             # bridge 翻译（只读 to_dict + base64）

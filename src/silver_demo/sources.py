@@ -19,8 +19,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Iterator, Tuple
 
-import cv2
-
 from home_perception.runtime.config import read_caviar_frames
 
 from .scenarios import ScenarioConfig
@@ -54,11 +52,11 @@ class CaviarJpgFrameSource(DemoFrameSource):
     def __init__(
         self,
         base_dir: str,
-        scenario: str,
+        scenario_source: str,
         fps_target: int = 2,
         frame_glob: str = "frame_*.jpg",
     ) -> None:
-        self._frames = read_caviar_frames(base_dir, scenario, frame_glob)
+        self._frames = read_caviar_frames(base_dir, scenario_source, frame_glob)
         self.fps_target = fps_target
         self.frame_count = len(self._frames)
 
@@ -70,11 +68,21 @@ class CaviarJpgFrameSource(DemoFrameSource):
 class VideoFileFrameSource(DemoFrameSource):
     """真实监控 MP4 帧源（产品展示层输入 · P0-11.3）。
 
-    通过 ``cv2.VideoCapture`` 读取 MP4，按 ``fps_target`` **跳帧 + 限速**产出 ``(timestamp, frame)``：
-    - 跳帧：``skip = round(src_fps / fps_target)``，仅产出每 ``skip`` 帧中的第 1 帧，
-      使产出帧率 ≈ ``fps_target``，现场播放接近实时（修复「逐帧全读导致 3x 慢放」问题）；
-    - 限速：仅在产出帧之间按 ``interval = 1/fps_target`` 维持节奏（推理更慢时不额外等待）。
-    每次 ``__iter__`` 重新打开文件（支持 loop 重放）；文件缺失则在迭代首帧抛 ``RuntimeError``。
+    通过 ``cv2.VideoCapture`` 读取 MP4，按 ``fps_target`` **跳帧**产出 ``(timestamp, frame)``：
+    ``skip = round(src_fps / fps_target)``，仅产出每 ``skip`` 帧中的第 1 帧，
+    使产出帧数 = ``ceil(total / skip)``（而非全帧读取），现场播放接近实时
+    （修复「逐帧全读导致 3x 慢放」）。
+
+    **限速（帧节奏）不在本类内做**——由网关 ``run_loop`` 的 ``await asyncio.sleep(interval)``
+    统一控制（见 gateway.py）。原因：
+    - 本类 ``__iter__`` 是同步迭代器，内部 ``time.sleep`` 会阻塞 asyncio 事件循环，
+      冻住 WebSocket 广播 / 上行 action / ``/health`` 响应；
+    - 两帧源行为一致（``CaviarJpgFrameSource`` 同样不做内部限速）；
+    - 有效帧率 = 配置值，不减半（否则源内 + 网关双重限速 ≈ 0.5x）。
+
+    cv2 延迟导入（仅本类需要），避免 ``CaviarJpgFrameSource`` 单独部署在无 cv2 环境时
+    导入本模块即报 ``ImportError``。每次 ``__iter__`` 重新打开文件（支持 loop 重放）；
+    文件缺失则在迭代首帧抛 ``RuntimeError``。
 
     定位（ADR-0015 §2.6 调整）：替代 CAVIAR 作为「银龄盾场景价值」展示输入，
     验证「真实场景输入 → 工业级架构 → 风险闭环」（CAVIAR 仍用于工程链路验证）。
@@ -87,12 +95,14 @@ class VideoFileFrameSource(DemoFrameSource):
         max_retries: int = 3,
         backoff_s: float = 1.0,
     ) -> None:
+        import cv2  # 延迟导入：仅本类需要 OpenCV
+
+        self._cv2 = cv2
         self.path = path
         self.fps_target = fps_target
-        self.interval = 1.0 / fps_target if fps_target > 0 else 0.0
         self.max_retries = max_retries
         self.backoff_s = backoff_s
-        # 跳帧步长：使产出帧率 ≈ fps_target（读每 skip 帧产出 1 帧）。
+        # 跳帧步长：使产出帧数 ≈ total / skip（读每 skip 帧产出 1 帧）。
         # 仅取元数据计算，不读全片；文件缺失则 _skip=1、frame_count=-1。
         self._skip = 1
         self.frame_count = -1
@@ -111,12 +121,11 @@ class VideoFileFrameSource(DemoFrameSource):
     def __iter__(self) -> Iterator[Tuple[float, Any]]:
         if not Path(self.path).is_file():
             raise RuntimeError(f"视频文件不存在: {self.path!r}（P0-11.3 真实输入源）")
-        cap = cv2.VideoCapture(str(self.path))
+        cap = self._cv2.VideoCapture(str(self.path))
         if not cap.isOpened():
             cap.release()
             raise RuntimeError(f"无法打开视频: {self.path!r}")
         skip = self._skip
-        last = 0.0
         idx = 0
         retries = 0
         try:
@@ -133,12 +142,8 @@ class VideoFileFrameSource(DemoFrameSource):
                 # 跳帧：仅产出每 skip 帧中的第 1 帧（帧索引 0, skip, 2*skip, ...）
                 if (idx - 1) % skip != 0:
                     continue
-                # 限速：仅在产出帧之间维持 fps_target 节奏（推理更慢时不额外等待）
-                now = time.time()
-                if self.interval > 0 and (now - last) < self.interval:
-                    time.sleep(max(0.0, self.interval - (now - last)))
-                last = time.time()
-                yield last, frame
+                # 限速由网关层 await asyncio.sleep 统一控制（不在此 sleep，避免阻塞事件循环）
+                yield time.time(), frame
         finally:
             cap.release()
 
@@ -152,9 +157,9 @@ def build_frame_source(scenario: ScenarioConfig, hp_settings: Any) -> DemoFrameS
     这是 P0-11.3 的核心替换点：切换输入源只需改 ``source_type`` / ``media_path``，
     Dashboard / Pipeline / WarningEvent 完全不变。
     """
-    source_type = getattr(scenario, "source_type", "caviar_jpg")
+    source_type = scenario.source_type
     if source_type == "video_file":
-        media_path = getattr(scenario, "media_path", None)
+        media_path = scenario.media_path
         if not media_path:
             raise ValueError(
                 f"video_file 源需要 media_path，场景 {scenario.scenario_id!r} 缺失"
@@ -166,7 +171,7 @@ def build_frame_source(scenario: ScenarioConfig, hp_settings: Any) -> DemoFrameS
     frame_glob = getattr(hp_settings.runtime, "frame_glob", "frame_*.jpg")
     return CaviarJpgFrameSource(
         str(base_dir),
-        scenario.source,
+        scenario_source=scenario.source,
         fps_target=scenario.fps_target,
         frame_glob=frame_glob,
     )

@@ -26,6 +26,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CAVIAR_BASE = REPO_ROOT / "tests" / "fixtures" / "doorway"
 
 
+def _caviar_frames_present(scenario: str = "one_leave_reenter") -> bool:
+    """CAVIAR jpg 帧 fixture 是否就位（*.jpg 被 gitignore，需先跑 download_fixtures.py）。"""
+    d = CAVIAR_BASE / scenario
+    return d.is_dir() and bool(list(d.glob("frame_*.jpg")))
+
+
 def _make_synthetic_mp4(path: Path, n: int = 10, w: int = 320, h: int = 240, fps: int = 8) -> None:
     """生成合成 MP4（彩色帧），用于验证 VideoFileFrameSource 不依赖真实素材。"""
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -91,7 +97,9 @@ def test_video_file_frame_source_skips_to_target_fps(tmp_path) -> None:
 
 
 def test_caviar_jpg_frame_source_yields_frames() -> None:
-    src = CaviarJpgFrameSource(str(CAVIAR_BASE), "one_leave_reenter", fps_target=2)
+    if not _caviar_frames_present("one_leave_reenter"):
+        pytest.skip("CAVIAR fixture 缺失：跑 tests/fixtures/download_fixtures.py 下载")
+    src = CaviarJpgFrameSource(str(CAVIAR_BASE), scenario_source="one_leave_reenter", fps_target=2)
     # one_leave_reenter fixture 含 30 张 jpg
     assert src.frame_count == 30
 
@@ -104,6 +112,30 @@ def test_caviar_jpg_frame_source_yields_frames() -> None:
 
 def test_caviar_jpg_frame_source_is_demo_frame_source() -> None:
     assert issubclass(CaviarJpgFrameSource, DemoFrameSource)
+
+
+def test_caviar_jpg_frame_source_loop_replay() -> None:
+    """loop 重放：第二次迭代应与第一次产出相同帧（时间戳允许不同）。"""
+    if not _caviar_frames_present("one_leave_reenter"):
+        pytest.skip("CAVIAR fixture 缺失：跑 tests/fixtures/download_fixtures.py 下载")
+    src = CaviarJpgFrameSource(str(CAVIAR_BASE), scenario_source="one_leave_reenter", fps_target=2)
+    first = list(src)
+    second = list(src)
+    assert len(first) == len(second) == 30
+    for i, ((_, f1), (_, f2)) in enumerate(zip(first, second)):
+        assert np.array_equal(f1, f2), f"帧 {i} 内容不一致（重放应一致）"
+
+
+def test_video_file_frame_source_loop_replay(tmp_path) -> None:
+    """loop 重放：第二次迭代应与第一次产出相同帧（时间戳允许不同）。"""
+    mp4 = tmp_path / "syn.mp4"
+    _make_synthetic_mp4(mp4, n=10)
+    src = VideoFileFrameSource(str(mp4), fps_target=8)
+    first = list(src)
+    second = list(src)
+    assert len(first) == len(second) == 10
+    for i, ((_, f1), (_, f2)) in enumerate(zip(first, second)):
+        assert np.array_equal(f1, f2), f"帧 {i} 内容不一致（重放应一致）"
 
 
 # ============================================================================
@@ -128,6 +160,8 @@ def test_build_frame_source_video_file(tmp_path) -> None:
 
 
 def test_build_frame_source_caviar() -> None:
+    if not _caviar_frames_present("one_leave_reenter"):
+        pytest.skip("CAVIAR fixture 缺失：跑 tests/fixtures/download_fixtures.py 下载")
     scenario = ScenarioConfig(
         scenario_id="night_visit",
         source="one_leave_reenter",
