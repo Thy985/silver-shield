@@ -138,6 +138,50 @@
     .route-list { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
     .route-list code { font-size: 11px; }
 
+    /* ---------- Region 3 deepen: 风险解释卡片 ---------- */
+    .rc-section { margin-top: 10px; }
+    .rc-label { font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 5px; letter-spacing: .3px; }
+    .rc-reason { margin: 0; padding-left: 18px; }
+    .rc-reason li { margin: 2px 0; font-size: 12.5px; }
+    .rc-triggers { display: flex; flex-wrap: wrap; gap: 6px; }
+    .trig-chip { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; border: 1px solid; }
+    .trig-chip b { font-weight: 800; margin-left: 3px; }
+    .rc-time { font-size: 11px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .rc-foot2 { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+    .meter { flex: 1 1 160px; min-width: 140px; }
+    .meter-label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+    .meter-label b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .rc-rec { font-size: 12px; }
+    .rc-meta { margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .rc-meta code { font-size: 11px; background: #f1f5f9; padding: 1px 5px; border-radius: 5px; }
+    .rc-ev { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .ev-chip2 { font-size: 10.5px; color: #475569; background: #f1f5f9; border: 1px solid var(--line); padding: 1px 7px; border-radius: 6px; }
+    .rc-link { margin-top: 10px; font-size: 11px; color: var(--brand); font-weight: 600; }
+
+    /* ---------- Region 4 deepen: 三端任务卡联动 ---------- */
+    .cl-reasons { font-size: 12px; color: var(--ink); margin: 6px 0; font-weight: 600; }
+    .cl-rec2 { font-size: 11.5px; color: var(--muted); margin-left: auto; }
+    .tasks { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
+    .task { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: #fff; }
+    .task.family { border-left: 3px solid var(--brand); }
+    .task.community { border-left: 3px solid var(--ok); }
+    .task.log { border-left: 3px solid #94a3b8; background: #fafafa; }
+    .task-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
+    .task-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .task-dot.f { background: var(--brand); }
+    .task-dot.c { background: var(--ok); }
+    .task-dot.l { background: #94a3b8; }
+    .task-status { margin-left: auto; font-size: 10.5px; font-weight: 700; color: #475569; background: #f1f5f9; padding: 1px 7px; border-radius: 6px; }
+    .task-body { font-size: 12px; color: var(--ink); margin-top: 5px; line-height: 1.45; }
+    .task-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+    .task-empty { font-size: 11.5px; color: var(--muted); margin-top: 4px; font-style: italic; }
+
+    /* ---------- Route panel deepen: 实际 payload 预览 ---------- */
+    .route-item { padding: 5px 0; border-bottom: 1px dashed var(--line); }
+    .route-item:last-child { border-bottom: 0; }
+    .route-cmd { font-size: 11.5px; font-weight: 700; }
+    .route-hint { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+
     /* ---------- Region 5: Architecture ---------- */
     .arch .body { padding: 8px; }
     .arch svg { width: 100%; height: auto; display: block; }
@@ -195,7 +239,7 @@
 
       <!-- Region 3: Risk cards -->
       <section class="region risk">
-        <h2>③ 风险解释卡片 <span class="tag">活跃 WarningEvent</span></h2>
+        <h2>③ 风险解释卡片 <span class="tag">人话原因 · 触发规则</span></h2>
         <div class="body" id="risk-body">
           <div class="tl-empty">当前无活跃风险</div>
         </div>
@@ -203,7 +247,7 @@
 
       <!-- Region 4: Action closure -->
       <section class="region closure">
-        <h2>④ 行动闭环 <span class="tag">家属 / 社区 人工确认</span></h2>
+        <h2>④ 行动闭环 <span class="tag">家属 / 社区 任务卡联动</span></h2>
         <div class="body">
           <div class="closure-cards" id="closure-cards">
             <div class="tl-empty">暂无待闭环风险</div>
@@ -329,8 +373,27 @@
     };
     var ACT = {
       MONITOR: "仅监测",
-      NOTIFY_FAMILY: "通知家属",
-      ESCALATE_COMMUNITY: "升级社区"
+      NOTIFY_FAMILY: "通知家属核实",
+      ESCALATE_COMMUNITY: "升级社区处置"
+    };
+    // 触发规则标签（贴近 reason_summary，给人话解释；与 EVT_COLOR 区分使用）
+    var TRIG = {
+      high_risk_approach: "高风险逼近",
+      abnormal_dwell: "异常停留",
+      repeat_visit: "重复访问",
+      visit_pending_verify: "未在白名单",
+      visit_normal: "异常时段访问"
+    };
+    var TRIG_COLOR = {
+      high_risk_approach: "#dc2626",
+      abnormal_dwell: "#d97706",
+      repeat_visit: "#7c3aed",
+      visit_pending_verify: "#0ea5e9",
+      visit_normal: "#0891b2"
+    };
+    // ActionCommand 执行层状态 → 中文（系统侧是否发出，区别于人工确认状态）
+    var CMD_STATUS = {
+      PENDING: "待执行", DONE: "已执行", FAILED: "执行失败", RETRYING: "重试中", GIVEN_UP: "已放弃"
     };
     var CLOSURE = {
       pending:        { t: "待处理", c: "#64748b" },
@@ -347,6 +410,7 @@
       stateMap: {},            // warning_id -> {status, operator}
       activeWarnings: [],
       routed: { family: [], community: [], log_only: [] },
+      commandMap: {},            // warning_id -> {family, community, log_only}（跨帧累积，供区域④联动）
       timeline: [],            // capped
       timelineMax: 160
     };
@@ -373,6 +437,68 @@
         el.classList.remove("show");
         setTimeout(function () { el.remove(); }, 250);
       }, 2600);
+    }
+
+    // ---------- P0-11.4 联动辅助 ----------
+    // 三端命令按 warning_id 跨帧累积（同一 warning 的 家属/社区 任务卡借此与风险卡片联动）
+    function mergeCommands(routed) {
+      var types = ["family", "community", "log_only"];
+      for (var i = 0; i < types.length; i++) {
+        var arr = (routed && routed[types[i]]) || [];
+        for (var j = 0; j < arr.length; j++) {
+          var c = arr[j];
+          var wid = c.warning_id;
+          if (!wid) continue;
+          if (!state.commandMap[wid]) state.commandMap[wid] = { family: [], community: [], log_only: [] };
+          var bucket = state.commandMap[wid][types[i]];
+          var cid = c.command_id;
+          var exists = false;
+          for (var k = 0; k < bucket.length; k++) { if (bucket[k].command_id === cid) { exists = true; break; } }
+          if (!exists) { bucket.push(c); if (bucket.length > 24) bucket.shift(); }
+        }
+      }
+    }
+    function lookupCommands(wid) {
+      var m = state.commandMap[wid];
+      return m || { family: [], community: [], log_only: [] };
+    }
+    function allRouted() {
+      var fam = [], com = [], log = [];
+      for (var wid in state.commandMap) {
+        fam = fam.concat(state.commandMap[wid].family);
+        com = com.concat(state.commandMap[wid].community);
+        log = log.concat(state.commandMap[wid].log_only);
+      }
+      return { family: fam, community: com, log_only: log };
+    }
+    function cmdStatusLabel(s) { return CMD_STATUS[s] || s || "—"; }
+    function maskPhone(p) {
+      p = String(p == null ? "" : p);
+      if (p.length >= 7) return p.slice(0, 3) + "****" + p.slice(-4);
+      return "***";
+    }
+    function hhmmss(iso) {
+      if (!iso) return "—";
+      var t = String(iso).replace("T", " ");
+      var m = t.match(/(\d{2}:\d{2}:\d{2})/);
+      return m ? m[1] : t.slice(0, 19);
+    }
+    function hintPayload(c) {
+      var p = c.payload || {};
+      var ct = c.command_type;
+      if (ct === "SEND_FAMILY_MESSAGE") {
+        var msg = String(p.message || "");
+        return msg.length > 48 ? msg.slice(0, 48) + "…" : msg;
+      }
+      if (ct === "CREATE_COMMUNITY_TASK") {
+        var rs = (p.reasons || []).join("、");
+        return "工单：" + (rs || "—") + " · 风险 " + (p.risk_level || "?");
+      }
+      if (ct === "LOG_ONLY") {
+        var rr = (p.reason_summary || []).join("、");
+        return "记入：" + (rr || p.risk_level || "—");
+      }
+      return c.command_type || "?";
     }
 
     // ---------- WebSocket ----------
@@ -414,6 +540,7 @@
         if (msg.state) Object.assign(state.stateMap, msg.state);
         state.activeWarnings = msg.active_warnings || [];
         state.routed = msg.routed_commands || { family: [], community: [], log_only: [] };
+        mergeCommands(state.routed);   // 跨帧累积三端命令，供区域④按 warning_id 联动
         pushTimeline(msg.view);
         renderAll();
       } else if (msg.type === "state_update") {
@@ -521,20 +648,39 @@
         var rl = riskOf(w.risk_level);
         var score = (typeof w.perception_score === "number") ? w.perception_score : 0;
         var reasons = (w.reason_summary || []).map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("");
+        var triggers = (w.trigger_events || []).map(function (t) {
+          var et = t.event_type || "?";
+          var col = TRIG_COLOR[et] || "#64748b";
+          var label = TRIG[et] || et;
+          var sc = (typeof t.score === "number") ? t.score.toFixed(2) : "?";
+          return '<span class="trig-chip" style="background:' + col + '1a;color:' + col + ';border-color:' + col + '55">'
+            + esc(label) + ' <b>' + sc + '</b></span>';
+        }).join("");
         var rec = ACT[w.recommended_action] || w.recommended_action || "—";
         var wstat = WARN_STATUS[w.status] || w.status || "—";
+        var evChips = "";
+        if (w.evidence && w.evidence.length) {
+          evChips = '<div class="rc-ev">'
+            + w.evidence.map(function (e, idx) { return '<span class="ev-chip2">证据 ' + (idx + 1) + '</span>'; }).join("")
+            + '</div>';
+        }
         html += '<div class="risk-card" style="border-left-color:' + rl.c + '">'
           + '<div class="rc-head">'
-          + '<span class="rlevel" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
-          + '<span class="rc-id">' + esc(shortId(w.warning_id)) + '</span>'
-          + '<span class="cl-status" style="color:' + rl.c + ';background:' + rl.c + '1a">' + esc(wstat) + '</span>'
+          +   '<span class="rlevel" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="rc-id">' + esc(shortId(w.warning_id)) + '</span>'
+          +   '<span class="rc-time">生成 ' + esc(hhmmss(w.created_at)) + '</span>'
+          +   '<span class="cl-status" style="color:' + rl.c + ';background:' + rl.c + '1a">' + esc(wstat) + '</span>'
           + '</div>'
-          + (reasons ? '<ul class="rc-reason">' + reasons + '</ul>' : '')
-          + '<div class="rc-foot">'
-          + '<span>建议：<b>' + esc(rec) + '</b></span>'
-          + '<span class="bar"><i style="width:' + (score * 100).toFixed(0) + '%;background:' + rl.c + '"></i></span>'
-          + '<span>强度 ' + score.toFixed(2) + '</span>'
+          + '<div class="rc-section"><div class="rc-label">人话原因</div><ul class="rc-reason">' + reasons + '</ul></div>'
+          + (triggers ? '<div class="rc-section"><div class="rc-label">触发规则</div><div class="rc-triggers">' + triggers + '</div></div>' : '')
+          + '<div class="rc-foot2">'
+          +   '<div class="meter"><div class="meter-label">规则命中强度 <b>' + score.toFixed(2) + '</b></div>'
+          +   '<div class="bar"><i style="width:' + (score * 100).toFixed(0) + '%;background:' + rl.c + '"></i></div></div>'
+          +   '<div class="rc-rec">建议：<b>' + esc(rec) + '</b></div>'
           + '</div>'
+          + (w.elder_id || w.device_id ? '<div class="rc-meta">设备 <code>' + esc(w.device_id || "—") + '</code> · 老人 <code>' + esc(w.elder_id || "—") + '</code></div>' : '')
+          + evChips
+          + '<div class="rc-link">→ 处置见区域④ 行动闭环</div>'
           + '</div>';
       }
       body.innerHTML = html;
@@ -542,43 +688,88 @@
 
     function renderClosure() {
       var wrap = $("closure-cards");
-      var warnings = (state.frame && state.frame.warnings) || [];
-      if (!warnings.length) {
+      var list = state.activeWarnings || [];
+      if (!list.length) {
         wrap.innerHTML = '<div class="tl-empty">暂无待闭环风险</div>';
         return;
       }
       var html = "";
-      for (var i = 0; i < warnings.length; i++) {
-        var w = warnings[i];
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
         var wid = w.warning_id;
+        var rl = riskOf(w.risk_level);
+        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
+        var cm = lookupCommands(wid);   // 本 warning 的三端命令（跨帧累积）
+
         var closure = state.stateMap[wid] ? state.stateMap[wid].status : "pending";
         if (!CLOSURE[closure]) closure = "pending";
         var cs = CLOSURE[closure];
-        var rl = riskOf(w.risk_level);
-        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
-
         var famDone = (closure === "family_handled" || closure === "community_done");
         var comDone = (closure === "community_done");
-        var famDisabled = famDone;                       // 家属已处理则不能再点
+        var famDisabled = famDone;                        // 家属已处理则不能再点
         var comDisabled = (closure !== "family_handled"); // 须先家属处理
+
+        // 家属端任务卡
+        var famTask = '<div class="task family"><div class="task-h"><span class="task-dot f"></span>家属端任务'
+          + (cm.family.length ? '<span class="task-status">' + cmdStatusLabel(cm.family[0].status) + '</span>' : '')
+          + '</div>';
+        if (cm.family.length) {
+          var fp = cm.family[0].payload || {};
+          var contact = fp.contact || {};
+          famTask += '<div class="task-body">' + esc(fp.message || "(无消息内容)") + '</div>'
+            + '<div class="task-sub">收件人：' + esc(contact.name || "—")
+            + (contact.relation ? '（' + esc(contact.relation) + '）' : '')
+            + ' · ' + esc(maskPhone(contact.phone)) + '</div>';
+        } else {
+          famTask += '<div class="task-empty">本风险未触发家属通知（建议：' + esc(rec) + '）</div>';
+        }
+        famTask += '</div>';
+
+        // 社区端任务卡
+        var comTask = '<div class="task community"><div class="task-h"><span class="task-dot c"></span>社区端任务'
+          + (cm.community.length ? '<span class="task-status">' + cmdStatusLabel(cm.community[0].status) + '</span>' : '')
+          + '</div>';
+        if (cm.community.length) {
+          var cp = cm.community[0].payload || {};
+          var reasons = (cp.reasons || []).join("、");
+          comTask += '<div class="task-body">工单原因：' + esc(reasons || "—") + '</div>'
+            + '<div class="task-sub">风险 ' + esc(cp.risk_level || "—") + ' · 端点 '
+            + esc(cp.endpoint || "—") + ' · 强度 '
+            + (typeof cp.perception_score === "number" ? cp.perception_score.toFixed(2) : "—") + '</div>';
+        } else {
+          comTask += '<div class="task-empty">本风险未触发社区工单</div>';
+        }
+        comTask += '</div>';
+
+        // 仅记录任务卡
+        var logTask = "";
+        if (cm.log_only.length) {
+          var lp = cm.log_only[0].payload || {};
+          var lrs = (lp.reason_summary || []).join("、");
+          logTask = '<div class="task log"><div class="task-h"><span class="task-dot l"></span>风险日志</div>'
+            + '<div class="task-body">' + esc(lrs || lp.risk_level || "已记入风险日志")
+            + (lp.risk_level ? ' · 风险 ' + esc(lp.risk_level) : '') + '</div></div>';
+        }
 
         html += '<div class="cl-card">'
           + '<div class="cl-top">'
-          + '<span class="cl-wid">' + esc(shortId(wid)) + '</span>'
-          + '<span class="cl-rl" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="cl-wid">' + esc(shortId(wid)) + '</span>'
+          +   '<span class="cl-rl" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="cl-rec2">建议：' + esc(rec) + '</span>'
           + '</div>'
-          + '<div class="cl-rec">建议动作：<b>' + esc(rec) + '</b></div>'
+          + '<div class="cl-reasons">' + esc((w.reason_summary || []).join(" · ")) + '</div>'
+          + '<div class="tasks">' + famTask + comTask + logTask + '</div>'
           + '<div class="stepper">'
-          + '<div class="step ' + (famDone ? "done" : (closure === "pending" ? "cur" : "")) + '">家属</div>'
-          + '<span class="arrow">→</span>'
-          + '<div class="step ' + (comDone ? "done" : (closure === "family_handled" ? "cur" : "")) + '">社区</div>'
+          +   '<div class="step ' + (famDone ? "done" : (closure === "pending" ? "cur" : "")) + '">家属确认</div>'
+          +   '<span class="arrow">→</span>'
+          +   '<div class="step ' + (comDone ? "done" : (closure === "family_handled" ? "cur" : "")) + '">社区闭环</div>'
           + '</div>'
           + '<div class="cl-actions">'
-          + '<button class="btn family" data-wid="' + esc(wid) + '" data-op="family" ' + (famDisabled ? "disabled" : "") + '>家属已认识 / 通知</button>'
-          + '<button class="btn community" data-wid="' + esc(wid) + '" data-op="community" ' + (comDisabled ? "disabled" : "") + '>社区已接单 / 处置</button>'
+          +   '<button class="btn family" data-wid="' + esc(wid) + '" data-op="family" ' + (famDisabled ? "disabled" : "") + '>家属已认识 / 通知</button>'
+          +   '<button class="btn community" data-wid="' + esc(wid) + '" data-op="community" ' + (comDisabled ? "disabled" : "") + '>社区已接单 / 处置</button>'
           + '</div>'
           + '<div style="margin-top:8px;text-align:right">'
-          + '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
+          +   '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
           + '</div>'
           + '</div>';
       }
@@ -586,14 +777,18 @@
     }
 
     function renderRouting() {
-      var r = state.routed || { family: [], community: [], log_only: [] };
+      var r = allRouted();   // 跨帧累积，稳定反映本场 Demo 已下发的三端命令
       $("rc-family").textContent = (r.family || []).length;
       $("rc-community").textContent = (r.community || []).length;
       $("rc-log").textContent = (r.log_only || []).length;
       function listHtml(arr) {
         if (!arr || !arr.length) return '<span class="muted">—</span>';
         return arr.map(function (c) {
-          return '<div>· <code>' + esc((c.command_type || "?").replace(/_/g, " ")) + '</code> <span class="muted">' + esc(shortId(c.command_id)) + '</span></div>';
+          var wid = c.warning_id ? shortId(c.warning_id) : "?";
+          return '<div class="route-item">'
+            + '<div class="route-cmd">' + esc((c.command_type || "?").replace(/_/g, " ")) + ' <span class="muted">' + esc(wid) + '</span></div>'
+            + '<div class="route-hint">' + esc(hintPayload(c)) + '</div>'
+            + '</div>';
         }).join("");
       }
       $("rc-family-list").innerHTML = listHtml(r.family);
