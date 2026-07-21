@@ -74,7 +74,7 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
         with:
-          api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           track_progress: true
           prompt: |
