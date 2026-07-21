@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 from pydantic import BaseModel, field_validator
@@ -33,7 +33,10 @@ class ScenarioConfig(BaseModel):
     """单个 Demo 场景的参数。
 
     - ``scenario_id``：场景标识（demo README / Dashboard 展示用）
-    - ``source``：CAVIAR fixture 目录名（位于 settings.runtime.caviar_base_dir 下）
+    - ``source``：CAVIAR fixture 目录名（``source_type=caviar_jpg`` 时，位于 ``settings.runtime.caviar_base_dir`` 下）；
+      或视频源的标识（``source_type=video_file`` 时作 device_id 用）
+    - ``source_type``：帧源类型（``caviar_jpg`` 工程验证 / ``video_file`` 真实 MP4 产品展示），默认 ``caviar_jpg``
+    - ``media_path``：``source_type=video_file`` 时的 MP4 路径（相对仓库根或绝对；建议放 ``data/demo/``，gitignore 不入库）
     - ``start_time``：DemoClock 起点（datetime，必须带时区）
     - ``frame_interval_s``：每帧推进的模拟时间（秒）
     - ``fps_target``：网关帧循环目标速率（0 = 不限速）
@@ -43,6 +46,8 @@ class ScenarioConfig(BaseModel):
 
     scenario_id: str
     source: str
+    source_type: str = "caviar_jpg"
+    media_path: Optional[str] = None
     start_time: datetime
     frame_interval_s: float = 0.5
     fps_target: int = 8

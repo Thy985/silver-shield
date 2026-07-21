@@ -107,8 +107,10 @@ def collect_active_warnings(warnings: List[Dict[str, Any]]) -> List[Dict[str, An
 
     供 AI 风险中心"风险解释卡片"展示当前活跃风险（P0-11.3 消费）。
     只做 dict 过滤，不触碰冻结对象。
+
+    防御：非 dict 元素（None / 其他类型）直接跳过，不崩溃（公开函数，可能被直接调用）。
     """
-    return [w for w in warnings if w.get("status") not in ("RESOLVED", "REJECTED")]
+    return [w for w in warnings if isinstance(w, dict) and w.get("status") not in ("RESOLVED", "REJECTED")]
 
 
 def route_commands(commands: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -120,12 +122,17 @@ def route_commands(commands: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, A
         - community ← CREATE_COMMUNITY_TASK
         - log_only ← LOG_ONLY
 
+    **未知 command_type 会被静默丢弃**（不进入任何桶）——本函数只做路由，不做兜底。
     由 P0-11.4 家属/社区交互层消费（当前 P0-11.1 网关仅广播原始 commands，未调用本函数）。
+
+    防御：非 dict 元素（None / 其他类型）直接跳过，不崩溃（公开函数，可能被直接调用）。
     """
     family: List[Dict[str, Any]] = []
     community: List[Dict[str, Any]] = []
     log_only: List[Dict[str, Any]] = []
     for c in commands:
+        if not isinstance(c, dict):
+            continue  # 防御：非 dict 元素跳过，不崩溃
         ct = c.get("command_type", "")
         if ct == "SEND_FAMILY_MESSAGE":
             family.append(c)
