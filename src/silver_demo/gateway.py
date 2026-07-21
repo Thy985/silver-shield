@@ -21,13 +21,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
 import structlog
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
@@ -213,6 +216,56 @@ class DemoGateway:
                 structlog.get_logger(__name__).warning("pipeline.close 失败", exc_info=exc)
             self.pipeline = None
 
+    # ------------------------------------------------------------------
+    # 输入源热切换（P0-11.4 视频输入适配层）
+    # ------------------------------------------------------------------
+
+    async def switch_source(self, scenario: "ScenarioConfig") -> None:
+        """热切换输入源（P0-11.4 视频输入适配）：停旧循环 → 重建帧源/时钟 → 清空跨帧状态 → 重开循环。
+
+        不重建 pipeline（昂贵的 YOLO 加载只做一次），严格复用已装配的 ``pipeline`` / ``hp_settings``。
+        切换后清空 ``DemoStateStore``（新视频 = 新会话），并广播 ``source_switched``，
+        前端据此清空跨帧累积（warningMap / behaviorEvents / commandMap 等），避免旧视频数据串场。
+        """
+        # 1. 停旧循环
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+        # 2. 重建帧源（复用已装配 pipeline / hp_settings）
+        self.scenario = scenario
+        self.clock = DemoClock(start=scenario.start_time, interval_s=scenario.frame_interval_s)
+        self.frame_source = build_frame_source(scenario, self.hp_settings)
+        self.n_frames = self.frame_source.frame_count
+
+        # 真实视频无可用帧（文件损坏 / 编码不支持 / 时长为 0）→ 启动即失败，给出清晰错误
+        if scenario.source_type == "video_file":
+            mp = scenario.media_path
+            if not mp or not Path(mp).is_file():
+                raise RuntimeError(f"video_file 源文件缺失: {mp!r}")
+            if self.n_frames == 0:
+                raise RuntimeError(f"视频无可用帧: {mp!r}（可能编码不支持或时长为 0）")
+
+        self._frame_index = 0
+        self.store = DemoStateStore()  # 新会话：清空历史闭环状态
+
+        # 3. 重开循环
+        self._task = asyncio.create_task(self.run_loop())
+
+        # 4. 广播切换事件（前端清空跨帧累积状态）
+        await self.hub.broadcast({
+            "type": "source_switched",
+            "scenario": scenario.scenario_id,
+            "source": scenario.source,
+            "source_type": scenario.source_type,
+            "frames": self.n_frames,
+        })
+
 
 # ======================================================================
 # FastAPI app 工厂
@@ -241,7 +294,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # 启动：装配 + 起帧循环后台 task
+        # 启动：确保上传目录存在 + 装配 + 起帧循环后台 task
+        Path(demo_settings.upload_dir).mkdir(parents=True, exist_ok=True)
         gateway.assemble()
         gateway._task = asyncio.create_task(gateway.run_loop())
         try:
@@ -285,8 +339,9 @@ def create_app(
     async def health() -> Dict[str, Any]:
         return {
             "status": "ok",
-            "scenario": scenario.scenario_id,
-            "source": scenario.source,
+            "scenario": gateway.scenario.scenario_id,
+            "source": gateway.scenario.source,
+            "source_type": gateway.scenario.source_type,
             "n_frames": gateway.n_frames,
             "frame_index": gateway._frame_index,
             "active_connections": len(gateway.hub.active),
@@ -309,6 +364,113 @@ def create_app(
             pass
         finally:
             await gateway.hub.disconnect(ws)
+
+    # ------------------------------------------------------------------
+    # P0-11.4 视频输入适配层：场景输入 / 视频源接入
+    # ------------------------------------------------------------------
+
+    @app.post("/demo/upload")
+    async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
+        """P0-11.4 视频输入适配：接收本地视频 → 落盘 → 热切换 VideoFileFrameSource → 重开帧循环。
+
+        视频只是"传感器"：经冻结 Pipeline 产出 身份→轨迹→行为→风险→解释→干预 全链，
+        不调用任何视觉大模型 API（工程闭环验证，非模型性能评测）。
+        """
+        allowed = {".mp4", ".mpg", ".mpeg", ".avi", ".mov", ".mkv", ".webm"}
+        fname = file.filename or ""
+        ext = Path(fname).suffix.lower()
+        if ext not in allowed:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"不支持的视频格式 {ext or '(无扩展名)'}，仅允许 {sorted(allowed)}"},
+            )
+
+        upload_dir = Path(demo_settings.upload_dir)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = f"{uuid.uuid4().hex}{ext}"
+        dest = upload_dir / safe_name
+
+        # 流式写入，避免大文件占满内存
+        try:
+            with dest.open("wb") as out:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+        except Exception as exc:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            return JSONResponse(status_code=500, content={"error": f"文件写入失败：{exc}"})
+
+        # 构造 video_file 场景（复用当前 scenario 的播放参数，保证观感一致）
+        base = gateway.scenario
+        new_scenario = ScenarioConfig(
+            scenario_id="uploaded_video",
+            source=dest.stem,
+            source_type="video_file",
+            media_path=str(dest),
+            start_time=datetime.now(timezone.utc),
+            frame_interval_s=base.frame_interval_s,
+            fps_target=base.fps_target,
+            loop=True,
+            description=f"用户上传：{fname}",
+        )
+        try:
+            await gateway.switch_source(new_scenario)
+        except Exception as exc:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            return JSONResponse(status_code=422, content={"error": f"视频接入失败：{exc}"})
+
+        return {
+            "status": "ok",
+            "source_id": safe_name,
+            "filename": fname,
+            "frames": gateway.n_frames,
+            "message": "已开始分析，Dashboard 实时刷新（身份→轨迹→行为→风险→干预）",
+        }
+
+    @app.post("/demo/scenario")
+    async def switch_scenario(req: Request) -> Dict[str, Any]:
+        """P0-11.4 场景输入：按 scenario_id（或路径）热切换到预置场景（模拟场景 / CAVIAR 工程验证）。"""
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+        scn_id = (body.get("scenario_id") or "").strip()
+        if not scn_id:
+            return JSONResponse(status_code=400, content={"error": "缺少 scenario_id"})
+        candidates = [
+            Path(demo_settings.scenarios_dir) / f"{scn_id}.yaml",
+            Path(scn_id),  # 允许绝对 / 相对路径
+        ]
+        found = None
+        for c in candidates:
+            if c.is_file():
+                found = c
+                break
+        if found is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"场景不存在: {scn_id}（应在 {demo_settings.scenarios_dir}/ 下）"},
+            )
+        try:
+            sc = load_scenario(found)
+            await gateway.switch_source(sc)
+        except Exception as exc:
+            return JSONResponse(status_code=422, content={"error": f"场景切换失败：{exc}"})
+        return {
+            "status": "ok",
+            "scenario": sc.scenario_id,
+            "source": sc.source,
+            "source_type": sc.source_type,
+            "frames": gateway.n_frames,
+        }
 
     # 把 gateway 挂到 app.state，便于测试 / 调试访问
     app.state.gateway = gateway

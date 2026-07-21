@@ -187,6 +187,34 @@
     .disclaimer { margin-top: 16px; font-size: 11.5px; color: var(--muted); background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 14px; }
     .disclaimer b { color: #92400e; }
 
+    /* ---------- P0-11.4 场景输入 / 视频源接入 ---------- */
+    .source-panel { margin-bottom: 16px; }
+    .source-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch; }
+    .src-controls { flex: 1 1 420px; min-width: 300px; }
+    .mode-tabs { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+    .mode-tabs label { font-size: 13px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+    .src-sub { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .src-sub[hidden] { display: none; }
+    .src-btn {
+      border: 1px solid var(--line); background: #fff; color: var(--ink);
+      border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: .15s;
+    }
+    .src-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+    .src-btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .src-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+    .src-btn:disabled { opacity: .5; cursor: not-allowed; }
+    #video-file { font-size: 12px; max-width: 240px; }
+    .src-status { font-size: 12px; color: var(--muted); }
+    .src-hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+
+    /* AI 状态卡（工程成熟度，非准确率） */
+    .ai-status { flex: 1 1 280px; min-width: 260px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafbff; }
+    .ai-status h4 { margin: 0 0 8px; font-size: 12.5px; }
+    .ai-row { display: flex; align-items: center; gap: 7px; font-size: 12px; margin: 4px 0; color: var(--ink); }
+    .ai-row .ck { width: 16px; text-align: center; color: var(--ok); font-weight: 700; }
+    .ai-model { margin-top: 8px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+    .ai-model code { font-size: 11px; background: #f1f5f9; padding: 1px 5px; border-radius: 5px; }
+
     /* ---------- Toasts ---------- */
     #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
     .toast { background: #111827; color: #fff; font-size: 12.5px; padding: 9px 14px; border-radius: 8px; box-shadow: var(--shadow); opacity: 0; transform: translateY(6px); transition: .2s; }
@@ -205,6 +233,42 @@
       <span class="badge-auth">Demo 数据真实性声明</span>
       <span class="pill offline" id="ws-pill"><span class="dot"></span><span id="ws-text">未连接</span></span>
     </header>
+
+    <!-- P0-11.4 场景输入 / 视频源接入 -->
+    <section class="region source-panel">
+      <h2>⚙ 场景输入 / 视频源接入 <span class="tag">入口适配验证</span></h2>
+      <div class="body source-body">
+        <div class="src-controls">
+          <div class="mode-tabs">
+            <label><input type="radio" name="srcmode" value="sim" checked /> 模拟场景</label>
+            <label><input type="radio" name="srcmode" value="local" /> 本地视频测试</label>
+            <label><input type="radio" name="srcmode" value="cam" disabled /> 摄像头接入 (Coming Soon)</label>
+          </div>
+          <div class="src-sub" id="sim-panel">
+            <button class="src-btn" data-scn="cctv_surveillance_suspicious">CCTV 夜间异常</button>
+            <button class="src-btn" data-scn="delivery_courier_normal">Delivery 白天正常</button>
+            <button class="src-btn" data-scn="night_visit">CAVIAR 工程验证</button>
+          </div>
+          <div class="src-sub" id="local-panel" hidden>
+            <input type="file" id="video-file" accept="video/mp4,video/*,.mp4,.mpg,.mov,.avi" />
+            <button class="src-btn primary" id="btn-analyze">开始分析</button>
+            <span class="src-status" id="upload-status"></span>
+          </div>
+          <div class="src-sub" id="cam-panel" hidden>
+            <span class="src-hint">RTSP / EZVIZ 摄像头接入将在 P1 多模态感知层提供（视频 + 语音 + 门铃 + 通信）。</span>
+          </div>
+          <div class="src-hint">视频只是<b>传感器</b>：经冻结架构持续观察，建立「访客连续身份 → 访问轨迹 → 时间行为模式 → 风险累积 → 解释 → 干预」全链，而非调用视觉大模型判断「是否诈骗」。</div>
+        </div>
+        <aside class="ai-status">
+          <h4>AI 状态 · 工程闭环验证</h4>
+          <div class="ai-row"><span class="ck">✓</span> 人体检测（YOLO）</div>
+          <div class="ai-row"><span class="ck">✓</span> 轨迹跟踪（ReID 连续身份）</div>
+          <div class="ai-row"><span class="ck">✓</span> 行为建模（停留 / 再现 / 升级）</div>
+          <div class="ai-row"><span class="ck">✓</span> 风险解释（规则命中强度）</div>
+          <div class="ai-model">模型版本：<code>Demo-YOLO11n</code> · 当前为<b>端到端链路验证</b>，模型采用基础检测器，后续经真实居家数据持续优化。</div>
+        </aside>
+      </div>
+    </section>
 
     <div class="grid">
       <!-- Region 1: Live Video -->
@@ -570,6 +634,8 @@
       } else if (msg.type === "state_update") {
         if (msg.state) Object.assign(state.stateMap, msg.state);
         renderClosure();
+      } else if (msg.type === "source_switched") {
+        resetSession(msg.scenario, msg.source, msg.source_type, msg.frames);
       } else if (msg.type === "action_ack") {
         toast("已记录：" + (msg.action || "操作"));
       } else if (msg.type === "error") {
@@ -612,6 +678,30 @@
         return String(b.created_at || "").localeCompare(String(a.created_at || ""));  // 新者在前
       });
       return arr;
+    }
+
+    // ---------- P0-11.4 视频输入：切换输入源后清空跨帧累积（新视频 = 新会话） ----------
+    function resetSession(scenario, source, sourceType, frames) {
+      state.frame = null;
+      state.stateMap = {};
+      state.warningMap = {};
+      state.routed = { family: [], community: [], log_only: [] };
+      state.commandMap = {};
+      state.behaviorEvents = [];
+      state.behaviorSeen = {};
+      state.behaviorN = 0;
+      state.visitorSeq = {};
+      state.visitorSeqN = 0;
+      state.visitorFirst = {};
+      // 清空视频帧与各区
+      $("video-img").style.display = "none";
+      $("video-ph").style.display = "block";
+      $("video-ph").textContent = "已切换输入源，等待新画面…";
+      renderAll();
+      toast("已切换输入源 → " + (scenario || "?") + (source ? "（" + source + "）" : ""));
+      // 更新顶部场景标签
+      $("scenario-sub").textContent = "P0-11 视频输入适配 · 场景 " + (scenario || "?")
+        + " · 源 " + (source || "?") + " · 类型 " + (sourceType || "?") + " · 帧数 " + (frames || 0);
     }
 
     // ---------- P0-11.3 状态层：AI 行为时间线 ----------
@@ -913,6 +1003,60 @@
     fetch("/health").then(function (r) { return r.json(); }).then(function (h) {
       $("scenario-sub").textContent = "P0-11 MVP Demo · 场景 " + (h.scenario || "?") + " · 源 " + (h.source || "?") + " · 帧数 " + (h.n_frames || 0);
     }).catch(function () { /* 网关未起时静默 */ });
+
+    // ---------- P0-11.4 场景输入 / 视频源接入 ----------
+    (function setupSourcePanel() {
+      var tabs = document.querySelectorAll('input[name="srcmode"]');
+      var panels = { sim: $("sim-panel"), local: $("local-panel"), cam: $("cam-panel") };
+      tabs.forEach(function (t) {
+        t.addEventListener("change", function () {
+          var mode = t.value;
+          for (var k in panels) panels[k].hidden = (k !== mode);
+        });
+      });
+
+      // 模拟场景按钮 → POST /demo/scenario
+      document.querySelectorAll("#sim-panel [data-scn]").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var id = b.getAttribute("data-scn");
+          b.disabled = true;
+          fetch("/demo/scenario", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scenario_id: id })
+          }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (res) {
+              if (!res.ok) toast("场景切换失败：" + (res.j.error || "未知"), true);
+              else toast("已切换到场景：" + (res.j.scenario || id));
+            })
+            .catch(function () { toast("场景切换请求失败", true); })
+            .then(function () { b.disabled = false; });
+        });
+      });
+
+      // 本地视频：选择文件 → 开始分析 → POST /demo/upload（multipart）
+      var fileInput = $("video-file");
+      var statusEl = $("upload-status");
+      $("btn-analyze").addEventListener("click", function () {
+        if (!fileInput.files || !fileInput.files.length) {
+          toast("请先选择视频文件", true); return;
+        }
+        var fd = new FormData();
+        fd.append("file", fileInput.files[0]);
+        var btn = $("btn-analyze");
+        btn.disabled = true; statusEl.textContent = "上传并接入中…";
+        fetch("/demo/upload", { method: "POST", body: fd })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (res) {
+            if (!res.ok) { toast("视频接入失败：" + (res.j.error || "未知"), true); statusEl.textContent = ""; }
+            else {
+              statusEl.textContent = "已接入：" + (res.j.filename || "") + " · " + (res.j.frames || 0) + " 帧";
+              toast(res.j.message || "已开始分析");
+            }
+          })
+          .catch(function () { toast("视频接入请求失败", true); statusEl.textContent = ""; })
+          .then(function () { btn.disabled = false; });
+      });
+    })();
 
     connect();
   })();

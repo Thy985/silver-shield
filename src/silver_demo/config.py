@@ -38,6 +38,8 @@ class DemoSettings(BaseModel):
     ws_path: str = "/ws"
     frame_loop_interval_s: float = 0.0
     jpeg_quality: int = 50
+    upload_dir: str = "data/demo/uploads"
+    scenarios_dir: str = "config/demo/scenarios"
 
     @classmethod
     def from_env(cls) -> "DemoSettings":
