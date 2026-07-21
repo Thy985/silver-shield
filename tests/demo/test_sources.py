@@ -26,10 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CAVIAR_BASE = REPO_ROOT / "tests" / "fixtures" / "doorway"
 
 
-def _make_synthetic_mp4(path: Path, n: int = 10, w: int = 320, h: int = 240) -> None:
+def _make_synthetic_mp4(path: Path, n: int = 10, w: int = 320, h: int = 240, fps: int = 8) -> None:
     """生成合成 MP4（彩色帧），用于验证 VideoFileFrameSource 不依赖真实素材。"""
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(path), fourcc, 8, (w, h))
+    writer = cv2.VideoWriter(str(path), fourcc, fps, (w, h))
     if not writer.isOpened():
         raise RuntimeError("无法创建测试 MP4（cv2.VideoWriter 打开失败）")
     for i in range(n):
@@ -68,6 +68,21 @@ def test_video_file_frame_source_missing_file_raises() -> None:
 
 def test_video_file_frame_source_is_demo_frame_source() -> None:
     assert issubclass(VideoFileFrameSource, DemoFrameSource)
+
+
+def test_video_file_frame_source_skips_to_target_fps(tmp_path) -> None:
+    """高帧率源应按 fps_target 跳帧：产出帧数远少于总帧数（修复逐帧全读 3x 慢放）。"""
+    mp4 = tmp_path / "hi.mp4"
+    _make_synthetic_mp4(mp4, n=24, fps=24, w=320, h=240)
+    src = VideoFileFrameSource(str(mp4), fps_target=8)
+    # 24fps / 8fps → skip=3（src_fps 偏差不影响取整）
+    assert src._skip >= 2
+    frames = list(src)
+    # 跳帧生效：产出远少于 24，且 frame_count 与产出一致
+    assert 0 < len(frames) < 24
+    assert src.frame_count == len(frames)
+    # 限速下产出帧率 ≈ fps_target（8fps 目标，24 总帧 → 约 8 产出帧）
+    assert len(frames) <= 12
 
 
 # ============================================================================

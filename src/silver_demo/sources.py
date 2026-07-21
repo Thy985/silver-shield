@@ -70,7 +70,10 @@ class CaviarJpgFrameSource(DemoFrameSource):
 class VideoFileFrameSource(DemoFrameSource):
     """真实监控 MP4 帧源（产品展示层输入 · P0-11.3）。
 
-    通过 ``cv2.VideoCapture`` 读取 MP4，按 ``fps_target`` 限速产出 ``(timestamp, frame)``。
+    通过 ``cv2.VideoCapture`` 读取 MP4，按 ``fps_target`` **跳帧 + 限速**产出 ``(timestamp, frame)``：
+    - 跳帧：``skip = round(src_fps / fps_target)``，仅产出每 ``skip`` 帧中的第 1 帧，
+      使产出帧率 ≈ ``fps_target``，现场播放接近实时（修复「逐帧全读导致 3x 慢放」问题）；
+    - 限速：仅在产出帧之间按 ``interval = 1/fps_target`` 维持节奏（推理更慢时不额外等待）。
     每次 ``__iter__`` 重新打开文件（支持 loop 重放）；文件缺失则在迭代首帧抛 ``RuntimeError``。
 
     定位（ADR-0015 §2.6 调整）：替代 CAVIAR 作为「银龄盾场景价值」展示输入，
@@ -89,14 +92,20 @@ class VideoFileFrameSource(DemoFrameSource):
         self.interval = 1.0 / fps_target if fps_target > 0 else 0.0
         self.max_retries = max_retries
         self.backoff_s = backoff_s
-        # 探测帧数（仅取元数据，不读全片；文件缺失则 frame_count = -1）
+        # 跳帧步长：使产出帧率 ≈ fps_target（读每 skip 帧产出 1 帧）。
+        # 仅取元数据计算，不读全片；文件缺失则 _skip=1、frame_count=-1。
+        self._skip = 1
         self.frame_count = -1
         if Path(path).is_file():
             cap = cv2.VideoCapture(str(path))
             if cap.isOpened():
                 n = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-                # NaN 守卫：部分封装下 CAP_PROP_FRAME_COUNT 返回 NaN
-                self.frame_count = int(n) if n == n and n > 0 else -1
+                src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+                total = int(n) if n == n and n > 0 else 0  # NaN 守卫
+                if self.fps_target > 0 and src_fps > 0:
+                    self._skip = max(1, round(src_fps / self.fps_target))
+                # 产出帧数 = ceil(total / skip)
+                self.frame_count = (total + self._skip - 1) // self._skip if total > 0 else -1
                 cap.release()
 
     def __iter__(self) -> Iterator[Tuple[float, Any]]:
@@ -106,13 +115,12 @@ class VideoFileFrameSource(DemoFrameSource):
         if not cap.isOpened():
             cap.release()
             raise RuntimeError(f"无法打开视频: {self.path!r}")
+        skip = self._skip
         last = 0.0
+        idx = 0
         retries = 0
         try:
             while True:
-                now = time.time()
-                if self.interval > 0 and (now - last) < self.interval:
-                    time.sleep(max(0.0, self.interval - (now - last)))
                 ret, frame = cap.read()
                 if not ret:
                     if retries >= self.max_retries:
@@ -121,6 +129,14 @@ class VideoFileFrameSource(DemoFrameSource):
                     time.sleep(self.backoff_s)
                     continue
                 retries = 0
+                idx += 1
+                # 跳帧：仅产出每 skip 帧中的第 1 帧（帧索引 0, skip, 2*skip, ...）
+                if (idx - 1) % skip != 0:
+                    continue
+                # 限速：仅在产出帧之间维持 fps_target 节奏（推理更慢时不额外等待）
+                now = time.time()
+                if self.interval > 0 and (now - last) < self.interval:
+                    time.sleep(max(0.0, self.interval - (now - last)))
                 last = time.time()
                 yield last, frame
         finally:
