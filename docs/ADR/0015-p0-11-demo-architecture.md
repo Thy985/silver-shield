@@ -51,11 +51,18 @@ P0-10.5 已证明**架构纪律成立**（冻结契约 + Contract Test + 仓库�
 | --- | --- | --- |
 | `PerceptionPipeline` | `home_perception.runtime.pipeline` | 唯一装配入口 |
 | `DemoClock` | `home_perception.runtime.pipeline` | 确定性时序源（驱动场景时间） |
-| `CaviarFrameSource` | `home_perception.ingestion.frame_source` | 帧迭代器（模拟摄像头） |
+| `read_caviar_frames` | `home_perception.runtime.config` | CAVIAR 帧读取（工程验证帧源；CAVIAR 公开序列本地副本） |
 | `FrameResult` | `home_perception.runtime.pipeline` | 每帧结果（消费出口） |
 | `WarningEvent` | `home_perception.analysis.warning` | AI 中心 / 分流依据（只读） |
 | `ActionCommand` | `home_perception.action.command` | 家属端 / 社区端（只读） |
 | `Settings` | `home_perception.core.config` | 装配配置 |
+
+> **帧源消费边界（P0-11.3 调整）**：`silver_demo` **不** import 冻结包内的 `FrameSource`（`home_perception.ingestion.frame_source`，属内部模块，仍在冻结测试禁止列表）。
+> 改为在 `silver_demo/sources.py` 内定义**结构一致的 `DemoFrameSource` 抽象**，并提供两个消费者侧实现：
+> `CaviarJpgFrameSource`（包裹 `read_caviar_frames`，工程验证）+ `VideoFileFrameSource`（真实 MP4，产品展示）。
+> 两者均产出 `(timestamp, frame)` 流，网关按场景配置（`source_type`）选择——**Dashboard / Pipeline / WarningEvent 零改动**。
+> 这正是 ADR-0014「实现可替换」在消费者侧的体现：消费者可自由提供自己的输入源，无需耦合冻结包内部。
+> 冻结包内的 `CaviarFrameSource` 仍作为 FrameSource 契约的参考实现保留，用于工程回归。
 
 - **严禁**：`silver_demo` 直接或间接 import `rule_engine` / `decision_engine` / `decision_policy` /
   `action.executor` / `action.dispatcher` / `action.notifier` / `action.publisher`（即不得穿透 7 层内部）。
@@ -111,8 +118,8 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
 ### 2.4 三端数据流（摄像机不独立成端，帧经 base64 推送）
 
 ```
-                CAVIAR / 视频流
-                      │  frame (np.ndarray)
+                CAVIAR (工程验证) / 真实 MP4 (产品展示)
+                      │  frame (np.ndarray) — 经 silver_demo.sources 帧源抽象
                       ▼
                PerceptionPipeline
             process_frame(frame, i)
@@ -134,7 +141,7 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
 
 颜色编码（与 README/API_REFERENCE 一致）：
 - 🟢 **稳定契约（绿）**：`PerceptionPipeline` 入口、`FrameResult`/`WarningEvent`/`ActionCommand` 类型
-- 🟡 **可替换实现（黄）**：`CaviarFrameSource`（未来 RTSPSource/EZVIZSource）、HTML Dashboard（未来真 App）
+- 🟡 **可替换实现（黄）**：`silver_demo.sources.VideoFileFrameSource`（真实 MP4，替换 CAVIAR 帧源）、`CaviarFrameSource`（冻结包内 FrameSource 契约参考实现）、HTML Dashboard（未来真 App）
 - 🔴 **禁止依赖（红）**：`silver_demo` 不得 import 7 层内部；不得自行构造 `RuleEngine`/`DecisionEngine`/`ActionExecutor`；不得改 `WarningEvent`/`ActionCommand` 契约
 
 ### 2.5 反馈闭环（DemoStateStore，仅内存 dict，不回写冻结对象）
@@ -158,14 +165,24 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
 ### 2.6 场景驱动（确定性、可复现）
 
 - 网关持有 `DemoClock(start=datetime(2026, 7, 20, 23, 30, tzinfo=timezone.utc), interval_s=0.5)`，每帧 `clock.tick(interval_s)`（在网关循环内，不在 pipeline 内）。实际签名 `DemoClock(start: Optional[datetime] = None, interval_s: float = 0.5)`，故 `start` 须传 `datetime` 而非时间字符串。
-- **`night_visit` fixture 选定（Owner 拍板）**：
-  - **主选 `OneLeaveShopReenter1cor`**：天然体现「出现 → 离开 → 再次出现」，对应 `RepeatVisitRule`，
-    最容易解释 *"AI 不是看到一个人就报警，而是理解访问模式"*。
-  - 辅选 `OneStopEnter1cor`：展示「进入 → 停留 → 异常停留」，对应 `LongDurationRule`。
-  - **最终比赛剧本**：`OneLeaveShopReenter1cor` + `DemoClock` 设为夜间 + 阈值调低
-    → 「夜间 + 重复出现 + 长停留」组合触发 `HighRiskApproachRule`（CompositeRule）→ `HIGH_RISK_APPROACH`。
-    具体阈值调优是 P0-11.5 任务，本 ADR 仅定方向。
-- 场景参数放 `config/demo/scenarios/night_visit.yaml`：source / start_time / frame_interval_s / 可选叙述标记。
+- **场景双轨定位（Owner 调整 · 2026-07-21）**：CAVIAR 与真实 MP4 各司其职，不互相替换删除。
+  - **工程验证层（CAVIAR）**：`OneLeaveShopReenter1cor` / `OneStopEnter1cor` 等公开序列，确定性可复现，
+    证明 `Tracking → Event → Feature → Rule` 链路正确。`night_visit` 剧本（`config/demo/scenarios/night_visit.yaml`）
+    仍用 CAVIAR 做工程回归与阈值调优基线。
+  - **产品展示层（真实门口 MP4）**：演示者提供 `data/demo/real_doorway.mp4`（gitignore，不入库），
+    证明「银龄盾场景价值」。`config/demo/scenarios/real_doorway.yaml` 用 `source_type: video_file` 接入，
+    Dashboard / Pipeline / WarningEvent 零改动（P0-11.3 验证）。
+  - **统一输出**：两轨都收敛到 `WarningEvent → HIGH_RISK_APPROACH`，评委看到的是
+    「真实场景输入 → 工业级架构 → 风险闭环」，而非单纯 CAVIAR。
+  - **为何真实数据提前（P0-11.3）**：验证冻结架构（ADR-0014 L2 FrameSource 契约）是否真的允许外部输入替换——
+    把 CAVIAR 帧源换成 `VideoFileFrameSource`（真实 MP4），Dashboard/Pipeline/WarningEvent 不改即是最直接证明；
+    且避免「一直用 CAVIAR 到最后，Dashboard 漂亮但业务关联弱」。真实输入从 MP4 起，不接 RTSP/EZVIZ（见 §9.7）。
+- **`night_visit` 主选 `OneLeaveShopReenter1cor`**（工程验证）：天然体现「出现 → 离开 → 再次出现」，对应 `RepeatVisitRule`，
+  最容易解释 *"AI 不是看到一个人就报警，而是理解访问模式"*。辅选 `OneStopEnter1cor`（长停留）。
+  **最终比赛工程剧本**：`OneLeaveShopReenter1cor` + 夜间 `DemoClock` + 阈值调低
+  → 「夜间 + 重复出现 + 长停留」组合触发 `HighRiskApproachRule`（CompositeRule）→ `HIGH_RISK_APPROACH`。
+  阈值调优是 P0-11.5 任务，本 ADR 仅定方向。
+- 场景参数放 `config/demo/scenarios/*.yaml`：`source` / `source_type`（`caviar_jpg` | `video_file`）/ `media_path`（video_file 时）/ `start_time` / `frame_interval_s`。
 
 ### 2.7 核心交付物：5 分钟风险闭环故事
 
@@ -183,8 +200,10 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
 
 ### 2.8 Demo 数据真实性声明（比赛可信度护栏）
 
-> P0-11 使用 CAVIAR 公开 fixture 作为**确定性输入**，用于演示系统闭环与架构消费契约；
-> **不代表真实部署环境的性能指标**，亦**不用于证明模型泛化能力**。
+> P0-11 **双轨输入**均属**受控演示输入**，用于演示系统闭环与架构消费契约，不代表真实部署环境的性能指标，亦不用于证明模型泛化能力：
+> - **CAVIAR 公开 fixture**（工程验证层）：确定性、可复现，用于回归 `Tracking → Event → Feature → Rule` 链路。
+> - **真实门口 MP4**（`data/demo/real_doorway.mp4`，演示者提供、gitignore 不入库）：属"真实场景素材"而非"真实部署"——
+>   它验证冻结架构允许外部真实输入无缝接入，但**仍非 7×24 实时摄像头 / 萤石设备直连**（那属 P0-12）。
 > Demo 的目标是被冻结的 AI 链路能够"被发现 → 被解释 → 被干预 → 被闭环"，而非验证检测模型在真实场景的准确率。
 
 在 Dashboard 与 demo README 中明确标注此声明（评委若问"视频数据真实吗"，提前定义边界反而增加可信度）。
@@ -200,17 +219,20 @@ src/silver_demo/
 ├── gateway.py       # FastAPI app：持有 pipeline + DemoClock，帧循环，WS 广播，StaticFiles('/dashboard')
 ├── bridge.py        # FrameResult → 三端 view-model；frame → JPEG encode → base64
 ├── state.py         # DemoStateStore（进程内 dict，反馈闭环、warning_id 幂等映射）
-├── scenarios.py     # 加载 config/demo/scenarios/*.yaml
+├── scenarios.py     # 加载 config/demo/scenarios/*.yaml（扩展 source_type / media_path）
+├── sources.py        # P0-11.3：DemoFrameSource 抽象 + CaviarJpgFrameSource + VideoFileFrameSource + 工厂
 ├── ws.py            # WebSocket 端点 + 极简广播（单演示连接即可）
 └── dashboard/       # 纯静态展示层（HTML + Vanilla JS），只消费 WS，不碰任何算法代码
     ├── index.html   # 单页观察窗口，含 5 区域
     ├── style.css
     └── app.js       # 原生 WebSocket 封装 + 5 区域渲染（无框架、无构建步骤）
 
-config/demo/scenarios/night_visit.yaml
+config/demo/scenarios/night_visit.yaml    # CAVIAR 工程验证剧本
+config/demo/scenarios/real_doorway.yaml   # 真实门口 MP4 产品展示剧本（source_type: video_file）
 
 tests/demo/
-└── test_freeze_boundary.py   # 证明 silver_demo 只消费冻结契约（见 §5）
+├── test_freeze_boundary.py   # 证明 silver_demo 只消费冻结契约（见 §5）
+└── test_sources.py           # P0-11.3：VideoFileFrameSource / CaviarJpgFrameSource / 工厂分发
 ```
 
 **Dashboard 5 区域（单页，对应"三端"逻辑拆分）**：
@@ -230,15 +252,19 @@ tests/demo/
 
 ---
 
-## 4. 分阶段计划（P0-11.1 ~ P0-11.5，Dashboard 提前）
+## 4. 分阶段计划（P0-11.1 ~ P0-11.5 · 2026-07-21 重排：真实输入提前）
+
+> 重排动因：原顺序（架构冻结→Dashboard→解释→交互→演示优化）对软件 Demo 成立，但"真实/准真实输入"一直留到最后，
+> 容易出现"Dashboard 漂亮但业务关联弱"。调整后把**真实视频输入适配提前到 P0-11.3**，
+> 以最直接方式验证 ADR-0014「冻结架构允许外部输入替换」（Dashboard/Pipeline/WarningEvent 零改动）。
 
 | 阶段 | 目标 | 验收（可演示） |
 | --- | --- | --- |
-| **P0-11.1** | FastAPI Gateway + `CaviarFrameSource` 驱动 `process_frame` + WebSocket 广播（JSON + base64 JPEG） | 起服务后 WS 推送 `FrameResult` 流 + 视频帧可达 |
-| **P0-11.2** | **HTML Dashboard MVP** ⭐（区域 1 视频 + 区域 2 时间线 + 区域 5 架构图） | 单页打开即见实时视频 + 感知时间线；快速验证冻结架构可作产品接口 |
-| **P0-11.3** | 风险解释卡片（区域 3，消费 `WarningEvent`）+ 行动区骨架（区域 4，消费 `ActionCommand`） | 风险等级 + 人话原因列表（无"诈骗概率"）+ 家属/社区任务卡 |
-| **P0-11.4** | 家属/社区交互模拟：按钮 `[认识][通知社区][接受][完成]` 写入 `DemoStateStore` + 闭环状态广播 | 点击后三端状态翻转（"已处理/已核验/已闭环"） |
-| **P0-11.5** | **5 分钟演示脚本** + demo README（含数据真实性声明）+ `night_visit` 阈值调优（OneLeaveShopReenter1cor + 夜间 + CompositeRule 触发 HIGH） | 单故事讲完：23:30 陌生人→停留→重复→HIGH→三端联动→闭环 |
+| **P0-11.1** ✅ | FastAPI Gateway + 帧源抽象消费 + WebSocket 广播（JSON + base64 JPEG） | 起服务后 WS 稳定推送 `FrameResult` 流 + 视频帧可达 |
+| **P0-11.2** ✅ | **HTML Dashboard MVP** ⭐（5 区域：视频 / 时间线 / 风险卡片 / 行动闭环 / 架构图） | 单页打开即见实时视频 + 感知时间线 + 冻结消费边界；快速验证冻结架构可作产品接口 |
+| **P0-11.3** 🔧 | **真实视频输入适配（新增）**：`VideoFileFrameSource`（MP4）替换 CAVIAR 帧源；场景 `source_type` 分发 | `real_doorway`（MP4）跑通，Dashboard **零修改**即可渲染；证明架构可替换输入 |
+| **P0-11.4** | **WarningEvent / ActionCommand 产品展示**：风险解释卡片（区域 3）+ 家属/社区任务（区域 4）完整渲染 | 风险等级 + 人话原因（无"诈骗概率"）+ 三端任务卡联动 + 上行交互按钮 |
+| **P0-11.5** | **闭环交互 + 5 分钟 Demo 脚本**：一次完整故事演示（CAVIAR 工程 + 真实 MP4 展示双轨）+ demo README | 单故事讲完：陌生人→停留→重复→HIGH→三端联动→闭环 |
 
 每个阶段独立 PR（不一次性大改）；每阶段**不修改 `home_perception` 任何文件**。
 **不过度扩展**——P0-11.5 之后即停，不做 Agent / LLM 解释 / 真实 App / 数据库 / 用户体系（见 §6，归 P1/P2）。
@@ -291,8 +317,13 @@ tests/demo/
 3. **场景素材** → 主选 **`OneLeaveShopReenter1cor`**（重复访问易解释）；辅选 `OneStopEnter1cor`（长停留）。
    最终剧本：`OneLeaveShopReenter1cor` + 夜间 `DemoClock` + 阈值调低 → 组合触发 `HighRiskApproachRule` → `HIGH_RISK_APPROACH`。
 4. **ADR + roadmap 同 PR** → **是**（即本 PR #32，原子提交避免"代码进 P0-11 而 roadmap 仍 P0-10"）。
+5. **真实输入提前（2026-07-21 调整）** → 真实视频输入适配从原 P0-11.5 提前到 **P0-11.3**，重排为
+   `Gateway → Dashboard → 真实/准真实输入 → 风险闭环展示 → 演示打磨`。理由：最直接验证 ADR-0014
+   「冻结架构允许外部输入替换」（Dashboard/Pipeline/WarningEvent 零改动）；避免一直用 CAVIAR 致业务关联弱。
+   真实输入从 **MP4 门口视频**起，**不接 RTSP/EZVIZ**（见 §9.7）。
 
 > 二审新增两项已落入本文：§2.8 **Demo 数据真实性声明**；§3/§4 **单页 HTML Dashboard 提前至 P0-11.2**（替代原 Vue 三端 SPA）。
+> 2026-07-21 重排：§2.1 修正 `CaviarFrameSource`→`read_caviar_frames` 偏差并明确消费者自提供帧源；§2.4/§2.6/§2.8/§4 反映 CAVIAR 工程验证 + 真实 MP4 产品展示双轨。
 
 ---
 
@@ -347,3 +378,10 @@ tests/demo/
 - **思路**：先搭漂亮前端，发现数据不够再回头改检测 / 规则模型。
 - **否决原因**：这恰是比赛项目常见的架构崩塌路径（见 §1）。本项目选择"先冻结再展示"，
   Demo 只消费契约、零改 `home_perception`，从根上避免架构腐化。
+
+### 9.7 真实输入用 RTSP / EZVIZ 直连（而非 MP4 文件）
+- **思路**：P0-11.3 直接接真实摄像头 RTSP 流 / 萤石 EZVIZ 设备作为 Demo 输入。
+- **否决原因**：RTSP / EZVIZ 引入**网络 / 设备 / 权限**三类不确定性（断流、鉴权、码流兼容），
+  与"可重复 / 可剪辑 / 可控风险触发 / 不依赖网络"的演示目标相悖；比赛阶段这些不是核心。
+  故 P0-11.3 真实输入从 **MP4 门口视频文件**起（`VideoFileFrameSource`），把"真实场景素材"与"实时设备直连"解耦——
+  前者验证架构可替换输入，后者属 P0-12 设备适配。CAVIAR 仍用于工程回归（确定性可复现）。

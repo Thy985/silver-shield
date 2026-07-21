@@ -2,18 +2,19 @@
 
 职责（仅消费冻结契约，零改 home_perception）：
 1. 经 ``PerceptionPipeline.from_settings(settings, ...)`` 装配流水线 + ``load_detector()`` 懒加载 YOLO。
-2. 经 ``read_caviar_frames(base_dir, scenario, glob)`` 读取 fixture 帧（demo 真实路径）。
+2. 经 ``build_frame_source(scenario, hp_settings)`` 构建帧源（CAVIAR jpg 或 真实 MP4，P0-11.3 可替换）。
 3. 后台帧循环：``DemoClock.tick()`` → ``process_frame(frame, i)`` → bridge 翻译 → WS 广播。
 4. WebSocket 端点：下行推 frame view-model + state 快照；上行接 action 写 DemoStateStore。
 5. StaticFiles 托管 ``dashboard/``（P0-11.2 实现完整 5 区域 HTML Dashboard）。
 
 冻结合规白名单（ADR-0015 §2.1，只 import 以下符号）：
 - ``PerceptionPipeline`` / ``DemoClock`` / ``FrameResult`` ← ``home_perception.runtime.pipeline``
-- ``read_caviar_frames`` ← ``home_perception.runtime.config``
+- ``read_caviar_frames`` ← ``home_perception.runtime.config``（经 ``.sources`` 间接消费）
 - ``Settings`` ← ``home_perception.core.config``
 - ``WarningEvent`` / ``ActionCommand`` 仅在类型标注中引用（运行期不调构造器）
 
-严禁 import：``rule_engine`` / ``decision_engine`` / ``action.executor`` / ``action.dispatcher`` 等 7 层内部。
+严禁 import：``rule_engine`` / ``decision_engine`` / ``action.executor`` / ``action.dispatcher`` 等 7 层内部；
+亦严禁 import 冻结包内的帧源实现模块（FrameSource 所在子模块）；``.sources`` 以结构一致的本地抽象自提供帧源。
 ``tests/demo/test_freeze_boundary.py`` 守此边界。
 """
 from __future__ import annotations
@@ -22,7 +23,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -31,7 +32,6 @@ from fastapi.staticfiles import StaticFiles
 
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
 from home_perception.core.config import Settings
-from home_perception.runtime.config import read_caviar_frames
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 
 # === 本包内部 ===
@@ -43,6 +43,7 @@ from .bridge import (
 )
 from .config import DemoSettings
 from .scenarios import ScenarioConfig, load_scenario
+from .sources import build_frame_source
 from .state import DemoStateStore
 from .ws import ConnectionHub, handle_upstream
 
@@ -71,7 +72,8 @@ class DemoGateway:
         # 冻结对象（装配后填充）
         self.pipeline: Optional[PerceptionPipeline] = None
         self.clock: Optional[DemoClock] = None
-        self.frames: List[Any] = []
+        self.frame_source: Optional[Any] = None
+        self.n_frames: int = -1
 
         # 展示层组件
         self.hub = ConnectionHub()
@@ -106,17 +108,23 @@ class DemoGateway:
         # 懒加载 YOLO 权重（构造期不触发 torch 导入）
         self.pipeline.load_detector()
 
-        # 读取 CAVIAR fixture 帧（demo 真实路径：jpg 目录，非 CaviarFrameSource 视频流）
-        self.frames = read_caviar_frames(
-            self.hp_settings.runtime.caviar_base_dir,
-            self.scenario.source,
-            self.hp_settings.runtime.frame_glob,
-        )
-        if not self.frames:
+        # 构建帧源（P0-11.3：CAVIAR jpg 或 真实 MP4，按 scenario.source_type 分发）
+        self.frame_source = build_frame_source(self.scenario, self.hp_settings)
+        self.n_frames = self.frame_source.frame_count
+
+        # CAVIAR 无帧（fixture 缺失或 cv2 未装）→ 启动即失败，给出清晰错误
+        if getattr(self.scenario, "source_type", "caviar_jpg") == "caviar_jpg" and self.n_frames == 0:
             raise RuntimeError(
-                f"场景 {self.scenario.source!r} 无可用帧（base_dir="
+                f"CAVIAR 场景 {self.scenario.source!r} 无可用帧（base_dir="
                 f"{self.hp_settings.runtime.caviar_base_dir!r}，fixture 缺失或 cv2 未装）"
             )
+        # 真实 MP4 文件缺失 → 启动即失败（清晰提示；文件建议放 data/demo/，gitignore 不入库）
+        if getattr(self.scenario, "source_type", "caviar_jpg") == "video_file":
+            mp = getattr(self.scenario, "media_path", None)
+            if not mp or not Path(mp).is_file():
+                raise RuntimeError(
+                    f"video_file 源文件缺失: {mp!r}（请将真实门口 MP4 放到该路径，建议 data/demo/real_doorway.mp4）"
+                )
 
     # ------------------------------------------------------------------
     # 帧循环（后台 task）
@@ -134,30 +142,36 @@ class DemoGateway:
             raise RuntimeError("gateway 未装配，请先调 assemble()")
 
         self._running = True
-        n = len(self.frames)
         # 帧循环间隔：DemoSettings.frame_loop_interval_s 显式设置优先；
         # 若为 0（不限速），回退到 scenario.fps_target（1.0 / fps）。
         interval = self.demo_settings.frame_loop_interval_s
         if interval <= 0 and self.scenario.fps_target > 0:
             interval = 1.0 / self.scenario.fps_target
 
+        # 迭代帧源抽象（P0-11.3：CAVIAR jpg 或 真实 MP4，均产出 (timestamp, frame) 流）
+        frame_iter = iter(self.frame_source)
         while self._running:
-            if not self.scenario.loop and self._frame_index >= n:
-                # 单次播放：帧列表耗尽后退出循环（不回绕）
+            try:
+                _, frame = next(frame_iter)
+            except StopIteration:
+                # 帧源耗尽：loop=True 时重放（重新迭代，MP4 重新打开文件 / CAVIAR 回到第 0 帧）
+                if self.scenario.loop:
+                    frame_iter = iter(self.frame_source)
+                    continue
                 break
-            i = self._frame_index % n  # loop 或单次
-            frame = self.frames[i]
 
             # 推进模拟时间（在网关内，不在 pipeline.run 内；process_frame 不推进 clock）
             self.clock.tick(self.scenario.frame_interval_s)
 
             # 消费冻结契约：process_frame（唯一出口）
-            result: FrameResult = self.pipeline.process_frame(frame, frame_index=i)
+            result: FrameResult = self.pipeline.process_frame(frame, frame_index=self._frame_index)
 
             # bridge 翻译（只读 to_dict + base64）
             frame_b64 = encode_frame_to_base64_jpeg(frame, quality=self.demo_settings.jpeg_quality)
             demo_time = self.clock.now().isoformat()
-            view = frame_result_to_view(result, frame_index=i, frame_base64=frame_b64, demo_time=demo_time)
+            view = frame_result_to_view(
+                result, frame_index=self._frame_index, frame_base64=frame_b64, demo_time=demo_time
+            )
 
             # 广播（frame view + state 快照 + 衍生的三端聚合视图）
             # active_warnings / routed_commands 由 bridge 消费 view-model 产出（P0-11.2 区域 3/4 直接渲染），
@@ -270,7 +284,7 @@ def create_app(
             "status": "ok",
             "scenario": scenario.scenario_id,
             "source": scenario.source,
-            "n_frames": len(gateway.frames),
+            "n_frames": gateway.n_frames,
             "frame_index": gateway._frame_index,
             "active_connections": len(gateway.hub.active),
         }
