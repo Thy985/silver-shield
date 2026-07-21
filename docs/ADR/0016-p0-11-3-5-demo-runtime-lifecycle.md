@@ -142,7 +142,7 @@ AggregateState 因此**不只是 Demo 功能，而是未来产品的数据层雏
   - 调 `self._rebuild_pipeline(scenario)`（复用 YOLO detector，清空追踪/窗口/决策状态）
   - `self._frame_index = 0`、`self.clock` 重置到 `scenario.start_time`、`self.loop_count = 0`
   - `self.store = DemoStateStore()`、`self.aggregate_state.clear()`
-  - 广播 `session_reset` 事件（客户端据此调既有 `resetSession()` 清空本地 maps，或从空 snapshot 重建）
+  - 广播 `source_switched` 事件（复用既有通道；前端 `resetSession()` 监听该消息已清空本地 maps，见 §6.1）
   - 返回 `{status:"ok", frame_index:0, session_status:"RUNNING", loop_count:0}`
 - 比赛价值：上一组选手跑完 → 点 Reset → ≤30 秒内恢复干净状态。
 
@@ -180,10 +180,20 @@ class Source:
 | --- | --- | --- |
 | `frame` | 下行 | `session_status`, `loop_count`, `last_warning`（每帧） |
 | `snapshot` | 下行（仅新连接） | 完整聚合状态（见 §5 能力 4） |
-| `session_reset` | 下行（广播） | 触发客户端 `resetSession()` |
-| （既有 `source_switched` 保留） | 下行 | 切换视频源语义不变 |
+| `source_switched` | 下行（广播） | **双用途**：切换视频源 **与** Reset（复用 `switch_source(同场景)`）均广播此消息，触发前端 `resetSession()` 清空本地 maps；无需独立 `session_reset` 消息（实现收敛，见 §6.1） |
 
 冻结边界：P0-11.3.5 **不新增任何 `home_perception` 内部 import**，`tests/demo/test_freeze_boundary.py` 仍守白名单。
+
+### 6.1 实现偏差记录：Reset 复用 `source_switched`（非独立 `session_reset`）
+
+ADR 初稿 §5 能力 3 拟新增独立的 `session_reset` 广播消息，前端据以调用 `resetSession()`。
+**实现期收敛为复用既有 `source_switched` 通道**，理由：
+
+- Reset 的实现路径是 `POST /demo/reset` → `switch_source(同场景)`（停旧循环 → 重建流水线 → 清空聚合 + store → 重开循环），其**天然**会广播 `source_switched`。
+- 前端 `resetSession()` 早已监听 `source_switched`（视频源切换语义一致：新视频 = 新会话 = 清空本地 maps）。Reset 与切换的输入边界完全相同，**无需新增消息类型**即可复用同一处理函数。
+- 减少一类 WS 消息 = 减少客户端分支与回归面，符合「运行时系统最小可信核心」的收敛目标。
+
+**结论**：WS 协议不引入 `session_reset`；Reset 经 `source_switched` 完成。`gateway.py` 的 `reset_demo` 端点与 `switch_source` 共用实现与广播，测试 `test_dashboard_lifecycle.py::test_reset_endpoint_clears_aggregate` 已验证该路径清空服务端聚合。
 
 ## 7. 三角色视角（本阶段之后的下一阶段，非本 ADR 范围）
 
@@ -205,7 +215,7 @@ Demo 应模拟**角色切换**（顶部 `[AI中心][家属端][社区端]` 切�
 | --- | --- | --- | --- |
 | **1** | 聚合状态（P0） | `DemoAggregateState`：服务端持有 warning/command/behavior/runtime status；每帧 `ingest`；frame 广播加 `session_status`/`loop_count`/`last_warning` | 单一事实来源，未来产品数据层雏形 |
 | **2** | 快照（P0） | WS 首连 `snapshot`；客户端退化为渲染器，晚连恢复历史 | 修「晚连无历史」 |
-| **3** | 重置（P0） | `POST /demo/reset`：清聚合 + pipeline + clock + frame_index，广播 `session_reset` | 演示确定性，换组 ≤30s 恢复 |
+| **3** | 重置（P0） | `POST /demo/reset`：清聚合 + pipeline + clock + frame_index，广播 `source_switched`（见 §6.1） | 演示确定性，换组 ≤30s 恢复 |
 | **4** | 状态面板（P0） | Dashboard `renderStatus()`：Source/Frame/Loop/Pipeline/Last Warning/Session | 评委「系统感」 |
 | **5** | 源抽象（P1） | 轻量 `Source`（load/iterator），复用 `DemoFrameSource`；不做 RTSP/EZVIZ 复杂桩 | 证明 Demo 不绑定 MP4 |
 
