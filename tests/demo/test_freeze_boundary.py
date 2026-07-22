@@ -324,6 +324,30 @@ async def test_state_store_transition() -> None:
         await store.upsert("w2", status="community_done", operator="community")
 
 
+@pytest.mark.asyncio
+async def test_state_store_first_seen_direct_non_pending() -> None:
+    """回归：单次点击即确认——首次 upsert 带明确非 pending 状态应直接作为初值。
+
+    PR #51 修复前，首见 warning 被强制覆盖为 pending，导致 WS 上行「单次点击
+    确认」状态被静默丢弃（status 停留 pending）。修复后 family_handled /
+    community_done 可作首态写入，同时仍受 TRANSITIONS 单向约束。
+    """
+    from silver_demo.state import DemoStateStore
+
+    store = DemoStateStore()
+    s = await store.upsert("w_family", status="family_handled", operator="family")
+    assert s["status"] == "family_handled"
+    assert s["operator"] == "family"
+
+    # 终态仍不可被非法翻转回退
+    with pytest.raises(ValueError):
+        await store.upsert("w_family", status="pending")
+
+    store2 = DemoStateStore()
+    s2 = await store2.upsert("w_community", status="community_done", operator="community")
+    assert s2["status"] == "community_done"
+
+
 # ============================================================================
 # 测试 6：ScenarioConfig 加载
 # ============================================================================

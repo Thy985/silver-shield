@@ -6,6 +6,7 @@
 - **作者**：AI（design pass，v3）
 - **相关**：ADR-0014（三级冻结）、P0-10 Runtime Assembly、P0-10.5.x 治理、v0.1.0-mvp-rc tag、PR #32
 - **范围**：ROADMAP P0-11（MVP Demo v0.1）
+- **术语修正（2026-07-22 · 见 ADR-0017）**：本 ADR 中「三端 / 三端闭环」一律指「单 Dashboard 内的多角色逻辑拆分（AI 风险中心 / 家属端 / 社区端）」，**非三个独立产品**；阶段名统一为「**多角色协同闭环模拟（Role-based Workflow Demo）**」，对应 ROADMAP P0-11.4。
 
 ---
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>银龄盾 · 三端风险闭环观察窗 (P0-11.2)</title>
+  <title>银龄盾 · 三端风险闭环观察窗 (P0-11.4)</title>
   <style>
     :root {
       --bg: #f4f6fb;
@@ -229,6 +229,15 @@
     .toast { background: #111827; color: #fff; font-size: 12.5px; padding: 9px 14px; border-radius: 8px; box-shadow: var(--shadow); opacity: 0; transform: translateY(6px); transition: .2s; }
     .toast.show { opacity: 1; transform: none; }
     .toast.err { background: #7f1d1d; }
+
+    /* ---------- P0-11.4 阶段叙事 Tabs ---------- */
+    .tabs { display: flex; gap: 6px; padding: 0 16px; margin: 12px 0 4px; border-bottom: 1px solid var(--line); }
+    .tab { background: transparent; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; padding: 8px 16px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; transition: .15s; }
+    .tab:hover { background: var(--panel); color: var(--text); }
+    .tab.active { background: var(--panel); color: var(--brand); border-color: var(--brand); border-bottom: 1px solid var(--panel); margin-bottom: -1px; }
+    .view[hidden] { display: none; }
+    /* Tab ②/③ 视图作为 .grid 唯一可见子项时，需占满 12 列（其他区域已 [hidden] 脱出 Grid） */
+    .view-family, .view-community { grid-column: span 12; }
   </style>
 </head>
 <body>
@@ -242,6 +251,13 @@
       <span class="badge-auth">Demo 数据真实性声明</span>
       <span class="pill offline" id="ws-pill"><span class="dot"></span><span id="ws-text">未连接</span></span>
     </header>
+
+    <!-- P0-11.4 阶段叙事 Tabs（强制评委左→右走剧情：发现→确认→处置） -->
+    <nav class="tabs" id="role-tabs">
+      <button class="tab active" data-idx="0">① 风险发现</button>
+      <button class="tab" data-idx="1">② 家属确认</button>
+      <button class="tab" data-idx="2">③ 社区处置</button>
+    </nav>
 
     <!-- P0-11.4 场景输入 / 视频源接入 -->
     <section class="region source-panel">
@@ -416,6 +432,34 @@
             Demo 仅消费白名单：<code>core.config.Settings</code> · <code>runtime.pipeline.{PerceptionPipeline, DemoClock, FrameResult}</code> ·
             <code>runtime.config.read_caviar_frames</code> · <code>analysis.warning.WarningEvent</code> · <code>action.command.ActionCommand</code>（仅 to_dict 只读）。
             不穿透 decision_engine / action.executor / dispatcher 等 7 层内部。
+          </div>
+        </div>
+      </section>
+
+      <!-- P0-11.4 Tab ② 家属确认（focused view · hidden by default · 切 Tab 不重订 WS） -->
+      <section class="region view-family" id="view-family" hidden>
+        <h2>② 家属确认 <span class="tag">单按钮 · 防同效穿帮</span></h2>
+        <div class="body">
+          <div class="route-grp">
+            <div class="gh"><span style="color:var(--brand)">●</span> 待家属处理 <span class="cnt" id="tab-family-cnt">0</span></div>
+            <div class="route-list" id="tab-family-list"><span class="muted">—</span></div>
+          </div>
+          <div style="margin-top:12px;color:var(--muted);font-size:12px">
+            点击「已确认」→ store 状态 <code>family_handled</code> → ① 风险卡片联动。
+          </div>
+        </div>
+      </section>
+
+      <!-- P0-11.4 Tab ③ 社区处置（focused view · hidden by default） -->
+      <section class="region view-community" id="view-community" hidden>
+        <h2>③ 社区处置 <span class="tag">单按钮 · 完成核验</span></h2>
+        <div class="body">
+          <div class="route-grp">
+            <div class="gh"><span style="color:var(--ok)">●</span> 待社区处置 <span class="cnt" id="tab-community-cnt">0</span></div>
+            <div class="route-list" id="tab-community-list"><span class="muted">—</span></div>
+          </div>
+          <div style="margin-top:12px;color:var(--muted);font-size:12px">
+            点击「完成核验」→ store 状态 <code>community_done</code> → 闭环标记。
           </div>
         </div>
       </section>
@@ -1046,6 +1090,9 @@
           + '</div>';
       }
       wrap.innerHTML = html;
+      // P0-11.4 阶段叙事 Tab 渲染（消费同一 state.routed；切 Tab 不重订 WS）
+      renderTabFamily();
+      renderTabCommunity();
     }
 
     function renderRouting() {
@@ -1097,6 +1144,71 @@
       }
       $("st-session").textContent = sessionElapsed(m.started_at);
     }
+
+    // ---------- P0-11.4 阶段叙事 Tab（切 Tab 不重订 WS；同一 state 多角色共享） ----------
+    function renderTabFamily() {
+      var r = allRouted();
+      var arr = r.family || [];
+      $("tab-family-cnt").textContent = arr.length;
+      var list = $("tab-family-list");
+      if (!arr.length) { list.innerHTML = '<span class="muted">—</span>'; return; }
+      list.innerHTML = arr.map(function (c) {
+        var wid = c.warning_id ? shortId(c.warning_id) : "?";
+        var msg = (c.payload && c.payload.message) ? c.payload.message : (c.command_type || "?");
+        return '<div class="route-item">'
+          + '<div class="route-cmd">' + esc((c.command_type || "?").replace(/_/g, " "))
+          + ' <span class="muted">' + esc(wid) + '</span></div>'
+          + '<div class="route-hint">' + esc(msg) + '</div>'
+          + '<div class="cl-actions" style="margin-top:6px">'
+          +   '<button class="btn family" data-wid="' + esc(c.warning_id || "") + '" data-op="family">已确认</button>'
+          + '</div></div>';
+      }).join("");
+    }
+    function renderTabCommunity() {
+      var r = allRouted();
+      var arr = r.community || [];
+      $("tab-community-cnt").textContent = arr.length;
+      var list = $("tab-community-list");
+      if (!arr.length) { list.innerHTML = '<span class="muted">—</span>'; return; }
+      list.innerHTML = arr.map(function (c) {
+        var wid = c.warning_id ? shortId(c.warning_id) : "?";
+        var task = (c.payload && c.payload.reasons) ? c.payload.reasons.join("、") : (c.command_type || "?");
+        return '<div class="route-item">'
+          + '<div class="route-cmd">' + esc((c.command_type || "?").replace(/_/g, " "))
+          + ' <span class="muted">' + esc(wid) + '</span></div>'
+          + '<div class="route-hint">' + esc(task) + '</div>'
+          + '<div class="cl-actions" style="margin-top:6px">'
+          +   '<button class="btn community" data-wid="' + esc(c.warning_id || "") + '" data-op="community">完成核验</button>'
+          + '</div></div>';
+      }).join("");
+    }
+    function switchTab(idx) {
+      document.querySelectorAll("#role-tabs .tab").forEach(function (t, i) {
+        t.classList.toggle("active", i === idx);
+      });
+      document.body.dataset.tab = ["discover", "family", "community"][idx];
+      $("view-family").hidden = (idx !== 1);
+      $("view-community").hidden = (idx !== 2);
+      // Tab ②/③：聚焦单一角色视图，隐藏其他内容区（状态面板/header 保持可见）
+      var hideContent = (idx !== 0);
+      document.querySelectorAll(".app .region:not(.view-family):not(.view-community):not(.demostat)")
+        .forEach(function (r) { r.hidden = hideContent; });
+    }
+    document.querySelectorAll("#role-tabs .tab").forEach(function (t, i) {
+      t.addEventListener("click", function () { switchTab(i); });
+    });
+    // 新 Tab 视图的按钮委托（复用 sendAction；与 closure-cards 同协议，不重订 WS）
+    ["tab-family-list", "tab-community-list"].forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      el.addEventListener("click", function (e) {
+        var btn = e.target.closest("[data-op]");
+        if (!btn) return;
+        sendAction(btn.getAttribute("data-wid"), btn.getAttribute("data-op"));
+      });
+    });
+    // 初始：discover
+    document.body.dataset.tab = "discover";
 
     // event delegation for action buttons
     $("closure-cards").addEventListener("click", function (e) {
