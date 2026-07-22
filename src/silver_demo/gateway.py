@@ -137,6 +137,9 @@ class DemoGateway:
         self.aggregate_state.source_type = self.scenario.source_type
         self.aggregate_state.n_frames = self.n_frames
 
+        # 场景级规则阈值覆盖（P0-11.5a：CCTV 夜间场景降 repeat_visit_count 以稳定产出 HIGH）
+        self._apply_scenario_rule_overrides()
+
         # 帧源可用性校验（CAVIAR / video_file 共用，见 _validate_frame_source）
         self._validate_frame_source(self.scenario)
 
@@ -260,6 +263,29 @@ class DemoGateway:
             if self.n_frames == 0:
                 raise RuntimeError(f"视频无可用帧: {mp!r}（可能编码不支持或时长为 0）")
 
+    def _apply_scenario_rule_overrides(self) -> None:
+        """场景级规则阈值覆盖（P0-11.5a）。
+
+        从 ``scenario.rule_overrides`` 把阈值键覆盖进 ``pipeline.rule_engine.thresholds``，
+        使单个场景可微调规则（如 CCTV 夜间场景降 ``repeat_visit_count`` 以稳定产出 HIGH），
+        不影响全局默认与其他场景。仅在键存在于 ThresholdConfig 时生效；未知键告警跳过。
+
+        注意：CooldownGate 在 RuleEngine.__init__ 时已按当时阈值构造，
+        故本覆盖应在重建流水线（assemble / _rebuild_pipeline）之后调用，
+        且仅用于运行期阈值（如 repeat_visit_count），不用于 cooldown 类参数。
+        """
+        overrides = getattr(self.scenario, "rule_overrides", None)
+        if not overrides:
+            return
+        th = self.pipeline.rule_engine.thresholds
+        for k, v in overrides.items():
+            if hasattr(th, k):
+                setattr(th, k, v)
+            else:
+                structlog.get_logger(__name__).warning(
+                    "scenario.rule_overrides.unknown_key", key=k, scenario=self.scenario.scenario_id,
+                )
+
     # ------------------------------------------------------------------
     # 输入源热切换（P0-11.4 视频输入适配层）
     # ------------------------------------------------------------------
@@ -332,6 +358,8 @@ class DemoGateway:
             now_provider=self.clock,
             frame_interval_s=scenario.frame_interval_s,
         )
+        # 场景级规则阈值覆盖（与 assemble 一致；每次重建流水线后重应用）
+        self._apply_scenario_rule_overrides()
 
     # ======================================================================
     # FastAPI app 工厂
