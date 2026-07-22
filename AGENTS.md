@@ -13,7 +13,7 @@
 - 本模块 = SilverShield 全局的 **Perceive 感知逻辑模块** + **门前时空异常与蹲守识别子系统**，部署于 **Home 端**。
 - 角色：**风险数字孪生（RiskTwin）的前端事实采集器** —— 把家庭入口的视频流，转成结构化"标签事件 + 风险证据"，上报中心风控引擎。
 - 上下游：上游是萤石（EZVIZ）摄像头视频流；下游是中心 AI 分析服务 / 业务服务（经由 MQTT 消费 `VisitorEvent`）。
-- 当前阶段：**Phase 0 工程化 + MVP 冲刺**。优先满足比赛演示；保留 v2 扩展（LLM 解释、多设备、中心联动）。
+- 当前阶段：**MVP Release Candidate 已交付 + P0-11 多角色协同闭环 Demo 落地**。优先满足比赛演示；保留 v2 扩展（LLM 解释、多设备、中心联动）。
 
 **模块边界铁律（最高优先级）**：本模块 **只输出"标签 / 事件"**（普通来访 / 待核验来访 / 异常停留 / 重复来访 / 高风险接近），**绝不直接输出"诈骗人员"结论**。是否诈骗由中心结合入户语音、物品、历史记录综合分析。
 
@@ -215,7 +215,7 @@ common/       横切（logging / timeutil）
 
 ## 8. CI 与质量门禁
 
-- **当前状态**：Phase 0 单人项目，CI 尚未建立；本地已 7 个契约测试通过（venv: `~/.workbuddy/binaries/python/envs/ss_home`）；
+- **当前状态**：MVP Release Candidate 已交付（tag `v0.1.0-mvp-rc`，2026-07-20）；CI 已建立（GitHub Actions：`ruff` lint + torch-free 合约测试每 PR，全栈 runtime 测试仅 main）；**289 测试全绿**；AI 经 branch + PR 协作，不直推 / 不 merge；
 - **门禁目标**（接入 GitHub Actions 后）：`ruff check` 无 error + `pytest` 全过 + 契约 schema 校验；
 - **PR 合并须满足**：`docs/05` §3.2 + `.github/PULL_REQUEST_TEMPLATE.md` 自检清单；
 - 未建立分支保护前，仍遵循本规范走 branch + PR，AI 不直推 / 不 merge。
@@ -271,9 +271,9 @@ AI Agent 在开始编码前，必须明确回答：
 
 | 项 | 说明 |
 | --- | --- |
-| 阶段 | Phase 0 工程化 + MVP 冲刺 |
-| 已完成 | P0-1 工程脚手架（目录 / 契约代码 / 7 契约测试）；EZVIZ 接入 + 帧源重连验证 |
-| 待办 | P0-2~P0-7：RTSP 接入 → YOLO 检测 → 门前规则（Dwell/Repeat/Pending/HighRisk）→ 取证 → MQTT 上报 → main 装配 |
+| 阶段 | MVP Release Candidate 已交付（P0-1~P0-10 全链路 + P0-10.5 冻结治理）；P0-11 多角色协同闭环 Demo 已完成（12/12 端到端验证） |
+| 已完成 | P0-1 工程脚手架；P0-2 萤石稳健取流（RTSP/HLS + 断流重连）；P0-3 YOLO 检测；P0-4 FPS Benchmark；P0-5 目标跟踪；P0-6 VisitorEvent；P0-7a/b 特征 + 规则引擎；P0-8/9/10 决策 / 行动 / main 装配；P0-10.5 架构冻结治理；P0-11 多角色协同闭环 Demo（详见 `docs/08_roadmap.md` 与 `README.md`） |
+| 待办 | 无（MVP 范围全部交付）。后续增强归 v2 / P1：LLM 解释、多设备、中心联动、真实 App / 用户体系 / 推送 |
 | 已知基线偏差 | 早期 3 个脚手架提交已落 `origin/main`（早于本约定，属基线）；`prototypes/` 为历史验证脚本（含真实凭证，已 gitignore） |
 | 例外不视为违规 | 上述基线偏差已记录；新增代码必须按目标架构，不得延续"硬编码凭证 / 裸 print / 静默异常"等问题 |
 

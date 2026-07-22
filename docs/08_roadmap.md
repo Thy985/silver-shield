@@ -18,12 +18,13 @@
 ## 8.2 第一阶段（MVP）任务拆解 —— D 交付物
 
 > 优先级 P0（比赛必交）/ P1（强建议）/ P2（增强）。每项给出产出与验收。
+> **交付状态**：P0-1~P0-11 全部 ✅ 完成；MVP Release Candidate tag `v0.1.0-mvp-rc` 已打（2026-07-20），289 测试全绿。各子阶段状态见其标题标注。
 
-### P0-1 工程脚手架（已完成本次）
+### P0-1 工程脚手架（✅ 已完成）
 - 产出：目录树、`pyproject`、依赖、`config`、`docs`、契约代码、git 初始化。
 - 验收：`pytest` 空跑通过；`.gitignore` 生效（无凭证入库）。
 
-### P0-2 萤石稳健取流（ingestion）
+### P0-2 萤石稳健取流（ingestion）（✅ 已完成）
 - 任务：在 `ezviz_client`/`frame_source` 基础上，支持 **RTSP 优先 + HLS 回退**，
   参数化 `quality/channel`，断流指数退避重连（沿用 `prototypes/` 已验证逻辑）。
 - 验收：模拟断网可自动恢复；输出 FPS/延迟基线报告（`scripts/eval_stream.py`）。
@@ -37,7 +38,7 @@
   `ruff`/`compileall` 干净。
 - 注：跟踪（`track_id`）本阶段**未开启**（`enable_track=False`），留待 P0-5。
 
-### P0-4 视频流稳定化 + FPS Benchmark（benchmark）【下一步】
+### P0-4 视频流稳定化 + FPS Benchmark（benchmark）（✅ 已完成）
 - 任务：建立 `benchmark/yolo_speed.py`，实测真实运行
   `萤石流 → OpenCV → YOLO → DetectionResult` 的端到端性能，量化：
   | 指标 | 目标 |
