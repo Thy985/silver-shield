@@ -53,6 +53,26 @@ def test_switchTab_does_not_reconnect_websocket():
     )
 
 
+def test_tab_view_button_delegation_targets_real_ids():
+    """回归：Tab ②/③ 按钮事件委托必须绑定到真实存在的 list 元素 ID。
+
+    Bug：委托曾写作 view-family-list / view-community-list，而 DOM 中真实 ID 是
+    tab-family-list / tab-community-list，导致 $() 返回 null、委托静默跳过、
+    按钮点击无响应（sendAction 永不触发）。断言委托数组引用的 ID 在 DOM 中确实存在，
+    且旧错误前缀不复存在。
+    """
+    html = _read()
+    # DOM 中定义真实 list 元素 ID
+    assert 'id="tab-family-list"' in html
+    assert 'id="tab-community-list"' in html
+    # 委托数组必须使用真实 ID
+    assert '"tab-family-list"' in html, "按钮委托未绑定 tab-family-list"
+    assert '"tab-community-list"' in html, "按钮委托未绑定 tab-community-list"
+    # 旧错误前缀不得再出现（静默跳过型 bug，必须有测试拦截）
+    assert "view-family-list" not in html, "仍存在错误的 view-family-list 委托目标"
+    assert "view-community-list" not in html, "仍存在错误的 view-community-list 委托目标"
+
+
 def test_routed_commands_preserve_warning_id():
     """``route_commands`` 保留 ``warning_id``：同一 warning_id 在三视图中可关联。"""
     from silver_demo.bridge import route_commands

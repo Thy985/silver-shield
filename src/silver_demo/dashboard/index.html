@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>银龄盾 · 三端风险闭环观察窗 (P0-11.2)</title>
+  <title>银龄盾 · 三端风险闭环观察窗 (P0-11.4)</title>
   <style>
     :root {
       --bg: #f4f6fb;
@@ -236,6 +236,8 @@
     .tab:hover { background: var(--panel); color: var(--text); }
     .tab.active { background: var(--panel); color: var(--brand); border-color: var(--brand); border-bottom: 1px solid var(--panel); margin-bottom: -1px; }
     .view[hidden] { display: none; }
+    /* Tab ②/③ 视图作为 .grid 唯一可见子项时，需占满 12 列（其他区域已 [hidden] 脱出 Grid） */
+    .view-family, .view-community { grid-column: span 12; }
   </style>
 </head>
 <body>
@@ -1196,7 +1198,7 @@
       t.addEventListener("click", function () { switchTab(i); });
     });
     // 新 Tab 视图的按钮委托（复用 sendAction；与 closure-cards 同协议，不重订 WS）
-    ["view-family-list", "view-community-list"].forEach(function (id) {
+    ["tab-family-list", "tab-community-list"].forEach(function (id) {
       var el = $(id);
       if (!el) return;
       el.addEventListener("click", function (e) {
