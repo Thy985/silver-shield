@@ -53,6 +53,7 @@ class ScenarioConfig(BaseModel):
     fps_target: int = 8
     loop: bool = True
     description: str = ""
+    rule_overrides: Optional[Dict[str, Any]] = None
 
     @field_validator("frame_interval_s")
     @classmethod
