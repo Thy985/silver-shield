@@ -37,6 +37,13 @@
 > [`ADR/0016`](ADR/0016-p0-11-3-5-demo-runtime-lifecycle.md)（运行时生命周期）、
 > [`ADR/0017`](ADR/0017-p0-11-role-based-workflow-demo.md)（多角色协同闭环范围收敛）。
 
+### 开发手册（跨项目原则沉淀）
+
+| 编号 | 文件 | 职责 |
+| --- | --- | --- |
+| PLAYBOOK | `PLAYBOOK-silver-shield-development.md` | 从本项目提炼、可复用于所有复杂 AI 系统的开发原则（被验证正确 / 验证阶段新增 / 被证伪 / 七阶段流程），含真实证据 |
+| PLAYBOOK-G | `PLAYBOOK-generic-ai-system-development.md` | 通用模板版：去除 SilverShield 专有名词，纯原则，可原样套用到任何「感知 → 判断 → 行动」类 AI 系统 |
+
 ## 设计依据
 
 本模块设计对齐团队《银龄盾 架构设计完善版（V2.0）》以及《IRMS 工程定稿版》，核心约束摘录：
