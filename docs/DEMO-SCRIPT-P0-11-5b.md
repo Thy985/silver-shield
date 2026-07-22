@@ -16,7 +16,7 @@
    # system Python 3.14（含 torch CUDA / ultralytics / opencv）
    python scripts/run_demo.py --scenario cctv_surveillance_suspicious
    ```
-   - 默认绑定 `127.0.0.1:8765`，仪表盘 `http://127.0.0.1:8765/demo`。
+   - 默认绑定 `127.0.0.1:8765`，仪表盘根路由 `http://127.0.0.1:8765/`。
    - 场景 `cctv_surveillance_suspicious` 已内置 `rule_overrides`
      （`repeat_visit_count: 3→2`）+ `family_contact` 配置 ——
      **保证 HIGH 风险确定性复现**，无需现场调参。
@@ -69,6 +69,10 @@
   是否误改了 `fps_target`（见 §0 注意事项），或重启 `run_demo.py`。
 - **时间不够**：优先保 ① HIGH 展示（1:30–2:30）+ ③ 点击闭环（2:30–3:30）这两幕，
   这是「理解→行动」的最小可信闭环。
+- **时间一致性**：① 区状态面板的「模拟时间」与 ② 区 AI 行为时间线现已统一到同一时基
+  （DemoClock 模拟时间）。桥接层 `frame_result_to_view` 会把 `created_at` 重打为
+  `demo_time`（仅作用于 `to_dict()` 副本，不动冻结模型），故两区时间对得上，评委不会看到
+  「墙钟时间 vs 模拟时间」错位。
 
 ---
 

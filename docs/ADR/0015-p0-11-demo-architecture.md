@@ -103,6 +103,14 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
 
 **Monitor（`LOG_ONLY`）= 仅记录**，不展示为独立页面。
 
+> **时基统一约定（补记 · 2026-07-22）**：`WarningEvent` / `PerceptionEvent` 的 `created_at`
+> 由模型 `default_factory=_utc_now` 打的是**墙钟 UTC**，而 Dashboard ① 区状态面板显示的是
+> DemoClock **模拟时间**（`demo_time`，按 `frame_interval_s` 逐帧推进）。二者时基不同会导致
+> ① 区模拟时间与 ② 区行为时间线错位。约定：桥接层 `bridge.frame_result_to_view` 在
+> `to_dict()` **副本**上把 `created_at` 重打为 `demo_time`（仅作用于传给前端的 dict，
+> **不修改冻结模型实例**，因此不破坏 ADR-0014 L1 Schema 冻结与本 ADR §2.1 白名单只读约束）。
+> 冻结合约回归见 `tests/demo/test_freeze_boundary.py::test_bridge_view_model_restamps_created_at_to_demo_time`。
+
 ### 2.3 技术栈（新增，不污染冻结包）
 
 - **网关（Python，同进程托管 pipeline）**：`FastAPI` + `WebSocket`（`uvicorn` 驱动）。

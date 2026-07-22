@@ -69,4 +69,5 @@
 | [0013](0013-p0-10-assembly-integration.md) | P0-10 装配联调：runtime/ 包 / DemoClock 模拟时序 / Demo 专用配置覆盖 / 保持 Mock | Accepted | 2026-07-20 |
 | [0014](0014-freeze-governance-three-levels.md) | 契约冻结治理：三级冻结（Schema/Interface/Runtime Assembly）+ Contract Test + 版本策略 | Proposed | 2026-07-20 |
 | [0015](0015-p0-11-demo-architecture.md) | P0-11 MVP Demo 架构（多角色协同闭环展示层；术语见 ADR-0017） | Proposed | 2026-07-20 |
+| [0016](0016-p0-11-3-5-demo-runtime-lifecycle.md) | P0-11.3.5 Demo Runtime Lifecycle：服务端聚合状态（DemoAggregateState）单一事实源 + 首连 Snapshot + Reset + 状态面板 | Approved | 2026-07-21 |
 | [0017](0017-p0-11-role-based-workflow-demo.md) | P0-11 协同闭环 Demo 范围收敛：多角色协同闭环模拟（Role-based Workflow Demo）· 单 Dashboard 三视图非三产品 · 阶段重编号 | Accepted | 2026-07-22 |

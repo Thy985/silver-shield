@@ -23,7 +23,19 @@
 | 07 | `07_event_schema.md` | 感知事件（VisitorEvent）字段与取值说明 |
 | 08 | `08_roadmap.md` | 分阶段研发路线与第一阶段任务拆解 |
 | 09 | `09_risks.md` | 技术 / 项目风险与缓解 |
+| ENV | `DEVELOPMENT_ENV.md` | 开发/运行双环境说明（managed venv 跑 ruff/pytest · system Py3.14 跑 AI 栈 + E2E） |
 | ADR | [`ADR/`](ADR/) | **架构决策记录**（为什么这样设计，可追溯）；编写规则见 [`ADR/README.md`](ADR/README.md) |
+
+### P0-11 多角色协同闭环展示层（Demo）文档
+
+| 编号 | 文件 | 职责 |
+| --- | --- | --- |
+| DESIGN-11.4 | `DESIGN-p0-11-4-role-based-workflow.md` | P0-11.4 三视图（① 风险发现 / ② 家属确认 / ③ 社区处置）设计：阶段叙事、共享 `DemoAggregateState`、方案 A 单按钮 |
+| DEMO-SCRIPT | `DEMO-SCRIPT-P0-11-5b.md` | P0-11.5b 5 分钟演示剧本（口播 + 切 Tab + 点按钮 SOP，与 E2E 对齐） |
+
+> Demo 展示层的架构决策见 [`ADR/0015`](ADR/0015-p0-11-demo-architecture.md)（技术选型）、
+> [`ADR/0016`](ADR/0016-p0-11-3-5-demo-runtime-lifecycle.md)（运行时生命周期）、
+> [`ADR/0017`](ADR/0017-p0-11-role-based-workflow-demo.md)（多角色协同闭环范围收敛）。
 
 ## 设计依据
 
