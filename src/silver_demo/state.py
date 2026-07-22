@@ -58,8 +58,11 @@ class DemoStateStore:
         async with self._lock:
             entry = self._state.get(warning_id)
             if entry is None:
-                # 首次：初始化为 pending（业务意义：新 warning 默认未处理）
-                entry = {"warning_id": warning_id, "status": "pending", "operator": operator}
+                # 首次：尊重请求的状态（演示交互「单次点击即确认」需要）。
+                # 合法非 pending 状态（family_handled / community_done）直接作为初值，
+                # 否则回退 pending。后续翻转仍受 TRANSITIONS 单向约束。
+                init_status = status if status in VALID_STATUSES and status != "pending" else "pending"
+                entry = {"warning_id": warning_id, "status": init_status, "operator": operator}
                 self._state[warning_id] = entry
                 return dict(entry)
 
