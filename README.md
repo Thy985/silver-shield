@@ -5,12 +5,16 @@
 基于萤石（EZVIZ）摄像头视频流，对家庭入口区域做实时感知，生成结构化异常事件并采集风险证据，
 上报至 SilverShield 中心风控引擎，支撑家庭数字孪生与协同预警。
 
-## 当前状态（MVP 接近 Release Candidate）
+## 当前状态（MVP Release Candidate + 多角色协同闭环 Demo 完成）
 
 - ✅ P0-3~P0-10：检测 → 跟踪 → 事件 → 特征 → 规则 → 决策 → 行动 → 装配 全链路完成（289 测试全绿）
 - ✅ P0-10.5 架构冻结治理（ADR-0014 三级冻结 + 契约测试 + 收敛清理），架构漂移清零
 - ✅ P0-10.5.3 Developer API Surface 文档层（DX）已建立（见下方「团队第一入口」）
-- 🚧 P0-10.5.4 仓库卫生清理（本文档所在 PR）+ Release Candidate tag 评审中
+- ✅ P0-10.5.4 仓库卫生清理完成；**Release Candidate tag `v0.1.0-mvp-rc` 已打（2026-07-20）**
+- ✅ **P0-11 多角色协同闭环展示层（Demo）全阶段完成**：单 Dashboard 三视图 Tab
+  （① 风险发现 / ② 家属确认 / ③ 社区处置）共享同一 `DemoAggregateState`，
+  确定性 HIGH 闭环 + 5 分钟演示剧本，并经 `scripts/e2e_validate_demo.py` 真实端到端验证（12/12）——
+  详见 `docs/ADR/0017` 与 `docs/DEMO-SCRIPT-P0-11-5b.md`。展示层零穿透 7 层冻结契约（ADR-0015）。
 - 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
 
 ## 架构总览（团队入口）

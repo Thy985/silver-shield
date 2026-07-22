@@ -247,6 +247,42 @@ def test_bridge_view_model_structure() -> None:
     assert view["commands"] == []
 
 
+def test_bridge_view_model_restamps_created_at_to_demo_time() -> None:
+    """断言 frame_result_to_view 把透传的 perception_events/warnings created_at 重打为 demo_time。
+
+    根因：模型 created_at 是真实墙钟 UTC（_utc_now），而 Region 1 的 demo_time 是 DemoClock
+    模拟时间，两者时基不同 → ①区模拟时间 vs ②区 AI 行为时间线对不上。重打后两区统一。
+    demo_time=None 时保留原始 created_at（降级不破坏）。
+    """
+    from silver_demo.bridge import frame_result_to_view
+
+    class _StubEvent:
+        def to_dict(self):
+            return {"event_type": "long_stay", "created_at": "2026-07-22T03:11:45.123456+00:00"}
+
+    class _StubWarning:
+        def to_dict(self):
+            return {"warning_id": "w1", "risk_level": "HIGH",
+                    "created_at": "2026-07-22T03:11:50.654321+00:00"}
+
+    class _StubFrameResult:
+        n_detections = 1
+        n_visitor_events = 1
+        perception_events = [_StubEvent()]
+        warnings = [_StubWarning()]
+        commands = []
+
+    demo_time = "2026-07-19T23:30:00+00:00"
+    view = frame_result_to_view(_StubFrameResult(), frame_index=10, frame_base64=None, demo_time=demo_time)
+    assert view["perception_events"][0]["created_at"] == demo_time
+    assert view["warnings"][0]["created_at"] == demo_time
+
+    # demo_time=None → 保留真实墙钟 created_at（降级路径）
+    view2 = frame_result_to_view(_StubFrameResult(), frame_index=10, frame_base64=None, demo_time=None)
+    assert view2["perception_events"][0]["created_at"].startswith("2026-07-22")
+    assert view2["warnings"][0]["created_at"].startswith("2026-07-22")
+
+
 def test_bridge_route_commands() -> None:
     """断言 route_commands 按 command_type 正确路由到三端。"""
     from silver_demo.bridge import route_commands

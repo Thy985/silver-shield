@@ -90,15 +90,33 @@ def frame_result_to_view(
         except Exception:
             return {}
 
+    perception_events = [_safe_to_dict(p) for p in getattr(frame_result, "perception_events", [])]
+    warnings = [_safe_to_dict(w) for w in getattr(frame_result, "warnings", [])]
+    commands = [_safe_to_dict(c) for c in getattr(frame_result, "commands", [])]
+
+    # 时间线一致性修复（Region 1 模拟时间 vs Region 2 AI 行为时间线对不上）：
+    # 模型里 perception_event/warning 的 created_at 是真实墙钟 UTC（default_factory=_utc_now），
+    # 而 Region 1 的 demo_time 是 DemoClock 模拟时间（每帧推进 frame_interval_s）。两者时基不同，
+    # 直接透传会导致 ①区/②区时间错位。此处把「展示用副本」的 created_at 重打为 demo_time，
+    # 使两区（及服务端聚合状态的行为时间线）共用同一模拟时基。
+    # 仅改 to_dict() 产出的副本，不触碰冻结模型对象 —— 守住 ADR-0015 冻结边界。
+    if demo_time is not None:
+        for _d in perception_events:
+            if isinstance(_d, dict):
+                _d["created_at"] = demo_time
+        for _d in warnings:
+            if isinstance(_d, dict):
+                _d["created_at"] = demo_time
+
     return {
         "frame_index": frame_index,
         "demo_time": demo_time,
         "frame_base64": frame_base64,
         "n_detections": getattr(frame_result, "n_detections", 0),
         "n_visitor_events": getattr(frame_result, "n_visitor_events", 0),
-        "perception_events": [_safe_to_dict(p) for p in getattr(frame_result, "perception_events", [])],
-        "warnings": [_safe_to_dict(w) for w in getattr(frame_result, "warnings", [])],
-        "commands": [_safe_to_dict(c) for c in getattr(frame_result, "commands", [])],
+        "perception_events": perception_events,
+        "warnings": warnings,
+        "commands": commands,
     }
 
 

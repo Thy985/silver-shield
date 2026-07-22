@@ -18,12 +18,13 @@
 ## 8.2 第一阶段（MVP）任务拆解 —— D 交付物
 
 > 优先级 P0（比赛必交）/ P1（强建议）/ P2（增强）。每项给出产出与验收。
+> **交付状态**：P0-1~P0-11 全部 ✅ 完成；MVP Release Candidate tag `v0.1.0-mvp-rc` 已打（2026-07-20），289 测试全绿。各子阶段状态见其标题标注。
 
-### P0-1 工程脚手架（已完成本次）
+### P0-1 工程脚手架（✅ 已完成）
 - 产出：目录树、`pyproject`、依赖、`config`、`docs`、契约代码、git 初始化。
 - 验收：`pytest` 空跑通过；`.gitignore` 生效（无凭证入库）。
 
-### P0-2 萤石稳健取流（ingestion）
+### P0-2 萤石稳健取流（ingestion）（✅ 已完成）
 - 任务：在 `ezviz_client`/`frame_source` 基础上，支持 **RTSP 优先 + HLS 回退**，
   参数化 `quality/channel`，断流指数退避重连（沿用 `prototypes/` 已验证逻辑）。
 - 验收：模拟断网可自动恢复；输出 FPS/延迟基线报告（`scripts/eval_stream.py`）。
@@ -37,7 +38,7 @@
   `ruff`/`compileall` 干净。
 - 注：跟踪（`track_id`）本阶段**未开启**（`enable_track=False`），留待 P0-5。
 
-### P0-4 视频流稳定化 + FPS Benchmark（benchmark）【下一步】
+### P0-4 视频流稳定化 + FPS Benchmark（benchmark）（✅ 已完成）
 - 任务：建立 `benchmark/yolo_speed.py`，实测真实运行
   `萤石流 → OpenCV → YOLO → DetectionResult` 的端到端性能，量化：
   | 指标 | 目标 |
@@ -315,7 +316,7 @@
 - 后续：P0-11 产品层（API Gateway → 三端观察窗口（Dashboard））经已冻结契约接入，核心链路 0 改动；
   P0-12 设备适配（RTSPFrameSource / EZVIZFrameSource / 真实 MQTTPublisher）。
 
-### P0-11 多角色协同闭环展示层（MVP Demo）【P0-11.1 / P0-11.2 ✅ 已完成 · P0-11.3 收口中 · P0-11.4 ⏳ 下一阶段 · ADR-0015 v3 + ADR-0017】
+### P0-11 多角色协同闭环展示层（MVP Demo）【✅ 全阶段完成 · P0-11.1~11.5b + 真实端到端验证（12/12）· ADR-0015 v3 + ADR-0017】
 - 任务：把 v0.1.0-mvp-rc 冻结架构的价值**对外可验证**——定位是「翻译能力」而非「再造能力」：
   把已冻结的 AI 链路翻译成一次可信的**风险发现 → 解释 → 干预 → 闭环**故事
   （老人门口 → AI 感知 → 异常访问 → 风险解释 → 家属/社区干预 → 人工确认闭环）。
@@ -360,10 +361,12 @@
   | --- | --- | --- |
   | **P0-11.1** ✅ | Dashboard 基础：FastAPI Gateway + 帧源抽象消费 + WebSocket 广播（JSON + base64 JPEG） | WS 稳定推送 `FrameResult` 流 + 视频帧可达 |
   | **P0-11.2** ✅ | **真实视频输入 + 生命周期**：`VideoFileFrameSource`（MP4）+ P0-11.3.5 服务端聚合状态/快照/Reset/状态面板 | CAVIAR + 真实 MP4 双轨跑通；任意时刻打开见运行中的系统；Dashboard 零修改 |
-  | **P0-11.3** 🔧 | **风险解释层**：`WarningEvent`/`ActionCommand` 风险卡（人话原因 `reason_summary` + 触发规则强度）+ AI 行为时间线 | 风险等级 + 人话原因（无"诈骗概率"）+ 轨迹演化叙事（PR #45 已落地骨架，待收口） |
-  | **P0-11.4** ⏳ | **协同闭环模拟（Role-based Workflow Demo）**：单 Dashboard 三视图 Tab（① 风险发现 / ② 家属确认 / ③ 社区处置），共享同一 `DemoAggregateState` 做角色视图投影；每角色单一确认按钮（家属「已确认」/ 社区「完成核验」） | Tabs 切换无刷新、共享运行态；三视图消费同一事实源；零新增后端契约 |
-  | **P0-11.5a** ⏳ | **稳定 HIGH 风险故事（关键瓶颈 · 先于页面打磨）**：调阈值（如 `repeat_visit_count` 3→2、night_visit 剧本精细化）使夜间 CCTV 场景确定性产出 `首次出现→长时间停留→再次出现→HIGH→通知家属/社区` | 5 分钟内确定性触发完整 HIGH 闭环；无 HIGH 则家属/社区页为空壳 |
-  | **P0-11.5b** ⏳ | **5 分钟 Demo 剧本**：串联 风险发现→家属确认→社区处置 的口播 + 操作 SOP（CAVIAR 工程 + 真实 MP4 展示双轨） | 单故事讲完：陌生人→停留→重复→HIGH→家属确认→社区处置→闭环 |
+  | **P0-11.3** ✅ | **风险解释层**：`WarningEvent`/`ActionCommand` 风险卡（人话原因 `reason_summary` + 触发规则强度）+ AI 行为时间线 | 风险等级 + 人话原因（无"诈骗概率"）+ 轨迹演化叙事（PR #45/#46/#48：reason_summary + DemoAggregateState 单一事实源 + WS snapshot + POST /demo/reset + renderStatus） |
+  | **P0-11.4** ✅ | **协同闭环模拟（Role-based Workflow Demo）**：单 Dashboard 三视图 Tab（① 风险发现 / ② 家属确认 / ③ 社区处置），共享同一 `DemoAggregateState` 做角色视图投影；每角色单一确认按钮（家属「已确认」/ 社区「完成核验」） | Tabs 切换无刷新、共享运行态；三视图消费同一事实源；零新增后端契约（PR #51） |
+  | **P0-11.5a** ✅ | **稳定 HIGH 风险故事（关键瓶颈 · 先于页面打磨）**：`ScenarioConfig.rule_overrides` 局部覆写（`repeat_visit_count` 3→2，全局默认 3 不动）+ `config/default.yaml` 配 `family_contact`，使 CCTV 场景确定性产出 `首次出现→长时间停留→再次出现→HIGH→通知家属/社区` | 5 分钟内确定性触发完整 HIGH 闭环；3-loop 实测每 loop HIGH+{SEND_FAMILY_MESSAGE:5, CREATE_COMMUNITY_TASK:1}（回归 `test_p0_11_5a_stable_high.py`） |
+  | **P0-11.5b** ✅ | **5 分钟 Demo 剧本**：串联 风险发现→家属确认→社区处置 的口播 + 操作 SOP（CAVIAR 工程 + 真实 MP4 展示双轨） | 单故事讲完：陌生人→停留→重复→HIGH→家属确认→社区处置→闭环（`docs/DEMO-SCRIPT-P0-11-5b.md`） |
+  | **真实端到端验证** ✅ | **无浏览器 E2E 断言**：`scripts/e2e_validate_demo.py` 真实 `create_app()` + `TestClient` + 真 WS 协议驱动真实 CCTV 视频跑 `run_loop` | 12/12 断言通过：/health、WS 首连 snapshot、HIGH、SEND_FAMILY_MESSAGE、CREATE_COMMUNITY_TASK、warning_id 三视图贯通、单次点击 family_handled/community_done 回写闭环 |
+  - **阶段收尾修复（2026-07-22）**：① `DemoStateStore.upsert` bugfix（首见 warning 曾被强制 `pending`，导致 WS 单次点击确认被静默丢弃 → 现尊重请求的非 pending 状态，翻转仍受 TRANSITIONS 单向约束）；② Dashboard 三处 bug（Tab ②/③ 按钮 ID 不匹配、布局 grid-column 缺失、标题版本号过期）；③ 桥接层时基统一（① 区模拟时间 vs ② 区行为时间线错位 → `frame_result_to_view` 把 `created_at` 重打为 `demo_time`，仅作用于 `to_dict()` 副本，不动冻结模型）。
   - **到此停止（范围收敛 · ADR-0017）**：不构建三个独立产品（家属 App / 社区 Web / 用户体系 / 推送 / 登录 / 权限 / 数据同步）；Agent / LLM 解释 / 真实 App / 数据库 / 用户体系归 P1/P2。控制展示面复杂度，资源集中到「输入真实化 + 行为可解释 + 闭环可信」三点。
 
 ### P2-12 增强（比赛后/增强版）
