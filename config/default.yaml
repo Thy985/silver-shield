@@ -83,7 +83,13 @@ decision:
   policy: rule_based              # rule_based | (v2: ml, llm)
 
 action:
-  family_contact: null            # 家属联系方式（Demo 不配 → 降级 LOG_ONLY，不丢）
+  # P0-11.5a：Demo 家属联系方式。配了才真发 SEND_FAMILY_MESSAGE（否则 NOTIFY_FAMILY 降级 LOG_ONLY，
+  # 家属端会空壳）。这是 Demo/MVP 占位联系方式，v1 接真实短信网关 / App push 时由中心 RiskTwin 拉取覆盖。
+  family_contact:
+    elder_id: elder_001
+    name: 家属演示
+    phone: "+8613800000000"
+    relation: family
   community_endpoint: ${COMMUNITY_ENDPOINT:-https://community.example.com/api/v1/tasks}
   mqtt_topic_prefix: silvershield/home
   max_retries: 3
