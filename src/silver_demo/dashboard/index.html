@@ -126,6 +126,7 @@
     .btn.community:not(:disabled) { background: #ecfdf5; }
     .btn:disabled { opacity: .45; cursor: not-allowed; }
     .cl-status { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; }
+    .sys-status { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 6px; color: #64748b; background: #f1f5f9; margin-left: 4px; }
 
     .route-panel { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafbff; align-self: start; }
     .route-panel h3 { margin: 0 0 10px; font-size: 13px; }
@@ -535,8 +536,13 @@
       family_handled: { t: "家属已处理", c: "#2563eb" },
       community_done: { t: "社区已闭环", c: "#16a34a" }
     };
-    var WARN_STATUS = {
-      CREATED: "已生成", PENDING: "已下发", CONFIRMED: "已确认", RESOLVED: "已闭环", REJECTED: "已拒绝"
+    // WarningEvent.status = 系统侧指令下发状态（CREATED→PENDING→CONFIRMED→RESOLVED/REJECTED），
+    // 与「人工闭环状态」(state.stateMap: pending/family_handled/community_done) 是两回事。
+    // 风险卡主状态改用人工闭环状态（见 CLOSURE），此处仅作次要、明确标注「系统·」的辅助标签，
+    // 避免「已确认」被误读为家属/社区人工确认。
+    var SYS_STATUS = {
+      CREATED: "系统·待下发", PENDING: "系统·待下发", CONFIRMED: "系统·已送达",
+      RESOLVED: "系统·已闭环", REJECTED: "系统·已拒绝"
     };
 
     // ---------- state（P0-11.3 Dashboard 状态层：从"事实生产"聚合出"用户认知"）----------
@@ -704,6 +710,7 @@
       } else if (msg.type === "state_update") {
         if (msg.state) Object.assign(state.stateMap, msg.state);
         renderClosure();
+        renderRisks();   // 风险卡主状态同样来自 state.stateMap，点击确认后需即时刷新
       } else if (msg.type === "source_switched") {
         resetSession(msg.scenario, msg.source, msg.source_type, msg.frames);
       } else if (msg.type === "action_ack") {
@@ -971,7 +978,11 @@
             + esc(label) + ' <b>' + sc + '</b></span>';
         }).join("");
         var rec = ACT[w.recommended_action] || w.recommended_action || "—";
-        var wstat = WARN_STATUS[w.status] || w.status || "—";
+        // 风险卡主状态 = 人工闭环状态（与 ②③ 共享 state.stateMap），而非 WarningEvent.status（系统下发状态）
+        var closure = state.stateMap[w.warning_id] ? state.stateMap[w.warning_id].status : "pending";
+        if (!CLOSURE[closure]) closure = "pending";
+        var cs = CLOSURE[closure];
+        var sysStat = SYS_STATUS[w.status] || w.status || "";
         var evChips = "";
         if (w.evidence && w.evidence.length) {
           evChips = '<div class="rc-ev">'
@@ -983,7 +994,8 @@
           +   '<span class="rlevel" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
           +   '<span class="rc-id">' + esc(shortId(w.warning_id)) + '</span>'
           +   '<span class="rc-time">生成 ' + esc(hhmmss(w.created_at)) + '</span>'
-          +   '<span class="cl-status" style="color:' + rl.c + ';background:' + rl.c + '1a">' + esc(wstat) + '</span>'
+          +   '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
+          +   (sysStat ? '<span class="sys-status" title="系统指令下发状态（非人工确认）">' + esc(sysStat) + '</span>' : '')
           + '</div>'
           + '<div class="rc-section"><div class="rc-label">人话原因</div><ul class="rc-reason">' + reasons + '</ul></div>'
           + (triggers ? '<div class="rc-section"><div class="rc-label">触发规则</div><div class="rc-triggers">' + triggers + '</div></div>' : '')
