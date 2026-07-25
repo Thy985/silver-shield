@@ -24,7 +24,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install ruff
-        run: pip install ruff
+        # 锁版本：CI 此前用 `pip install ruff`（不锁），2026-07-24 自动升到 0.16.0 后
+        # 默认规则集变严（新增 I001 import 排序 / RUF022 __all__ 排序等），
+        # 导致 src/home_perception/action/__init__.py 等 539 处误报、全量 PR lint 飘红。
+        # 固定到项目已知绿灯版本（与本地 managed venv 一致），杜绝版本漂移。
+        # 如需升级，请先本地 `ruff==<new> check src tests` 全绿后再改此行。
+        run: pip install ruff==0.15.22
       - name: Run ruff
         run: ruff check src tests
 
