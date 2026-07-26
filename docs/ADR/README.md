@@ -71,3 +71,6 @@
 | [0015](0015-p0-11-demo-architecture.md) | P0-11 MVP Demo 架构（多角色协同闭环展示层；术语见 ADR-0017） | Proposed | 2026-07-20 |
 | [0016](0016-p0-11-3-5-demo-runtime-lifecycle.md) | P0-11.3.5 Demo Runtime Lifecycle：服务端聚合状态（DemoAggregateState）单一事实源 + 首连 Snapshot + Reset + 状态面板 | Approved | 2026-07-21 |
 | [0017](0017-p0-11-role-based-workflow-demo.md) | P0-11 协同闭环 Demo 范围收敛：多角色协同闭环模拟（Role-based Workflow Demo）· 单 Dashboard 三视图非三产品 · 阶段重编号 | Accepted | 2026-07-22 |
+| [0018](0018-separate-realtime-risk-signal-and-historical-visitor-event.md) | 实时风险信号与历史事件流分离：新增 Behavior State 双下游（RiskSignal 实时 / VisitorEvent 历史）+ 支持事中干预 | Proposed | 2026-07-26 |
+| [0019](0019-multimodal-evidence-fusion-architecture.md) | 多模态证据融合架构：Vision / Audio 双独立感知链 + Evidence Fusion 阶段，WarningEvent.evidence 升为类型化列表 | Proposed | 2026-07-26 |
+| [0020](0020-decouple-short-term-tracking-identity-and-long-term-visitor-identity.md) | 短期追踪身份（track_id）与长期访客身份（person_id）分离：新增 Identity Resolver 阶段 | Proposed | 2026-07-26 |
