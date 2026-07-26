@@ -34,11 +34,11 @@ def process_frame(self, frame, frame_index=0) -> FrameResult:
 
 **与 ADR 伪代码的 3 个关键差异（落地必须对齐真实代码，不得照抄理想图）**：
 
-| # | 理想伪代码 | 真实代码 | 落地含义 |
-| --- | --- | --- | --- |
-| 1 | `tracks = tracker.update(detection)` 独立一步 | tracker 被 `event_builder.update(dets)` 内部驱动 | 实时路径**不重复驱动 tracker**，只读 `self.tracker.active()`（当前在场 `VisitorTrack` 列表） |
-| 2 | `perceptions = []` 两路合并后批量决策 | 历史路径**逐事件**决策（`_act_on_event`），`DecisionEngine.evaluate` 返回单个 warning | 实时路径新增**平行步骤** `_act_on_signals`，不重构既有逐事件循环（0 行为变化） |
-| 3 | 隐含墙钟 | 全链路 `now_provider` 注入（DemoClock 模拟时间） | `BehaviorBuilder` / `RealTimeRiskEvaluator` **必须**接同一 `now_provider`，否则 dwell 计算在 Demo 下失真（帧间毫秒级） |
+| # | 理想伪代码                                     | 真实代码                                                                  | 落地含义                                                                                              |
+| - | ----------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 1 | `tracks = tracker.update(detection)` 独立一步 | tracker 被 `event_builder.update(dets)` 内部驱动                           | 实时路径**不重复驱动 tracker**，只读 `self.tracker.active()`（当前在场 `VisitorTrack` 列表）                          |
+| 2 | `perceptions = []` 两路合并后批量决策              | 历史路径**逐事件**决策（`_act_on_event`），`DecisionEngine.evaluate` 返回单个 warning | 实时路径新增**平行步骤** `_act_on_signals`，不重构既有逐事件循环（0 行为变化）                                               |
+| 3 | 隐含墙钟                                      | 全链路 `now_provider` 注入（DemoClock 模拟时间）                                 | `BehaviorBuilder` / `RealTimeRiskEvaluator` **必须**接同一 `now_provider`，否则 dwell 计算在 Demo 下失真（帧间毫秒级） |
 
 ### 1.2 目标（Phase 1 完成后）
 
@@ -57,8 +57,10 @@ def process_frame(self, frame, frame_index=0) -> FrameResult:
     risk_signals:    List[RiskSignal]    = []
     if self._realtime_enabled:
         now = self._now()                                        # 同一 now_provider
-        behavior_states = self.behavior_builder.build(self.tracker.active(), now)
-        risk_signals    = self.realtime_evaluator.evaluate(behavior_states, now)
+        behavior_states = self.behavior_builder.build(self.tracker.active(), now)       # 纯实时快照
+        recent          = self.recent_behavior_store.update(self.tracker.active(), now)  # 跨访问账本
+        ctxs            = [RealtimeContext(s, recent[s.track_id]) for s in behavior_states]
+        risk_signals    = self.realtime_evaluator.evaluate(ctxs, now)
         rt_percs = [risk_signal_to_perception(s) for s in risk_signals
                     if s.transition is SignalTransition.RAISED]   # CLEARED 不产 Warning
         if rt_percs:
@@ -77,31 +79,34 @@ def process_frame(self, frame, frame_index=0) -> FrameResult:
 
 ```
 src/home_perception/analysis/
-├── behavior_state.py            # BehaviorState 数据类（working state，含 schema_version）
-├── risk_signal.py               # RiskSignal + SignalCategory/SourceModality/SignalTransition 枚举
-├── behavior_builder.py          # BehaviorBuilder：VisitorTrack → BehaviorState（纯函数式，无状态）
-├── realtime_risk_evaluator.py   # RealTimeRiskEvaluator：状态机 + 实时判断（有状态）
+├── behavior_state.py            # BehaviorState 纯实时快照 + RealtimeContext（state=f(Reality,Time)）
+├── recent_behavior_store.py     # RecentBehaviorStore：跨访问计数账本（visits_in_window），与纯态分离
+├── risk_signal.py               # RiskSignal + SignalCategory/SourceModality/SignalTransition/SubjectType 枚举
+├── behavior_builder.py          # BehaviorBuilder：VisitorTrack + now → BehaviorState（纯函数式，无状态）
+├── realtime_risk_evaluator.py   # RealTimeRiskEvaluator：状态机 + 实时判断（消费 RealtimeContext，有状态）
 └── signal_adapter.py            # risk_signal_to_perception：RiskSignal → 既有 PerceptionEvent
 ```
 
 ### 2.2 职责表
 
-| 模块 | 职责 | 有无内部状态 |
-| --- | --- | --- |
-| `BehaviorState` | 描述当前访问生命周期状态（dwell / visits / odd_hour） | 无（每帧重算的快照） |
-| `BehaviorBuilder` | 从 `tracker.active()` + `now` 计算 `BehaviorState` 列表 | 仅进行中访问计数账本（见 §3.3） |
-| `RiskSignal` | 描述风险状态**跃迁**（RAISED / CLEARED 两种发射） | 无（瞬时消息） |
-| `RealTimeRiskEvaluator` | 每 track 一台 `NONE→ACTIVE_RISK→NONE` 状态机 + 阈值判断 | **有**（`active_states` 字典，见 §4） |
-| `signal_adapter` | RAISED 信号 → 冻结 `PerceptionEvent`（复用 5 类 `EventType`，零新增枚举） | 无 |
+| 模块                      | 职责                                                         | 有无内部状态                         |
+| ----------------------- | ---------------------------------------------------------- | ------------------------------ |
+| `BehaviorState`         | **纯当前状态快照**：dwell / phase / proximity / odd_hour（`state=f(Reality,Time)`，不含跨访问统计） | 无（每帧重算的快照）                     |
+| `BehaviorBuilder`       | 从 `tracker.active()` + `now` 计算 `BehaviorState`（**纯函数，无内部账本**） | 无（职责纯化后不再持账本）                 |
+| `RecentBehaviorStore`   | 维护 `Dict[track_key, List[enter_time]]` 滑窗，产出跨访问统计 `recent_behavior`（如 `visits_in_window`） | **有**（enter_time 账本，volatile） |
+| `RealtimeContext`       | 组合体 `{current_state: BehaviorState, recent_behavior: {...}}`——评估器的实际输入 | 无（每帧组装）                        |
+| `RiskSignal`            | 描述风险状态**跃迁**（RAISED / CLEARED）；以 `subject_type`+`subject_id` 表达主体 | 无（瞬时消息）                        |
+| `RealTimeRiskEvaluator` | 每 track 一台 `NONE→ACTIVE_RISK→NONE` 状态机 + 阈值判断（消费 `RealtimeContext`） | **有**（`active_states` 字典，见 §4） |
+| `signal_adapter`        | RAISED 信号 → 冻结 `PerceptionEvent`（复用 5 类 `EventType`，零新增枚举） | 无                              |
 
 ### 2.3 修改文件（最小侵入）
 
-| 文件 | 改动 | 约束 |
-| --- | --- | --- |
-| `runtime/pipeline.py` | `FrameResult` +2 可选字段；`process_frame` 加旁路块；`from_settings` 装配两个新组件 | 历史路径代码块不动 |
-| `core/config.py` | `Settings` 增 `realtime_risk` 配置段（pydantic） | 默认 `enabled=false` |
-| `config/default.yaml` | 增 `realtime_risk:` 段 | 见 §5 |
-| `runtime/config.py` | `build_threshold_config` 产物**同时**喂给 RuleEngine 与 Evaluator | 单一阈值来源（见 §5） |
+| 文件                    | 改动                                                                 | 约束                 |
+| --------------------- | ------------------------------------------------------------------ | ------------------ |
+| `runtime/pipeline.py` | `FrameResult` +2 可选字段；`process_frame` 加旁路块；`from_settings` 装配两个新组件 | 历史路径代码块不动          |
+| `core/config.py`      | `Settings` 增 `realtime_risk` 配置段（pydantic）                         | 默认 `enabled=false` |
+| `config/default.yaml` | 增 `realtime_risk:` 段                                               | 见 §5               |
+| `runtime/config.py`   | `build_threshold_config` 产物**同时**喂给 RuleEngine 与 Evaluator         | 单一阈值来源（见 §5）       |
 
 **不修改**：`event_builder.py` / `feature_extractor.py` / `rule_engine.py` / `decision_engine.py` / `decision_policy.py` / `dispatcher.py` —— 一行不改。
 
@@ -126,8 +131,10 @@ src/home_perception/analysis/
   │
   ├─ 4. if realtime_enabled:  ← 实时状态路径（新增旁路）
   │       now = now_provider()                          # 与 tracker 同源时钟
-  │       states  = behavior_builder.build(tracker.active(), now)
-  │       signals = realtime_evaluator.evaluate(states, now)
+  │       states  = behavior_builder.build(tracker.active(), now)       # 纯实时快照
+  │       recent  = recent_behavior_store.update(tracker.active(), now) # 跨访问账本（visits_in_window）
+  │       ctxs    = [RealtimeContext(s, recent[s.track_id]) for s in states]
+  │       signals = realtime_evaluator.evaluate(ctxs, now)
   │       for s in signals if s.transition == RAISED:
   │           perc = risk_signal_to_perception(s)       # 复用冻结 PerceptionEvent
   │           decision_engine.evaluate([perc])          # 同一决策中心
@@ -143,14 +150,23 @@ src/home_perception/analysis/
 - 原因：Demo 帧间真实间隔是毫秒级，模拟时间由 `DemoClock.tick()` 推进；不接同源时钟则 `dwell_seconds` 永远 ≈0，实时路径在 Demo 里永不触发（与 E2E 验证发现的 `fps_target` 坑同族）。
 - `dwell_seconds = (now - track.enter_time).total_seconds()`，来源与 tracker 判离场的时基一致。
 
-### 3.3 实时 `visits_in_window` 的账本问题
+### 3.3 实时 `visits_in_window` 的账本问题（State / History 职责分离）
 
-历史 `repeat_visit` 基于 `leave_time` 窗口（`feature_extractor.py`，`frequency_window_s=1800`）——**进行中的访问尚无 leave_time，不在历史账本里**。实时路径需要独立账本：
+历史 `repeat_visit` 基于 `leave_time` 窗口（`feature_extractor.py`，`frequency_window_s=1800`）——**进行中的访问尚无 leave_time，不在历史账本里**。实时路径需要独立账本，但**它不属于 `BehaviorState`**：
 
-- `BehaviorBuilder` 内部维护 `Dict[track_key, List[enter_time]]`（仅进入时间，滑窗清理过期项）；
-- `visits_in_window = 窗口内该访客 enter 次数（含当前进行中这次）`；
+**关键职责边界**：`BehaviorState` 是纯当前状态（`state=f(Reality,Time)`，如 `dwell_seconds`）；`visits_in_window` 是**跨访问生命周期统计**，属于 History / Pattern 语义。二者时间尺度不同，若把 `visits_in_window` 塞进 `BehaviorState`，会让状态对象背负两个时间尺度，未来与 Memory ADR 冲突（ADR-0021 §3.2）。因此拆开——`BehaviorBuilder` 回归纯函数，账本独立成 `RecentBehaviorStore`：
+
+```
+VisitorTrack ──┬──▶ BehaviorBuilder ─────▶ BehaviorState（纯实时快照）──────┐
+               │                                                          ├─▶ RealtimeContext ─▶ RealTimeRiskEvaluator
+               └──▶ RecentBehaviorStore ─▶ recent_behavior（跨访问统计）────┘
+```
+
+- `RecentBehaviorStore`（新文件）维护 `Dict[track_key, List[enter_time]]`（仅进入时间，滑窗清理过期项），产出 `recent_behavior = {"visits_in_window": N}`；
+- `BehaviorBuilder` 是**纯函数** `build(tracks, now) -> List[BehaviorState]`，无任何内部账本（职责纯化）；
+- 评估器输入 `RealtimeContext(current_state=BehaviorState, recent_behavior={...})`，State 与 History 边界清晰；
 - v1 的 `track_key` = `visitor_instance_id`（会话级，ADR-0023 边界内），**不做跨会话 ReID**；
-- 该账本是 volatile working state，进程重启即失（可接受：与 tracker 同生命周期）。
+- 该账本是 volatile working state，进程重启即失（丢失语义见 §4.3 State Loss Policy）。
 
 ---
 
@@ -179,7 +195,7 @@ track_id 首次出现在 states
         ↓
    创建 _TrackRiskState(phase=NONE)
         ↓
-   每帧 evaluate(state)
+   每帧 evaluate(ctx)   ← ctx = RealtimeContext(current_state, recent_behavior)
         ↓ trigger（阈值达成 且 phase==NONE）
    emit RiskSignal(transition=RAISED)；phase=ACTIVE_RISK
         ↓ recover（特征回落 或 state.phase=="LEFT"）
@@ -194,6 +210,19 @@ track_id 首次出现在 states
 2. 每个 RAISED **必须**有配对 CLEARED（离场兜底保证）——契约测试断言成对性；
 3. 状态机字典只增不删会泄漏 → 离场 + CLEARED 后必须删除条目；
 4. 进程重启后状态机清零：不产生虚假 CLEARED（丢失的 RAISED 由展示层超时兜底，Demo 可接受）。
+
+### 4.3 失败恢复与状态丢失策略（State Loss Policy）
+
+实时状态系统必然遇到进程崩溃 / 摄像头断连 / pipeline 重启。所有实时运行时态（`RealTimeRiskEvaluator._active`、`RecentBehaviorStore` 账本、`BehaviorState`）都是 **volatile working state**，必须明确其丢失语义，避免产生虚假信号或脏状态：
+
+| 事件 | 策略 | 理由 |
+| --- | --- | --- |
+| **进程崩溃 / 重启** | **丢弃全部 active 状态**（`_active` 清零、账本清零），**不补发 CLEARED** | 重启后无从判断旧 RAISED 是否仍成立；补发假 CLEARED 会污染下游。宁可丢失也不造假 |
+| **摄像头断连** | track 自然消失 → 状态机走正常"离场"路径最终清理；断连期间不 evaluate | 复用既有离场兜底，不引入特例分支 |
+| **Dashboard 侧悬挂卡片** | 展示层对 RAISED 卡片设**超时自动熄灭（TTL）**，不依赖必达的 CLEARED | 与 volatile 语义一致：状态可丢，UI 不能永久卡红（同 P0-11 "已确认状态混乱"病因） |
+| **Long-term Memory** | **不受影响** | Memory 存的是摘要 / 事件投影（未来 Memory ADR），不存 volatile 实时态；重启不丢历史 |
+
+原则：**实时态可丢、历史记忆不可丢**。重启后系统从干净状态重新累积，不试图恢复"崩溃前正处于 ACTIVE_RISK"这类瞬时态——恢复瞬时态的成本与风险（假信号）远高于重新累积。
 
 ---
 
@@ -272,18 +301,20 @@ class FrameResult:
 
 ### 8.1 Unit Test（torch-free，进 CI 每 PR 合约子集）
 
-| 文件 | 覆盖 |
-| --- | --- |
-| `tests/analysis/test_behavior_state.py` | 进入→dwell 累计→离开 phase 翻转；`now_provider` 驱动（非墙钟）；`schema_version=1`；`visits_in_window` 账本滑窗（过期清理、含进行中） |
-| `tests/analysis/test_realtime_evaluator.py` | 状态机 `NONE→RAISED(emit)→ACTIVE_RISK→CLEARED(emit)→NONE`；ACTIVE_RISK 内不重复 RAISED；离场兜底 CLEARED；离场后条目删除（无泄漏）；阈值来自 `ThresholdConfig` 非硬编码 |
-| `tests/analysis/test_signal_adapter.py` | RAISED→`PerceptionEvent` 标签映射（dwell 超阈→`abnormal_dwell`）；CLEARED 不产出；产物过冻结 schema 校验；黑名单字段（fraud/suspect）拒绝 |
+| 文件                                          | 覆盖                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `tests/analysis/test_behavior_state.py`     | 进入→dwell 累计→离开 phase 翻转；`now_provider` 驱动（非墙钟）；`schema_version=1`；**纯态断言：`BehaviorState` 无 `visits_in_window` 字段**                       |
+| `tests/analysis/test_recent_behavior_store.py` | `visits_in_window` 账本滑窗（过期清理、含当前进行中这次）；`track_key=visitor_instance_id`；重启即空（volatile）                                              |
+| `tests/analysis/test_realtime_evaluator.py` | 消费 `RealtimeContext`；状态机 `NONE→RAISED(emit)→ACTIVE_RISK→CLEARED(emit)→NONE`；ACTIVE_RISK 内不重复 RAISED；离场兜底 CLEARED；离场后条目删除（无泄漏）；**重启丢弃 active 不补发 CLEARED（§4.3）**；阈值来自 `ThresholdConfig` 非硬编码 |
+| `tests/analysis/test_signal_adapter.py`     | RAISED→`PerceptionEvent` 标签映射（dwell 超阈→`abnormal_dwell`）；CLEARED 不产出；产物过冻结 schema 校验；黑名单字段（fraud/suspect）拒绝                          |
 
 ### 8.2 Contract Test
 
 `tests/test_risksignal_contract.py`：
 
-- 字段闭合：`signal_id / track_id / visitor_instance_id / category / source / transition / features / created_at`；
-- 枚举闭合：`SignalCategory` 5 值 × `SourceModality` 3 值 × `SignalTransition` 2 值；与 ADR-0022 `EvidenceModality` **无交叉 import**；
+- 字段闭合：`signal_id / subject_type / subject_id / category / source / transition / features / created_at`（+ 视觉冗余可选字段 `track_id` / `visitor_instance_id`）；
+- 主体泛化：`subject_type` 枚举闭合（`VISITOR/PERSON/DEVICE/ENVIRONMENT`）；Phase 1 断言恒为 `VISITOR` 且 `subject_id==visitor_instance_id`；
+- 枚举闭合：`SignalCategory` 5 值 × `SourceModality` 3 值 × `SignalTransition` 2 值 × `SubjectType` 4 值；与 ADR-0022 `EvidenceModality` **无交叉 import**；
 - **RAISED 必须能 CLEARED**（成对性：注入触发→回落序列，断言配对 signal_id）；
 - **CLEARED 不产生 Warning**（adapter 层拦截断言）；
 - **重复 RAISED 不刷屏**（同 track 持续超阈 N 帧只 emit 1 次 RAISED）。
@@ -300,16 +331,19 @@ class FrameResult:
 
 ---
 
-## 9. Migration Plan（分 4 个 PR，禁止一次重构完成）
+## 9. Migration Plan（分阶段独立 PR，禁止一次重构完成）
+
+演进顺序遵循 **State → Signal → Observe → Decision → Memory → Agent**。实时系统最大的风险**不是代码错误，而是误报**——因此在"产信号"和"接报警"之间插入 **Shadow Mode（影子模式：产信号但不报警，只观察）**，用真实数据验证误报率后再接决策。
 
 | Phase | 内容 | PR 范围 | 验收 |
 | --- | --- | --- | --- |
-| **Phase 0** | 只加类型：`behavior_state.py` / `risk_signal.py` + 契约测试。**不接入 pipeline** | `feat/realtime-types` | 289+新契约测试全绿；pipeline diff 为空 |
-| **Phase 1** | 接实时状态：`BehaviorBuilder` 挂入 `process_frame`，`FrameResult.behavior_states` 可观察。**不产信号** | `feat/realtime-behavior-state` | flag 关闭输出与基线逐字段一致；开启仅多 behavior_states |
-| **Phase 2** | 接信号链：Evaluator + Adapter + 决策汇入。**默认关闭**（`enabled=false` 合入 main） | `feat/realtime-signal-chain` | 全部 §8 测试绿；关闭态 golden 回归过 |
-| **Phase 3** | 灰度开启：Demo 场景 YAML 里 `realtime_risk.enabled=true`（经 `ScenarioConfig` 覆盖），E2E 验证后再改 default | `chore/enable-realtime-demo` | E2E 断言事中 RAISED；5 分钟剧本（P0-11.5b）可复现 |
+| **Phase 0**<br>类型 + Contract | 只加类型：`behavior_state.py`（含 `RealtimeContext`）/ `recent_behavior_store.py` / `risk_signal.py` + 契约测试。**不接入 pipeline** | `feat/realtime-types` | 289+新契约测试全绿；pipeline diff 为空 |
+| **Phase 1**<br>State + Observation | 接实时状态：`BehaviorBuilder` + `RecentBehaviorStore` 挂入 `process_frame`，`FrameResult.behavior_states` 可观察，**并输出 Observation（为什么触发 / 当前状态是什么）供调试**。**不产信号** | `feat/realtime-behavior-state` | flag 关闭输出与基线逐字段一致；开启仅多 behavior_states；Observation 可读 |
+| **Phase 2**<br>Signal · **Shadow Mode** | 接信号链：Evaluator + Adapter 产出 `RiskSignal`，**只经 `FrameResult` / Dashboard 展示，不接 DecisionPolicy、不产 Warning**。观察真实误报率 | `feat/realtime-signal-shadow` | §8 测试绿；`decision_engine` diff 为空；影子信号仅进 FrameResult |
+| **Phase 3**<br>Decision | 接 Warning：RAISED 信号经 adapter 汇入 `DecisionPolicy` 产 `WarningEvent`。**默认关闭**（`enabled=false` 合入 main），Demo 场景灰度开启 | `feat/realtime-signal-decision` | 关闭态 golden 回归过；E2E 断言事中 RAISED→Warning；5 分钟剧本（P0-11.5b）可复现 |
+| **Phase 4**<br>Memory（未来） | `BehaviorState` / `RiskSignal` 接入 Memory Pipeline —— **由独立 Memory ADR（ADR-0024）决策**，不在本方案范围 | （未来 ADR） | —— |
 
-每个 Phase 独立 PR、独立可回滚；任何 Phase 出问题，前一 Phase 的 main 状态即回退点。
+每个 Phase 独立 PR、独立可回滚；任何 Phase 出问题，前一 Phase 的 main 状态即回退点。**Shadow Mode 是关键闸门：没有真实误报数据，不接决策。**
 
 ---
 
@@ -326,11 +360,11 @@ realtime_risk:
 
 ---
 
-## 11. 未来 Agent 接入边界（只写接口，不写 Memory）
+## 11. 未来 Cognitive Layer 接入边界（只写接口，不写 Memory）
 
 ```
-BehaviorState ──→ Observation Builder ──→ Agent Context
-RiskSignal    ──→ Agent Observation Input
+BehaviorState ──→ Observation Builder ──→ Cognitive Layer（Agent Context）
+RiskSignal    ──→ Cognitive Observation Input
 ```
 
 - 本方案交付的 `BehaviorState.to_dict()` / `RiskSignal.to_dict()` 即未来 Observation Builder 的输入契约——**接口在此，消费另议**；
@@ -341,12 +375,16 @@ RiskSignal    ──→ Agent Observation Input
 
 ## 附：与 ADR-0021 的对照速查
 
-| ADR-0021 决策 | 本文落地位置 |
-| --- | --- |
-| Reality → State → Signal → Decision 四层 | §3.1 每帧顺序 |
-| BehaviorState = working state（volatile） | §2.2 / §7（不持久化） |
-| RiskSignal = 瞬时跃迁（transition） | §4 状态机 emit 语义 |
-| 单一决策中心（adapter 汇入 DecisionPolicy） | §3.1 步骤 4 / §6 检查清单 |
-| Signal Generation Layer 显式命名 | §6 边界图 |
-| 不改 RuleEngine（Alternative） | §6 检查清单第 1 条 |
-| MINOR 增量 / 冻结不破 | §7 FrameResult 可选字段 / §9 分 PR |
+| ADR-0021 决策                             | 本文落地位置                        |
+| --------------------------------------- | ----------------------------- |
+| Reality → State → Signal → Decision 四层  | §3.1 每帧顺序                     |
+| BehaviorState = working state（volatile） | §2.2 / §7（不持久化）               |
+| RiskSignal = 瞬时跃迁（transition）           | §4 状态机 emit 语义                |
+| 单一决策中心（adapter 汇入 DecisionPolicy）       | §3.1 步骤 4 / §6 检查清单           |
+| Signal Generation Layer 显式命名            | §6 边界图                        |
+| 不改 RuleEngine（Alternative）              | §6 检查清单第 1 条                  |
+| MINOR 增量 / 冻结不破                         | §7 FrameResult 可选字段 / §9 分 PR |
+| State / History 分离（BehaviorState 纯态 + RecentBehaviorStore） | §2.2 职责表 / §3.3 数据流 |
+| RiskSignal 主体泛化（subject_type / subject_id） | §2.2 / §8.2 契约字段 |
+| State Loss Policy（volatile 丢失语义）         | §4.3 |
+| Shadow Mode（先观察误报再接决策）              | §9 Phase 2 |
