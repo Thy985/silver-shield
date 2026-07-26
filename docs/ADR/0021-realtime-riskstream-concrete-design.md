@@ -6,6 +6,8 @@
 - **决策者**：Owner
 - **相关**：ADR-0018（实时/历史分流方向）、ADR-0010（WarningEvent 决策架构）、ADR-0014（三级冻结治理）、ADR-0005（Schema 稳定性）、ADR-0006（track_id 会话级）、ADR-0022（证据链，Phase 2）、ADR-0023（身份，Phase 4）
 
+> **文档职责边界（本 ADR ↔ 工程落地方案）**：本 ADR 只回答 **"为什么这样分层、契约边界在哪、字段的语义与不变式"**——即**决策与契约**。**"改哪个文件、每帧执行顺序、状态存哪、怎么测、怎么灰度、装配期校验"** 等**实现细节**归 `docs/DESIGN-realtime-riskstream-engineering-plan.md`（工程落地方案）。二者约定：类型/枚举/字段语义/不变式以**本 ADR 为准**（工程方案引用不复制定义）；落地步骤/文件清单/测试矩阵/Migration 以**工程方案为准**（本 ADR 不写实现流程）。冲突时按此分工归位，避免同一决策两处漂移。
+
 ---
 
 ## 1. 背景（基于已核实的现状事实）
@@ -117,19 +119,32 @@ ActionCommand[]       ← executor (runtime/pipeline.py:325-349)
 每帧从 `VisitorTrack` 计算进行中行为态：
 
 ```python
+class BehaviorPhase(str, Enum):   # 访问生命周期阶段（枚举化，杜绝裸字符串拼写漂移）
+    ONGOING     = "ongoing"       # 在场进行中（Phase 1 主态）
+    LEFT        = "left"          # 已离场（触发 CLEARED 兜底，见 §3.3.1）
+    # —— 预留（Phase 1 不产出，接口先留）——
+    APPROACHING = "approaching"   # 正在接近门口（未来 proximity_score 上升趋势）
+    DEPARTING   = "departing"     # 正在远离（未来轨迹判定，早于 LEFT）
+
 @dataclass
 class BehaviorState:             # 纯当前状态快照：state = f(Reality, Time)，只含当前生命周期量，无跨访问统计
     track_id: int
     visitor_instance_id: str     # 复用 event_builder 分配会话级 UUID（命名见 ADR-0023）
-    phase: str                   # "ONGOING" | "LEFT"
-    first_seen: float
-    last_seen: float
-    dwell_seconds: float         # (now - enter_time)，当前生命周期内累计量
+    phase: BehaviorPhase         # 生命周期阶段枚举（Phase 1 仅取 ONGOING / LEFT）
+    first_seen: datetime         # 时间戳统一用 datetime(UTC)，对齐真实 NowProvider→datetime 与 ADR-0007
+    last_seen: datetime          # 同上；勿用 float unix 戳（与 now_provider 返回类型冲突）
+    dwell_seconds: float         # 时长量用 float 秒 = (now - enter_time).total_seconds()，当前生命周期内累计
     is_odd_hour: bool            # f(now)，当前时刻属性
-    proximity_score: float = 0.0
+    proximity_score: float = 0.0 # [0,1] 归一化接近度；规约见下方注释
     schema_version: int = 1      # 内部态演进标记：未来加 trajectory_pattern/distance_to_door/body_orientation 时递增，便于 AI 系统长期演进与序列化兼容
     def to_dict(self) -> Dict[str, Any]: ...   # 仅内部/演示使用，不入冻结契约
 ```
+
+> **时间表示统一约定（关键，解决 datetime/float 混用）**：全系统区分**时间戳**与**时长**两类量，各用一种类型，不混用——
+> - **时间戳（某一时刻）一律 `datetime`（UTC）**：`BehaviorState.first_seen/last_seen`、`RiskSignal.created_at`、评估器 `_TrackRiskState.raised_at` 全部 `datetime`。这与真实代码 `NowProvider.__call__(self) -> datetime`（`runtime/pipeline.py:65`）、`VisitorEvent` 的 UTC datetime、ADR-0007「时间强制 UTC」完全一致。**禁止用 float unix 戳表达时刻**（会与注入的 `now_provider` 返回类型冲突，强制到处转换）。
+> - **时长（一段间隔）用 `float` 秒**：`dwell_seconds = (now - enter_time).total_seconds()`。时长是标量，天然 float，不与时间戳混淆。
+>
+> 因此不存在"raised_at 与 float 戳不一致"的问题：`raised_at` 是时刻(datetime)，`dwell_seconds` 是时长(float)，二者本就不同维度。评估器与 `BehaviorBuilder` 消费同一 `now_provider()`（→datetime），任何减法产出 `timedelta` 再 `.total_seconds()` 落为 float。
 
 > **纯实时边界（关键：`state = f(Reality, Time)`）**：`BehaviorState` 只承载**当前访问生命周期内**、可由「现实 + 时间」直接算出的量（`dwell_seconds` / `phase` / `proximity_score` / `is_odd_hour`）。**跨访问的统计量 `visits_in_window` 不属于当前状态，而是历史特征（History Feature）**——它描述"这个访客近期来过几次"，语义上属于 Memory / History / Pattern。若把它塞进 `BehaviorState`，会让状态对象同时背负两个时间尺度（当前生命周期 vs 跨生命周期），未来与 Memory ADR 冲突。因此 `visits_in_window` **移出** `BehaviorState`，由独立的 `RecentBehaviorStore` 维护，评估器的真正输入是二者的组合体 `RealtimeContext`：
 >
@@ -153,6 +168,12 @@ class BehaviorState:             # 纯当前状态快照：state = f(Reality, Ti
 >       └──▶ Long-term Memory（仅摘要 / 转移 / 关键快照）
 > ```
 > `schema_version` 虽非契约字段（不受 ADR-0014 约束），但保留它使未来扩展行为特征（轨迹 / 门距 / 朝向）时演示层与序列化可平滑兼容。
+
+> **`proximity_score` 计算规约（避免"留了字段却语义不明"）**：
+> - **值域**：`float ∈ [0, 1]`，语义为"访客与门口/受保护区域的接近程度"——`0` = 远/未知，`1` = 紧贴门口。构造时 clamp 到 `[0,1]`。
+> - **Phase 1 恒为 `0.0`（预留位，不参与判定）**：当前检测链只有 2D 检测框，无深度/标定，无法可靠估距。Phase 1 **不**用 `proximity_score` 触发任何信号（阈值判定只用 `dwell_seconds` / `visits_in_window`），字段仅占位，保证未来加入时 `schema_version` 与序列化平滑演进。
+> - **未来计算方向（非本 ADR 实现）**：由 `distance_to_door` 归一化而来，如 `proximity_score = clamp(1 - distance_to_door / d_max, 0, 1)`，`distance_to_door` 可来自门口 ROI 与检测框底边中心的像素距离（需场景标定 `d_max`）或深度相机。归一化到 `[0,1]` 是为了让阈值跨场景可迁移、供未来 `APPROACHING`/`DEPARTING` 阶段判定（`BehaviorPhase`）使用。
+> - **不做的事**：不承诺物理米制精度、不做多摄像头融合、不引入标定流程——全部留待引入实测需求时再定。
 
 ### 3.3 `RiskSignal`（NEW，`analysis/risk_signal.py`，**抽象信号层，MINOR 增量消息**）— 关键：不在 `RiskSignal` 上枚举具体行为
 
@@ -195,7 +216,9 @@ class RiskSignal:
     category: SignalCategory          # 异常类别（与来源正交，不展开具体行为）
     source: SourceModality            # 产出该信号的物理来源
     transition: SignalTransition      # 本次发射是升起还是解除（非长期状态；持续态在评估器状态机）
-    features: Dict[str, Any]          # 原始异常证据（如 {"dwell_seconds":350}），供 adapter 解释
+    features: Dict[str, Any]          # 原始异常证据（如 {"dwell_seconds":350}），供 adapter 解释；只放"异常证据"，不放信号关系元数据
+    # —— 信号关系元数据：配对提升为顶级可选字段（不塞进 features，避免"证据 vs 关系"混装）——
+    paired_signal_id: Optional[str] = None   # CLEARED 回填其对应 RAISED 的 signal_id；RAISED 时为 None。下游据此把一升一解配成一对
     # —— 视觉便利冗余字段：仅当 subject_type==VISITOR 时有值，便于 Demo/调试，不作长期主键 ——
     track_id: Optional[int] = None
     visitor_instance_id: Optional[str] = None
@@ -234,10 +257,10 @@ class RiskSignal:
 ```
 
 - **RAISED 跃迁**：`evaluate(ctx)`（`ctx` 为 `RealtimeContext`）检测到阈值达成且该 track 当前为 `NONE` → 转入 `ACTIVE_RISK` 并发射 `RiskSignal(transition=RAISED)`。已在 `ACTIVE_RISK` 则不重复发（去抖交给 `CooldownGate`）。
-- **CLEARED 跃迁（明确职责）**：**由 `RealTimeRiskEvaluator` 负责，不是离场事件**。触发条件二选一：① 异常特征回落到阈值以下（如 `dwell_seconds` 因人离开门口区域而停止增长 / 徘徊结束）；② track 从 `ACTIVE→LEFT`（`BehaviorState.phase="LEFT"`）。满足任一且该 track 处于 `ACTIVE_RISK` → 回到 `NONE` 并发射 `RiskSignal(transition=CLEARED)`。
+- **CLEARED 跃迁（明确职责）**：**由 `RealTimeRiskEvaluator` 负责，不是离场事件**。触发条件二选一：① 异常特征回落到阈值以下（如 `dwell_seconds` 因人离开门口区域而停止增长 / 徘徊结束）；② track 从 `ACTIVE→LEFT`（`BehaviorState.phase == BehaviorPhase.LEFT`）。满足任一且该 track 处于 `ACTIVE_RISK` → 回到 `NONE` 并发射 `RiskSignal(transition=CLEARED)`。
 - **展示语义**：演示层 / `DemoAggregateState` 依据 `RAISED→CLEARED` 两次跃迁驱动风险卡亮/灭，绝不把单个 `RiskSignal` 当常驻实体缓存，从根上杜绝"卡片不熄灭"。
 
-> 持续态 `ACTIVE_RISK` 是内部运行时态（随 `RealTimeRiskEvaluator` 存活），不入冻结契约；`RiskSignal.transition` 的两个跃迁值属于契约字段（§3.3），需 contract test 覆盖 `RAISED→CLEARED` 成对完整性（有升必有解）。
+> 持续态 `ACTIVE_RISK` 是内部运行时态（随 `RealTimeRiskEvaluator` 存活，其状态机字典以 `visitor_instance_id` 为键防 track_id 重用串号，见工程方案 §4.1），不入冻结契约；`RiskSignal.transition` 的两个跃迁值属于契约字段（§3.3），需 contract test 覆盖 `RAISED→CLEARED` 成对完整性（有升必有解）。**配对方式**：`CLEARED` 信号通过顶级字段 `paired_signal_id` 回填其对应 `RAISED` 的 `signal_id`（**不塞进 `features`**——`features` 只装异常证据，信号间关系属元数据，见 §3.3），下游据此把"一升一解"配成一对。
 
 ### 3.4 实时评估 + 适配（关键：单一决策中心）
 
@@ -245,7 +268,7 @@ class RiskSignal:
 2. `RealTimeRiskEvaluator.evaluate(ctx) -> Optional[RiskSignal]`：输入是 `RealtimeContext`（= 纯实时 `BehaviorState` + 来自 `RecentBehaviorStore` 的 `recent_behavior`，见 §3.2）。作为 §3.3.1 的状态机——当事中阈值触发（`ctx.current_state.dwell_seconds` 超 `long_duration_seconds`；`ctx.recent_behavior["visits_in_window"]` 达 `repeat_visit_count`）且该 track 为 `NONE`，转入 `ACTIVE_RISK` 并产出 `RiskSignal(subject_type=VISITOR, subject_id=visitor_instance_id, category=BEHAVIORAL, source=VISION, transition=RAISED)`；回落 / 离场产出对应 `transition=CLEARED`。
 3. `risk_signal_to_perception(sig) -> PerceptionEvent`：**adapter 复用冻结的 `PerceptionEvent` + 既有 5 类 `EventType` 标签**，标签选择**复用 RuleEngine 共享的阈值/标签映射**（同一份定义，实时与历史在标签层也汇合），**零新增枚举值**。例如 `features.dwell_seconds > long_duration_seconds → abnormal_dwell`。`transition=CLEARED` 信号不适配为 `PerceptionEvent`（不触发新 Warning），仅用于驱动展示态退出。
 4. 适配后的 `PerceptionEvent` 经**现有 `DecisionPolicy.decide()`** 产出 `WarningEvent` → `ActionCommand[]`。**实时与历史在决策层汇合于同一冻结对象**，无第二套决策栈。
-5. `FrameResult`（`runtime/pipeline.py:108-117`）追加 `risk_signals: List[RiskSignal]` 与 `behavior_state: Optional[BehaviorState]`；演示 `DemoGateway.run_loop` 广播 `RiskSignal` 与随之产生的 `WarningEvent`（早于离场）。
+5. `FrameResult`（`runtime/pipeline.py:108-117`）追加 `risk_signals: List[RiskSignal]` 与 `behavior_states: List[BehaviorState]`（**复数、List**——一帧内可同时有多个在场 track，每个 track 一个 `BehaviorState`；空列表 = 无在场 track 或实时路径关闭，与工程方案 §7 `FrameResult` 定义一致）；演示 `DemoGateway.run_loop` 广播 `RiskSignal` 与随之产生的 `WarningEvent`（早于离场）。
 
 > **双源去重**：`DecisionPolicy` 消费 `PerceptionEvent` 不区分来源（实时适配 vs 历史 RiskFeature），由 `CooldownGate`（`rule_engine.py`）天然防抖，避免实时/历史重复触发。
 

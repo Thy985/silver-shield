@@ -147,8 +147,9 @@ src/home_perception/analysis/
 ### 3.2 时序源约束（Demo 可复现的命门）
 
 - `BehaviorBuilder` / `RealTimeRiskEvaluator` **禁止**调用 `datetime.now()`，必须消费传入的 `now`（来自 `now_provider`，即 DemoClock 或墙钟）。
+- **时间类型（对齐真实代码）**：`now_provider()` 返回 **`datetime`**（真实签名 `NowProvider.__call__(self) -> datetime`，`runtime/pipeline.py:65`），不是 float。因此**时间戳一律 `datetime`(UTC)**（`BehaviorState.first_seen/last_seen`、`RiskSignal.created_at`、`_TrackRiskState.raised_at`），**时长一律 `float` 秒**（`dwell_seconds`）。禁止把时刻表达成 float unix 戳（与注入时钟返回类型冲突，见 ADR-0021 §3.2 时间表示统一约定）。
 - 原因：Demo 帧间真实间隔是毫秒级，模拟时间由 `DemoClock.tick()` 推进；不接同源时钟则 `dwell_seconds` 永远 ≈0，实时路径在 Demo 里永不触发（与 E2E 验证发现的 `fps_target` 坑同族）。
-- `dwell_seconds = (now - track.enter_time).total_seconds()`，来源与 tracker 判离场的时基一致。
+- `dwell_seconds = (now - track.enter_time).total_seconds()`，`now` 与 `enter_time` 均为 datetime，相减得 `timedelta` 再 `.total_seconds()` 落为 float；来源与 tracker 判离场的时基一致。
 
 ### 3.3 实时 `visits_in_window` 的账本问题（State / History 职责分离）
 
@@ -168,6 +169,12 @@ VisitorTrack ──┬──▶ BehaviorBuilder ─────▶ BehaviorState
 - v1 的 `track_key` = `visitor_instance_id`（会话级，ADR-0023 边界内），**不做跨会话 ReID**；
 - 该账本是 volatile working state，进程重启即失（丢失语义见 §4.3 State Loss Policy）。
 
+**返回值只读约束（防引用传递误改内部账本）**：`RecentBehaviorStore.update(...)` 产出的 `recent_behavior` **必须是与内部账本解耦的只读快照**，绝不能把内部 `Dict[track_key, List[enter_time]]` 的**引用**直接透传出去——否则评估器/适配器/演示层任一处误改 `recent_behavior`，就会污染下游一帧的滑窗账本，制造难查的串状态 bug（同族于状态串号）。具体做法：
+
+- 每帧产出的 `recent_behavior` 是**新构造的标量字典**（如 `{"visits_in_window": N}`，值为 `int`/`float` 等不可变标量），本身即天然只读，不含对内部 list 的引用；
+- 若未来 `recent_behavior` 需携带集合类值（如最近进入时间序列），必须返回**深拷贝或不可变视图**（`tuple` / `types.MappingProxyType` / `copy.deepcopy`），不得暴露内部可变 `list`；
+- `RealtimeContext.recent_behavior` 及 `BehaviorState` 都应视为**只读输入**，评估器只读不写；契约/单测断言"改动 `recent_behavior` 不影响 store 下一帧产出"（见 §8.1）。
+
 ---
 
 ## 4. 状态机实现规范
@@ -175,33 +182,40 @@ VisitorTrack ──┬──▶ BehaviorBuilder ─────▶ BehaviorState
 ### 4.1 生命周期存储位置
 
 ```python
+class RiskPhase(str, Enum):     # 状态机持续态（枚举化，勿与 BehaviorPhase 混淆：这是"风险机"态，非"访问生命周期"态）
+    NONE        = "none"        # 未处于风险
+    ACTIVE_RISK = "active_risk" # 已 RAISED 未 CLEARED
+
 class RealTimeRiskEvaluator:
-    """每 track 一台状态机；有状态组件，随 pipeline 存活。"""
+    """每主体一台状态机；有状态组件，随 pipeline 存活。"""
 
     def __init__(self, thresholds: ThresholdConfig, now_provider=None):
-        self._active: Dict[int, _TrackRiskState] = {}   # track_id → 状态机记录
+        # key 用 visitor_instance_id（会话级 UUID），不用 track_id —— 见下方"key 选型"
+        self._active: Dict[str, _TrackRiskState] = {}   # visitor_instance_id → 状态机记录
 
 @dataclass
 class _TrackRiskState:          # 私有，不出模块
-    phase: str                  # "NONE" | "ACTIVE_RISK"
-    raised_signal_id: str       # 配对：CLEARED 时回填 features["paired_signal_id"]
-    raised_at: datetime
+    phase: RiskPhase            # RiskPhase.NONE | RiskPhase.ACTIVE_RISK（枚举，非裸字符串）
+    raised_signal_id: str       # 本次 RAISED 的 signal_id；CLEARED 时回填到 RiskSignal.paired_signal_id（顶级字段，非 features）
+    raised_at: datetime         # 时刻用 datetime(UTC)，对齐 now_provider→datetime（见 §3.2 时间约定）
 ```
+
+**状态机 key 选型（防 track_id 重用串号）**：`_active` 的键**必须用 `visitor_instance_id`（会话级 UUID），绝不用 `track_id`**。原因：`track_id` 由 ByteTrack 分配，**会被回收重用**——A 离场后其 `track_id` 可能被后来的 B 复用；若以 `track_id` 为键，B 会"继承"A 残留的 `ACTIVE_RISK` 状态，导致状态串号（B 一进场就误判为已在风险中、或吃到 A 的 `raised_signal_id`）。`visitor_instance_id` 是 `event_builder` 为每次进入分配的一次性 UUID（ADR-0023 边界内），天然不重用，从根上杜绝串号。`RecentBehaviorStore` 的 `track_key` 同理用 `visitor_instance_id`（§3.3）。
 
 ### 4.2 生命周期（含创建与删除）
 
 ```
-track_id 首次出现在 states
+visitor_instance_id 首次出现在 states（key=visitor_instance_id，非 track_id）
         ↓
-   创建 _TrackRiskState(phase=NONE)
+   创建 _TrackRiskState(phase=RiskPhase.NONE)
         ↓
    每帧 evaluate(ctx)   ← ctx = RealtimeContext(current_state, recent_behavior)
-        ↓ trigger（阈值达成 且 phase==NONE）
-   emit RiskSignal(transition=RAISED)；phase=ACTIVE_RISK
-        ↓ recover（特征回落 或 state.phase=="LEFT"）
-   emit RiskSignal(transition=CLEARED)；phase=NONE
-        ↓ track 离场且已 CLEARED
-   从 self._active 中 **delete**（防泄漏：长时运行不积累已离场 track）
+        ↓ trigger（阈值达成 且 phase==RiskPhase.NONE）
+   emit RiskSignal(transition=RAISED)；phase=RiskPhase.ACTIVE_RISK
+        ↓ recover（特征回落 或 current_state.phase==BehaviorPhase.LEFT）
+   emit RiskSignal(transition=CLEARED, paired_signal_id=<该 RAISED 的 signal_id>)；phase=RiskPhase.NONE
+        ↓ 主体离场且已 CLEARED
+   从 self._active 中 **delete**（防泄漏：长时运行不积累已离场主体）
 ```
 
 **硬性规则**：
@@ -209,7 +223,8 @@ track_id 首次出现在 states
 1. `phase==ACTIVE_RISK` 时不重复 emit RAISED（去抖第一层；跨 Warning 的节流仍由既有 `CooldownGate` 负责，两层职责不同）；
 2. 每个 RAISED **必须**有配对 CLEARED（离场兜底保证）——契约测试断言成对性；
 3. 状态机字典只增不删会泄漏 → 离场 + CLEARED 后必须删除条目；
-4. 进程重启后状态机清零：不产生虚假 CLEARED（丢失的 RAISED 由展示层超时兜底，Demo 可接受）。
+4. 进程重启后状态机清零：不产生虚假 CLEARED（丢失的 RAISED 由展示层超时兜底，Demo 可接受）；
+5. **跳帧对称**（`eval_interval_frames>1`）：RAISED 与 CLEARED **只在评估帧**发生，二者延迟对称，禁止 CLEARED 逐帧、RAISED 跳帧的不对称实现（详见 §5.3）；评估帧必须消费 `tracker.active()` 全量在场主体，非增量。
 
 ### 4.3 失败恢复与状态丢失策略（State Loss Policy）
 
@@ -245,8 +260,20 @@ rule:
 # 新增段：只放开关与实时特有项，不复制阈值
 realtime_risk:
   enabled: false                # Feature Flag（§10），默认关闭
-  eval_interval_frames: 1       # 每 N 帧评估一次（性能旋钮，边缘 CPU 可调大）
+  eval_interval_frames: 1       # 每 N 帧评估一次（性能旋钮，边缘 CPU 可调大）；语义与副作用见 §5.3
 ```
+
+### 5.3 `eval_interval_frames` 跳帧语义（关键：延迟 RAISED **和** CLEARED，且必须消费全部在场主体）
+
+`eval_interval_frames=N` 表示每 N 帧才跑一次 `realtime_evaluator.evaluate(...)`（性能旋钮）。它不是"只看第 N 帧"，其精确语义与副作用必须钉死，否则会出现"人早走了风险卡还红着"：
+
+- **对称延迟**：跳帧同时推迟 **RAISED 与 CLEARED** 的判定，最坏延迟 `≈ N × 帧间隔`。**绝不能**只在评估帧算 RAISED 却让 CLEARED 逐帧生效（那会不对称）——两者都只在评估帧发生。
+- **评估帧看全量在场主体**：评估帧调用 `behavior_builder.build(tracker.active(), now)` 取**当前全部在场 track** 的快照（非增量），逐一过状态机；非评估帧完全跳过实时块（零开销）。因此"跳过的帧里进/出的人"会在下一个评估帧被一次性结算。
+- **离场兜底不受跳帧遗漏**：某主体在两个评估帧之间进场又离场（存活 < N 帧、评估帧从未见过它）→ 它从未 RAISED，无需 CLEARED，天然一致。若它在评估帧被 RAISED、随后离场 → 下一个评估帧 `tracker.active()` 已不含它 → 评估器检测到"曾 active 但本帧消失"→ 补发 CLEARED（离场兜底，见 §4.2 delete 前先 CLEARED）。
+- **约束**：`eval_interval_frames` 越大，事中干预越迟钝、风险卡熄灭越滞后；`dwell` 阈值极小的 Demo（`long_duration_seconds=1.5`）建议保持 `=1`，仅在边缘 CPU 吃紧的生产场景调大，并接受对称延迟。
+- **CLEARED 延迟的 UI 兜底**：即便跳帧推迟了 CLEARED，展示层的 RAISED 卡片 TTL（§4.3）仍是最终防线——UI 不会因跳帧而永久卡红。
+
+> **配置警告（装配期校验）**：`from_settings` 装配时若 `eval_interval_frames > 1` 应 **`logger.warning`** 提示"实时风险评估已降频，RAISED/CLEARED 最坏延迟约 N×帧间隔"；`eval_interval_frames < 1` 视为非法配置，钳为 `1` 并告警。避免运维静默调大后困惑于"报警变慢/熄灯变慢"。
 
 ### 5.2 装配路径
 
@@ -304,15 +331,17 @@ class FrameResult:
 | 文件                                          | 覆盖                                                                                                                                   |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `tests/analysis/test_behavior_state.py`     | 进入→dwell 累计→离开 phase 翻转；`now_provider` 驱动（非墙钟）；`schema_version=1`；**纯态断言：`BehaviorState` 无 `visits_in_window` 字段**                       |
-| `tests/analysis/test_recent_behavior_store.py` | `visits_in_window` 账本滑窗（过期清理、含当前进行中这次）；`track_key=visitor_instance_id`；重启即空（volatile）                                              |
-| `tests/analysis/test_realtime_evaluator.py` | 消费 `RealtimeContext`；状态机 `NONE→RAISED(emit)→ACTIVE_RISK→CLEARED(emit)→NONE`；ACTIVE_RISK 内不重复 RAISED；离场兜底 CLEARED；离场后条目删除（无泄漏）；**重启丢弃 active 不补发 CLEARED（§4.3）**；阈值来自 `ThresholdConfig` 非硬编码 |
+| `tests/analysis/test_recent_behavior_store.py` | `visits_in_window` 账本滑窗（过期清理、含当前进行中这次）；`track_key=visitor_instance_id`；重启即空（volatile）；**只读返回：改动产出的 `recent_behavior` 不影响 store 下一帧产出（引用隔离）**            |
+| `tests/analysis/test_realtime_evaluator.py` | 消费 `RealtimeContext`；状态机 `NONE→RAISED(emit)→ACTIVE_RISK→CLEARED(emit)→NONE`；ACTIVE_RISK 内不重复 RAISED；离场兜底 CLEARED；离场后条目删除（无泄漏）；**重启丢弃 active 不补发 CLEARED（§4.3）**；阈值来自 `ThresholdConfig` 非硬编码；**状态机 key=`visitor_instance_id`：track_id 重用不串号（A 离场后 B 复用同 track_id 不继承 A 的 ACTIVE_RISK）**；**CLEARED.paired_signal_id == 对应 RAISED.signal_id** |
+| `tests/analysis/test_eval_interval_frames.py` | **跳帧参数化 `eval_interval_frames ∈ {1,2,5}`**：① 同一触发序列下，RAISED 与 CLEARED 均只在评估帧发生、延迟对称（不出现 CLEARED 逐帧而 RAISED 跳帧）；② 评估帧消费 `tracker.active()` 全量；③ 两评估帧间进又出的短命主体不产生孤儿 RAISED；④ `eval_interval_frames<1` 钳为 1 并告警；⑤ `>1` 装配期 `logger.warning`（caplog 断言） |
 | `tests/analysis/test_signal_adapter.py`     | RAISED→`PerceptionEvent` 标签映射（dwell 超阈→`abnormal_dwell`）；CLEARED 不产出；产物过冻结 schema 校验；黑名单字段（fraud/suspect）拒绝                          |
 
 ### 8.2 Contract Test
 
 `tests/test_risksignal_contract.py`：
 
-- 字段闭合：`signal_id / subject_type / subject_id / category / source / transition / features / created_at`（+ 视觉冗余可选字段 `track_id` / `visitor_instance_id`）；
+- 字段闭合：`signal_id / subject_type / subject_id / category / source / transition / features / created_at`（+ 顶级可选 `paired_signal_id`；+ 视觉冗余可选字段 `track_id` / `visitor_instance_id`）；
+- **配对字段定位**：`paired_signal_id` 是**顶级字段**而非 `features` 键；断言 `RAISED.paired_signal_id is None` 且 `CLEARED.paired_signal_id == 对应 RAISED.signal_id`；`created_at` 为 `datetime`（非 float 戳）；
 - 主体泛化：`subject_type` 枚举闭合（`VISITOR/PERSON/DEVICE/ENVIRONMENT`）；Phase 1 断言恒为 `VISITOR` 且 `subject_id==visitor_instance_id`；
 - 枚举闭合：`SignalCategory` 5 值 × `SourceModality` 3 值 × `SignalTransition` 2 值 × `SubjectType` 4 值；与 ADR-0022 `EvidenceModality` **无交叉 import**；
 - **RAISED 必须能 CLEARED**（成对性：注入触发→回落序列，断言配对 signal_id）；
@@ -322,12 +351,16 @@ class FrameResult:
 ### 8.3 Regression Test
 
 - **基线：既有 289 测试全部通过，一个不许改**（AGENTS.md §6.2.6）；
-- flag 关闭回归：`realtime_risk.enabled=false` 时，`process_frame` 输出与主线逐字段一致（golden 对比 CAVIAR 固定帧序列的 RunSummary）；
-- flag 开启回归：历史路径产出（VisitorEvent / 历史 Warning 计数）与关闭时完全一致——实时是**旁路**，不得改变历史行为。
+- **flag 关闭降级回归（合入前置门，硬性）**：`realtime_risk.enabled=false` 时，`process_frame` 输出与主线**逐字段一致**（golden 对比 CAVIAR 固定帧序列的 `RunSummary`）。**这是每个 Phase PR 的合入前置条件**——golden 不过 = 旁路泄漏进了主线，禁止合入。断言粒度：`n_detections / n_visitor_events / perception_events / warnings / commands` 全等基线，且 `behavior_states == [] and risk_signals == []`（关闭时两新字段必为空列表）；
+- flag 开启回归：历史路径产出（VisitorEvent / 历史 Warning 计数）与关闭时完全一致——实时是**旁路**，不得改变历史行为（同一 golden 帧序列，仅 `behavior_states`/`risk_signals` 可非空，历史五字段必须逐字段等于关闭态）。
 
 ### 8.4 E2E（系统 Py3.14 全栈，仅 main / 手动）
 
-扩展 `scripts/e2e_validate_demo.py`：CCTV 视频 + flag 开启 → 断言"人未离场即出现 RAISED 信号"（事中干预可验证）+ 离场后收到配对 CLEARED。
+扩展 `scripts/e2e_validate_demo.py`，**同一段 CCTV 视频跑两遍做 A/B 降级对照**：
+
+- **flag 开启**：断言"人未离场即出现 RAISED 信号"（事中干预可验证）+ 离场后收到配对 CLEARED（`paired_signal_id` 正确）；
+- **flag 关闭（降级断言，对应评审发现 #10）**：同一视频、同一随机种子跑一遍，断言 **`risk_signals` 全程为空、`behavior_states` 全程为空**，且历史路径的 `WarningEvent` 序列与"P0-11.5a 既有基线"**逐帧一致**——证明关闭 flag 后系统**完全降级回今天的行为**，实时路径零残留副作用；
+- 缺 torch/httpx → SKIP（沿用既有 E2E 脚本的 importorskip 约定）。
 
 ---
 
@@ -388,3 +421,23 @@ RiskSignal    ──→ Cognitive Observation Input
 | RiskSignal 主体泛化（subject_type / subject_id） | §2.2 / §8.2 契约字段 |
 | State Loss Policy（volatile 丢失语义）         | §4.3 |
 | Shadow Mode（先观察误报再接决策）              | §9 Phase 2 |
+
+---
+
+## 附录 B：尚未决策 / 开放项（Open Questions）
+
+以下条目**本方案有意不下结论**，留待实测数据或未来 ADR 决策。列出是为了让评审者一眼看清"哪些是已定契约、哪些还悬着"，避免把开放项误读为遗漏。
+
+| # | 开放项 | 当前占位/默认 | 决策依赖 | 归属 |
+| - | --- | --- | --- | --- |
+| O1 | `proximity_score` 的实际计算（distance_to_door 归一化 / 深度相机 / 标定 `d_max`） | Phase 1 恒 `0.0`，不参与判定 | 是否引入门口 ROI 标定或深度硬件 | 本方案未来 Phase（非 Memory ADR） |
+| O2 | `BehaviorPhase.APPROACHING / DEPARTING` 的判定规则（趋势/轨迹） | 枚举已留、Phase 1 不产出 | 依赖 O1 的 proximity 时序 | 本方案未来 Phase |
+| O3 | `eval_interval_frames` 生产默认值 | Demo `=1`；生产未定 | 边缘 CPU 实测吞吐 vs 可接受延迟 | 部署调优（非架构） |
+| O4 | RAISED 卡片 TTL 具体秒数（§4.3 UI 兜底） | 未定，仅定"必须有 TTL" | Dashboard 实测悬挂体感 | 演示层（silver_demo） |
+| O5 | "特征回落"触发 CLEARED 的判定细节（是否加迟滞/去抖窗口防抖振） | 未定，仅定"回落即 CLEARED" | Shadow Mode 观察抖动率 | Phase 2 Shadow 后回填 |
+| O6 | `visits_in_window` 是否计入"当前进行中这一次" | 倾向计入（与实时语义一致），待测锁定 | 与历史 `repeat_visit` 语义对齐核验 | Phase 1 实现时锁定 + 测试 pin |
+| O7 | `RiskSignal` 是否最终进入 MQTT / 外部消息总线 | 当前仅 `FrameResult`→Demo，不发布 | 是否有外部订阅方需求 | 未来（ADR-0005 评审） |
+| O8 | `BehaviorState`/`RiskSignal` 的持久化粒度、保留时长、淘汰/摘要 | **明确不在本方案** | Memory Policy | **独立 Memory ADR（ADR-0024）** |
+| O9 | 多主体（非 VISITOR）来源（音频电话诈骗 / 传感器）的实际接入 | 接口已留（`subject_type`），实现未铺开 | ADR-0022/0023 推进 | 未来 ADR |
+
+**原则**：开放项在被决策前，代码里对应字段**要么恒定占位（如 `proximity_score=0.0`）、要么不产出（如 `APPROACHING`）**，不得偷偷用未定语义参与判定——防止"留了口子却已在暗中生效"。
