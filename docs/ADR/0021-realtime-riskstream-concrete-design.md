@@ -89,6 +89,27 @@ ActionCommand[]       ← executor (runtime/pipeline.py:325-349)
 
 核心判断：**`VisitorEvent` 离场生成没有错，它是现实流的历史投影；只是投影不够实时，需要在其旁补回实时状态流**。历史投影解决"访问完整性"，实时状态解决"事中干预",二者同源而非对立。
 
+### 3.1.1 Signal Generation Layer（信号生成层，显式命名）
+
+`FeatureExtractor`（历史）与 `RealTimeRiskEvaluator`（实时）并非散落的两个工具，而是**同一个抽象层——信号生成层(Signal Generation Layer)——下的两个信号生成器**。显式命名这一层，是为了让未来接入新来源时有明确归位，且始终与决策层保持分离：
+
+```
+                         Reality
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+        Historical Signal           Real-time Signal
+        FeatureExtractor            RealTimeRiskEvaluator
+              │                           │
+          RiskFeature                 RiskSignal
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+                  Decision Layer（RuleEngine / DecisionPolicy）
+```
+
+这样未来新来源可自然进入，不触碰决策层：音频 `AudioAnalyzer → RiskSignal`、门磁 `DoorSensor → RiskSignal`、家属/社区反馈同理。**信号生成层只产出信号（RiskFeature / RiskSignal），决策层只消费信号做判断**——本 ADR 隐含的这条约束（§6 详述）在此获得正式命名。
+
 ### 3.2 `BehaviorState`（NEW，`analysis/behavior_state.py`，**实时感知域的工作状态 / working state**）
 
 `BehaviorState` 不是一个普通的中间计算变量，而是**实时感知域的工作状态(working state)**——它回答"此刻门口正在发生什么"，是未来 Agent 理解现况、Memory 系统沉淀短期记忆的天然输入。**当前**它不作为外部消息契约发布(不入 MQTT / 冻结契约)，但其定位应按"短期状态"来设计，避免未来 Memory ADR 推翻重做。
@@ -112,6 +133,15 @@ class BehaviorState:
 ```
 
 > `BehaviorState` 是**实时感知域的工作状态(working state)**，当前不作为外部消息契约发布（不入 MQTT / 冻结契约），仅经 `FrameResult` 传给演示层观察；但**未来可作为 Memory 系统的短期状态输入**（§7.1）。
+>
+> **易变状态边界（关键，防未来 Memory 爆炸）**：`BehaviorState` 是 **volatile state（易变状态）**——`dwell_seconds` 每帧变化（10:00=100 → 10:01=160 → 10:05=350），若逐帧全量落入 Long-term Memory 会产生海量冗余。因此**`BehaviorState` 默认属于 Working Memory / Runtime State，不直接进入 Long-term Memory**；只有**状态摘要、状态转移(transition)或关键异常快照**经过 **Memory Policy** 判定后才持久化：
+> ```
+> BehaviorState
+>       │
+>   Memory Policy（由未来 Memory ADR 定义）
+>       ├──▶ Short-term cache（工作记忆，易变态）
+>       └──▶ Long-term Memory（仅摘要 / 转移 / 关键快照）
+> ```
 > `schema_version` 虽非契约字段（不受 ADR-0014 约束），但保留它使未来扩展行为特征（轨迹 / 门距 / 朝向）时演示层与序列化可平滑兼容。
 
 ### 3.3 `RiskSignal`（NEW，`analysis/risk_signal.py`，**抽象信号层，MINOR 增量消息**）— 关键：不在 `RiskSignal` 上枚举具体行为
@@ -122,12 +152,15 @@ class BehaviorState:
 
 **`category`（异常类别）与 `source`（物理来源）正交**——两者是不同维度，不应混在一个枚举里：`category` 回答"这是哪一类异常"，`source` 回答"由哪个模态检测到"。同一类异常可由不同模态产生（如 `IDENTITY` 既可来自 `VISION` 人脸，也可来自 `AUDIO` 声纹）。
 
+**关键原则：`category` 描述的是「风险语义域」，不是「模型能力 / 检测手段」。** 反例：`weapon_detected` 不应归入 `BEHAVIOR`（持械不是一种行为，而是一种安全威胁）；`fall_detected` / `elder_missing` 也不是行为异常，而是安全域风险。据此把类别抽象为按风险语义划分的稳定域，未来新检测器只需归入既有语义域、不新增枚举：
+
 ```python
 class SignalCategory(str, Enum):
-    BEHAVIOR     = "behavior"       # 行为异常（停留/重复/接近）
-    CONVERSATION = "conversation"   # 对话/语音异常（预留，Phase 3）
-    IDENTITY     = "identity"       # 身份异常（预留，Phase 4）
-    ENVIRONMENT  = "environment"    # 环境异常（预留）
+    BEHAVIORAL    = "behavioral"      # 行为异常（停留/重复/接近/徘徊轨迹）
+    IDENTITY      = "identity"        # 身份异常（陌生人脸/声纹，Phase 4）
+    COMMUNICATION = "communication"   # 沟通/话术异常（语音威胁/诱导话术，Phase 3）
+    SAFETY        = "safety"          # 安全威胁（持械/跌倒/老人走失等人身安全）
+    ENVIRONMENT   = "environment"     # 环境异常（预留）
 
 class Modality(str, Enum):
     VISION = "vision"
@@ -156,12 +189,13 @@ class RiskSignal:
 
 | 场景 | `source` | `category` |
 | --- | --- | --- |
-| 视觉发现异常停留/重复 | `VISION` | `BEHAVIOR` |
-| 语音威胁 / 诱导话术（Phase 3） | `AUDIO` | `CONVERSATION` |
+| 视觉发现异常停留/重复/徘徊 | `VISION` | `BEHAVIORAL` |
+| 语音威胁 / 诱导话术（Phase 3） | `AUDIO` | `COMMUNICATION` |
 | 人脸判为陌生身份（Phase 4） | `VISION` | `IDENTITY` |
 | 声纹判为陌生身份（未来） | `AUDIO` | `IDENTITY` |
+| 持械 / 跌倒 / 老人走失（未来） | `VISION` | `SAFETY` |
 
-> 扩展不会污染：`future` 的 `face_expression_abnormal` / `weapon_detected` / `fall_detected` 都收进 `category=BEHAVIOR` + `features`，不会新增枚举值、不会新增 `EventType`。
+> 扩展不会污染，且归类按**风险语义**而非检测手段：`face_expression_abnormal` 归 `BEHAVIORAL`，`weapon_detected` / `fall_detected` / `elder_missing` 归 `SAFETY`（而非曾经易误分的 `BEHAVIOR`）——都通过 `category`(既有语义域) + `features`(dict) 承载，不新增枚举值、不新增 `EventType`。
 
 ### 3.3.1 评估器状态机（持续态归评估器，`RiskSignal` 只发跃迁）
 
@@ -185,7 +219,7 @@ class RiskSignal:
 ### 3.4 实时评估 + 适配（关键：单一决策中心）
 
 1. `PerceptionPipeline.process_frame` 在 `event_builder.update` 之后，每帧计算 `BehaviorState`（消费当前 `VisitorTrack`）。
-2. `RealTimeRiskEvaluator.evaluate(state) -> Optional[RiskSignal]`：作为 §3.3.1 的状态机——当事中阈值触发（`dwell_seconds` 超 `long_duration_seconds`；`visits_in_window` 达 `repeat_visit_count`）且该 track 为 `NONE`，转入 `ACTIVE_RISK` 并产出 `RiskSignal(category=BEHAVIOR, source=VISION, transition=RAISED)`；回落 / 离场产出对应 `transition=CLEARED`。
+2. `RealTimeRiskEvaluator.evaluate(state) -> Optional[RiskSignal]`：作为 §3.3.1 的状态机——当事中阈值触发（`dwell_seconds` 超 `long_duration_seconds`；`visits_in_window` 达 `repeat_visit_count`）且该 track 为 `NONE`，转入 `ACTIVE_RISK` 并产出 `RiskSignal(category=BEHAVIORAL, source=VISION, transition=RAISED)`；回落 / 离场产出对应 `transition=CLEARED`。
 3. `risk_signal_to_perception(sig) -> PerceptionEvent`：**adapter 复用冻结的 `PerceptionEvent` + 既有 5 类 `EventType` 标签**，标签选择**复用 RuleEngine 共享的阈值/标签映射**（同一份定义，实时与历史在标签层也汇合），**零新增枚举值**。例如 `features.dwell_seconds > long_duration_seconds → abnormal_dwell`。`transition=CLEARED` 信号不适配为 `PerceptionEvent`（不触发新 Warning），仅用于驱动展示态退出。
 4. 适配后的 `PerceptionEvent` 经**现有 `DecisionPolicy.decide()`** 产出 `WarningEvent` → `ActionCommand[]`。**实时与历史在决策层汇合于同一冻结对象**，无第二套决策栈。
 5. `FrameResult`（`runtime/pipeline.py:108-117`）追加 `risk_signals: List[RiskSignal]` 与 `behavior_state: Optional[BehaviorState]`；演示 `DemoGateway.run_loop` 广播 `RiskSignal` 与随之产生的 `WarningEvent`（早于离场）。
@@ -256,7 +290,7 @@ Phase 1 只做：`VisitorTrack → BehaviorState → RiskSignal → WarningEvent
 - **ADR-0018**：本 ADR 是其**具体实现**——`BehaviorState`/`RiskSignal`/`RealTimeRiskEvaluator`/adapter 把"实时/历史分流"落为接口与数据流。
 - **ADR-0010**：`WarningEvent` 仍是唯一决策对象，实时/历史均经 `PerceptionEvent` 汇入。
 - **ADR-0014**：全部改动映射为 MINOR（§3.5），不破坏三级冻结；`RiskSignal` 走 ADR-0005 评审。
-- **ADR-0022 / ADR-0023**：本 ADR 的实时信号接口已为后续模态预留——音频异常（`source=AUDIO, category=CONVERSATION`，ADR-0022 Phase 3）与身份异常（`category=IDENTITY`，来源可为 `VISION` 人脸或 `AUDIO` 声纹，ADR-0023 Phase 4）均可即插即用，不在本 ADR 实现。
+- **ADR-0022 / ADR-0023**：本 ADR 的实时信号接口已为后续模态预留——音频异常（`source=AUDIO, category=COMMUNICATION`，ADR-0022 Phase 3）与身份异常（`category=IDENTITY`，来源可为 `VISION` 人脸或 `AUDIO` 声纹，ADR-0023 Phase 4）均可即插即用，不在本 ADR 实现。
 
 ### 7.1 面向未来的演化定位（Memory / Agent 铺路，非本 ADR 实现）
 
@@ -264,15 +298,15 @@ Phase 1 只做：`VisitorTrack → BehaviorState → RiskSignal → WarningEvent
 
 > **事件是过去发生的事实，状态是当前正在发生的现实；Agent 真正需要的是状态连续性。**
 
-本 ADR 引入的对象因此各有其长期归宿，后续 Memory / Agent ADR 应**沿用而非重设**：
+**范围边界（关键，保持架构边界干净）**：本 ADR **仅定义状态连续性的「来源」**——即产出哪些对象、各自的时间语义。它**不定义 Memory 如何存储**：`BehaviorState` / `VisitorEvent` / `RiskSignal` 各自的**持久化粒度、保留时长、淘汰与摘要策略，均由独立的 Memory ADR（未来 ADR-0024）决策**，本 ADR 不作约束，以免过早锁死未来 Memory 设计。下表是**时间语义与候选归宿的方向提示，非存储规格**：
 
-| 本 ADR 对象 | 时间语义 | 未来演化归宿 |
+| 本 ADR 对象 | 时间语义 | 候选演化归宿（方向，非存储规格） |
 | --- | --- | --- |
-| `BehaviorState` | 当前正在发生 | **Short-term / Working Memory**（Agent"现在发生什么"的输入） |
-| `VisitorEvent` | 过去已完成 | **Long-term Episodic Memory**（历史访问档案） |
-| `RiskFeature` | 过去的统计 | Long-term Memory 的模式/频率特征 |
-| `RiskSignal` | 此刻的跃迁 | **Agent Observation Input**（可观测的风险迹象输入） |
+| `BehaviorState` | 当前正在发生（volatile） | 倾向 **Short-term / Working Memory**（Agent"现在发生什么"的输入） |
+| `VisitorEvent` | 过去已完成 | 倾向 **Long-term Episodic Memory**（历史访问档案） |
+| `RiskFeature` | 过去的统计 | 倾向 Long-term Memory 的模式/频率特征 |
+| `RiskSignal` | 此刻的跃迁 | 倾向 **Agent Observation Input**（可观测的风险迹象输入） |
 
-未来 Memory 不应设计成 `Memory → VisitorEvent` 的单层，而应是：`Reality Stream → Short-term State → Event Projection → Long-term Memory → Agent Reasoning`。届时 Agent 回答"为什么今天风险高"= 当前状态异常(`BehaviorState`) + 历史模式匹配(long-term memory) + 家庭/社区规则。
+方向上，未来 Memory 宜是 `Reality Stream → Short-term State → Event Projection → Long-term Memory → Agent Reasoning` 的分层，而非 `Memory → VisitorEvent` 单层；但**具体如何选择持久化哪一层、以何粒度落盘，交由 Memory ADR 决定**。届时 Agent 回答"为什么今天风险高"可以是：当前状态异常(`BehaviorState`) + 历史模式匹配(long-term memory) + 家庭/社区规则。
 
 **"实时 350 秒算不算历史？" —— 不算。** 区分实时与历史的**不是时间长度，而是时间语义**：实时状态回答"当前生命周期内正在累计什么"（如本次访问已停留 350 秒 → `ONGOING_DWELL`），历史统计回答"跨多次访问已经发生过什么"（如 30 天来访 8 次、傍晚居多、pattern_score=0.91）。350 秒是**当前生命周期内的累计量**，属实时状态，不因数值大而变成历史。
