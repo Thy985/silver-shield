@@ -162,7 +162,7 @@ class SignalCategory(str, Enum):
     SAFETY        = "safety"          # 安全威胁（持械/跌倒/老人走失等人身安全）
     ENVIRONMENT   = "environment"     # 环境异常（预留）
 
-class Modality(str, Enum):
+class SourceModality(str, Enum):   # 信号上下文的"传感来源"（勿与 ADR-0022 的 EvidenceModality 混淆，见下注）
     VISION = "vision"
     AUDIO  = "audio"
     SENSOR = "sensor"
@@ -177,7 +177,7 @@ class RiskSignal:
     track_id: int
     visitor_instance_id: str
     category: SignalCategory          # 异常类别（与来源正交，不展开具体行为）
-    source: Modality                  # 产出该信号的物理来源
+    source: SourceModality            # 产出该信号的物理来源
     transition: SignalTransition      # 本次发射是升起还是解除（非长期状态；持续态在评估器状态机）
     features: Dict[str, Any]          # 原始异常证据（如 {"dwell_seconds":350} / {"visits_in_window":3}），供 adapter 解释
     severity_hint: Optional[float] = None
@@ -196,6 +196,8 @@ class RiskSignal:
 | 持械 / 跌倒 / 老人走失（未来） | `VISION` | `SAFETY` |
 
 > 扩展不会污染，且归类按**风险语义**而非检测手段：`face_expression_abnormal` 归 `BEHAVIORAL`，`weapon_detected` / `fall_detected` / `elder_missing` 归 `SAFETY`（而非曾经易误分的 `BEHAVIOR`）——都通过 `category`(既有语义域) + `features`(dict) 承载，不新增枚举值、不新增 `EventType`。
+
+> **命名消歧（跨 ADR bounded context）**：本 ADR 的 `SourceModality` 与 ADR-0022 的 `EvidenceModality` 是**两个不同限界上下文中的独立枚举**，值集不同、语义不同——`SourceModality`（`analysis/risk_signal.py`）回答"信号由哪类**传感器**产生"（含 `SENSOR`）；`EvidenceModality`（`core/event.py`，ADR-0022）回答"这条**证据**属于哪个模态"（含 `IDENTITY`）。刻意不共享类名、不放同一模块，实现时禁止互相 import 复用或强行合并成一个枚举（合并会迫使一方携带对己无意义的值）。
 
 ### 3.3.1 评估器状态机（持续态归评估器，`RiskSignal` 只发跃迁）
 
@@ -231,7 +233,7 @@ class RiskSignal:
 | 改动 | 契约层级 | SemVer | 说明 |
 | --- | --- | --- | --- |
 | 新增 `RiskSignal` 实时消息 | L1 新对象 | MINOR | 独立消息，不入 5 类 `EventType`；ADR-0005 评审 |
-| 新增 `SignalCategory` / `Modality` / `SignalTransition` 枚举 | L1 枚举 | MINOR | 正交增量枚举（类别×来源×跃迁），不触碰 5 类 `EventType` |
+| 新增 `SignalCategory` / `SourceModality` / `SignalTransition` 枚举 | L1 枚举 | MINOR | 正交增量枚举（类别×来源×跃迁），不触碰 5 类 `EventType`；`SourceModality` 与 ADR-0022 `EvidenceModality` 分属不同上下文（§3.3 命名消歧） |
 | `BehaviorState`（内部态） | 不入契约 | — | 仅 `FrameResult`→演示层，不对外发布 |
 | `DecisionPolicy.decide` 签名 | L2 接口 | 不变 | 经 adapter 复用，零签名改动 |
 | `PerceptionPipeline.from_settings` 入口 | L3 装配 | 不变 | 仅 `process_frame` 增加分支 |
@@ -270,7 +272,7 @@ Phase 1 只做：`VisitorTrack → BehaviorState → RiskSignal → WarningEvent
 - ✅ 信号层可扩展（音频/身份异常即插即用）。
 
 **负面 / 约束**
-- ⚠️ 新增 2 个对象（`BehaviorState`/`RiskSignal`）+ 3 枚举（`SignalCategory`/`Modality`/`SignalTransition`）+ 评估器/适配器，组件数上升。
+- ⚠️ 新增 2 个对象（`BehaviorState`/`RiskSignal`）+ 3 枚举（`SignalCategory`/`SourceModality`/`SignalTransition`）+ 评估器/适配器，组件数上升。
 - ⚠️ 实时/历史双路径需在 `CooldownGate` 协同防抖（已具备）。
 - ⚠️ 音频/身份异常为预留（`source`/`features` 预留，检测在 Phase 3/4）。
 

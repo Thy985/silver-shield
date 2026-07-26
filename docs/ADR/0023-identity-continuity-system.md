@@ -53,6 +53,16 @@ class IdentityResult:
 class IdentityResolver(ABC):
     @abstractmethod
     def resolve(self, track_id: int, ctx: Dict[str, Any]) -> IdentityResult: ...
+
+    def confirm(self, person_identity_id: str, track_id: int) -> None:
+        """外部确认回填钩子（基类可选方法，默认空实现）。
+
+        供 P0-11 家属确认 / Phase 4 中心画像把已确认的真实身份回填给解析器。
+        v1 的 SessionMergeResolver 不覆写（收到确认也不会把 visitor_instance_id
+        升格为 person_identity_id）；Phase 4 的 ReID Resolver 覆写后据此建立
+        跨访问身份关联。
+        """
+        return None
 ```
 
 ### 3.3 v1：`SessionMergeResolver`（**不冒充身份**）
@@ -66,7 +76,7 @@ class SessionMergeResolver(IdentityResolver):
         # person_identity_id 不返回（恒 None）
 ```
 
-- `confirm(person_identity_id, track_id)` 钩子预留（供 P0-11 家属确认回填 / Phase 4 真实身份）。
+- `confirm(person_identity_id, track_id)` 钩子的**接口归属为 `IdentityResolver` 基类可选方法**（§3.2，默认空实现）：`SessionMergeResolver` 不覆写（v1 收到家属确认也不伪造真实身份），Phase 4 ReID Resolver 覆写接通家属确认 / 中心画像回填。
 - **约束**：任何代码不得把 `visitor_instance_id` 当作 `person_identity_id` 使用；Memory/Profile 在 `person_identity_id` 为 None 时按 `visitor_instance_id` 建临时画像，标注"未确认身份"。
 
 ### 3.4 事件透传

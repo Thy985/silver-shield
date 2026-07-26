@@ -74,6 +74,6 @@
 | [0018](0018-separate-realtime-risk-signal-and-historical-visitor-event.md) | 实时风险信号与历史事件流分离：新增 Behavior State 双下游（RiskSignal 实时 / VisitorEvent 历史）+ 支持事中干预 | Proposed | 2026-07-26 |
 | [0019](0019-multimodal-evidence-fusion-architecture.md) | 多模态证据融合架构：Vision / Audio 双独立感知链 + Evidence Fusion 阶段，WarningEvent.evidence 升为类型化列表 | Proposed | 2026-07-26 |
 | [0020](0020-decouple-short-term-tracking-identity-and-long-term-visitor-identity.md) | 短期追踪身份（track_id）与长期访客身份（person_id）分离：新增 Identity Resolver 阶段 | Proposed | 2026-07-26 |
-| [0021](0021-realtime-riskstream-concrete-design.md) | 实时风险流·具体设计：把 ADR-0018 落为 BehaviorState/RiskSignal(抽象信号层)/RealTimeRiskEvaluator/adapter，复用单一 DecisionPolicy（Phase 1） | Proposed | 2026-07-26 |
+| [0021](0021-realtime-riskstream-concrete-design.md) | 实时风险状态流与信号生成层·具体设计：把 ADR-0018 落为 Reality→State→Signal→Decision 四层，BehaviorState/RiskSignal/RealTimeRiskEvaluator/adapter，复用单一 DecisionPolicy（Phase 1） | Proposed | 2026-07-26 |
 | [0022](0022-evidence-chain-multimodal-interface.md) | 证据链与多模态接口·具体设计：EvidenceItem(类型化证据)+EvidenceAggregator(只整理不重推)+WarningEvent.evidence_items（Phase 2） | Proposed | 2026-07-26 |
 | [0023](0023-identity-continuity-system.md) | 身份连续性系统·具体设计：track_id/visitor_instance_id/person_identity_id 三层 + IdentityResolver（Phase 4，v1 不冒充真实身份） | Proposed | 2026-07-26 |

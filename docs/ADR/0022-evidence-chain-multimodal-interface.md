@@ -32,17 +32,17 @@
 
 ## 3. 决策（具体设计）
 
-### 3.1 `EvidenceItem` + `Modality`（NEW，`core/event.py`，MINOR 新对象）
+### 3.1 `EvidenceItem` + `EvidenceModality`（NEW，`core/event.py`，MINOR 新对象）
 
 ```python
-class Modality(str, Enum):
+class EvidenceModality(str, Enum):   # 证据上下文的"证据模态"（勿与 ADR-0021 的 SourceModality 混淆，见下注）
     VISION   = "vision"
     AUDIO    = "audio"
     IDENTITY = "identity"
 
 @dataclass
 class EvidenceItem:
-    modality: Modality
+    modality: EvidenceModality
     kind: str                 # snapshot | clip | transcript | segment
     uri: str                  # 本地路径 / 对象存储 URL
     score: float = 0.0        # 该证据模态置信度（vision 0.7 / audio 0.9 / identity 0.8 ...）
@@ -54,6 +54,8 @@ class EvidenceItem:
 ```
 
 > `modality` 字段是关键：中心可按模态加权、家属解释可区分"画面 / 声音 / 身份"。
+
+> **命名消歧（跨 ADR bounded context）**：`EvidenceModality` 与 ADR-0021 的 `SourceModality` 是**两个不同限界上下文中的独立枚举**——`SourceModality`（`analysis/risk_signal.py`）描述"信号由哪类**传感器**产生"（值集含 `SENSOR`）；`EvidenceModality`（`core/event.py`）描述"这条**证据**属于哪个模态"（值集含 `IDENTITY`，身份证据如人脸截图/声纹片段）。刻意不共享类名：实现时禁止互相 import 复用或合并为一个枚举（合并会迫使一方携带对己无意义的值，如证据不可能是 `SENSOR`、信号来源不可能是 `IDENTITY`）。
 
 ### 3.2 `EvidenceAggregator`（NEW，`evidence/aggregator.py`）— 改名与边界
 
@@ -92,7 +94,7 @@ ADR-0019 的"Vision / Audio 双独立感知链 + 融合"在本 ADR 落为**接�
 
 | 改动 | 契约层级 | SemVer | 说明 |
 | --- | --- | --- | --- |
-| 新增 `EvidenceItem` / `Modality` | L1 新对象 | MINOR | 增量消息，ADR-0005 评审 |
+| 新增 `EvidenceItem` / `EvidenceModality` | L1 新对象 | MINOR | 增量消息，ADR-0005 评审；与 ADR-0021 `SourceModality` 分属不同上下文（§3.1 命名消歧） |
 | `WarningEvent.evidence_items: List[EvidenceItem]`（新增，保留 `evidence`） | L1 字段 | MINOR | 可选字段，向后兼容 |
 | `EvidenceCollector` / `EvidenceAggregator` / `AudioEvidenceCollector` ABC | L2 接口 | MINOR | 增量接口，实现可替换 |
 | `WarningEvent.evidence` 字段类型 / 语义 | L1 字段 | 不变 | 冻结保留 |
@@ -104,7 +106,7 @@ ADR-0019 的"Vision / Audio 双独立感知链 + 融合"在本 ADR 落为**接�
 
 Phase 2 只做证据体系（让系统可解释），音频检测延后：
 
-1. `EvidenceItem` / `Modality` + contract test（`test_evidence_item_contract.py`：to_dict 与 EvidenceRef 兼容、modality 枚举闭合）。
+1. `EvidenceItem` / `EvidenceModality` + contract test（`test_evidence_item_contract.py`：to_dict 与 EvidenceRef 兼容、modality 枚举闭合、与 `SourceModality` 无交叉 import）。
 2. 实现视觉 `EvidenceCollector`（snapshot/clip），挂 `WarningEvent.evidence_items`。
 3. `EvidenceAggregator.merge` 落地（先仅 vision，接口兼容 audio）。
 4. 演示层 `WarningEvent` 风险卡展示证据链（截图 + 片段 + 时间线）。
