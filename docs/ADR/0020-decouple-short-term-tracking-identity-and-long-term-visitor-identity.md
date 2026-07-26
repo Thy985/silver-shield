@@ -1,6 +1,7 @@
 # ADR-0020: 短期追踪身份与长期访客身份分离（Decouple Short-term Tracking Identity and Long-term Visitor Identity）
 
-- **状态**：Proposed（Owner 建议 · 2026-07-26）
+- **状态**：Proposed
+- **日期**：2026-07-26
 - **范围**：未来架构方向（v2 / 后 MVP），**当前 MVP 不实现**；本 ADR 仅固化决策，不改动现有冻结契约。
 - **决策者**：Owner
 - **相关**：ADR-0006（VisitorTrack = track_id，会话级）、

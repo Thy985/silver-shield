@@ -1,6 +1,7 @@
 # ADR-0019: 多模态证据融合架构（Multimodal Evidence Fusion Architecture）
 
-- **状态**：Proposed（Owner 建议 · 2026-07-26）
+- **状态**：Proposed
+- **日期**：2026-07-26
 - **范围**：未来架构方向（v2 / 后 MVP），**当前 MVP 不实现**；本 ADR 仅固化决策，不改动现有冻结契约。
 - **决策者**：Owner
 - **相关**：ADR-0010（WarningEvent.evidence 字段）、ADR-0001（只产事实）、
@@ -26,7 +27,7 @@ Audio 逻辑
 - 音频模型升级会牵动视觉管道；
 - 证据无法区分「来自画面」还是「来自声音」，中心无法按模态加权。
 
-同时，`WarningEvent` 已经预留了 `evidence` 字段（ADR-0010 Decision 2：「取证引用 snapshot/clip URI；P0-8 不填，P0-9 行动层填」）——但当前它是**单一视觉引用**，是多模态化的天然落点。
+同时，`WarningEvent` 已经预留了 `evidence` 字段（ADR-0010 Decision 2：「取证引用 snapshot/clip URI；P0-8 不填，P0-9 行动层填」）——但当前它是 `List[Dict[str, Any]]`（非类型化的字典列表），是多模态化的天然落点。
 
 ## 2. 决策（Decision）
 
@@ -48,7 +49,7 @@ Audio 逻辑
 - 融合产物是「带模态标记的证据集合」，喂给决策层。
 
 ### 2.3 `WarningEvent.evidence` 升级为**类型化证据列表**
-由单一 URI 改为：
+由 `List[Dict[str, Any]]`（非类型化字典）升级为：
 ```python
 evidence: List[EvidenceItem]   # EvidenceItem = {modality: "vision"|"audio"|..., uri, score, captured_at, ...}
 ```
@@ -59,7 +60,7 @@ evidence: List[EvidenceItem]   # EvidenceItem = {modality: "vision"|"audio"|...,
 - **系统可扩展性**：加音频（乃至未来 RFID / 门磁 / 温感）只是「新一条 Pipeline + 一个融合入口」，不是重写视觉链。
 - **保持视觉链纯净**：延续 ADR-0001/0007 的边界与每帧成本纪律；音频的延迟 / 边缘预算单独评估。
 - **证据可归因、可审计**：每条证据带 `modality`，中心能解释「这条预警来自画面还是声音」，家属侧解释更可信。
-- **复用既有字段**：`WarningEvent.evidence` 已是预留位，仅从「单引用」扩为「类型化列表」，迁移成本可控。
+- **复用既有字段**：`WarningEvent.evidence` 已是预留位，仅从「非类型化 `Dict[str, Any]` 列表」扩为「类型化 `List[EvidenceItem]`」，迁移成本可控。
 
 ## 4. 后果（Consequences）
 
@@ -87,5 +88,5 @@ evidence: List[EvidenceItem]   # EvidenceItem = {modality: "vision"|"audio"|...,
 ## 6. 与既有 ADR 的关系
 
 - **ADR-0018**：`RiskSignal` 是音频信号汇入决策的天然载体——音频 Pipeline 可产出 `RiskSignal`，经融合进入 `WarningEvent`。
-- **ADR-0010**：本 ADR 把 `WarningEvent.evidence` 从「单 URI」扩展为「类型化证据列表」，字段语义升级但对象不变。
+- **ADR-0010**：本 ADR 把 `WarningEvent.evidence` 从「`List[Dict[str, Any]]` 非类型化字典列表」扩展为「`List[EvidenceItem]` 类型化证据列表」，字段语义升级但对象不变。
 - **ADR-0001**：多模态仍只产「事实 / 证据」，不产「诈骗判定」；最终判定仍归中心。

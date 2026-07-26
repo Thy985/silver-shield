@@ -1,6 +1,7 @@
 # ADR-0018: 实时风险信号与历史事件流分离（Real-time Risk Signal vs Historical Visitor Event）
 
-- **状态**：Proposed（Owner 建议 · 2026-07-26）
+- **状态**：Proposed
+- **日期**：2026-07-26
 - **范围**：未来架构方向（v2 / 后 MVP），**当前 MVP 不实现**；本 ADR 仅固化决策，不改动现有冻结契约。
 - **决策者**：Owner
 - **相关**：ADR-0010（WarningEvent 决策架构）、ADR-0006（VisitorTrack）、
@@ -53,24 +54,25 @@ WarningEvent          ← 决策层
 `Behavior State` 向下分流为两条独立输出：
 
 ```
-                 DetectionResult
-                       │
+                  DetectionResult
+                  │
                   VisitorTrack
-                       │
+                  │
                   Behavior State
-                     /        \
-                    /          \
-         Real-time Risk    Historical Event
-              │                 │
-              ▼                 ▼
+         /                 \
+        /                  \
+        Real-time Risk     Historical Event
+        │                  │
+        ▼                  ▼
         RiskSignal         VisitorEvent   ← 离场生成（保持不变）
-              │                 │
-              ▼                 ▼
-        WarningEvent        Memory / Profile
-              │
-              ▼
-           Action
-```
+        │                  │
+        ▼                  ▼
+        WarningEvent       Memory / Profile
+        │
+        ▼
+        Action
+
+（注：本图仅展示新增的实时分流。`RiskFeature → PerceptionEvent → WarningEvent` 原有路径**保留不变、图中从略**。`WarningEvent` 可由 `RiskSignal`（实时）或 `PerceptionEvent`（语义）任一喂入，二者不互斥——详见 §6 与 ADR-0010。）
 
 ### 2.3 新增事件对象 `RiskSignal`
 `RiskSignal` 是 `VisitorEvent` 的**实时对应物**：在访问进行中产出，承载「行为状态变化」而非「完整访问总结」。它是实时风险判断的输入，可**在访客离场前**触发 `WarningEvent → Action`。
