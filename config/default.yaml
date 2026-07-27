@@ -109,7 +109,10 @@ runtime:
 # 只放开关与实时特有项；阈值复用上面 rule 段（单一阈值来源，不在此重复）。
 # enabled=false 默认关闭：关闭时 pipeline 不构造实时组件（零运行时开销）；
 # Demo 场景如需开启，经 ScenarioConfig.rule_overrides 同型通道或此处显式置 true。
+# decision_enabled=true 开启 Stage D（RAISED 信号经 adapter 汇入 DecisionEngine 产 Warning）；
+# 灰度策略：先 enabled=true, decision_enabled=false 观察误报率（Shadow Mode），再开决策。
 realtime_risk:
   enabled: false                  # Feature Flag：Stage B 起 main 默认关闭
   eval_interval_frames: 1         # 每 N 帧评估一次（性能旋钮，见工程方案 §5.3）；Demo 保持 1（dwell 阈值小）
+  decision_enabled: false         # Stage D 决策接入开关：true 时 RAISED→Warning；需 enabled=true 才生效
 
