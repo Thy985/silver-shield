@@ -1,0 +1,35 @@
+# Soak Test 场景配置（ADR-0021 Stage E）
+# 对应 docs/DESIGN-realtime-riskstream-engineering-plan.md §9.2.4
+#
+# S3 Track Lifecycle Churn：验证 track 创建/删除循环无泄漏
+#
+# 重要语义说明（避免误解）：
+# 本场景验证 track 生命周期循环（enter→leave→enter→leave），
+# 不验证"同一访客跨次识别"——后者属 ADR-0023 身份能力。
+# 视频循环时 tracker 会分配新 track_id + visitor_instance_id，
+# 每次"出现"都是全新会话实例，这是设计预期，不是 bug。
+#
+# 视频源：CAVIAR OneLeaveShopReenter1cor（含 leave-reenter 模式）
+# 期望：active_tracks_peak 稳定，不随循环次数增长
+
+scenario_name: "S3_track_churn"
+description: "Track 生命周期循环测试（CAVIAR leave-reenter 循环，验证 active dict 无泄漏）"
+
+video:
+  source: "tests/fixtures/caviar_raw/OneLeaveShopReenter1cor.mpg"
+  loop_count: 30  # 循环 30 次（高频 churn，暴露泄漏）
+
+clock:
+  interval_s: 5.0
+
+realtime:
+  enabled: true
+  decision_enabled: false  # S3 不接决策，专注状态机清理
+  eval_interval_frames: 1
+
+expected:
+  active_tracks_peak_max: 5  # 峰值不超过 5（单主体场景）
+  active_tracks_end: 0
+  active_risk_end: 0
+  # 关键：peak 不随循环次数单调增长（趋势稳定）
+  active_tracks_trend: "stable_not_growing"
