@@ -18,22 +18,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict
 
-
-def _utc_now() -> datetime:
-    """时区感知的 UTC 当前时间（对齐仓库其他领域对象）。"""
-    return datetime.now(timezone.utc)
-
-
-def _require_utc(dt: datetime, field_name: str) -> None:
-    """校验 datetime 是 timezone-aware 且为 UTC（防御 naive 漏标，对齐 ADR-0007）。"""
-    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-        raise ValueError(
-            f"{field_name} 必须是 timezone-aware datetime（建议 UTC），收到 naive datetime: {dt!r}"
-        )
+from ..common.timeutil import require_utc
 
 
 def compute_is_odd_hour(dt: datetime) -> bool:
@@ -41,7 +30,7 @@ def compute_is_odd_hour(dt: datetime) -> bool:
 
     纯函数，便于 Phase 1 `BehaviorBuilder` 与单元测试复用；展示层若需本地时区自行转换。
     """
-    _require_utc(dt, "dt")
+    require_utc(dt, "dt")
     return dt.hour >= 22 or dt.hour < 6
 
 
@@ -101,8 +90,8 @@ class BehaviorState:
                 )
 
         # 2) 时间 UTC 校验（先于 last>=first 比较，否则 naive vs aware 抛 TypeError）
-        _require_utc(self.first_seen, "first_seen")
-        _require_utc(self.last_seen, "last_seen")
+        require_utc(self.first_seen, "first_seen")
+        require_utc(self.last_seen, "last_seen")
 
         # 3) last_seen >= first_seen
         if self.last_seen < self.first_seen:
@@ -142,6 +131,26 @@ class BehaviorState:
             "proximity_score": round(self.proximity_score, 4),
             "schema_version": self.schema_version,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "BehaviorState":
+        """从 to_dict() 产出的字典反序列化（枚举 value → 枚举实例、ISO 字符串 → datetime）。
+
+        用于 Stage B/C 跨进程传递 / 日志回放 / 测试构造。与 `to_dict()` 严格对称。
+        注意：`to_dict()` 对 dwell_seconds/proximity_score 做了 round，
+        `from_dict()` 接受任意合法 float（round 后的值仍满足契约不变式）。
+        """
+        return cls(
+            track_id=data["track_id"],
+            visitor_instance_id=data["visitor_instance_id"],
+            phase=data["phase"],
+            first_seen=datetime.fromisoformat(data["first_seen"]),
+            last_seen=datetime.fromisoformat(data["last_seen"]),
+            dwell_seconds=data["dwell_seconds"],
+            is_odd_hour=data["is_odd_hour"],
+            proximity_score=data["proximity_score"],
+            schema_version=data["schema_version"],
+        )
 
 
 @dataclass

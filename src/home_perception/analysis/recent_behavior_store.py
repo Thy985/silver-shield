@@ -21,7 +21,7 @@ import types
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Mapping
 
-from .behavior_state import _require_utc
+from ..common.timeutil import require_utc
 
 
 class RecentBehaviorStore:
@@ -59,8 +59,8 @@ class RecentBehaviorStore:
             raise ValueError("visitor_instance_id 不能为空")
         if window_seconds < 0:
             raise ValueError(f"window_seconds 必须 >= 0，收到 {window_seconds}")
-        _require_utc(enter_time, "enter_time")
-        _require_utc(now, "now")
+        require_utc(enter_time, "enter_time")
+        require_utc(now, "now")
         if enter_time > now:
             raise ValueError(f"enter_time ({enter_time}) 不能晚于 now ({now})")
 
@@ -70,8 +70,11 @@ class RecentBehaviorStore:
 
         cutoff = now - timedelta(seconds=window_seconds)
         in_window = [t for t in bucket if t >= cutoff]
-        # 清理窗口外旧记录（保留窗口内 + 未来可能的同帧重处理不影响计数）
-        self._entries[visitor_instance_id] = in_window
+        # 清理窗口外旧记录：窗口内非空则覆写，为空则删除键（防空键累积无意义内存）
+        if in_window:
+            self._entries[visitor_instance_id] = in_window
+        else:
+            self._entries.pop(visitor_instance_id, None)
 
         return types.MappingProxyType({"visits_in_window": len(in_window)})
 
@@ -87,7 +90,7 @@ class RecentBehaviorStore:
         """
         if window_seconds < 0:
             raise ValueError(f"window_seconds 必须 >= 0，收到 {window_seconds}")
-        _require_utc(now, "now")
+        require_utc(now, "now")
         bucket = self._entries.get(visitor_instance_id, [])
         cutoff = now - timedelta(seconds=window_seconds)
         in_window = [t for t in bucket if t >= cutoff]

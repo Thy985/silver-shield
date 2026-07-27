@@ -250,14 +250,17 @@ def test_no_evidence_modality_cross_import():
 
 def test_raised_cleared_pairing_roundtrip():
     """注入 触发→回落 序列，断言 CLEARED.paired_signal_id == RAISED.signal_id。"""
-    raised = _make_signal(transition=SignalTransition.RAISED, signal_id="s-raise-1")
+    raised = _make_signal(
+        transition=SignalTransition.RAISED,
+        signal_id="11111111-1111-1111-1111-111111111111",
+    )
     cleared = _make_signal(
         transition=SignalTransition.CLEARED,
-        signal_id="s-clear-1",
+        signal_id="22222222-2222-2222-2222-222222222222",
         paired_signal_id=raised.signal_id,
         subject_id=raised.subject_id,
     )
-    assert cleared.paired_signal_id == "s-raise-1"
+    assert cleared.paired_signal_id == "11111111-1111-1111-1111-111111111111"
     # 两者 transition 不同、signal_id 不同（两条独立消息）
     assert cleared.signal_id != raised.signal_id
     assert cleared.transition is not raised.transition
@@ -290,3 +293,128 @@ def test_repeated_raised_gets_unique_signal_ids():
     a = _make_signal(transition=SignalTransition.RAISED)
     b = _make_signal(transition=SignalTransition.RAISED)
     assert a.signal_id != b.signal_id
+
+
+# ---------------------------------------------------------------------------
+# signal_id UUID 格式校验（发现 2）
+# ---------------------------------------------------------------------------
+
+def test_signal_id_rejects_non_uuid_string():
+    """signal_id 字符串必须是合法 UUID 格式；"not-a-uuid" 应抛 ValueError。"""
+    with pytest.raises(ValueError):
+        _make_signal(signal_id="not-a-uuid")
+
+
+def test_signal_id_accepts_valid_uuid_string():
+    """合法 UUID 字符串通过校验。"""
+    valid = "12345678-1234-1234-1234-123456789abc"
+    sig = _make_signal(signal_id=valid)
+    assert sig.signal_id == valid
+
+
+def test_signal_id_accepts_uuid_object():
+    """UUID 实例自动转 str。"""
+    from uuid import uuid4
+    u = uuid4()
+    sig = _make_signal(signal_id=u)
+    assert sig.signal_id == str(u)
+
+
+# ---------------------------------------------------------------------------
+# features 类型断言（发现 3）
+# ---------------------------------------------------------------------------
+
+def test_features_rejects_none():
+    """features=None 应抛 TypeError（不再静默跳过黑名单检查）。"""
+    with pytest.raises(TypeError):
+        RiskSignal(
+            signal_id=str(uuid4()),
+            subject_type=SubjectType.VISITOR,
+            subject_id="vid",
+            category=SignalCategory.BEHAVIORAL,
+            source=SourceModality.VISION,
+            transition=SignalTransition.RAISED,
+            features=None,  # 非 dict
+        )
+
+
+def test_features_rejects_list():
+    """features=list 应抛 TypeError。"""
+    with pytest.raises(TypeError):
+        RiskSignal(
+            signal_id=str(uuid4()),
+            subject_type=SubjectType.VISITOR,
+            subject_id="vid",
+            category=SignalCategory.BEHAVIORAL,
+            source=SourceModality.VISION,
+            transition=SignalTransition.RAISED,
+            features=[("dwell_seconds", 1)],
+        )
+
+
+# ---------------------------------------------------------------------------
+# _coerce_enum TypeError 分支（发现 8）
+# ---------------------------------------------------------------------------
+
+def test_coerce_enum_rejects_int():
+    """_coerce_enum 传入 int（既非枚举也非 str）应抛 TypeError。"""
+    from home_perception.analysis.risk_signal import _coerce_enum
+    with pytest.raises(TypeError):
+        _coerce_enum(SignalCategory, 42, "category")
+
+
+def test_coerce_enum_rejects_none():
+    """_coerce_enum 传入 None 应抛 TypeError。"""
+    from home_perception.analysis.risk_signal import _coerce_enum
+    with pytest.raises(TypeError):
+        _coerce_enum(SourceModality, None, "source")
+
+
+def test_coerce_enum_rejects_list():
+    """_coerce_enum 传入 list 应抛 TypeError。"""
+    from home_perception.analysis.risk_signal import _coerce_enum
+    with pytest.raises(TypeError):
+        _coerce_enum(SubjectType, ["visitor"], "subject_type")
+
+
+# ---------------------------------------------------------------------------
+# from_dict / from_json 反序列化（发现 7）
+# ---------------------------------------------------------------------------
+
+def test_from_dict_roundtrip():
+    """to_dict → from_dict → to_dict 应产出相同字典（round-trip 对称）。"""
+    original = _make_signal(
+        transition=SignalTransition.RAISED,
+        signal_id="12345678-1234-1234-1234-123456789abc",
+    )
+    d1 = original.to_dict()
+    restored = RiskSignal.from_dict(d1)
+    d2 = restored.to_dict()
+    assert d1 == d2
+
+
+def test_from_json_roundtrip():
+    """to_json → from_json → to_json 应产出相同 JSON 字符串。"""
+    original = _make_signal(
+        transition=SignalTransition.CLEARED,
+        signal_id="12345678-1234-1234-1234-123456789abc",
+        paired_signal_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    j1 = original.to_json()
+    restored = RiskSignal.from_json(j1)
+    j2 = restored.to_json()
+    assert j1 == j2
+
+
+def test_from_dict_preserves_paired_signal_id():
+    """from_dict 保留 paired_signal_id（CLEARED 配对关系不丢失）。"""
+    raised = _make_signal(transition=SignalTransition.RAISED,
+                          signal_id="11111111-1111-1111-1111-111111111111")
+    cleared = _make_signal(
+        transition=SignalTransition.CLEARED,
+        signal_id="22222222-2222-2222-2222-222222222222",
+        paired_signal_id=raised.signal_id,
+    )
+    restored = RiskSignal.from_dict(cleared.to_dict())
+    assert restored.paired_signal_id == raised.signal_id
+    assert restored.transition is SignalTransition.CLEARED

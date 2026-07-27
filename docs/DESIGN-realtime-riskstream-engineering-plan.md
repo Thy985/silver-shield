@@ -397,12 +397,12 @@ class FrameResult:
 | 8 | 测试覆盖 | `tests/test_risksignal_contract.py` | ⚪ 建议 | `_coerce_enum` 的非字符串非法类型分支（`raise TypeError`）未测试 | Stage B：补单元测试覆盖该边界 |
 
 **Stage B 准入清单**（合并 Stage B 前须完成）：
-- [ ] 处理发现 1（提取 `_require_utc` / `_utc_now` 到共用模块）
-- [ ] 处理发现 2（`signal_id` UUID 格式校验）
-- [ ] 处理发现 3（`features` 类型断言）
-- [ ] 处理发现 4（空键清理）
-- [ ] 补上发现 7（`from_dict()` / `from_json()` 反序列化方法）
-- [ ] 补上发现 8（`_coerce_enum` TypeError 分支测试）
+- [x] 处理发现 1（提取 `_require_utc` / `_utc_now` 到共用模块）✅ PR #65 `fix/stage-a-tech-debt`
+- [x] 处理发现 2（`signal_id` UUID 格式校验）✅ PR #65 `fix/stage-a-tech-debt`
+- [x] 处理发现 3（`features` 类型断言）✅ PR #65 `fix/stage-a-tech-debt`
+- [x] 处理发现 4（空键清理）✅ PR #65 `fix/stage-a-tech-debt`
+- [x] 补上发现 7（`from_dict()` / `from_json()` 反序列化方法）✅ PR #65 `fix/stage-a-tech-debt`
+- [x] 补上发现 8（`_coerce_enum` TypeError 分支测试）✅ PR #65 `fix/stage-a-tech-debt`
 
 ---
 

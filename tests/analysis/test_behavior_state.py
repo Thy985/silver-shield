@@ -170,3 +170,65 @@ def test_realtime_context_combines_state_and_recent():
 def test_realtime_context_requires_behavior_state():
     with pytest.raises(TypeError):
         RealtimeContext(current_state={"phase": "ongoing"})  # 非 BehaviorState
+
+
+# ---------------------------------------------------------------------------
+# from_dict 反序列化（与 to_dict 严格对称）
+# ---------------------------------------------------------------------------
+
+def test_from_dict_roundtrip():
+    """to_dict → from_dict → to_dict 应产出相同字典（round-trip 对称）。"""
+    enter = _utc(2026, 7, 26, 10, 0, 0)
+    now = _utc(2026, 7, 26, 10, 5, 30)
+    original = BehaviorState(
+        track_id=7,
+        visitor_instance_id="vid-roundtrip",
+        phase=BehaviorPhase.LEFT,
+        first_seen=enter,
+        last_seen=now,
+        dwell_seconds=330.0,
+        is_odd_hour=False,
+        proximity_score=0.42,
+    )
+    d1 = original.to_dict()
+    restored = BehaviorState.from_dict(d1)
+    d2 = restored.to_dict()
+    assert d1 == d2
+
+
+def test_from_dict_accepts_str_phase():
+    """from_dict 接受字符串 phase 值（枚举归一）。"""
+    enter = _utc(2026, 7, 26, 10, 0, 0)
+    now = _utc(2026, 7, 26, 10, 0, 10)
+    d = {
+        "track_id": 1,
+        "visitor_instance_id": "vid",
+        "phase": "ongoing",
+        "first_seen": enter.isoformat(),
+        "last_seen": now.isoformat(),
+        "dwell_seconds": 10.0,
+        "is_odd_hour": False,
+        "proximity_score": 0.0,
+        "schema_version": 1,
+    }
+    s = BehaviorState.from_dict(d)
+    assert s.phase is BehaviorPhase.ONGOING
+    assert s.first_seen == enter
+    assert s.last_seen == now
+
+
+def test_from_dict_rejects_invalid_phase():
+    """from_dict 接受非法 phase 值应抛 ValueError（枚举闭合）。"""
+    d = {
+        "track_id": 1,
+        "visitor_instance_id": "vid",
+        "phase": "unknown_phase",
+        "first_seen": _utc(2026, 7, 26, 10).isoformat(),
+        "last_seen": _utc(2026, 7, 26, 10).isoformat(),
+        "dwell_seconds": 0.0,
+        "is_odd_hour": False,
+        "proximity_score": 0.0,
+        "schema_version": 1,
+    }
+    with pytest.raises(ValueError):
+        BehaviorState.from_dict(d)
