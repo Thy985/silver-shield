@@ -39,6 +39,8 @@ data/cache/**
 *.jpg
 !data/evidence/.gitkeep
 
+# 注意：data/demo/ 入库（验证报告 + 区域审计，文本/JSON，体积小，长期资产）
+
 # --- 编辑器 / 系统 ---
 .idea/
 .vscode/
