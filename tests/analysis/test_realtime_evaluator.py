@@ -402,3 +402,67 @@ class TestInputValidation:
         ev = RealTimeRiskEvaluator(_thresholds())
         s = ev.evaluate([], _utc(2026, 7, 27, 10, 0, 0))
         assert s == []
+
+
+# ============================================================================
+# 7. 端到端状态机序列：NONE→ACTIVE_RISK→NONE（防 Dashboard 闪烁）
+# ============================================================================
+
+class TestStateMachineSequence:
+    """验证状态机序列：多帧触发只产 1 RAISED + 1 CLEARED。
+
+    防回归：早期实现可能在每帧触发都产 RAISED，导致 Dashboard 风险卡闪烁
+    （红卡反复亮起）。正确行为是首次触发 RAISED 后持续 ACTIVE_RISK，
+    直到回落或离场才产 CLEARED。
+    """
+
+    def test_multi_frame_trigger_only_one_raised_one_cleared(self):
+        """5 帧持续触发 + 1 帧回落 → 只产 1 RAISED + 1 CLEARED。"""
+        ev = RealTimeRiskEvaluator(_thresholds(long_duration=300.0))
+        vid = str(uuid4())
+
+        # 帧 1-5：持续触发（dwell 递增 350→750）
+        raised_count = 0
+        for i in range(5):
+            now = _utc(2026, 7, 27, 10, 5 + i, 50)
+            sigs = ev.evaluate([_ctx(_state(vid, dwell=350.0 + i * 60.0, now=now))], now)
+            raised_count += sum(1 for s in sigs if s.transition is SignalTransition.RAISED)
+        assert raised_count == 1, f"5 帧触发应只产 1 RAISED，实际 {raised_count}"
+
+        # 帧 6：回落（dwell 重置）
+        now6 = _utc(2026, 7, 27, 11, 0, 0)
+        sigs6 = ev.evaluate([_ctx(_state(vid, dwell=10.0, now=now6))], now6)
+        cleared_count = sum(1 for s in sigs6 if s.transition is SignalTransition.CLEARED)
+        assert cleared_count == 1, f"回落应产 1 CLEARED，实际 {cleared_count}"
+
+    def test_raised_cleared_then_raised_again(self):
+        """RAISED → CLEARED → 再次 RAISED（新风险周期）。"""
+        ev = RealTimeRiskEvaluator(_thresholds(long_duration=300.0))
+        vid = str(uuid4())
+
+        # 周期 1：RAISED
+        now1 = _utc(2026, 7, 27, 10, 5, 50)
+        s1 = ev.evaluate([_ctx(_state(vid, dwell=350.0, now=now1))], now1)
+        assert len(s1) == 1 and s1[0].transition is SignalTransition.RAISED
+
+        # 周期 1：CLEARED（回落）
+        now2 = _utc(2026, 7, 27, 11, 0, 0)
+        s2 = ev.evaluate([_ctx(_state(vid, dwell=10.0, now=now2))], now2)
+        assert len(s2) == 1 and s2[0].transition is SignalTransition.CLEARED
+
+        # 周期 2：再次 RAISED（新风险）
+        now3 = _utc(2026, 7, 27, 11, 10, 50)
+        s3 = ev.evaluate([_ctx(_state(vid, dwell=350.0, now=now3))], now3)
+        assert len(s3) == 1 and s3[0].transition is SignalTransition.RAISED
+        # 新 RAISED 的 signal_id 不同于周期 1
+        assert s3[0].signal_id != s1[0].signal_id
+
+    def test_no_raised_when_never_triggered(self):
+        """从未触发的主体：全程无 RAISED 无 CLEARED。"""
+        ev = RealTimeRiskEvaluator(_thresholds(long_duration=300.0))
+        vid = str(uuid4())
+        # 5 帧 dwell=10（远低于阈值 300）
+        for i in range(5):
+            now = _utc(2026, 7, 27, 10, 0, i * 10)
+            sigs = ev.evaluate([_ctx(_state(vid, dwell=10.0, now=now))], now)
+            assert sigs == [], f"帧 {i} 不应产信号"

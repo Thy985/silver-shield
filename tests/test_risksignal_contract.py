@@ -418,3 +418,56 @@ def test_from_dict_preserves_paired_signal_id():
     restored = RiskSignal.from_dict(cleared.to_dict())
     assert restored.paired_signal_id == raised.signal_id
     assert restored.transition is SignalTransition.CLEARED
+
+
+# ---------------------------------------------------------------------------
+# 不污染 EventType（Stage A 边界守卫）
+# ---------------------------------------------------------------------------
+
+def test_event_types_unchanged_five_categories():
+    """Stage A 引入 RiskSignal 不得污染 §7.2 EventType 5 类枚举。
+
+    ADR-0021 §3.3：RiskSignal 是内部实时旁路产物，不进 MQTT 上报；
+    EventType 仍是历史 5 类（visit_normal / visit_pending_verify /
+    abnormal_dwell / repeat_visit / high_risk_approach），不新增"实时"类。
+    """
+    from home_perception.analysis.perception import EVENT_TYPES
+    assert set(EVENT_TYPES) == {
+        "visit_normal",
+        "visit_pending_verify",
+        "abnormal_dwell",
+        "repeat_visit",
+        "high_risk_approach",
+    }
+    assert len(EVENT_TYPES) == 5
+
+
+def test_risksignal_has_no_schema_version():
+    """RiskSignal 无 schema_version 字段（设计上不版本化）。
+
+    原因：RiskSignal 是内部实时旁路产物，不进 MQTT 上报（不跨设备 / 不跨服务），
+    无需 schema_version 做兼容协商。如未来需上报中心，再引入 schema_version
+    并走 ADR-0005 schema 评审。
+    """
+    sig = _make_signal()
+    d = sig.to_dict()
+    assert "schema_version" not in d
+    assert not hasattr(sig, "schema_version")
+
+
+# ---------------------------------------------------------------------------
+# JSON 可序列化（Stage A §8.2：to_dict / to_json 均可序列化）
+# ---------------------------------------------------------------------------
+
+def test_to_json_serializable():
+    """to_json 产出合法 JSON 字符串（含中文 / UUID / datetime ISO）。"""
+    import json
+    sig = _make_signal(
+        features={"dwell_seconds": 350.5, "is_odd_hour": True, "中文键": "值"},
+    )
+    j = sig.to_json()
+    # 合法 JSON 可反序列化
+    parsed = json.loads(j)
+    assert parsed["signal_id"] == sig.signal_id
+    assert parsed["features"]["中文键"] == "值"
+    assert parsed["transition"] == "raised"
