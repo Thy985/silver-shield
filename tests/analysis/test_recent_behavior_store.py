@@ -136,3 +136,41 @@ def test_negative_window_rejected():
 def test_enter_after_now_rejected():
     with pytest.raises(ValueError):
         RecentBehaviorStore().update("V", _utc(100), now=_utc(0), window_seconds=600)
+
+
+# ---------------------------------------------------------------------------
+# 空键清理（发现 4）：过期后不残留空列表
+# ---------------------------------------------------------------------------
+
+def test_empty_bucket_key_removed_after_expiry():
+    """所有进入记录过期后，visitor_instance_id 键应被删除（防空键累积）。"""
+    store = RecentBehaviorStore()
+    store.update("V", _utc(0), now=_utc(0), window_seconds=600)
+    assert "V" in store._entries
+    # t=700：cutoff=100，V 的 t=0 已过期 → 窗口空 → 键应被删除
+    store.update("V", _utc(0), now=_utc(700), window_seconds=600)
+    assert "V" not in store._entries
+
+
+def test_empty_bucket_key_removal_does_not_affect_other_visitors():
+    """一个访客过期删键不影响其他访客的账本。"""
+    store = RecentBehaviorStore()
+    store.update("V", _utc(0), now=_utc(0), window_seconds=600)
+    store.update("U", _utc(500), now=_utc(500), window_seconds=600)
+    # t=700：V 过期（cutoff=100），U 仍在窗口内（t=500 >= 100）
+    store.update("V", _utc(0), now=_utc(700), window_seconds=600)
+    assert "V" not in store._entries
+    assert "U" in store._entries
+    assert store.snapshot("U", now=_utc(700), window_seconds=600)["visits_in_window"] == 1
+
+
+def test_empty_bucket_removal_is_empty_property():
+    """所有访客过期后，is_empty 应为 True（无残留空键）。"""
+    store = RecentBehaviorStore()
+    store.update("V", _utc(0), now=_utc(0), window_seconds=600)
+    store.update("U", _utc(0), now=_utc(0), window_seconds=600)
+    assert not store.is_empty
+    # 两者都过期
+    store.update("V", _utc(0), now=_utc(700), window_seconds=600)
+    store.update("U", _utc(0), now=_utc(700), window_seconds=600)
+    assert store.is_empty

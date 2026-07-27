@@ -21,15 +21,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-
-def _utc_now() -> datetime:
-    """时区感知的 UTC 当前时间（对齐仓库其他领域对象，替代 deprecated `datetime.utcnow()`）。"""
-    return datetime.now(timezone.utc)
+from ..common.timeutil import now_dt, require_utc
 
 
 def _coerce_enum(enum_cls: type, value: Any, field_name: str) -> Enum:
@@ -50,20 +47,14 @@ def _coerce_enum(enum_cls: type, value: Any, field_name: str) -> Enum:
 
 
 def _coerce_uuid(value: Any) -> str:
-    """signal_id 接受 UUID 或 str（内部统一为 str）。"""
+    """signal_id 接受 UUID 或 str（内部统一为 str，并校验 UUID 格式）。"""
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, str):
+        # 校验字符串是合法 UUID 格式（防下游传 "not-a-uuid" 等非法值）
+        UUID(value)
         return value
     raise TypeError(f"signal_id 必须是 UUID 或 str，收到 {type(value).__name__}")
-
-
-def _require_utc(dt: datetime, field_name: str) -> None:
-    """校验 datetime 是 timezone-aware 且为 UTC（防御 naive 漏标，对齐 ADR-0007）。"""
-    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-        raise ValueError(
-            f"{field_name} 必须是 timezone-aware datetime（建议 UTC），收到 naive datetime: {dt!r}"
-        )
 
 
 # ============================================================================
@@ -177,7 +168,7 @@ class RiskSignal:
     track_id: Optional[int] = None
     visitor_instance_id: Optional[str] = None
     severity_hint: Optional[float] = None
-    created_at: datetime = field(default_factory=_utc_now)
+    created_at: datetime = field(default_factory=now_dt)
 
     def __post_init__(self) -> None:
         # 1) 枚举归一 + 闭合校验
@@ -196,7 +187,7 @@ class RiskSignal:
             )
 
         # 4) created_at 必须 UTC-aware
-        _require_utc(self.created_at, "created_at")
+        require_utc(self.created_at, "created_at")
 
         # 5) severity_hint 范围
         if self.severity_hint is not None:
@@ -214,10 +205,13 @@ class RiskSignal:
         forbidden_top = FORBIDDEN_RISKSIGNAL_FIELDS.intersection(self.__dict__.keys())
         if forbidden_top:
             raise ValueError(f"RiskSignal 含禁止字段 {forbidden_top}")
-        if isinstance(self.features, dict):
-            forbidden_in_features = FORBIDDEN_RISKSIGNAL_FIELDS.intersection(self.features.keys())
-            if forbidden_in_features:
-                raise ValueError(f"RiskSignal.features 含禁止字段 {forbidden_in_features}")
+        if not isinstance(self.features, dict):
+            raise TypeError(
+                f"features 必须是 dict，收到 {type(self.features).__name__}"
+            )
+        forbidden_in_features = FORBIDDEN_RISKSIGNAL_FIELDS.intersection(self.features.keys())
+        if forbidden_in_features:
+            raise ValueError(f"RiskSignal.features 含禁止字段 {forbidden_in_features}")
 
     def to_dict(self) -> Dict[str, Any]:
         """structlog-safe 字典（枚举转 value、datetime 转 ISO 字符串）。"""
@@ -239,3 +233,29 @@ class RiskSignal:
     def to_json(self) -> str:
         """JSON 序列化（日志归档 / 跨进程传递用）。"""
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RiskSignal":
+        """从 to_dict() 产出的字典反序列化（枚举 value → 枚举实例、ISO 字符串 → datetime）。
+
+        用于 Stage B/C 跨进程传递 / 日志回放 / 测试构造。与 `to_dict()` 严格对称。
+        """
+        return cls(
+            signal_id=data["signal_id"],
+            subject_type=data["subject_type"],
+            subject_id=data["subject_id"],
+            category=data["category"],
+            source=data["source"],
+            transition=data["transition"],
+            features=data["features"],
+            paired_signal_id=data.get("paired_signal_id"),
+            track_id=data.get("track_id"),
+            visitor_instance_id=data.get("visitor_instance_id"),
+            severity_hint=data.get("severity_hint"),
+            created_at=datetime.fromisoformat(data["created_at"]),
+        )
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "RiskSignal":
+        """从 to_json() 产出的 JSON 字符串反序列化。"""
+        return cls.from_dict(json.loads(json_str))
