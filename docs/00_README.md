@@ -21,9 +21,10 @@
 | 05 | `05_git_workflow.md` | 分支策略、提交规范、发布 |
 | 06 | `06_api_contract.md` | 与中心（AI 分析服务 / 业务服务）的接口契约 |
 | 07 | `07_event_schema.md` | 感知事件（VisitorEvent）字段与取值说明 |
-| 08 | `08_roadmap.md` | 分阶段研发路线与第一阶段任务拆解 |
+| 08 | `08_roadmap.md` | 分阶段研发路线与第一阶段任务拆解（§8.4 含 v2 演进路线） |
 | 09 | `09_risks.md` | 技术 / 项目风险与缓解 |
 | ENV | `DEVELOPMENT_ENV.md` | 开发/运行双环境说明（managed venv 跑 ruff/pytest · system Py3.14 跑 AI 栈 + E2E） |
+| HPC | `HPC-USAGE-GUIDE.md` | 高性能计算公共平台（傲飞）使用指南（GPU 推理 + Demo 部署操作手册） |
 | ADR | [`ADR/`](ADR/) | **架构决策记录**（为什么这样设计，可追溯）；编写规则见 [`ADR/README.md`](ADR/README.md) |
 
 ### P0-11 多角色协同闭环展示层（Demo）文档
@@ -36,6 +37,20 @@
 > Demo 展示层的架构决策见 [`ADR/0015`](ADR/0015-p0-11-demo-architecture.md)（技术选型）、
 > [`ADR/0016`](ADR/0016-p0-11-3-5-demo-runtime-lifecycle.md)（运行时生命周期）、
 > [`ADR/0017`](ADR/0017-p0-11-role-based-workflow-demo.md)（多角色协同闭环范围收敛）。
+
+### v2 演进设计文档（后 MVP · Stage A 已落地类型 + 契约测试）
+
+> 详见 [`08_roadmap.md`](08_roadmap.md) §8.4「v2 架构演进路线」。**命名约定**：Roadmap 的 **Phase** = 产品演进时间线；工程方案的 **Stage** = 代码迁移步骤（Phase 1 内部分 Stage A-D）。当前 **Stage A**（类型 + 契约测试）已在工作区落地，未接入 pipeline；Stage B（BehaviorState 接入）/ Stage C（RiskSignal 链路）/ Stage D（灰度开启）为后续迁移步骤。产品 Phase 2（证据链）/ Phase 4（身份系统化）为后续演进阶段。
+
+| 编号 | 文件 | 职责 |
+| --- | --- | --- |
+| DESIGN-RR | `DESIGN-realtime-riskstream-engineering-plan.md` | **实时风险状态流工程落地方案**：把 ADR-0021 落为文件清单 / 每帧执行顺序 / 状态机规范 / 测试矩阵 / Migration Plan（State→Signal→Observe→Decision→Memory→Agent） |
+| ADR-0018 | [`ADR/0018-separate-realtime-risk-signal-and-historical-visitor-event.md`](ADR/0018-separate-realtime-risk-signal-and-historical-visitor-event.md) | **方向**：实时风险信号与历史事件流分离（新增 Behavior State 双下游） |
+| ADR-0019 | [`ADR/0019-multimodal-evidence-fusion-architecture.md`](ADR/0019-multimodal-evidence-fusion-architecture.md) | **方向**：多模态证据融合架构（Vision / Audio 双独立感知链 + Evidence Fusion） |
+| ADR-0020 | [`ADR/0020-decouple-short-term-tracking-identity-and-long-term-visitor-identity.md`](ADR/0020-decouple-short-term-tracking-identity-and-long-term-visitor-identity.md) | **方向**：短期追踪身份（track_id）与长期访客身份（person_id）分离 |
+| ADR-0021 | [`ADR/0021-realtime-riskstream-concrete-design.md`](ADR/0021-realtime-riskstream-concrete-design.md) | **具体设计（Phase 1）**：Reality→State→Signal→Decision 四层 + `BehaviorState`/`RiskSignal`/`RealTimeRiskEvaluator`/adapter |
+| ADR-0022 | [`ADR/0022-evidence-chain-multimodal-interface.md`](ADR/0022-evidence-chain-multimodal-interface.md) | **具体设计（Phase 2）**：`EvidenceItem`(类型化证据) + `EvidenceAggregator`(只整理不重推) + `WarningEvent.evidence_items` |
+| ADR-0023 | [`ADR/0023-identity-continuity-system.md`](ADR/0023-identity-continuity-system.md) | **具体设计（Phase 4）**：track_id/visitor_instance_id/person_identity_id 三层 + `IdentityResolver`（v1 不冒充真实身份） |
 
 ### 开发手册（跨项目原则沉淀）
 

@@ -4,7 +4,7 @@
 >
 > - 状态：Draft（随 ADR-0021 Proposed 评审同步演进）
 > - 日期：2026-07-26
-> - 关联：ADR-0018（方向）/ ADR-0021（具体设计）/ ADR-0014（冻结契约）/ `docs/08_roadmap.md` §8.4 Phase 1
+> - 关联：ADR-0018（方向）/ ADR-0021（具体设计）/ ADR-0014（冻结契约）/ `docs/08_roadmap.md` §8.4 产品 Phase 1（实时风险 MVP）
 > - 定位：**比 ADR 更工程化**。ADR 回答"为什么、边界在哪"；本文回答"改哪个文件、每帧执行顺序、状态存哪、怎么测、怎么灰度"。
 > - 事实基线：`src/home_perception/runtime/pipeline.py`（P0-10 装配）、**289 测试全绿**（`v0.1.0-mvp-rc` 后基线）、CI = ruff + torch-free 合约测试（每 PR）+ 全栈 runtime（仅 main）。
 
@@ -40,7 +40,7 @@ def process_frame(self, frame, frame_index=0) -> FrameResult:
 | 2 | `perceptions = []` 两路合并后批量决策              | 历史路径**逐事件**决策（`_act_on_event`），`DecisionEngine.evaluate` 返回单个 warning | 实时路径新增**平行步骤** `_act_on_signals`，不重构既有逐事件循环（0 行为变化）                                               |
 | 3 | 隐含墙钟                                      | 全链路 `now_provider` 注入（DemoClock 模拟时间）                                 | `BehaviorBuilder` / `RealTimeRiskEvaluator` **必须**接同一 `now_provider`，否则 dwell 计算在 Demo 下失真（帧间毫秒级） |
 
-### 1.2 目标（Phase 1 完成后）
+### 1.2 目标（Stage B 完成后）
 
 ```python
 def process_frame(self, frame, frame_index=0) -> FrameResult:
@@ -247,7 +247,7 @@ visitor_instance_id 首次出现在 states（key=visitor_instance_id，非 track
 
 **禁止**：`if dwell_seconds > 300:`（写死后 Agent/运维调参困难，且与历史路径阈值漂移）。
 
-**Phase 1 阈值全部复用既有 `rule` 段**（不新增数值，实时与历史在阈值层就汇合）：
+**Stage B 阈值全部复用既有 `rule` 段**（不新增数值，实时与历史在阈值层就汇合）：
 
 ```yaml
 # config/default.yaml（现状，实时路径直接消费）
@@ -319,7 +319,7 @@ class FrameResult:
     risk_signals: List[RiskSignal] = field(default_factory=list)
 ```
 
-- **短期**（Phase 1）：仅 Demo 消费——`silver_demo` 网关经 WS 推给 Dashboard 展示"进行中风险"（RAISED 亮卡 / CLEARED 熄卡）。注意 `FrameResult` 在 ADR-0015 白名单内，字段**新增**为 MINOR，演示层按可选字段消费（缺失容错）。
+- **短期**（Stage B 起）：仅 Demo 消费——`silver_demo` 网关经 WS 推给 Dashboard 展示"进行中风险"（RAISED 亮卡 / CLEARED 熄卡）。注意 `FrameResult` 在 ADR-0015 白名单内，字段**新增**为 MINOR，演示层按可选字段消费（缺失容错）。
 - **长期**：`behavior_states` / `risk_signals` 是未来 Observation API / Memory Pipeline / Agent Context 的数据源——但**如何持久化、保留多久，由独立 Memory ADR 决策**（ADR-0021 §7.1 边界），本方案不为其设计存储。
 
 ---
@@ -342,7 +342,7 @@ class FrameResult:
 
 - 字段闭合：`signal_id / subject_type / subject_id / category / source / transition / features / created_at`（+ 顶级可选 `paired_signal_id`；+ 视觉冗余可选字段 `track_id` / `visitor_instance_id`）；
 - **配对字段定位**：`paired_signal_id` 是**顶级字段**而非 `features` 键；断言 `RAISED.paired_signal_id is None` 且 `CLEARED.paired_signal_id == 对应 RAISED.signal_id`；`created_at` 为 `datetime`（非 float 戳）；
-- 主体泛化：`subject_type` 枚举闭合（`VISITOR/PERSON/DEVICE/ENVIRONMENT`）；Phase 1 断言恒为 `VISITOR` 且 `subject_id==visitor_instance_id`；
+- 主体泛化：`subject_type` 枚举闭合（`VISITOR/PERSON/DEVICE/ENVIRONMENT`）；Stage A 断言恒为 `VISITOR` 且 `subject_id==visitor_instance_id`（产品 Phase 1 内恒 VISITOR，见 ADR-0021 §3.3）；
 - 枚举闭合：`SignalCategory` 5 值 × `SourceModality` 3 值 × `SignalTransition` 2 值 × `SubjectType` 4 值；与 ADR-0022 `EvidenceModality` **无交叉 import**；
 - **RAISED 必须能 CLEARED**（成对性：注入触发→回落序列，断言配对 signal_id）；
 - **CLEARED 不产生 Warning**（adapter 层拦截断言）；
@@ -366,17 +366,19 @@ class FrameResult:
 
 ## 9. Migration Plan（分阶段独立 PR，禁止一次重构完成）
 
+> **命名约定（重要）**：本文档的 **Stage A/B/C/D** 是**代码迁移阶段（Migration Stage）**，描述"如何把实时风险流分批接入 pipeline"。它与 [`docs/08_roadmap.md`](08_roadmap.md) §8.4 的**产品演进 Phase**（Phase 0 巩固 / Phase 1 实时风险 MVP / Phase 2 证据链 / ...）是**两个不同维度**——Stage 是"这个产品 Phase 内部的代码落地步骤"。本方案的 Stage A-D 全部属于 Roadmap 产品 Phase 1（实时风险 MVP）的内部迁移步骤。读者看到"Phase"一律指 Roadmap 产品演进阶段；看到"Stage"一律指本方案的代码迁移步骤。
+
 演进顺序遵循 **State → Signal → Observe → Decision → Memory → Agent**。实时系统最大的风险**不是代码错误，而是误报**——因此在"产信号"和"接报警"之间插入 **Shadow Mode（影子模式：产信号但不报警，只观察）**，用真实数据验证误报率后再接决策。
 
-| Phase | 内容 | PR 范围 | 验收 |
+| Stage | 内容 | PR 范围 | 验收 |
 | --- | --- | --- | --- |
-| **Phase 0**<br>类型 + Contract | 只加类型：`behavior_state.py`（含 `RealtimeContext`）/ `recent_behavior_store.py` / `risk_signal.py` + 契约测试。**不接入 pipeline** | `feat/realtime-types` | 289+新契约测试全绿；pipeline diff 为空 |
-| **Phase 1**<br>State + Observation | 接实时状态：`BehaviorBuilder` + `RecentBehaviorStore` 挂入 `process_frame`，`FrameResult.behavior_states` 可观察，**并输出 Observation（为什么触发 / 当前状态是什么）供调试**。**不产信号** | `feat/realtime-behavior-state` | flag 关闭输出与基线逐字段一致；开启仅多 behavior_states；Observation 可读 |
-| **Phase 2**<br>Signal · **Shadow Mode** | 接信号链：Evaluator + Adapter 产出 `RiskSignal`，**只经 `FrameResult` / Dashboard 展示，不接 DecisionPolicy、不产 Warning**。观察真实误报率 | `feat/realtime-signal-shadow` | §8 测试绿；`decision_engine` diff 为空；影子信号仅进 FrameResult |
-| **Phase 3**<br>Decision | 接 Warning：RAISED 信号经 adapter 汇入 `DecisionPolicy` 产 `WarningEvent`。**默认关闭**（`enabled=false` 合入 main），Demo 场景灰度开启 | `feat/realtime-signal-decision` | 关闭态 golden 回归过；E2E 断言事中 RAISED→Warning；5 分钟剧本（P0-11.5b）可复现 |
-| **Phase 4**<br>Memory（未来） | `BehaviorState` / `RiskSignal` 接入 Memory Pipeline —— **由独立 Memory ADR（ADR-0024）决策**，不在本方案范围 | （未来 ADR） | —— |
+| **Stage A**<br>类型与契约基础 | 只加类型：`behavior_state.py`（含 `RealtimeContext`）/ `recent_behavior_store.py` / `risk_signal.py` + 契约测试。**不接入 pipeline** | `feat/realtime-types` | 289+新契约测试全绿；pipeline diff 为空 |
+| **Stage B**<br>BehaviorState 接入 | 接实时状态：`BehaviorBuilder` + `RecentBehaviorStore` 挂入 `process_frame`，`FrameResult.behavior_states` 可观察，**并输出 Observation（为什么触发 / 当前状态是什么）供调试**。**不产信号** | `feat/realtime-behavior-state` | flag 关闭输出与基线逐字段一致；开启仅多 behavior_states；Observation 可读 |
+| **Stage C**<br>RiskSignal 链路接入 · **Shadow Mode** | 接信号链：Evaluator + Adapter 产出 `RiskSignal`，**只经 `FrameResult` / Dashboard 展示，不接 DecisionPolicy、不产 Warning**。观察真实误报率 | `feat/realtime-signal-shadow` | §8 测试绿；`decision_engine` diff 为空；影子信号仅进 FrameResult |
+| **Stage D**<br>灰度开启 · Decision | 接 Warning：RAISED 信号经 adapter 汇入 `DecisionPolicy` 产 `WarningEvent`。**默认关闭**（`enabled=false` 合入 main），Demo 场景灰度开启 | `feat/realtime-signal-decision` | 关闭态 golden 回归过；E2E 断言事中 RAISED→Warning；5 分钟剧本（P0-11.5b）可复现 |
+| ~~Phase 4 Memory~~ | `BehaviorState` / `RiskSignal` 接入 Memory Pipeline —— **超出本方案范围**，由独立 Memory ADR（ADR-0024）决策，属 Roadmap 产品 Phase 4 | （未来 ADR） | —— |
 
-每个 Phase 独立 PR、独立可回滚；任何 Phase 出问题，前一 Phase 的 main 状态即回退点。**Shadow Mode 是关键闸门：没有真实误报数据，不接决策。**
+每个 Stage 独立 PR、独立可回滚；任何 Stage 出问题，前一 Stage 的 main 状态即回退点。**Shadow Mode 是关键闸门：没有真实误报数据，不接决策。**
 
 ---
 
@@ -420,7 +422,7 @@ RiskSignal    ──→ Cognitive Observation Input
 | State / History 分离（BehaviorState 纯态 + RecentBehaviorStore） | §2.2 职责表 / §3.3 数据流 |
 | RiskSignal 主体泛化（subject_type / subject_id） | §2.2 / §8.2 契约字段 |
 | State Loss Policy（volatile 丢失语义）         | §4.3 |
-| Shadow Mode（先观察误报再接决策）              | §9 Phase 2 |
+| Shadow Mode（先观察误报再接决策）              | §9 Stage C |
 
 ---
 
@@ -430,12 +432,12 @@ RiskSignal    ──→ Cognitive Observation Input
 
 | # | 开放项 | 当前占位/默认 | 决策依赖 | 归属 |
 | - | --- | --- | --- | --- |
-| O1 | `proximity_score` 的实际计算（distance_to_door 归一化 / 深度相机 / 标定 `d_max`） | Phase 1 恒 `0.0`，不参与判定 | 是否引入门口 ROI 标定或深度硬件 | 本方案未来 Phase（非 Memory ADR） |
-| O2 | `BehaviorPhase.APPROACHING / DEPARTING` 的判定规则（趋势/轨迹） | 枚举已留、Phase 1 不产出 | 依赖 O1 的 proximity 时序 | 本方案未来 Phase |
+| O1 | `proximity_score` 的实际计算（distance_to_door 归一化 / 深度相机 / 标定 `d_max`） | Stage B 恒 `0.0`，不参与判定 | 是否引入门口 ROI 标定或深度硬件 | 本方案未来 Stage（非 Memory ADR） |
+| O2 | `BehaviorPhase.APPROACHING / DEPARTING` 的判定规则（趋势/轨迹） | 枚举已留、Stage B 不产出 | 依赖 O1 的 proximity 时序 | 本方案未来 Stage |
 | O3 | `eval_interval_frames` 生产默认值 | Demo `=1`；生产未定 | 边缘 CPU 实测吞吐 vs 可接受延迟 | 部署调优（非架构） |
 | O4 | RAISED 卡片 TTL 具体秒数（§4.3 UI 兜底） | 未定，仅定"必须有 TTL" | Dashboard 实测悬挂体感 | 演示层（silver_demo） |
-| O5 | "特征回落"触发 CLEARED 的判定细节（是否加迟滞/去抖窗口防抖振） | 未定，仅定"回落即 CLEARED" | Shadow Mode 观察抖动率 | Phase 2 Shadow 后回填 |
-| O6 | `visits_in_window` 是否计入"当前进行中这一次" | 倾向计入（与实时语义一致），待测锁定 | 与历史 `repeat_visit` 语义对齐核验 | Phase 1 实现时锁定 + 测试 pin |
+| O5 | "特征回落"触发 CLEARED 的判定细节（是否加迟滞/去抖窗口防抖振） | 未定，仅定"回落即 CLEARED" | Shadow Mode 观察抖动率 | Stage C Shadow 后回填 |
+| O6 | `visits_in_window` 是否计入"当前进行中这一次" | 倾向计入（与实时语义一致），待测锁定 | 与历史 `repeat_visit` 语义对齐核验 | Stage B 实现时锁定 + 测试 pin |
 | O7 | `RiskSignal` 是否最终进入 MQTT / 外部消息总线 | 当前仅 `FrameResult`→Demo，不发布 | 是否有外部订阅方需求 | 未来（ADR-0005 评审） |
 | O8 | `BehaviorState`/`RiskSignal` 的持久化粒度、保留时长、淘汰/摘要 | **明确不在本方案** | Memory Policy | **独立 Memory ADR（ADR-0024）** |
 | O9 | 多主体（非 VISITOR）来源（音频电话诈骗 / 传感器）的实际接入 | 接口已留（`subject_type`），实现未铺开 | ADR-0022/0023 推进 | 未来 ADR |

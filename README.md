@@ -17,6 +17,15 @@
   详见 `docs/ADR/0017` 与 `docs/DEMO-SCRIPT-P0-11-5b.md`。展示层零穿透 7 层冻结契约（ADR-0015）。
 - 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
 
+### v2 实时风险状态流（设计完成 · 未集成 · 未启用）
+
+> **严格区分**：设计完成 ≠ 集成完成 ≠ 默认启用。
+
+- **设计完成**：ADR-0018/0019/0020（方向）+ ADR-0021/0022/0023（具体设计）+ `docs/DESIGN-realtime-riskstream-engineering-plan.md`（工程方案）已就位。
+- **工程迁移 Stage A 进行中**：`BehaviorState` / `RiskSignal` / `RecentBehaviorStore` 类型 + 契约测试已在工作区落地，**未接入 pipeline**（`pipeline.py` diff 为空）。
+- **当前运行路径**：仍为 MVP 历史事件流（`VisitorEvent` 离场生成 → `RuleEngine` → `WarningEvent`），`realtime_risk.enabled=false` 默认关闭。
+- 后续 Stage B/C/D（工程方案 §9）才逐步接入实时状态 / 信号 / 决策；详见 `docs/08_roadmap.md` §8.4 产品 Phase 1。
+
 ## 架构总览（团队入口）
 
 ```
