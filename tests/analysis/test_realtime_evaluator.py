@@ -313,6 +313,79 @@ class TestThresholdsFromConfig:
 
 
 # ============================================================================
+# 5b. features 反映实际触发证据（防 visits_in_window 硬编码 0 回归）
+# ============================================================================
+
+class TestRaisedFeaturesReflectTrigger:
+    """RAISED 信号的 features 必须反映实际触发证据，不能硬编码。
+
+    回归保护：早期实现把 visits_in_window 硬编码为 0，导致由 visits 触发的
+    RAISED 信号经 signal_adapter 映射时落入兜底分支返回 visit_pending_verify
+    （错误映射）。本组测试断言 features 字段与输入一致。
+    """
+
+    def test_visits_triggered_features_visits_in_window_matches(self):
+        """visits 触发：features.visits_in_window 必须等于输入的 visits 值。"""
+        ev = RealTimeRiskEvaluator(_thresholds(repeat_count=2))
+        vid = str(uuid4())
+        s = ev.evaluate(
+            [_ctx(_state(vid, dwell=10.0), visits=5)],
+            _utc(2026, 7, 27, 10, 0, 10),
+        )
+        assert len(s) == 1 and s[0].transition is SignalTransition.RAISED
+        # 关键断言：features.visits_in_window 反映实际 visits=5，不是 0
+        assert s[0].features["visits_in_window"] == 5
+
+    def test_dwell_triggered_features_dwell_seconds_matches(self):
+        """dwell 触发：features.dwell_seconds 必须等于输入的 dwell 值（rounded）。"""
+        ev = RealTimeRiskEvaluator(_thresholds(long_duration=300.0))
+        vid = str(uuid4())
+        s = ev.evaluate(
+            [_ctx(_state(vid, dwell=350.5))],
+            _utc(2026, 7, 27, 10, 5, 50),
+        )
+        assert len(s) == 1 and s[0].transition is SignalTransition.RAISED
+        assert s[0].features["dwell_seconds"] == 350.5
+
+    def test_visits_triggered_features_visits_in_window_zero_when_no_visits(self):
+        """visits 未触发（=0）：features.visits_in_window=0（与输入一致，非硬编码）。"""
+        ev = RealTimeRiskEvaluator(_thresholds(long_duration=300.0))
+        vid = str(uuid4())
+        # dwell 触发，visits=0
+        s = ev.evaluate(
+            [_ctx(_state(vid, dwell=350.0), visits=0)],
+            _utc(2026, 7, 27, 10, 5, 50),
+        )
+        assert len(s) == 1 and s[0].transition is SignalTransition.RAISED
+        assert s[0].features["visits_in_window"] == 0  # 与输入一致
+
+    def test_odd_hour_triggered_features_is_odd_hour_true(self):
+        """odd_hour 触发：features.is_odd_hour=True。"""
+        ev = RealTimeRiskEvaluator(_thresholds())
+        vid = str(uuid4())
+        now = _utc(2026, 7, 27, 23, 0, 10)
+        s = ev.evaluate(
+            [_ctx(_state(vid, dwell=10.0, is_odd=True, now=now))],
+            now,
+        )
+        assert len(s) == 1 and s[0].transition is SignalTransition.RAISED
+        assert s[0].features["is_odd_hour"] is True
+
+    def test_features_thresholds_present(self):
+        """features.thresholds 必须含 long_duration_seconds + repeat_visit_count。"""
+        ev = RealTimeRiskEvaluator(_thresholds(long_duration=300.0, repeat_count=3))
+        vid = str(uuid4())
+        s = ev.evaluate(
+            [_ctx(_state(vid, dwell=350.0))],
+            _utc(2026, 7, 27, 10, 5, 50),
+        )
+        assert len(s) == 1
+        th = s[0].features["thresholds"]
+        assert th["long_duration_seconds"] == 300.0
+        assert th["repeat_visit_count"] == 3
+
+
+# ============================================================================
 # 6. 输入校验
 # ============================================================================
 

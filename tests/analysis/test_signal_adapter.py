@@ -262,3 +262,88 @@ class TestInputValidation:
         # meta 内也不含
         for f in FORBIDDEN_RISKSIGNAL_FIELDS:
             assert f not in (perc.meta or {}), f"meta 含禁止字段 {f}"
+
+
+# ============================================================================
+# 5. 端到端：RealTimeRiskEvaluator → signal_adapter（防 features 硬编码回归）
+# ============================================================================
+
+class TestEvaluatorToAdapterIntegration:
+    """端到端：evaluator 产出 RAISED → signal_adapter 映射 PerceptionEvent。
+
+    回归保护：早期 evaluator._emit_raised 把 visits_in_window 硬编码为 0，
+    导致 visits 触发的 RAISED 信号经 adapter 映射落入兜底分支返回
+    visit_pending_verify（错误）。本组测试通过真实 evaluator 产出信号喂给
+    adapter，断言映射正确。
+    """
+
+    def _eval_raised(
+        self,
+        *,
+        dwell: float,
+        visits: int,
+        is_odd: bool = False,
+        long_duration: float = 300.0,
+        repeat_count: int = 3,
+    ) -> RiskSignal:
+        """用 RealTimeRiskEvaluator 产出一个 RAISED 信号。"""
+        from home_perception.analysis.behavior_state import (
+            BehaviorPhase,
+            BehaviorState,
+            RealtimeContext,
+        )
+        from home_perception.analysis.realtime_risk_evaluator import RealTimeRiskEvaluator
+        from home_perception.analysis.rule_engine import ThresholdConfig
+
+        vid = str(uuid4())
+        fs = _utc(2026, 7, 27, 10, 0, 0)
+        # last_seen 由 dwell 推导（防秒越界）
+        if dwell >= 60:
+            ls = fs.replace(minute=fs.minute + int(dwell // 60), second=int(dwell % 60))
+        else:
+            ls = fs.replace(second=int(dwell))
+        state = BehaviorState(
+            track_id=1,
+            visitor_instance_id=vid,
+            phase=BehaviorPhase.ONGOING,
+            first_seen=fs,
+            last_seen=ls,
+            dwell_seconds=dwell,
+            is_odd_hour=is_odd,
+            proximity_score=0.0,
+        )
+        ctx = RealtimeContext(
+            current_state=state,
+            recent_behavior={"visits_in_window": visits},
+        )
+        ev = RealTimeRiskEvaluator(ThresholdConfig(
+            long_duration_seconds=long_duration,
+            repeat_visit_count=repeat_count,
+        ))
+        signals = ev.evaluate([ctx], _utc(2026, 7, 27, 10, 0, int(dwell) if dwell < 60 else 0))
+        assert len(signals) == 1, f"应产 1 个 RAISED，实际 {len(signals)}"
+        assert signals[0].transition is SignalTransition.RAISED
+        return signals[0]
+
+    def test_visits_triggered_maps_to_repeat_visit(self):
+        """visits 触发的 RAISED → adapter → repeat_visit（不是 visit_pending_verify）。"""
+        sig = self._eval_raised(dwell=10.0, visits=5, repeat_count=3)
+        perc = risk_signal_to_perception(sig, device_id="dev/test")
+        assert perc is not None
+        assert perc.event_type == "repeat_visit"
+        assert perc.repeat_count == 5
+
+    def test_dwell_triggered_maps_to_abnormal_dwell(self):
+        """dwell 触发的 RAISED → adapter → abnormal_dwell。"""
+        sig = self._eval_raised(dwell=350.0, visits=0, long_duration=300.0)
+        perc = risk_signal_to_perception(sig, device_id="dev/test")
+        assert perc is not None
+        assert perc.event_type == "abnormal_dwell"
+
+    def test_odd_hour_triggered_maps_to_visit_pending_verify(self):
+        """odd_hour 触发的 RAISED → adapter → visit_pending_verify。"""
+        sig = self._eval_raised(dwell=10.0, visits=0, is_odd=True)
+        perc = risk_signal_to_perception(sig, device_id="dev/test")
+        assert perc is not None
+        assert perc.event_type == "visit_pending_verify"
+        assert perc.is_odd_hour is True

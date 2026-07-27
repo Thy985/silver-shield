@@ -143,7 +143,7 @@ class RealTimeRiskEvaluator:
             if existing is None:
                 # 首次见到：创建条目
                 if triggered:
-                    signal = self._emit_raised(state, now)
+                    signal = self._emit_raised(ctx, now)
                     signals.append(signal)
                     self._active[vid] = _TrackRiskState(
                         phase=RiskPhase.ACTIVE_RISK,
@@ -180,7 +180,7 @@ class RealTimeRiskEvaluator:
                 else:
                     # NONE 状态：triggered 则 RAISED
                     if triggered:
-                        signal = self._emit_raised(state, now)
+                        signal = self._emit_raised(ctx, now)
                         signals.append(signal)
                         existing.phase = RiskPhase.ACTIVE_RISK
                         existing.raised_signal_id = signal.signal_id
@@ -222,7 +222,13 @@ class RealTimeRiskEvaluator:
         触发条件（与 RuleEngine 语义对齐，但只产信号不产 PerceptionEvent）：
         - dwell_seconds >= thresholds.long_duration_seconds，或
         - visits_in_window >= thresholds.repeat_visit_count，或
-        - is_odd_hour（state.is_odd_hour 且当前小时在 odd_hour_set 内）
+        - state.is_odd_hour 为 True
+
+        注意 odd_hour 语义：本模块只读 ``state.is_odd_hour``，该字段由
+        ``BehaviorBuilder`` 通过 ``compute_is_odd_hour(now)`` 计算（22:00–06:00），
+        **不**使用 ``ThresholdConfig.odd_hour_set``——后者是 ``RuleEngine.OddHourRule``
+        用的；两套 odd_hour 判定语义当前不一致是 Stage B 已知技术债务，Stage D
+        灰度开启前需统一（详见工程方案 §9 技术债务追踪）。
         """
         state = ctx.current_state
         recent = ctx.recent_behavior
@@ -246,11 +252,24 @@ class RealTimeRiskEvaluator:
     # 内部：信号构造
     # ------------------------------------------------------------------
 
-    def _emit_raised(self, state: BehaviorState, now: datetime) -> RiskSignal:
-        """构造 RAISED 信号（features 放触发证据）。"""
+    def _emit_raised(self, ctx: RealtimeContext, now: datetime) -> RiskSignal:
+        """构造 RAISED 信号（features 放触发证据）。
+
+        features 必须反映**实际触发证据**：
+        - ``dwell_seconds``：来自 state（当前累计停留时长）
+        - ``visits_in_window``：来自 ``ctx.recent_behavior``（跨访问统计），
+          不能硬编码 0——否则下游 ``signal_adapter`` 无法识别 visits 触发
+          会落入兜底分支返回 ``visit_pending_verify``（错误映射）
+        - ``is_odd_hour``：来自 state（BehaviorBuilder 按 now 计算）
+        """
+        state = ctx.current_state
+        recent = ctx.recent_behavior
+        visits = recent.get("visits_in_window", 0) if isinstance(recent, dict) else 0
+        if not isinstance(visits, (int, float)):
+            visits = 0
         features: Dict[str, Any] = {
             "dwell_seconds": round(state.dwell_seconds, 3),
-            "visits_in_window": 0,
+            "visits_in_window": int(visits),
             "is_odd_hour": state.is_odd_hour,
             "thresholds": {
                 "long_duration_seconds": self._thresholds.long_duration_seconds,
@@ -277,6 +296,7 @@ class RealTimeRiskEvaluator:
             visitor_instance_id=state.visitor_instance_id,
             track_id=state.track_id,
             dwell_seconds=state.dwell_seconds,
+            visits_in_window=visits,
         )
         return signal
 
