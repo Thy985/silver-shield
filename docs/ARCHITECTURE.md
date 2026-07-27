@@ -79,6 +79,54 @@ External Device / Video
 
 ---
 
+## 3.5 v2 架构演进（后 MVP · Stage A 已落地类型）
+
+> 总原则（Owner 评审 2026-07-26）：**冻结核心、增量扩展、避免重写**。历史管道（`VisitorEvent` 离场生成）没有错，只是不够实时；新能力以旁路 / 接口增量方式叠加，不推翻已冻结架构。详见 `docs/08_roadmap.md` §8.4。
+>
+> **命名约定**：下表 **Phase** = 产品演进时间线（Roadmap §8.4）；**Stage** = 代码迁移步骤（工程方案 §9，Phase 1 内部的分批落地）。两者维度不同，不混用。
+
+### 演进阶段
+
+| 阶段 | 目标 | 状态 | 对应 ADR |
+| --- | --- | --- | --- |
+| **产品 Phase 0** | Demo bug 修复 + ADR 整理 + 工程资产沉淀（MVP RC 巩固） | ✅ 已完成 | ADR-0016/0017 + 资产库 |
+| **产品 Phase 1 · 实时风险 MVP** | 把"离场报警"升级为"访问过程中报警"（内部分 Stage A-D 迁移） | 🟡 Stage A 已落地 | ADR-0021 / ADR-0018 |
+| **产品 Phase 2 · 证据链** | `WarningEvent.evidence_items` + 视觉 `EvidenceCollector` | ⏳ 未开始 | ADR-0022 / ADR-0019 |
+| **产品 Phase 3 · 音频双通道** | 薄双通道：`Video ⟍ Risk Fusion ⟋ Audio`（仅接口 + 最小演示） | ⏳ 未开始 | ADR-0022 接口就绪 / ADR-0019 |
+| **产品 Phase 4 · 身份系统化** | ReID / 跨天 Memory 产出真实 `person_identity_id` | ⏳ 未开始 | ADR-0023 / ADR-0020 |
+| **产品 Phase 5 · Agent** | 风险解释 / 主动询问 / 辅助决策 | ⏳ 未开始 | 后续 ADR |
+
+### 产品 Phase 1 内部的代码迁移 Stage（工程方案 §9）
+
+| Stage | 内容 | 状态 |
+| --- | --- | --- |
+| **Stage A** 类型与契约基础 | 只加类型 + 契约测试，不接入 pipeline | ✅ 工作区已落地（未 commit） |
+| **Stage B** BehaviorState 接入 | `BehaviorBuilder` 挂入 `process_frame`，可观察不产信号 | ⏳ 未开始 |
+| **Stage C** RiskSignal 链路接入 · Shadow | Evaluator + Adapter 产出 `RiskSignal`，只展示不接决策 | ⏳ 未开始 |
+| **Stage D** 灰度开启 · Decision | RAISED 信号经 adapter 汇入 `DecisionPolicy` 产 `WarningEvent` | ⏳ 未开始 |
+
+### Stage A 已落地内容（工作区，未 commit 到 main）
+
+新增三组类型（torch-free，进 CI 每 PR 合约子集）：
+
+- **`BehaviorState` + `RealtimeContext`**（`analysis/behavior_state.py`）—— ADR-0021 State Layer；纯当前生命周期态 `state=f(Reality, Time)`，不含跨访问统计。
+- **`RecentBehaviorStore`**（`analysis/recent_behavior_store.py`）—— 跨访问近期行为账本（`visits_in_window`），与 `BehaviorState` 职责分离。
+- **`RiskSignal` + 4 枚举**（`analysis/risk_signal.py`）—— ADR-0021 Signal Layer；瞬时跃迁消息（RAISED / CLEARED），`category × source × transition × subject_type` 正交，主体泛化预留无 track 场景。
+
+配套测试：`tests/test_risksignal_contract.py` + `tests/analysis/{test_behavior_state,test_recent_behavior_store}.py`。
+
+### 关键架构判断（沉淀自 Owner 评审 2026-07-26）
+
+1. `VisitorEvent` 离场生成没有错，只是不够实时。
+2. 实时风险应**新增旁路**（`realtime_risk.enabled=false` 默认关闭），不破坏历史链。
+3. 多模态应**增加证据维度**，而不是重构视觉系统。
+4. Agent 不是当前瓶颈，数据和事件体系才是。
+5. 身份系统是长期能力，**不应伪装成当前能力**（v1 `person_identity_id` 恒 None）。
+
+> 工程落地（每帧执行顺序 / 状态机规范 / 测试矩阵 / Migration）见 `docs/DESIGN-realtime-riskstream-engineering-plan.md`；v2 类型 API 速览见 `docs/API_REFERENCE.md` §12。
+
+---
+
 ## 4. 文档导航
 
 | 文档 | 用途 |

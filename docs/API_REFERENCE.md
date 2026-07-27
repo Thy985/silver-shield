@@ -272,7 +272,61 @@ External Device / Video
 
 ---
 
-## 12. 相关文档
+## 12. v2 Stage A 类型（前瞻接口，未接入 pipeline）
+
+> **状态**：工作区已落地，未接入 `process_frame`；ADR-0018/0019/0020（方向）+ ADR-0021/0022/0023（具体设计）+ `docs/DESIGN-realtime-riskstream-engineering-plan.md`（工程方案 §9 Migration Stage A）。Stage B 才接入 pipeline。
+>
+> **命名约定**：本节 "Stage A" 是工程方案 §9 的代码迁移阶段（Migration Stage），属 Roadmap 产品 Phase 1（实时风险 MVP）的内部步骤；与 Roadmap §8.4 的"产品演进 Phase"是两个维度。
+>
+> **契约定位**：本节类型**不在 L1/L2/L3 冻结契约内**（ADR-0014），仅 `RiskSignal` 走 ADR-0005 评审后入 L1。当前可经 `analysis/__init__.py` 导入，仅用于演示层 / 调试 / 后续 Stage B 装配预研。
+
+### BehaviorState + RealtimeContext  `[v2 P0 · 内部态]`
+
+- **位置**：`src/home_perception/analysis/behavior_state.py`
+- **角色**：ADR-0021 State Layer —— **实时感知域的工作状态（volatile working state）**，回答"此刻门口正在发生什么"。`state = f(Reality, Time)` 纯当前生命周期快照，**不含跨访问统计**。
+- **关键字段**：
+  - `phase: BehaviorPhase` ∈ {ONGOING, LEFT, APPROACHING(预留), DEPARTING(预留)}；Stage B 仅产出 ONGOING / LEFT
+  - `first_seen` / `last_seen`：datetime UTC（禁止 float 戳）
+  - `dwell_seconds`：float 秒，当前生命周期内累计
+  - `is_odd_hour`：f(now) 当前时刻属性
+  - `proximity_score`：float ∈ [0,1]，**Stage B 恒 0.0**（占位，不参与判定）
+  - `schema_version`：内部演进标记（不受 ADR-0014 约束）
+- **RealtimeContext** = `current_state: BehaviorState` + `recent_behavior: Dict[str, Any]`（来自 `RecentBehaviorStore`）—— `RealTimeRiskEvaluator` 的真正输入。State 与 History 在此组合。
+- **不入契约**：仅 `FrameResult` → 演示层观察，不对外发布。
+
+### RecentBehaviorStore  `[Stage A · 内部态]`
+
+- **位置**：`src/home_perception/analysis/recent_behavior_store.py`
+- **角色**：跨访问近期行为账本（滑窗计数），产出 `recent_behavior = {"visits_in_window": N}`。
+- **关键属性**：
+  - `track_key = visitor_instance_id`（**非 track_id**，防 ByteTrack 回收重用串号）
+  - `update()` 返回 `types.MappingProxyType`（只读，引用隔离，调用方误改不影响下一帧）
+  - volatile：进程重启即空（无持久化）
+- **职责边界**：`visits_in_window` 属跨访问统计（History 语义），**不**塞进 `BehaviorState`，避免状态对象背负两个时间尺度（ADR-0021 §3.2）。
+
+### RiskSignal + 4 枚举  `[Stage A · 待入 L1 契约]`
+
+- **位置**：`src/home_perception/analysis/risk_signal.py`
+- **角色**：ADR-0021 Signal Layer —— **瞬时跃迁消息**，描述"某一来源检测到一个异常迹象"。`RAISED` 与 `CLEARED` 是两条独立发射的消息，**持续态 `ACTIVE_RISK` 由 `RealTimeRiskEvaluator` 内部状态机持有**（Stage C 实现），下游依据 `RAISED→CLEARED` 两次跃迁推导展示态。
+- **正交枚举（不混装）**：
+  - `category: SignalCategory` ∈ {BEHAVIORAL, IDENTITY, COMMUNICATION, SAFETY, ENVIRONMENT} —— 风险语义域（非检测手段）
+  - `source: SourceModality` ∈ {VISION, AUDIO, SENSOR} —— 传感来源
+  - `transition: SignalTransition` ∈ {RAISED, CLEARED} —— 跃迁类型（非长期状态）
+  - `subject_type: SubjectType` ∈ {VISITOR, PERSON, DEVICE, ENVIRONMENT} —— 风险主体（前瞻接口，Stage A 恒 VISITOR，产品 Phase 1 内均为 VISITOR）
+- **关键不变式（`__post_init__` 强制）**：
+  - `transition==RAISED` ⇒ `paired_signal_id is None`
+  - `transition==CLEARED` ⇒ `paired_signal_id` 回填对应 RAISED 的 `signal_id`（**顶级字段**，不塞进 `features`）
+  - `created_at` 必须 UTC timezone-aware datetime（**禁止 float 戳**）
+  - `severity_hint` ∈ [0,1] 或 None
+  - 顶层与 `features` 内**结构性拒绝**黑名单字段（`fraud_result` / `is_fraud` / `verdict` 等，模块边界铁律）
+- **主体泛化**：`track_id` / `visitor_instance_id` 仅当 `subject_type==VISITOR` 时的便利冗余字段；为未来音频（电话诈骗 / `DEVICE`）/ 传感器（异常转账）等无 track 场景预留接口（ADR-0021 §3.3）。
+- **命名消歧**：本模块的 `SourceModality` 与 ADR-0022 的 `EvidenceModality` 是**两个独立限界上下文**的枚举（值集不同、语义不同），实现时禁止互相 import 复用或合并。
+
+> **Stage B 接入预告**（未实现）：`BehaviorBuilder` + `RealTimeRiskEvaluator` + `signal_adapter.risk_signal_to_perception()` 将在 `process_frame` 增加旁路（`realtime_risk.enabled=false` 默认关闭），实时信号经 adapter 复用既有 `PerceptionEvent` + `DecisionPolicy.decide()` 汇入同一决策中心，**不改 RuleEngine / DecisionEngine / 5 类 EventType**（详见工程方案 §3.1 / §6）。
+
+---
+
+## 13. 相关文档
 
 - `docs/CONTRACTS.md` —— 冻结契约（什么不能改）
 - `docs/ARCHITECTURE.md` —— 系统架构总览
@@ -280,4 +334,6 @@ External Device / Video
 - `docs/06_api_contract.md` —— 与中心 MQTT 契约
 - `docs/07_event_schema.md` —— 事件字段与取值
 - `docs/CONTRIBUTING.md` —— 贡献规范
+- `docs/DESIGN-realtime-riskstream-engineering-plan.md` —— [v2] 实时风险状态流工程落地方案（Phase 1 装配 / 测试 / Migration）
+- `docs/ADR/0021-realtime-riskstream-concrete-design.md` —— [v2] 实时风险流具体设计
 - `AGENTS.md` —— AI 协作强制规范（所有 PR 须满足）

@@ -1,7 +1,7 @@
 # 03 · 目录结构（Repository Layout）
 
 > **新人第一站**：先看本文档了解仓库结构，再看 [`API_REFERENCE.md`](API_REFERENCE.md)（接口入口）与 [`CONTRACTS.md`](CONTRACTS.md)（冻结契约）。
-> 本文档描述 `origin/main` 的当前结构（P0-10.5.4 仓库卫生清理后）。
+> 本文档描述 `origin/main` 的当前结构（P0-10.5.4 仓库卫生清理后）+ v2 Stage A 增量（标记 `[Stage A]`，属工程方案 §9 Migration Stage A，未接入 pipeline）。
 
 ## 顶层结构
 
@@ -52,7 +52,10 @@ home_perception/
 │   ├── rule_engine.py   #   RuleEngine：编排 4 基础 Rule + 1 复合 + CooldownGate
 │   ├── warning.py       #   WarningEvent（决策层状态机）
 │   ├── decision_engine.py   # DecisionEngine：PerceptionEvent → WarningEvent
-│   └── decision_policy.py   # DecisionPolicy（可替换决策策略）
+│   ├── decision_policy.py   # DecisionPolicy（可替换决策策略）
+│   ├── behavior_state.py        # [Stage A] BehaviorState + RealtimeContext（ADR-0021 State Layer 类型，未接入 pipeline）
+│   ├── recent_behavior_store.py # [Stage A] RecentBehaviorStore：跨访问近期行为账本（visits_in_window）
+│   └── risk_signal.py           # [Stage A] RiskSignal + 4 枚举（SignalCategory/SourceModality/SignalTransition/SubjectType）
 ├── evidence/            # 风险证据采集（副作用）
 │   ├── clip_collector.py #  触发式快照/片段采集
 │   └── storage.py       #  本地/COS 存储
@@ -96,6 +99,10 @@ common 横切
 tests/
 ├── conftest.py            # 公共 fixture
 ├── test_*.py              # 单元/集成测试（config/event/feature/detector/tracker/benchmark/runtime/warning 等）
+├── test_risksignal_contract.py  # [Stage A] RiskSignal 契约测试（字段闭合 / 枚举闭合 / 配对性 / 黑名单）
+├── analysis/              # [Stage A] v2 实时风险流单元测试（torch-free，进 CI 每 PR 合约子集）
+│   ├── test_behavior_state.py        #   BehaviorState / RealtimeContext 字段、UTC 校验、phase 枚举
+│   └── test_recent_behavior_store.py #   RecentBehaviorStore 滑窗 / 只读返回 / volatile 重启即空
 ├── contract/              # 契约测试（冻结门禁，攻击性测试）：schema / interface / state-machine / input-attack / config
 └── fixtures/              # 测试数据（CAVIAR 真实场景）+ 下载脚本
 ```
