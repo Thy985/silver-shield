@@ -23,6 +23,7 @@ silver-shield/
 ├── scripts/                   # 运行 / Demo 脚本
 ├── benchmark/                 # 性能基准
 ├── docs/                      # 文档体系（00-09 + ADR + DX 四篇）
+├── silver-engineering-assets/ # 工程资产库（长期可复制能力，10 类模式；母项目沉淀，新项目套结构）
 └── data/                      # 本地运行数据（均 gitignore）
 ```
 

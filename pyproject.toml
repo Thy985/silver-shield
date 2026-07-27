@@ -42,6 +42,9 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# 工程资产库（silver-engineering-assets/）是教学示例骨架，非生产代码；
+# 不参与 lint/format，避免示例代码风格阻塞 PR。
+extend-exclude = ["silver-engineering-assets"]
 
 [tool.black]
 line-length = 100

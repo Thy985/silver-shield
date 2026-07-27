@@ -25,6 +25,7 @@
 | 09 | `09_risks.md` | 技术 / 项目风险与缓解 |
 | ENV | `DEVELOPMENT_ENV.md` | 开发/运行双环境说明（managed venv 跑 ruff/pytest · system Py3.14 跑 AI 栈 + E2E） |
 | HPC | `HPC-USAGE-GUIDE.md` | 高性能计算公共平台（傲飞）使用指南（GPU 推理 + Demo 部署操作手册） |
+| ASSETS | [`../silver-engineering-assets/`](../silver-engineering-assets/) | **工程资产库**（长期可复制能力：架构/代码/测试/调试/Demo/前端/后端/ADR 模板/失败案例 10 类）；母项目沉淀，新项目套结构；统一索引见 [`HANDBOOK.md`](../silver-engineering-assets/HANDBOOK.md) |
 | ADR | [`ADR/`](ADR/) | **架构决策记录**（为什么这样设计，可追溯）；编写规则见 [`ADR/README.md`](ADR/README.md) |
 
 ### P0-11 多角色协同闭环展示层（Demo）文档
