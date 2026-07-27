@@ -33,6 +33,20 @@ jobs:
       - name: Run ruff
         run: ruff check src tests
 
+  # 阶段一致性锁：README「当前状态」= SSOT，AGENTS §10 / Roadmap §8.2 为投影。
+  # 脚本只读、加法型，仅用 Python 标准库（无依赖），退出码 0=一致 / 1=漂移 / 2=输入错误。
+  # 漂移即 PR 阻塞——防止文档间状态不一致悄然合入。
+  phase-consistency:
+    name: Phase consistency (SSOT lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Run phase consistency check
+        run: python scripts/phase_consistency_check.py
+
   # torch-free 契约/仪表盘测试：每 PR 运行，不安装 AI 栈（torch/ultralytics/opencv）。
   # 这些测试只 import 轻量模块（config / action.command / analysis.* / 仪表盘 HTML 文本），
   # 在 `pip install --no-deps -e .` + 轻量依赖下即可跑通。
