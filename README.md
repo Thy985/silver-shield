@@ -7,6 +7,11 @@
 
 ## 当前状态（MVP Release Candidate + 多角色协同闭环 Demo 完成）
 
+> **状态归属声明**：本节「当前状态」是项目阶段 / 交付状态的**单一事实源（SSOT）**。
+> `AGENTS.md` §10、`docs/08_roadmap.md` §8.2 为本节的**投影**，须与本节保持一致；
+> `docs/05_git_workflow.md` 仅就 Git 提交规范以 `AGENTS.md` 为准，不覆盖阶段状态 SSOT。
+> CI 门禁 `scripts/phase_consistency_check.py` 自动锁定此一致性。
+
 - ✅ P0-3~P0-10：检测 → 跟踪 → 事件 → 特征 → 规则 → 决策 → 行动 → 装配 全链路完成（289 测试全绿）
 - ✅ P0-10.5 架构冻结治理（ADR-0014 三级冻结 + 契约测试 + 收敛清理），架构漂移清零
 - ✅ P0-10.5.3 Developer API Surface 文档层（DX）已建立（见下方「团队第一入口」）

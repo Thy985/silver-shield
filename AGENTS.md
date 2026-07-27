@@ -271,7 +271,7 @@ AI Agent 在开始编码前，必须明确回答：
 
 | 项 | 说明 |
 | --- | --- |
-| 阶段 | MVP Release Candidate 已交付（P0-1~P0-10 全链路 + P0-10.5 冻结治理）；P0-11 多角色协同闭环 Demo 已完成（12/12 端到端验证） |
+| 阶段 | MVP Release Candidate 已交付（tag `v0.1.0-mvp-rc`，P0-1~P0-10 全链路 + P0-10.5 冻结治理，289 测试全绿）；P0-11 多角色协同闭环 Demo 已完成（12/12 端到端验证）。**本行为 README「当前状态」SSOT 的投影，须与 README 保持一致** |
 | 已完成 | P0-1 工程脚手架；P0-2 萤石稳健取流（RTSP/HLS + 断流重连）；P0-3 YOLO 检测；P0-4 FPS Benchmark；P0-5 目标跟踪；P0-6 VisitorEvent；P0-7a/b 特征 + 规则引擎；P0-8/9/10 决策 / 行动 / main 装配；P0-10.5 架构冻结治理；P0-11 多角色协同闭环 Demo（详见 `docs/08_roadmap.md` 与 `README.md`） |
 | 待办 | 无（MVP 范围全部交付）。后续增强归 v2 / P1：LLM 解释、多设备、中心联动、真实 App / 用户体系 / 推送 |
 | 已知基线偏差 | 早期 3 个脚手架提交已落 `origin/main`（早于本约定，属基线）；`prototypes/` 为历史验证脚本（含真实凭证，已 gitignore） |
