@@ -372,10 +372,11 @@ class FrameResult:
 
 | Stage | 内容 | PR 范围 | 验收 |
 | --- | --- | --- | --- |
-| **Stage A**<br>类型与契约基础 | 只加类型：`behavior_state.py`（含 `RealtimeContext`）/ `recent_behavior_store.py` / `risk_signal.py` + 契约测试。**不接入 pipeline** | `feat/realtime-types` | 289+新契约测试全绿；pipeline diff 为空 |
-| **Stage B**<br>BehaviorState 接入 | 接实时状态：`BehaviorBuilder` + `RecentBehaviorStore` 挂入 `process_frame`，`FrameResult.behavior_states` 可观察，**并输出 Observation（为什么触发 / 当前状态是什么）供调试**。**不产信号** | `feat/realtime-behavior-state` | flag 关闭输出与基线逐字段一致；开启仅多 behavior_states；Observation 可读 |
-| **Stage C**<br>RiskSignal 链路接入 · **Shadow Mode** | 接信号链：Evaluator + Adapter 产出 `RiskSignal`，**只经 `FrameResult` / Dashboard 展示，不接 DecisionPolicy、不产 Warning**。观察真实误报率 | `feat/realtime-signal-shadow` | §8 测试绿；`decision_engine` diff 为空；影子信号仅进 FrameResult |
-| **Stage D**<br>灰度开启 · Decision | 接 Warning：RAISED 信号经 adapter 汇入 `DecisionPolicy` 产 `WarningEvent`。**默认关闭**（`enabled=false` 合入 main），Demo 场景灰度开启 | `feat/realtime-signal-decision` | 关闭态 golden 回归过；E2E 断言事中 RAISED→Warning；5 分钟剧本（P0-11.5b）可复现 |
+| **Stage A** ✅<br>类型与契约基础 | 只加类型：`behavior_state.py`（含 `RealtimeContext`）/ `recent_behavior_store.py` / `risk_signal.py` + 契约测试。**不接入 pipeline** | `feat/realtime-types` → PR #60 | ✅ 289→443 测试全绿；pipeline diff 为空（commit `85aa885`） |
+| **Stage B** ✅<br>BehaviorState 接入 | 接实时状态：`BehaviorBuilder` + `RecentBehaviorStore` 挂入 `process_frame`，`FrameResult.behavior_states` 可观察，**并输出 Observation（为什么触发 / 当前状态是什么）供调试**。**不产信号** | `feat/realtime-behavior-state` → PR #68 | ✅ flag 关闭输出与基线逐字段一致；开启仅多 behavior_states；Observation 可读（commit `51b37b6`） |
+| **Stage C** ✅<br>RiskSignal 链路接入 · **Shadow Mode** | 接信号链：Evaluator + Adapter 产出 `RiskSignal`，**只经 `FrameResult` / Dashboard 展示，不接 DecisionPolicy、不产 Warning**。观察真实误报率 | `feat/realtime-signal-shadow` → PR #70 | ✅ §8 测试绿；`decision_engine` diff 为空；Shadow Mode 信号仅进 FrameResult（commit `5719153` + 修复 `e460786`） |
+| **Stage D** ✅<br>灰度开启 · Decision | 接 Warning：RAISED 信号经 adapter 汇入 `DecisionPolicy` 产 `WarningEvent`。**默认关闭**（`enabled=false` 合入 main），Demo 场景灰度开启 | `feat/realtime-signal-decision` → PR #70 | ✅ 关闭态 golden 回归过（678 测试全绿）；事中 RAISED→Warning 验证；历史路径零污染（commit `2d4b2bc` + 补充测试 `3e576a9`） |
+| **Stage E**<br>运行稳定性验证 · **Soak Test** | 长时间运行验证：状态机生命周期闭合、`_active` dict 无泄漏、RecentBehaviorStore 滑窗清理生效、实时路径延迟分布、历史路径零污染（长时间维度）。**不接业务准确率验证**（那是 E2E 职责） | `feat/soak-test` （待开） | 见 §9.2 |
 | ~~Phase 4 Memory~~ | `BehaviorState` / `RiskSignal` 接入 Memory Pipeline —— **超出本方案范围**，由独立 Memory ADR（ADR-0024）决策，属 Roadmap 产品 Phase 4 | （未来 ADR） | —— |
 
 每个 Stage 独立 PR、独立可回滚；任何 Stage 出问题，前一 Stage 的 main 状态即回退点。**Shadow Mode 是关键闸门：没有真实误报数据，不接决策。**
@@ -403,6 +404,223 @@ class FrameResult:
 - [x] 处理发现 4（空键清理）✅ PR #65 `fix/stage-a-tech-debt`
 - [x] 补上发现 7（`from_dict()` / `from_json()` 反序列化方法）✅ PR #65 `fix/stage-a-tech-debt`
 - [x] 补上发现 8（`_coerce_enum` TypeError 分支测试）✅ PR #65 `fix/stage-a-tech-debt`
+
+---
+
+### 9.2 Stage E：运行稳定性验证（Soak Test）
+
+> **定位**：Stage A-D 证明**逻辑正确性**（单元/契约/集成测试全绿）；Stage E 证明**运行稳定性**（长时间运行下状态不泄漏、生命周期闭合、延迟分布合理）。两者是不同维度——单测覆盖不到的"长时间 + 多主体 + 状态循环"类问题，由 soak test 暴露。
+>
+> **不是什么**：Stage E **不验证业务准确率**（误报率/漏报率），那是 E2E + 人工标注的职责；**不验证内存泄漏**（Python GC + tracemalloc 是另一套工具链）；**不验证并发安全**（pipeline 单线程，无并发风险）。
+
+#### 9.2.1 验证目标与动机
+
+ADR-0021 把系统从 `Frame → Event → Risk` 升级为 `Reality → State → Signal → Decision → Memory`。新引入的有状态对象：
+
+| 有状态对象 | 存储位置 | 泄漏风险 |
+| --- | --- | --- |
+| `RealTimeRiskEvaluator._active: Dict[visitor_instance_id, _TrackRiskState]` | 评估器内部 | 主体离场未清理 → 无界增长 |
+| `RecentBehaviorStore._entries: Dict[visitor_instance_id, List[datetime]]` | 账本内部 | 滑窗清理失效 → 空键累积 |
+| `Tracker._tracks: Dict[track_id, VisitorTrack]` | 跟踪器内部 | 离场未删除 → track_id 复用串号 |
+
+单测能覆盖"单次离场清理"，但覆盖不了"1 小时内 50 次进出循环后状态是否仍正确"。soak test 的核心价值：**用时间维度换问题暴露概率**。
+
+#### 9.2.2 核心指标（5 类）
+
+##### 指标 1：状态机生命周期闭合（**最关键**）
+
+```json
+{
+  "risk_signal": {
+    "raised_count": 23,
+    "cleared_count": 23,
+    "unpaired_raised": 0
+  }
+}
+```
+
+**不变式**：
+- `raised_count >= cleared_count`（允许 RAISED 未配对，但不可少）
+- `unpaired_raised == 0`（运行结束时**所有** RAISED 必须有配对 CLEARED）
+- 每个 `CLEARED.paired_signal_id` 必须等于对应 `RAISED.signal_id`（配对正确性，不能错配）
+
+**失败信号**：`unpaired_raised > 0` → 状态泄漏 / 离场未清理 / 评估器生命周期错误。
+
+##### 指标 2：评估器 `_active` dict 无泄漏
+
+```json
+{
+  "evaluator_state": {
+    "active_tracks_peak": 15,
+    "active_tracks_end": 0,
+    "active_risk_peak": 3,
+    "active_risk_end": 0
+  }
+}
+```
+
+**不变式**：
+- `active_tracks_end == 0`（所有主体离场后，dict 必须清空）
+- `active_tracks_peak` 应与场景设计的主体的并发数吻合（如场景最多 3 人并发，peak 不应 = 50）
+
+**失败信号**：`active_tracks_end > 0` → `_active` dict 泄漏；`active_tracks_peak` 远超预期 → track_id 重用未触发清理。
+
+##### 指标 3：BehaviorState 数量趋势（每分钟采样）
+
+```
+minute   behavior_states_count
+0        2
+10       3
+20       4
+30       3
+60       5
+```
+
+**不变式**：`behavior_states_count` 应在场景设计的主体数附近波动，**不随时间单调增长**。
+
+**失败信号**：曲线单调上升 → tracker 生命周期或 builder 有问题（如 LEFT 状态的 track 未被过滤）。
+
+##### 指标 4：实时路径延迟分布
+
+```json
+{
+  "latency_ms": {
+    "p50": 12,
+    "p95": 25,
+    "p99": 42,
+    "max": 85
+  }
+}
+```
+
+**不变式**：
+- `p99 < 100ms`（边缘 CPU 友好，不阻塞主循环）
+- `p95 / p50 < 5`（无长尾抖动）
+
+**失败信号**：`p99` 随时间增长 → 可能是 `_active` dict 变大导致遍历变慢；`p95/p50` 比值大 → 有偶发卡顿（GC / IO）。
+
+##### 指标 5：历史路径零污染（长时间维度）
+
+```json
+{
+  "warnings": {
+    "historical_count": 5,
+    "realtime_count": 12
+  }
+}
+```
+
+**不变式**：`historical_count` 不因实时路径开启而**减少**（同一视频流，关闭实时 vs 开启实时，历史 Warning 数应一致）。
+
+**失败信号**：开启实时后历史 Warning 减少 → 实时路径改变了历史语义（如 adapter 抢先产出导致历史路径被抑制）。
+
+#### 9.2.3 数据来源：已有视频循环 + DemoClock 加速
+
+**方案 A（推荐）**：复用 P0-11 Demo 的 CAVIAR / CCTV 视频资产，通过 `DemoClock` 加速时序。
+
+**可行性（已核实）**：
+- `DemoClock` 已实现（`runtime/pipeline.py:84-110`），支持 `interval_s` 控制每帧推进的模拟时间
+- `now_provider` 全链路注入（pipeline / behavior_builder / event_builder / rule_engine / decision_engine / executor），加速不改变任何风险判定逻辑
+- `CaviarFrameSource` 支持视频文件 + 断流重连
+- `RecentBehaviorStore` 有滑窗清理（`recent_behavior_store.py:71-77`），窗口外旧记录自动清理 + 空键删除
+
+**加速策略**：`DemoClock(interval_s=5.0)` → 每帧推进 5 秒模拟时间 → 10x 加速。1 小时真实视频 = 10 小时模拟时间，dwell_seconds 阈值 300s 在加速后只需 60s 真实时间触发。
+
+**已知限制**：
+- 视频循环时 tracker 会给同一人分配新 `track_id` + 新 `visitor_instance_id`，**无法验证"同一访客多次来访"的实时路径**（跨次识别属 v2 身份 ADR-0023 职责）。soak test 只测 track 生命周期循环，不测跨次识别。
+- 视频循环边界可能产生 ID 切换或异常离场，**脚本需记录循环边界事件**，分析报告时边界帧的信号单独标记，不计入 `unpaired_raised` 统计。
+
+#### 9.2.4 场景设计（4 个）
+
+| 场景 | 视频源 | 验证目标 | 预期指标 |
+| --- | --- | --- | --- |
+| **S1 正常访问** | CAVIAR 短停留视频循环 | 无异常泄漏 | `raised_count=0`，`active_tracks_end=0` |
+| **S2 异常停留** | CAVIAR 长停留视频循环 | RAISED→CLEARED 配对 | `raised_count==cleared_count`，`unpaired_raised=0` |
+| **S3 重复访问** | CCTV 视频循环 N 次 | track 创建/删除循环 | `active_tracks_peak` 稳定，不随循环次数增长 |
+| **S4 多主体并发** | CAVIAR 多人场景视频 | 多主体配对不错配 | `paired_signal_id` 全部正确配对，无错配 |
+
+**S3/S4 的区别**：S3 测"时间维度的循环"（同一场景重复），S4 测"空间维度的并发"（多主体同时在场）。两者泄漏模式不同：S3 暴露 track_id 复用串号，S4 暴露 paired_signal_id 错配。
+
+#### 9.2.5 运行时长递进（3 轮）
+
+| 轮次 | 时长 | 目标 | 准入条件 |
+| --- | --- | --- | --- |
+| **R1 烟雾测试** | 5 min | 脚本无 crash + 报告格式正确 | 工具链通畅（RunCommand long_running_process 模式验证） |
+| **R2 快速暴露** | 30 min | crash / 状态泄漏 / 卡死 | R1 报告格式正确 |
+| **R3 长期稳定** | 2 h | 内存趋势 / 状态增长 / 长期稳定 | R2 无泄漏 |
+| **R4 生产级**（可选） | 8 h | 接近生产 soak test | R3 稳定 |
+
+**原则**：不直接跑 30min。第一轮目标是验证脚本本身，不是发现问题。5min 足以验证工具链 + 报告 schema，然后再递进。
+
+#### 9.2.6 报告 schema
+
+输出到 `reports/soak_YYYYMMDD_HHMMSS.json`（`reports/` 已 gitignore），结构：
+
+```json
+{
+  "metadata": {
+    "scenario": "S2_abnormal_dwell",
+    "duration_s": 1800,
+    "frames_processed": 14400,
+    "started_at": "2026-07-27T12:00:00Z",
+    "finished_at": "2026-07-27T12:30:00Z",
+    "realtime_enabled": true,
+    "decision_enabled": true,
+    "clock_interval_s": 5.0
+  },
+  "risk_signal": {
+    "raised_count": 23,
+    "cleared_count": 23,
+    "unpaired_raised": 0,
+    "paired_correct": 23,
+    "paired_mismatched": 0
+  },
+  "evaluator_state": {
+    "active_tracks_peak": 3,
+    "active_tracks_end": 0,
+    "active_risk_peak": 1,
+    "active_risk_end": 0
+  },
+  "behavior_states_trend": [
+    {"minute": 0, "count": 1},
+    {"minute": 10, "count": 2},
+    {"minute": 30, "count": 1}
+  ],
+  "latency_ms": {
+    "p50": 12.3,
+    "p95": 25.1,
+    "p99": 42.7,
+    "max": 85.2
+  },
+  "warnings": {
+    "historical_count": 5,
+    "realtime_count": 12
+  },
+  "loop_boundaries": [
+    {"frame_index": 7200, "action": "reset_evaluator"},
+    {"frame_index": 14400, "action": "reset_evaluator"}
+  ]
+}
+```
+
+#### 9.2.7 与既有测试的边界
+
+| 测试类型 | 覆盖维度 | Stage E 关系 |
+| --- | --- | --- |
+| Unit Test（§8.1） | 单个类/函数逻辑 | Stage E 不重复，只测长时间维度 |
+| Contract Test（§8.2） | 数据契约不变式 | Stage E 不重复 |
+| Regression Test（§8.3） | flag 关闭 golden | Stage E 验证 flag 开启长时间稳定 |
+| E2E（§8.4） | 业务准确率 | **Stage E 明确不验证业务准确率** |
+| **Soak Test（§9.2）** | **长时间运行稳定性** | **本节定义** |
+
+#### 9.2.8 准入清单（开跑前须确认）
+
+- [ ] `scripts/soak_test_realtime_risk.py` 脚本已实现（含 `SoakMetrics` 类、`run_soak` 函数、报告输出）
+- [ ] `config/scenarios/` 目录已建，4 个场景 YAML 配置就绪
+- [ ] `reports/` 目录已 gitignore（确认 `.gitignore` 覆盖）
+- [ ] RunCommand 工具 `long_running_process` 模式已验证（先跑 5min 烟雾）
+- [ ] 视频循环边界处理策略已实现（`evaluator.reset()` 或边界帧标记）
+- [ ] 多主体场景视频资产已就位（CAVIAR 多人场景）
 
 ---
 
