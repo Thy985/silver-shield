@@ -1,7 +1,7 @@
 # ADR-0024: Memory 架构 · 三类记忆模型与 Memory Policy
 
-- **状态**：Proposed
-- **日期**：2026-07-27
+- **状态**：Accepted
+- **日期**：2026-07-27（Proposed）→ 2026-07-28（Accepted）
 - **范围**：v2 / 后 MVP 的 **Memory 架构设计**；回答"什么信息值得跨生命周期保留"以及"如何从 Raw State 提炼 Memory"。本 ADR 是 ADR-0021 §7.1 预留的 Memory ADR，是 Roadmap Phase 4-5（身份系统化 / Agent）的基础设施。当前 MVP 不实现。
 - **决策者**：Owner
 - **相关**：
