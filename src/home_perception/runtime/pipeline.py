@@ -38,7 +38,7 @@ from ..action.executor import ActionExecutor
 from ..action.notifier import MockNotifier
 from ..action.publisher import MockPublisher
 from ..analysis.behavior_builder import BehaviorBuilder
-from ..analysis.behavior_state import BehaviorState
+from ..analysis.behavior_state import BehaviorState, RealtimeContext
 from ..analysis.decision_engine import DecisionEngine
 from ..analysis.decision_policy import RuleBasedDecisionPolicy
 from ..analysis.event import VisitorEvent
@@ -46,6 +46,8 @@ from ..analysis.event_builder import VisitorEventBuilder
 from ..analysis.feature_extractor import FeatureExtractor
 from ..analysis.perception import PerceptionEvent
 from ..analysis.recent_behavior_store import RecentBehaviorStore
+from ..analysis.realtime_risk_evaluator import RealTimeRiskEvaluator
+from ..analysis.risk_signal import RiskSignal
 from ..analysis.rule_engine import RuleEngine
 from ..analysis.warning import WarningEvent
 from ..common.logging import get_logger
@@ -122,6 +124,11 @@ class FrameResult:
     # behavior_states 即实时观察（Observation）：每帧在场访客的纯实时快照，
     # 供 Demo Dashboard / 调试层展示"此刻门口正在发生什么"。Stage B 不产信号。
     behavior_states: List[BehaviorState] = field(default_factory=list)
+    # —— Stage C 新增（默认空列表 = 向后兼容，flag 关闭时与基线逐字段一致）——
+    # risk_signals 即实时风险跃迁（RAISED/CLEARED）：Shadow Mode 只进 FrameResult 供
+    # Dashboard 展示"进行中风险"（RAISED 亮卡 / CLEARED 熄卡），**不接决策、不产 Warning**。
+    # 接决策是 Stage D 的职责（经 signal_adapter 翻译为 PerceptionEvent 汇入 DecisionEngine）。
+    risk_signals: List[RiskSignal] = field(default_factory=list)
 
 
 @dataclass
@@ -200,6 +207,8 @@ class PerceptionPipeline:
         # —— Stage B 实时旁路组件（可选；flag 关闭时全 None，零运行时开销）——
         behavior_builder: Optional[BehaviorBuilder] = None,
         recent_behavior_store: Optional[RecentBehaviorStore] = None,
+        # —— Stage C 实时评估器（可选；flag 关闭时 None，Shadow Mode 不接决策）——
+        realtime_evaluator: Optional[RealTimeRiskEvaluator] = None,
         realtime_enabled: bool = False,
         eval_interval_frames: int = 1,
     ):
@@ -214,9 +223,10 @@ class PerceptionPipeline:
         # Demo 时序源（now_provider 即 tick 对象）；frame_interval_s>0 时 run() 每帧推进
         self._clock = now_provider
         self._frame_interval_s = frame_interval_s
-        # 实时旁路（Stage B）：flag 关闭时组件为 None，process_frame 跳过旁路块
+        # 实时旁路（Stage B/C）：flag 关闭时组件为 None，process_frame 跳过旁路块
         self._behavior_builder = behavior_builder
         self._recent_behavior_store = recent_behavior_store
+        self._realtime_evaluator = realtime_evaluator
         self._realtime_enabled = realtime_enabled
         self._eval_interval_frames = max(1, int(eval_interval_frames))
         if realtime_enabled and eval_interval_frames > 1:
@@ -283,17 +293,24 @@ class PerceptionPipeline:
             notifier=notifier,
             max_retries=settings.action.max_retries,
         )
-        # —— Stage B 实时旁路装配 ——
+        # —— Stage B/C 实时旁路装配 ——
         # flag 关闭时不构造组件（零运行时开销）；开启时构造 BehaviorBuilder +
-        # RecentBehaviorStore，挂入 process_frame 旁路块。阈值复用 settings.rule
-        # （单一阈值来源，工程方案 §5.1）。
+        # RecentBehaviorStore + RealTimeRiskEvaluator，挂入 process_frame 旁路块。
+        # 阈值复用 settings.rule（单一阈值来源，工程方案 §5.1）：同一 ThresholdConfig
+        # 实例喂 RuleEngine 与 RealTimeRiskEvaluator，改一处 YAML 两路同时生效。
         realtime_enabled = settings.realtime_risk.enabled
         eval_interval = settings.realtime_risk.eval_interval_frames
         behavior_builder: Optional[BehaviorBuilder] = None
         recent_behavior_store: Optional[RecentBehaviorStore] = None
+        realtime_evaluator: Optional[RealTimeRiskEvaluator] = None
         if realtime_enabled:
+            thresholds = build_threshold_config(settings.rule)
             behavior_builder = BehaviorBuilder(event_builder=event_builder)
             recent_behavior_store = RecentBehaviorStore()
+            realtime_evaluator = RealTimeRiskEvaluator(
+                thresholds=thresholds,
+                now_provider=now_provider,
+            )
         return cls(
             detector=det,
             tracker=tracker,
@@ -307,6 +324,7 @@ class PerceptionPipeline:
             frame_interval_s=frame_interval_s,
             behavior_builder=behavior_builder,
             recent_behavior_store=recent_behavior_store,
+            realtime_evaluator=realtime_evaluator,
             realtime_enabled=realtime_enabled,
             eval_interval_frames=eval_interval,
         )
@@ -351,27 +369,51 @@ class PerceptionPipeline:
             warnings.extend(ev_warnings)
             commands.extend(cmds)
 
-        # —— Stage B 实时旁路（feature flag 控制；关闭时零开销，行为与基线逐字段一致）——
-        # 仅产 behavior_states 供观察（Observation），不产信号（Stage C）、不接决策。
-        # 工程方案 §3.1 步骤 4：BehaviorBuilder 纯函数 + RecentBehaviorStore 跨访问账本。
+        # —— Stage B/C 实时旁路（feature flag 控制；关闭时零开销，行为与基线逐字段一致）——
+        # Stage B：BehaviorBuilder 纯函数 + RecentBehaviorStore 跨访问账本 → behavior_states（观察）
+        # Stage C：RealTimeRiskEvaluator 状态机 → risk_signals（Shadow Mode：只进 FrameResult，
+        #          不接 DecisionPolicy、不产 Warning；接决策是 Stage D 的职责）
+        # 工程方案 §3.1 步骤 4 + §5.3 跳帧对称：RAISED/CLEARED 仅在评估帧发生，延迟对称
         behavior_states: List[BehaviorState] = []
+        risk_signals: List[RiskSignal] = []
         if self._realtime_enabled and self._behavior_builder is not None:
-            # 跳帧对称（工程方案 §5.3）：仅在评估帧执行实时块，RAISED/CLEARED 延迟对称
             is_eval_frame = (frame_index % self._eval_interval_frames) == 0
             if is_eval_frame:
                 now = self._clock() if self._clock is not None else datetime.now(timezone.utc)
                 active_tracks = self.tracker.active()
                 behavior_states = self._behavior_builder.build(active_tracks, now)
-                # RecentBehaviorStore 跨访问账本更新（pipeline 遍历调用，见 Stage B Task Contract Q2）
-                if self._recent_behavior_store is not None:
+
+                # 构造 RealtimeContext 列表（BehaviorState + recent_behavior）喂给评估器
+                # 工程方案 §3.3：State 与 History 在此组合，评估器只读不写
+                # 注意：即使 behavior_states 为空（主体全部离场），也要调用 evaluate([])
+                # 让评估器走 missing_ids 路径补发 CLEARED（离场兜底，工程方案 §4.2 规则 2）
+                if (
+                    self._recent_behavior_store is not None
+                    and self._realtime_evaluator is not None
+                ):
                     window_s = self.feature_extractor.frequency_window_s
-                    for vt in active_tracks:
-                        visitor_uuid = self.event_builder.visitor_id_for(vt.track_id)
-                        if visitor_uuid is None or vt.enter_time is None:
+                    # 建立 track_id → enter_time 映射（active_tracks 与 behavior_states 同序）
+                    enter_time_map = {
+                        vt.track_id: vt.enter_time
+                        for vt in active_tracks
+                        if vt.enter_time is not None
+                    }
+                    ctxs: List[RealtimeContext] = []
+                    for state in behavior_states:
+                        enter_time = enter_time_map.get(state.track_id)
+                        if enter_time is None:
                             continue
-                        self._recent_behavior_store.update(
-                            str(visitor_uuid), vt.enter_time, now, window_s
+                        # 先更新账本（记录本次进入），再取只读快照组合进 ctx
+                        recent = self._recent_behavior_store.update(
+                            state.visitor_instance_id, enter_time, now, window_s
                         )
+                        ctxs.append(RealtimeContext(
+                            current_state=state,
+                            recent_behavior=dict(recent),  # 解 MappingProxyType 为普通 dict
+                        ))
+                    # 评估器消费 ctxs 产出 signals（RAISED + CLEARED）
+                    # ctxs 为空时评估器走 missing_ids 路径补发 CLEARED（离场兜底）
+                    risk_signals = self._realtime_evaluator.evaluate(ctxs, now)
 
         return FrameResult(
             frame_index=frame_index,
@@ -381,6 +423,7 @@ class PerceptionPipeline:
             warnings=warnings,
             commands=commands,
             behavior_states=behavior_states,
+            risk_signals=risk_signals,
         )
 
     def _act_on_event(
