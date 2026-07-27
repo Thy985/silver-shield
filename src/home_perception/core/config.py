@@ -316,10 +316,18 @@ class RealtimeRiskConfig(BaseModel):
     - ``eval_interval_frames``：每 N 帧评估一次（性能旋钮）。语义见工程方案 §5.3：
       RAISED/CLEARED **对称延迟**，最坏延迟 ≈ N×帧间隔；评估帧消费
       ``tracker.active()`` 全量在场主体（非增量）。
+    - ``decision_enabled``：Stage D 决策接入开关。默认 ``false``——Stage C
+      Shadow Mode（只产信号不接决策）即使 ``enabled=true`` 也不产 Warning；
+      ``decision_enabled=true`` 时 RAISED 信号经 ``signal_adapter`` 翻译为
+      ``PerceptionEvent`` 汇入 ``DecisionEngine`` 产 ``WarningEvent``。
+      **灰度策略**：先 ``enabled=true, decision_enabled=false`` 观察误报率
+      （Shadow Mode），数据可信后再 ``decision_enabled=true`` 接决策。
+      ``decision_enabled=true`` 隐含要求 ``enabled=true``（关闭态下此开关无意义）。
     """
 
     enabled: bool = False
     eval_interval_frames: int = 1
+    decision_enabled: bool = False
 
     @field_validator("eval_interval_frames", mode="before")
     @classmethod

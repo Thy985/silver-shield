@@ -47,8 +47,9 @@ from ..analysis.feature_extractor import FeatureExtractor
 from ..analysis.perception import PerceptionEvent
 from ..analysis.recent_behavior_store import RecentBehaviorStore
 from ..analysis.realtime_risk_evaluator import RealTimeRiskEvaluator
-from ..analysis.risk_signal import RiskSignal
+from ..analysis.risk_signal import RiskSignal, SignalTransition
 from ..analysis.rule_engine import RuleEngine
+from ..analysis.signal_adapter import risk_signal_to_perception
 from ..analysis.warning import WarningEvent
 from ..common.logging import get_logger
 from ..core.config import Settings
@@ -211,6 +212,8 @@ class PerceptionPipeline:
         realtime_evaluator: Optional[RealTimeRiskEvaluator] = None,
         realtime_enabled: bool = False,
         eval_interval_frames: int = 1,
+        # —— Stage D 决策接入开关（可选；默认 false，Shadow Mode 不产 Warning）——
+        decision_enabled: bool = False,
     ):
         self.detector = detector
         self.tracker = tracker
@@ -229,11 +232,20 @@ class PerceptionPipeline:
         self._realtime_evaluator = realtime_evaluator
         self._realtime_enabled = realtime_enabled
         self._eval_interval_frames = max(1, int(eval_interval_frames))
+        # Stage D 决策接入：true 时 RAISED 信号经 adapter 汇入 DecisionEngine 产 Warning。
+        # 灰度策略：先 enabled=true, decision_enabled=false 观察误报率，再开决策。
+        # decision_enabled=true 隐含要求 realtime_enabled=true（关闭态下此开关无意义）。
+        self._decision_enabled = bool(decision_enabled)
         if realtime_enabled and eval_interval_frames > 1:
             log.warning(
                 "pipeline.realtime_eval_throttled",
                 eval_interval_frames=eval_interval_frames,
                 note="RAISED/CLEARED 最坏延迟约 N×帧间隔",
+            )
+        if decision_enabled and not realtime_enabled:
+            log.warning(
+                "pipeline.decision_enabled_without_realtime",
+                note="decision_enabled=true 但 realtime_enabled=false，决策开关无意义",
             )
 
     # ------------------------------------------------------------------
@@ -300,6 +312,7 @@ class PerceptionPipeline:
         # 实例喂 RuleEngine 与 RealTimeRiskEvaluator，改一处 YAML 两路同时生效。
         realtime_enabled = settings.realtime_risk.enabled
         eval_interval = settings.realtime_risk.eval_interval_frames
+        decision_enabled = settings.realtime_risk.decision_enabled
         behavior_builder: Optional[BehaviorBuilder] = None
         recent_behavior_store: Optional[RecentBehaviorStore] = None
         realtime_evaluator: Optional[RealTimeRiskEvaluator] = None
@@ -327,6 +340,7 @@ class PerceptionPipeline:
             realtime_evaluator=realtime_evaluator,
             realtime_enabled=realtime_enabled,
             eval_interval_frames=eval_interval,
+            decision_enabled=decision_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -415,6 +429,18 @@ class PerceptionPipeline:
                     # ctxs 为空时评估器走 missing_ids 路径补发 CLEARED（离场兜底）
                     risk_signals = self._realtime_evaluator.evaluate(ctxs, now)
 
+                    # —— Stage D：决策接入（feature flag 控制；默认关闭 = Shadow Mode）——
+                    # RAISED 信号经 signal_adapter 翻译为 PerceptionEvent 汇入同一
+                    # DecisionEngine 产 WarningEvent；CLEARED 不进决策（仅随 FrameResult
+                    # 供展示层熄灭风险卡）。工程方案 §3.1 步骤 4 + §6 单一决策中心。
+                    if self._decision_enabled and risk_signals:
+                        rt_percs, rt_warnings, rt_cmds = self._act_on_signals(
+                            risk_signals, now
+                        )
+                        perception_events.extend(rt_percs)
+                        warnings.extend(rt_warnings)
+                        commands.extend(rt_cmds)
+
         return FrameResult(
             frame_index=frame_index,
             n_detections=len(dets),
@@ -451,6 +477,59 @@ class PerceptionPipeline:
             for c in cmds:
                 self.metrics.record_command(c.command_type)
         return percs, warnings, commands
+
+    def _act_on_signals(
+        self, signals: List[RiskSignal], now: datetime
+    ) -> Tuple[List[PerceptionEvent], List[WarningEvent], List[Any]]:
+        """Stage D：处理实时信号的下游链路（adapter → decision → action）。
+
+        与 ``_act_on_event`` 平行（不重构既有逐事件循环，0 行为变化）：
+        - ``RAISED`` 信号 → ``signal_adapter`` 翻译为 ``PerceptionEvent`` →
+          汇入同一 ``DecisionEngine.evaluate`` → 产 ``WarningEvent`` →
+          ``executor.execute`` 产 ``ActionCommand``；
+        - ``CLEARED`` 信号 → 不产出 ``PerceptionEvent``（``signal_adapter`` 返回 None），
+          仅随 ``FrameResult.risk_signals`` 供展示层熄灭风险卡（工程方案 §3.1 步骤 4）。
+
+        单一决策中心（工程方案 §6 检查清单第 4 条）：本方法**不**新建决策器，
+        复用 ``self.decision_engine``——同一 ``DecisionPolicy`` 解释历史与实时两路
+        PerceptionEvent，避免双决策中心漂移。
+
+        参数：
+        - ``signals``：评估器本帧产出的 RiskSignal 列表（含 RAISED + CLEARED）
+        - ``now``：当前时刻（用于 device_id 透传，与历史路径同源）
+
+        返回：(perception_events, warnings, commands)，调用方安全 extend。
+        """
+        # 1) 翻译：RAISED → PerceptionEvent；CLEARED → None（跳过）
+        rt_percs: List[PerceptionEvent] = []
+        for sig in signals:
+            if sig.transition is not SignalTransition.RAISED:
+                continue  # CLEARED 不进决策
+            perc = risk_signal_to_perception(
+                sig,
+                device_id=self.rule_engine.device_id,
+                location=self.rule_engine.location,
+            )
+            if perc is not None:
+                rt_percs.append(perc)
+        if not rt_percs:
+            return [], [], []
+
+        for p in rt_percs:
+            self.metrics.record_perception(p.event_type)
+
+        # 2) 决策：复用同一 DecisionEngine（单一决策中心）
+        warnings: List[WarningEvent] = []
+        commands: List[Any] = []
+        w = self.decision_engine.evaluate(rt_percs)
+        if w is not None:
+            self.metrics.record_warning(w.risk_level)
+            warnings.append(w)
+            cmds = self.executor.execute(w)
+            commands.extend(cmds)
+            for c in cmds:
+                self.metrics.record_command(c.command_type)
+        return rt_percs, warnings, commands
 
     def run(self, frames: List["object"], scenario: str = "unknown") -> RunSummary:
         """处理一整个帧序列（单场景 / 单视频源），返回汇总。

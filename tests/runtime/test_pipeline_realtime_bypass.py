@@ -92,8 +92,9 @@ def _build_pipeline(
     realtime_enabled: bool = False,
     eval_interval_frames: int = 1,
     thresholds: Optional[ThresholdConfig] = None,
+    decision_enabled: bool = False,
 ) -> PerceptionPipeline:
-    """构造 PerceptionPipeline，可选挂入 Stage B/C 实时旁路组件。"""
+    """构造 PerceptionPipeline，可选挂入 Stage B/C/D 实时旁路组件。"""
     tracker = VisitorTracker(absence_gap_s=5.0, now_provider=clock)
     event_builder = VisitorEventBuilder(tracker, source_video="demo/test", now_provider=clock)
     th = thresholds or ThresholdConfig()
@@ -128,6 +129,7 @@ def _build_pipeline(
         realtime_evaluator=evaluator,
         realtime_enabled=realtime_enabled,
         eval_interval_frames=eval_interval_frames,
+        decision_enabled=decision_enabled,
     )
 
 
@@ -326,6 +328,13 @@ class TestRealtimeRiskConfig:
         s = Settings.load()
         assert s.realtime_risk.enabled is False
         assert s.realtime_risk.eval_interval_frames == 1
+        assert s.realtime_risk.decision_enabled is False  # Stage D
+
+    def test_decision_enabled_default_false(self):
+        """Stage D 决策开关默认关闭。"""
+        from home_perception.core.config import RealtimeRiskConfig
+        c = RealtimeRiskConfig()
+        assert c.decision_enabled is False
 
 
 # ============================================================================
@@ -468,3 +477,235 @@ class TestStageCShadowMode:
         ]
         # 只应有一次 RAISED（首次触发后持续 ACTIVE_RISK 不重复）
         assert len(all_raised) == 1, f"应有 1 次 RAISED，实际 {len(all_raised)}"
+
+
+# ============================================================================
+# 7. Stage D：决策接入（RAISED → adapter → DecisionEngine → Warning）
+# ============================================================================
+
+class TestStageDFlagOffDecision:
+    """flag 关闭时 decision_enabled 无意义（无论取值，无实时 Warning）。"""
+
+    def test_flag_off_decision_off_no_realtime_warning(self):
+        """flag off + decision off：无实时 Warning（基线）。"""
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        clock = ManualClock()
+        plan = [_person(1), _person(1), _person(1)]
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=False, thresholds=th, decision_enabled=False,
+        )
+        results = _run_frames(p, 3)
+        # 无实时路径，无 risk_signals，无实时 Warning
+        for r in results:
+            assert r.risk_signals == []
+
+    def test_flag_off_decision_on_no_effect(self):
+        """flag off + decision on：decision_enabled 无意义（无实时路径触发）。
+
+        等价于基线——realtime_enabled=false 时 process_frame 跳过整个旁路块，
+        decision_enabled 即使为 true 也不会产生任何实时 Warning。
+        """
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        clock = ManualClock()
+        plan = [_person(1), _person(1), _person(1)]
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=False, thresholds=th, decision_enabled=True,
+        )
+        results = _run_frames(p, 3)
+        for r in results:
+            assert r.risk_signals == []  # 无实时路径
+
+
+class TestStageDShadowModeNoWarning:
+    """flag on + decision off：Shadow Mode（产信号但不接决策，无实时 Warning）。"""
+
+    def test_shadow_mode_raised_no_warning(self):
+        """flag on + decision off：RAISED 产出但不产实时 Warning。"""
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        clock = ManualClock()
+        plan = [_person(1), _person(1), _person(1)]  # 帧 2 dwell=2s 触发
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=True, thresholds=th, decision_enabled=False,
+        )
+        results = _run_frames(p, 3)
+
+        # 帧 2 应有 RAISED 信号
+        all_signals = [s for r in results for s in r.risk_signals]
+        raised = [s for s in all_signals if s.transition is SignalTransition.RAISED]
+        assert len(raised) >= 1, "应有 RAISED 信号"
+
+        # 但 Shadow Mode：不接决策 → 无额外 Warning 来自实时路径
+        # 注意：历史路径也可能产 Warning（dwell 超阈触发 abnormal_dwell），
+        # 这里只断言"实时路径未额外增加 Warning"——与 flag off 基线对比
+        clock_base = ManualClock()
+        p_base = _build_pipeline(
+            StubDetector(plan, clock_base), clock_base,
+            realtime_enabled=False, thresholds=th, decision_enabled=False,
+        )
+        results_base = _run_frames(p_base, 3)
+
+        for i, (r_shadow, r_base) in enumerate(zip(results, results_base)):
+            assert len(r_shadow.warnings) == len(r_base.warnings), (
+                f"frame {i}: Shadow Mode 应不增加 Warning "
+                f"(shadow={len(r_shadow.warnings)} base={len(r_base.warnings)})"
+            )
+
+
+class TestStageDDecisionOn:
+    """flag on + decision on：Stage D 决策接入（RAISED → Warning）。"""
+
+    def test_raised_produces_realtime_warning(self):
+        """flag on + decision on：RAISED 信号经 adapter 汇入 DecisionEngine 产 Warning。"""
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        clock = ManualClock()
+        # 持续在场 3 帧，帧 2 dwell=2s 触发 RAISED
+        plan = [_person(1), _person(1), _person(1)]
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=True, thresholds=th, decision_enabled=True,
+        )
+        results = _run_frames(p, 3)
+
+        # 帧 2 应有 RAISED 信号
+        r2 = results[2]
+        raised = [s for s in r2.risk_signals if s.transition is SignalTransition.RAISED]
+        assert len(raised) == 1, "帧 2 应有 1 个 RAISED"
+
+        # Stage D：RAISED → adapter → DecisionEngine → Warning
+        # 与 Shadow Mode 对比：decision on 应比 decision off 多出实时 Warning
+        clock_shadow = ManualClock()
+        p_shadow = _build_pipeline(
+            StubDetector(plan, clock_shadow), clock_shadow,
+            realtime_enabled=True, thresholds=th, decision_enabled=False,
+        )
+        results_shadow = _run_frames(p_shadow, 3)
+
+        # decision on 的 Warning 数应 > decision off（实时路径额外产 Warning）
+        total_warnings_on = sum(len(r.warnings) for r in results)
+        total_warnings_off = sum(len(r.warnings) for r in results_shadow)
+        assert total_warnings_on > total_warnings_off, (
+            f"Stage D 应增加 Warning：on={total_warnings_on} off={total_warnings_off}"
+        )
+
+        # 实时路径产出的 PerceptionEvent 应含 meta.realtime=True
+        rt_percs = [
+            p for r in results for p in r.perception_events
+            if (p.meta or {}).get("realtime") is True
+        ]
+        assert len(rt_percs) >= 1, "应有来自实时路径的 PerceptionEvent"
+
+    def test_cleared_does_not_produce_warning(self):
+        """flag on + decision on：CLEARED 信号不进决策（不产 PerceptionEvent / Warning）。
+
+        工程方案 §3.1 步骤 4：CLEARED 仅随 FrameResult 供展示层熄灭风险卡。
+        """
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        clock = ManualClock()
+        # 在场 3 帧（触发 RAISED）+ 离场 6 帧（触发 CLEARED）
+        plan = [_person(1), _person(1), _person(1)] + [[] for _ in range(6)]
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=True, thresholds=th, decision_enabled=True,
+        )
+        results = _run_frames(p, len(plan))
+
+        # 找 CLEARED 信号所在帧
+        cleared_frames = [
+            (i, s) for i, r in enumerate(results)
+            for s in r.risk_signals
+            if s.transition is SignalTransition.CLEARED
+        ]
+        assert len(cleared_frames) >= 1, "应有 CLEARED 信号"
+
+        # CLEARED 帧：不应有来自实时路径的 PerceptionEvent（CLEARED → adapter 返回 None）
+        for i, sig in cleared_frames:
+            r = results[i]
+            rt_percs_in_frame = [
+                p for p in r.perception_events
+                if (p.meta or {}).get("realtime") is True
+            ]
+            # CLEARED 不产 PerceptionEvent；但同帧可能有其他 RAISED（多主体场景）
+            # 本测试单主体，CLEARED 帧不应有实时 PerceptionEvent
+            assert rt_percs_in_frame == [], (
+                f"frame {i}: CLEARED 帧不应有实时 PerceptionEvent，"
+                f"实际 {len(rt_percs_in_frame)} 个"
+            )
+
+    def test_history_unchanged_vs_shadow_mode(self):
+        """Stage D on vs Shadow Mode：历史五字段逐字段一致（决策接入不污染历史路径）。
+
+        工程方案 §6 检查清单：DecisionEngine / DecisionPolicy diff 为空，
+        实时路径是平行步骤，不重构既有逐事件循环。
+        """
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        plan = [_person(1), _person(1), _person(1), [], []]
+
+        clock_shadow = ManualClock()
+        p_shadow = _build_pipeline(
+            StubDetector(plan, clock_shadow), clock_shadow,
+            realtime_enabled=True, thresholds=th, decision_enabled=False,
+        )
+        results_shadow = _run_frames(p_shadow, 5)
+
+        clock_dec = ManualClock()
+        p_dec = _build_pipeline(
+            StubDetector(plan, clock_dec), clock_dec,
+            realtime_enabled=True, thresholds=th, decision_enabled=True,
+        )
+        results_dec = _run_frames(p_dec, 5)
+
+        # 逐帧对比历史五字段
+        # 注意：_history_fields 不含 perception_events（实时路径会增加），
+        # 但含 n_visitor_events / warnings / commands 数量
+        # Stage D on 会增加 warnings/commands，所以这里只对比不受实时影响的部分：
+        # frame_index / n_detections / n_visitor_events（这些只由历史路径决定）
+        for i, (rs, rd) in enumerate(zip(results_shadow, results_dec)):
+            assert rs.frame_index == rd.frame_index, f"frame {i}: frame_index 不一致"
+            assert rs.n_detections == rd.n_detections, f"frame {i}: n_detections 不一致"
+            assert rs.n_visitor_events == rd.n_visitor_events, (
+                f"frame {i}: n_visitor_events 不一致 "
+                f"(shadow={rs.n_visitor_events} dec={rd.n_visitor_events})"
+            )
+
+
+class TestStageDFromSettingsAssembly:
+    """from_settings 装配：decision_enabled 透传。"""
+
+    def test_flag_off_decision_off_no_evaluator(self):
+        """flag off：from_settings 不构造实时组件（含 evaluator）。"""
+        s = Settings()
+        s.realtime_risk.enabled = False
+        s.realtime_risk.decision_enabled = False
+        from unittest.mock import MagicMock
+        fake_det = MagicMock()
+        p = PerceptionPipeline.from_settings(s, detector=fake_det)
+        assert p._realtime_enabled is False
+        assert p._realtime_evaluator is None
+        assert p._decision_enabled is False
+
+    def test_flag_on_decision_off_shadow_mode(self):
+        """flag on + decision off：构造实时组件，但 decision_enabled=False（Shadow Mode）。"""
+        s = Settings()
+        s.realtime_risk.enabled = True
+        s.realtime_risk.decision_enabled = False
+        from unittest.mock import MagicMock
+        fake_det = MagicMock()
+        p = PerceptionPipeline.from_settings(s, detector=fake_det)
+        assert p._realtime_enabled is True
+        assert p._realtime_evaluator is not None
+        assert p._decision_enabled is False
+
+    def test_flag_on_decision_on_stage_d(self):
+        """flag on + decision on：构造实时组件，decision_enabled=True（Stage D）。"""
+        s = Settings()
+        s.realtime_risk.enabled = True
+        s.realtime_risk.decision_enabled = True
+        from unittest.mock import MagicMock
+        fake_det = MagicMock()
+        p = PerceptionPipeline.from_settings(s, detector=fake_det)
+        assert p._realtime_enabled is True
+        assert p._realtime_evaluator is not None
+        assert p._decision_enabled is True
