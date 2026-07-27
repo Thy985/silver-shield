@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -55,11 +55,11 @@ class MemoryStatus(str, Enum):
 
 
 # record_id 前缀白名单（I1 幂等键派生约束，§5.1.1）
-RECORD_ID_PREFIXES: tuple = ("st-", "ep-", "sem-")
+RECORD_ID_PREFIXES: tuple[str, ...] = ("st-", "ep-", "sem-")
 
 
 # enum 闭合性基线（契约测试据此断言"枚举值不漂移"）
-MEMORY_STATUS_VALUES: tuple = tuple(e.value for e in MemoryStatus)
+MEMORY_STATUS_VALUES: tuple[str, ...] = tuple(e.value for e in MemoryStatus)
 
 
 class RecordIdPrefix(str, Enum):
@@ -171,21 +171,57 @@ def _validate_record_id(record_id: str, expected_prefix: RecordIdPrefix) -> None
         )
 
 
-def _validate_source_event_ids(source_event_ids: List[str]) -> None:
-    """I4 可解释性校验：source_event_ids 不能为空。
+def _validate_non_empty_str_list(
+    ids: List[str], field_name: str = "source_event_ids"
+) -> None:
+    """I4 可解释性校验：id 列表不能为空，且每个元素必须是非空 str。
 
-    每条 MemoryRecord 必须引用 source evidence（至少一个 source event id），
-    否则 Memory 变成黑盒，Agent 无法回答"这个记忆基于哪个事件"。
+    通用校验器，同时服务两种语义：
+    - `field_name="source_event_ids"`（ShortTermRecord / EpisodicRecord）：
+      引用触发本记录的源事件 id（signal_id / event_id / warning_id ...）。
+    - `field_name="source_episode_ids"`（SemanticAggregate）：
+      引用聚合源 Episode 的 record_id（注意是 Episode，不是 Event）。
+
+    两者都属 I4 可解释性约束：每条 MemoryRecord 必须可追溯到源对象，
+    否则 Memory 变成黑盒，Agent 无法回答"这个记忆基于哪个事件/Episode"。
     """
-    if not source_event_ids:
+    if not ids:
         raise ValueError(
-            "source_event_ids 不能为空（I4 可解释性：每条记忆必须可追溯到源事件）"
+            f"{field_name} 不能为空（I4 可解释性：每条记忆必须可追溯到源对象）"
         )
-    for i, sid in enumerate(source_event_ids):
+    for i, sid in enumerate(ids):
         if not isinstance(sid, str) or not sid.strip():
             raise ValueError(
-                f"source_event_ids[{i}] 必须是非空 str，收到 {sid!r}"
+                f"{field_name}[{i}] 必须是非空 str，收到 {sid!r}"
             )
+
+
+def _coerce_memory_status(
+    value: Any, field_name: str = "memory_status"
+) -> MemoryStatus:
+    """将 str / MemoryStatus 归一为 MemoryStatus 枚举。
+
+    三个 Record 的 `__post_init__` 共用此函数（DRY）。
+
+    - 已是 MemoryStatus：原样返回
+    - str：尝试 `MemoryStatus(value)`，失败抛 ValueError（含合法值清单）
+    - 其他类型：抛 TypeError
+    """
+    if isinstance(value, MemoryStatus):
+        return value
+    if isinstance(value, str):
+        try:
+            return MemoryStatus(value)
+        except ValueError as exc:
+            valid = ", ".join(repr(e.value) for e in MemoryStatus)
+            raise ValueError(
+                f"{field_name} 必须是 MemoryStatus 之一，"
+                f"收到 {value!r}；合法值：{valid}"
+            ) from exc
+    raise TypeError(
+        f"{field_name} 必须是 MemoryStatus 或 str，"
+        f"收到 {type(value).__name__}"
+    )
 
 
 # ============================================================================
@@ -193,7 +229,7 @@ def _validate_source_event_ids(source_event_ids: List[str]) -> None:
 # ============================================================================
 
 # to_dict 字段闭合基准（契约测试据此断言"字段集合恒定"）
-SHORT_TERM_RECORD_DICT_KEYS: tuple = (
+SHORT_TERM_RECORD_DICT_KEYS: tuple[str, ...] = (
     "record_id",
     "visitor_instance_id",
     "phase",
@@ -256,24 +292,10 @@ class ShortTermRecord:
             raise ValueError("phase 不能为空")
 
         # 3) I4 可解释性
-        _validate_source_event_ids(self.source_event_ids)
+        _validate_non_empty_str_list(self.source_event_ids, "source_event_ids")
 
         # 4) memory_status 归一为枚举
-        if not isinstance(self.memory_status, MemoryStatus):
-            if isinstance(self.memory_status, str):
-                try:
-                    self.memory_status = MemoryStatus(self.memory_status)
-                except ValueError as exc:
-                    valid = ", ".join(repr(e.value) for e in MemoryStatus)
-                    raise ValueError(
-                        f"memory_status 必须是 MemoryStatus 之一，"
-                        f"收到 {self.memory_status!r}；合法值：{valid}"
-                    ) from exc
-            else:
-                raise TypeError(
-                    f"memory_status 必须是 MemoryStatus 或 str，"
-                    f"收到 {type(self.memory_status).__name__}"
-                )
+        self.memory_status = _coerce_memory_status(self.memory_status)
 
         # 5) phase 闭合校验（Phase 1 仅 none / active_risk）
         valid_phases = ("none", "active_risk")
@@ -346,7 +368,7 @@ class ShortTermRecord:
 # ============================================================================
 
 # to_dict 字段闭合基准
-EPISODIC_RECORD_DICT_KEYS: tuple = (
+EPISODIC_RECORD_DICT_KEYS: tuple[str, ...] = (
     "record_id",
     "visitor_instance_id",
     "person_identity_id",
@@ -435,24 +457,10 @@ class EpisodicRecord:
             )
 
         # 3) I4 可解释性
-        _validate_source_event_ids(self.source_event_ids)
+        _validate_non_empty_str_list(self.source_event_ids, "source_event_ids")
 
         # 4) memory_status 归一
-        if not isinstance(self.memory_status, MemoryStatus):
-            if isinstance(self.memory_status, str):
-                try:
-                    self.memory_status = MemoryStatus(self.memory_status)
-                except ValueError as exc:
-                    valid = ", ".join(repr(e.value) for e in MemoryStatus)
-                    raise ValueError(
-                        f"memory_status 必须是 MemoryStatus 之一，"
-                        f"收到 {self.memory_status!r}；合法值：{valid}"
-                    ) from exc
-            else:
-                raise TypeError(
-                    f"memory_status 必须是 MemoryStatus 或 str，"
-                    f"收到 {type(self.memory_status).__name__}"
-                )
+        self.memory_status = _coerce_memory_status(self.memory_status)
 
         # 5) risk_level 闭合校验（与 WarningEvent 对齐）
         valid_risk_levels = ("LOW", "MEDIUM", "HIGH")
@@ -546,7 +554,7 @@ class EpisodicRecord:
 # ============================================================================
 
 # to_dict 字段闭合基准
-SEMANTIC_AGGREGATE_DICT_KEYS: tuple = (
+SEMANTIC_AGGREGATE_DICT_KEYS: tuple[str, ...] = (
     "aggregate_id",
     "dimension",
     "period_key",
@@ -619,24 +627,10 @@ class SemanticAggregate:
             )
 
         # 4) I4 可解释性（聚合也必须可追溯到源 Episode）
-        _validate_source_event_ids(self.source_episode_ids)
+        _validate_non_empty_str_list(self.source_episode_ids, "source_episode_ids")
 
         # 5) memory_status 归一
-        if not isinstance(self.memory_status, MemoryStatus):
-            if isinstance(self.memory_status, str):
-                try:
-                    self.memory_status = MemoryStatus(self.memory_status)
-                except ValueError as exc:
-                    valid = ", ".join(repr(e.value) for e in MemoryStatus)
-                    raise ValueError(
-                        f"memory_status 必须是 MemoryStatus 之一，"
-                        f"收到 {self.memory_status!r}；合法值：{valid}"
-                    ) from exc
-            else:
-                raise TypeError(
-                    f"memory_status 必须是 MemoryStatus 或 str，"
-                    f"收到 {type(self.memory_status).__name__}"
-                )
+        self.memory_status = _coerce_memory_status(self.memory_status)
 
         # 6) episode_count >= 0
         if not isinstance(self.episode_count, int) or self.episode_count < 0:
@@ -647,7 +641,7 @@ class SemanticAggregate:
         # 7) confidence ∈ [0, 1]
         if not isinstance(self.confidence, (int, float)):
             raise TypeError(
-                f"confidence 必须是 float，收到 {type(self.confidence).__name__}"
+                f"confidence 必须是 int 或 float，收到 {type(self.confidence).__name__}"
             )
         if not (0.0 <= float(self.confidence) <= 1.0):
             raise ValueError(
@@ -708,11 +702,16 @@ class SemanticAggregate:
 # ============================================================================
 
 def records_equal(a: Any, b: Any) -> bool:
-    """深度比较两个 Memory record 是否字段级相等（忽略 created_at 之外的细微差异）。
+    """深度比较两个 Memory record 是否字段级相等。
 
-    用于 Replay Test（§6.7）的 baseline 比对。当前实现用 `asdict` 深度比较，
-    嵌套 dataclass 也会展开。datetime 直接比较（要求精确一致）。
+    用于 Replay Test（§6.7）的 baseline 比对。直接使用 dataclass 生成的
+    `__eq__`（按字段逐字段比较，嵌套 dataclass 递归调用其 `__eq__`，
+    datetime 精确比较，List[str] 逐元素比较）。
+
+    保留 `type(a) is not type(b)` 前置检查以拒绝跨类型比较（如 ShortTermRecord
+    vs EpisodicRecord），避免 dataclass `__eq__` 在跨类型时直接返回 False
+    的隐式行为显式化。
     """
     if type(a) is not type(b):
         return False
-    return asdict(a) == asdict(b)
+    return a == b

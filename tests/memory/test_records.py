@@ -143,8 +143,10 @@ class TestShortTermRecord:
     def test_default_created_at_utc(self):
         """created_at 默认 UTC timezone-aware。"""
         rec = _make_short_term()
-        require_utc = rec.created_at.tzinfo is not None
-        assert require_utc
+        # 注意：变量名用 has_tz，避免与 home_perception.common.timeutil.require_utc
+        # 函数同名造成语义混淆（本测试文件未 import 该函数，但命名应一致避歧义）。
+        has_tz = rec.created_at.tzinfo is not None
+        assert has_tz
         assert rec.created_at.utcoffset() == timezone.utc.utcoffset(None)
 
     def test_record_id_prefix_validation(self):
@@ -372,7 +374,7 @@ class TestSemanticAggregate:
 
     def test_source_episode_ids_empty_rejected(self):
         """I4 可解释性：聚合也必须可追溯。"""
-        with pytest.raises(ValueError, match="source_event_ids 不能为空"):
+        with pytest.raises(ValueError, match="source_episode_ids 不能为空"):
             _make_semantic(source_episode_ids=[])
 
     def test_episode_count_negative_rejected(self):
