@@ -102,22 +102,32 @@ Semantic      月/年级           Pattern（高抽象）
 > BehaviorState（当前状态快照）
 >     │
 >     ▼
-> RealTimeRiskEvaluator（状态机评估）
+> RealTimeRiskEvaluator（状态机评估，产出运行时态）
 >     │
 >     ▼
 > RiskSignal（transition event，跃迁事件，不是状态）
 > ```
-> 因此 Short-term Memory 的来源必须**按对象类型区分语义**：状态快照 vs 状态机态 vs 跃迁事件，三者不能混为一谈。
+> 因此 Short-term Memory 的输入必须**按类型区分语义**：StateSnapshot（状态快照）vs RiskStateMachineRuntimeState（状态机运行时态）vs TransitionEvent（跃迁事件），三者不能混为一谈。本 ADR 只定义输入类型，不依赖任何类的内部实现（见 §3.1.1 实现中立原则）。
 
 #### 3.1.1 Short-term Memory（工作记忆）
 
 | 字段 | 值 |
 | --- | --- |
-| **来源** | `BehaviorState`（状态快照）/ `RealTimeRiskEvaluator` 内部状态机态（`_active` dict）/ `RiskSignal`（作为 **transition input**，不是状态） |
+| **输入** | **StateSnapshot**（当前状态，由 `BehaviorState` 承载）+ **TransitionEvent**（状态变化，由 `RiskSignal` 承载） |
 | **时间尺度** | 分钟级（当前访问生命周期 + 短期缓存） |
 | **生命周期** | 访客离场后短期保留（如 5 分钟），过期清除 |
 | **用途** | Agent "现在发生什么"的输入；进程重启后的状态恢复（TD-0027） |
 | **存储** | 进程内（volatile）+ 可选短期持久化（用于重启恢复） |
+
+**输入类型定义**（架构层抽象，不依赖具体实现）：
+
+| 输入类型 | 语义 | 当前承载对象 |
+| --- | --- | --- |
+| StateSnapshot | 当前状态快照（低抽象） | `BehaviorState` |
+| TransitionEvent | 状态跃迁事件（触发写入） | `RiskSignal` |
+| RiskStateMachineRuntimeState | 风险状态机运行时态（如"哪个 track 当前处于 ACTIVE_RISK"） | 由 ADR-0021 `RealTimeRiskEvaluator` 产出，**本 ADR 不指定内部数据结构** |
+
+> **实现中立原则**：本 ADR 不依赖任何类的私有字段（如 `_active` dict）。未来 `RealTimeRiskEvaluator` 重构为 `StateStore` / Actor Model / 其他形式时，只要仍产出上述三类输入，本 ADR 不失效。具体内部数据结构属工程实现，由工程方案决定。
 
 **内容示例**：
 
@@ -131,11 +141,11 @@ Semantic      月/年级           Pattern（高抽象）
 
 **关键约束**：Short-term Memory **不逐帧落盘**。`BehaviorState.dwell_seconds` 每帧变化，落盘 = 爆炸。Short-term Memory 只在以下时机写入：
 
-- 状态转移（`NONE → ACTIVE_RISK` / `ACTIVE_RISK → NONE`，由 `RiskSignal` transition 触发）
-- 周期快照（如每 30 秒一次，用于重启恢复，见 §3.6 Snapshot 原则）
+- 状态转移（`NONE → ACTIVE_RISK` / `ACTIVE_RISK → NONE`，由 TransitionEvent 触发）
+- 周期快照（如每 30 秒一次，用于重启恢复，见 §3.7 Snapshot 原则）
 - 访客离场（生命周期结束，转为 Episodic Memory）
 
-**`RiskSignal` 的定位**：`RiskSignal` 是**跃迁事件**（transition event），不是状态。它作为 Short-term Memory 的 **transition input**（触发写入的信号），不作为"当前状态"存入。当前状态由 `BehaviorState` 快照承载，`RiskSignal` 只记录"何时发生了什么跃迁"。
+**TransitionEvent 的定位**：TransitionEvent 是**跃迁事件**，不是状态。它作为 Short-term Memory 的 **写入触发信号**，不作为"当前状态"存入。当前状态由 StateSnapshot 承载，TransitionEvent 只记录"何时发生了什么跃迁"。
 
 #### 3.1.2 Episodic Memory（事件记忆）
 
@@ -175,7 +185,7 @@ Semantic Memory 分为两类，**启用条件不同**：
 | **时间尺度** | 月/年级 |
 | **生命周期** | 长期保留，周期性更新（如每日/每周聚合） |
 | **用途** | 环境模式识别；Agent "这个家庭/这个时段的模式是什么"的输入 |
-| **v1 是否启用** | **可由场景需求决定**（不依赖 `person_identity_id`） |
+| **v1 是否启用** | **可由场景需求决定**（不依赖 `person_identity_id`），但**必须满足最低观测阈值**（见下） |
 | **存储** | 持久化（键值/文档库） |
 
 **内容示例**：
@@ -189,6 +199,20 @@ Semantic Memory 分为两类，**启用条件不同**：
 ```
 
 **聚合维度**：时间 / 时段 / 地点（设备）—— **不按身份聚合**，因此 v1 即可启用。
+
+**最低观测阈值约束**（防 false pattern）：
+
+> **Environment Semantic Memory requires minimum observation threshold.**
+
+环境模式在数据量不足时容易产生 false pattern（如"一天来了两个快递员 → 系统认为晚上陌生访问风险升高"）。必须满足最低阈值才产出聚合：
+
+| 阈值类型 | 建议值（具体由工程方案定） | 作用 |
+| --- | --- | --- |
+| minimum_episodes | ≥ 30 条 Episodic 记录 | 防小样本误判 |
+| minimum_time_window | ≥ 7 天观测 | 防短期偶发被当成模式 |
+| minimum_confidence | 聚合置信度达标才输出 | 防低置信度模式污染 Agent |
+
+**未达阈值时的行为**：不产出 SemanticAggregate，或产出但标注 `confidence=low` 且不供 Agent 消费。具体策略由工程方案决定。
 
 ##### 3.1.3.2 Identity Semantic Memory（身份模式记忆）
 
@@ -256,17 +280,17 @@ ActionCommand             │  - 关联同一访问  │          visitor: ...,
                           │  - 丢弃冗余字段  │          risk: ...,
                           │  - 生成摘要     │          actions: [...],
                           └─────────────────┘          evidence: [...],
-                                                       narrative: "..."
+                                                       summary: "..."
                                                      }
 ```
 
 **Memory Object 的特征**：
 
 - **Memory 自有 schema**：不依赖 `WarningEvent` / `ActionCommand` 的字段定义
-- **narrative 字段**：人类可读的事件叙述（如"陌生访客异常停留 12 分钟，已通知家属"），用于 Agent 解释
+- **human-interpretable summary**：Memory Object **必须包含人类可读的事件摘要**（如"陌生访客异常停留 12 分钟，已通知家属"），用于 Agent 解释
 - **向后兼容**：业务对象字段变化时，只需调整 Episode Builder 的投影规则，Memory Object schema 不变
 
-**举例**：未来 `WarningEvent.reason` 从 `"abnormal_dwell"` 变成 `{"type": "dwell", "duration_s": 720}`，只需改 Episode Builder 的映射规则，Episodic Memory 的 `narrative` 字段保持稳定。
+> **实现中立**：本 ADR 只约束"Memory Object 必须包含 human-interpretable summary"，**不固定字段名**。具体字段名（`narrative` / `summary` / `explanation` / `evidence_chain` 等）由工程方案决定，未来可演进。
 
 #### 3.2.2 Memory Policy 输入输出契约
 
@@ -282,12 +306,12 @@ MemoryPolicy.transform(
 
 **输入**（ObservationStream）：
 
-| 类型 | 来源 | 语义 |
+| 类型 | 语义 | 当前承载对象 |
 | --- | --- | --- |
-| StateSnapshot | `BehaviorState` | 当前状态快照（低抽象） |
-| StateMachineState | `RealTimeRiskEvaluator._active` | 状态机内部态 |
-| TransitionEvent | `RiskSignal` | 跃迁事件（触发写入） |
-| RawEvent | `VisitorEvent` / `WarningEvent` / `ActionCommand` | 业务事件（待投影） |
+| StateSnapshot | 当前状态快照（低抽象） | `BehaviorState` |
+| RiskStateMachineRuntimeState | 风险状态机运行时态 | 由 `RealTimeRiskEvaluator` 产出（本 ADR 不指定内部结构） |
+| TransitionEvent | 跃迁事件（触发写入） | `RiskSignal` |
+| RawEvent | 业务事件（待投影） | `VisitorEvent` / `WarningEvent` / `ActionCommand` |
 
 **输出**（MemoryRecord）：
 
@@ -375,6 +399,16 @@ Phase 5（Agent）
 ### 3.6 Memory Lifecycle（记忆生命周期状态机）
 
 与 ADR-0021 的 `NONE → ACTIVE_RISK → NONE` 对应，Memory 也有自己的生命周期状态机。Memory Record 的状态流转：
+
+> **关键约束**：**Memory Lifecycle is data lifecycle, not business state machine.**
+>
+> Memory Lifecycle 描述的是**一条 Memory Record 从产生到淘汰的数据流转**（类似 TTL / retention policy），**不是**业务状态机。它：
+> - ❌ 不驱动业务决策（决策由 ADR-0010 DecisionPolicy 负责）
+> - ❌ 不产出 RiskSignal / WarningEvent（信号由 ADR-0021 状态机负责）
+> - ❌ 不被 Agent 直接消费（Agent 消费 Memory 内容，不消费 Lifecycle 状态）
+> - ✅ 只描述"这条记录何时产生、何时转换、何时淘汰"
+>
+> Memory Lifecycle 与 ADR-0021 状态机是**两个独立的状态机**：ADR-0021 描述"风险业务的态"，Memory Lifecycle 描述"数据记录的态"。两者通过**事件触发**关联（如访客离场触发 Episode Closed），但状态机本身不耦合。
 
 ```
                    ┌──────────────────────────────────────────┐
@@ -523,7 +557,7 @@ Memory Policy 是**从状态到记忆的提炼层**，确保 Memory 存的是**�
 - Memory 变成业务对象的 dump 场所，失去抽象
 - Agent 无法消费"原始事件堆叠"，需要"事件叙述"
 
-Episode Builder 是 **Event Projection 层**，把业务事件投影为 Memory 自有的 Memory Object（含 `narrative` 字段），隔离业务对象变化。
+Episode Builder 是 **Event Projection 层**，把业务事件投影为 Memory 自有的 Memory Object（含 human-interpretable summary），隔离业务对象变化。
 
 ### 4.5 为什么 Memory 不参与决策
 
@@ -627,7 +661,7 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | Agent 推理逻辑 / Context Builder | ❌ 否 | Phase 5 ADR |
 | ReID 算法 | ❌ 否 | Phase 4 ADR-0023 |
 | Memory Policy 的具体提炼规则（状态转移触发条件/快照频率/聚合粒度） | ❌ 否（本 ADR 只定义抽象） | 工程方案 |
-| Episode Builder 的具体投影规则（字段映射/narrative 模板） | ❌ 否（本 ADR 只定义必要性） | 工程方案 |
+| Episode Builder 的具体投影规则（字段映射/summary 模板） | ❌ 否（本 ADR 只定义必要性） | 工程方案 |
 | Memory Object schema 字段定义 | ❌ 否 | 工程方案 |
 | 数据合规/隐私（数据保留/删除/审计） | ❌ 否（需独立 ADR） | 未来合规 ADR |
 
@@ -646,7 +680,7 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | O5 | 进程重启后 Short-term Memory 如何恢复（从 Snapshot? 从 Episodic 回溯?） | TD-0027 + 工程方案 |
 | O6 | Memory 是否需要 export 给中心服务（跨设备共享） | 未来跨设备 ADR |
 | O7 | 数据合规（老人隐私 / 数据删除权 / 审计要求） | 未来合规 ADR |
-| O8 | Episode Builder 的 narrative 字段生成规则（模板? LLM? 混合?） | 工程方案 |
+| O8 | Episode Builder 的 summary 字段生成规则（模板? LLM? 混合?） | 工程方案 |
 | O9 | Memory Object schema 的版本管理策略 | 工程方案 |
 
 ---
