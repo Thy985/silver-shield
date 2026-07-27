@@ -334,6 +334,70 @@ MemoryPolicy.transform(
 >
 > 它把状态/事件流转换为 Memory Object，不产出决策、不修改上游状态、不调用推理。所有"判断"留在 `DecisionPolicy` / `Agent`。
 
+#### 3.2.3 Memory Policy Invariants（不变量）
+
+Memory Policy 必须满足以下四条不变量。这些不变量是**架构级约束**，工程方案必须保证，测试必须覆盖。
+
+> **I1. Idempotency（幂等性）**
+>
+> **同一个 observation event 重复发送，只能产生同一条 MemoryRecord，不能产生多条。**
+>
+> ```
+> RiskSignal(RAISED, event_id=X) 发送 1 次 → EpisodicRecord(id=derive(X))
+> RiskSignal(RAISED, event_id=X) 发送 2 次 → EpisodicRecord(id=derive(X))（同一记录，不新增）
+> RiskSignal(RAISED, event_id=X) 发送 3 次 → EpisodicRecord(id=derive(X))（同一记录，不新增）
+> ```
+>
+> **实现要求**：MemoryRecord 的唯一键必须从 source event 的稳定标识派生（如 `event_id` / `signal_id`），不能用自增 ID 或随机 UUID。重复投递时 upsert，不 insert。
+>
+> **为何重要**：upstream（pipeline / MQTT）可能重试或重放；没有幂等性会导致同一事件被记录多次，污染 Semantic 聚合。
+
+> **I2. Monotonicity（单调性）**
+>
+> **Memory history 不能重写过去已有的 Episode。**
+>
+> ```
+> ✅ 允许：追加新 Episode / 聚合新 Semantic
+> ❌ 禁止：修改已存在的 EpisodicRecord 的字段（如 retroactively 改 risk_level）
+> ❌ 禁止：删除已发生的 Episode（除非合规删除，归 ADR-00xx 合规 ADR）
+> ```
+>
+> **例外**：可追加 `correction` / `annotation` 字段（不改原字段，只附加修正说明），具体由工程方案定。
+>
+> **为何重要**：Agent 解释依赖历史一致性；重写过去会让"昨天为什么 HIGH"的答案不稳定，破坏可解释性。
+
+> **I3. Causality（因果性）**
+>
+> **MemoryRecord 的 timestamp 必须 >= source event 的 timestamp。**
+>
+> ```
+> VisitorEvent(ts=T1) → EpisodicRecord(ts=T2)
+> 约束：T2 >= T1
+> ```
+>
+> **为何重要**：允许 Memory 时间戳早于源事件会破坏因果链，导致 Agent 无法回答"这个记忆基于哪个事件"。
+
+> **I4. Explainability（可解释性）**
+>
+> **每条 EpisodicRecord 必须引用 source evidence（至少一个 source event id 或 evidence reference）。**
+>
+> ```
+> EpisodicRecord {
+>   source_event_ids: [visitor_event_id, warning_event_id, ...],
+>   evidence_refs: [evidence_item_id, ...],  # 见 §3.9 Memory Trust Layer
+>   ...
+> }
+> ```
+>
+> **为何重要**：老人安全场景下，Memory 会影响家属通知/社区干预；没有 source evidence 的 Memory 是黑盒，Agent 回答"为什么认为异常"会变成"Memory 说的"——不可接受。每条记忆必须可追溯到源事件和证据。
+
+**不变量验收标准**（工程方案落地时）：
+
+- [ ] I1 测试：同一 event_id 重复投递 3 次，Memory 中只有 1 条记录
+- [ ] I2 测试：写入 Episode 后尝试修改 risk_level，断言失败或只追加 correction
+- [ ] I3 测试：构造 MemoryRecord(ts < source_event.ts)，断言拒绝
+- [ ] I4 测试：构造无 source_event_ids 的 EpisodicRecord，断言拒绝
+
 ### 3.3 主键策略（与 ADR-0023 的关系）
 
 Memory 的主键是 `person_identity_id`（ADR-0023），但 v1 它恒为 `None`。
@@ -514,6 +578,114 @@ Short-term Memory 的周期快照用于进程重启状态恢复（TD-0027）。�
 - [ ] 恢复后 `dwell_seconds` 由 `now - enter_time` 重新计算，不从 Snapshot 读取
 - [ ] 新增测试：模拟进程重启，验证恢复后状态与连续运行一致（除 derived metrics 外）
 
+### 3.8 Memory Conflict Resolution（冲突处理边界）
+
+> **本节只定义冲突的"存在性"与"处理边界"，不定义具体冲突解决策略**——后者归未来 **ADR-00xx Memory Consistency Policy**。
+
+#### 冲突场景
+
+未来 Agent 一定会遇到 Memory 冲突：
+
+| 场景 | 旧 Memory | 新 Episode | 冲突 |
+| --- | --- | --- | --- |
+| 时段模式 | "该访客通常晚上出现" | "今天下午出现" | 时段不符 |
+| 风险趋势 | "历史风险低" | "本次风险高" | 风险等级跳跃 |
+| 访问频率 | "过去 30 天 2 次" | "本周已 5 次" | 频率突变 |
+
+#### 本 ADR 确定的边界
+
+1. **冲突是客观存在的**：本 ADR 不假装 Memory 永远自洽；新 Episode 可能与旧 Semantic 矛盾
+2. **冲突不由 Memory Policy 自动解决**：Memory Policy 是 transformation boundary（§3.2.2），不做冲突判定
+3. **冲突不由 DecisionPolicy 解决**：DecisionPolicy（ADR-0010）只看当前帧，不看 Memory 历史
+4. **冲突处理归未来 ADR**：具体策略（覆盖 / 衰减 / 版本化 / contradiction handling）由 **ADR-00xx Memory Consistency Policy** 定义
+
+#### 未来 ADR-00xx 需回答的问题
+
+| # | 问题 | 候选方向 |
+| --- | --- | --- |
+| C1 | 旧 Semantic 被新 Episode 矛盾时，覆盖还是衰减？ | 衰减（旧模式 confidence 随时间下降）+ 版本化（保留历史版本） |
+| C2 | Memory 是否有 confidence 字段？ | 是（与 §3.9 Trust Layer 协同） |
+| C3 | Agent 如何消费冲突的 Memory？ | 同时提供新旧 + 标注冲突，由 Agent 推理 |
+| C4 | 合规删除与 Monotonicity（I2）冲突时如何处理？ | 合规删除优先（合规 ADR 定义例外） |
+
+#### v1 约束
+
+v1 无 Semantic Memory（除可选的 Environment Semantic），冲突场景有限。v1 的 Episodic Memory 按 §3.2.3 I2 Monotonicity 只追加不重写，不涉及冲突。**冲突处理的复杂度归 Phase 4-5**。
+
+### 3.9 Memory Trust Layer（可信度层）
+
+> **核心判断**：老人安全场景下，Memory 会影响家属通知 / 社区干预 / Agent 解释。**Memory 本身必须可信，不能是黑盒。**
+
+#### 问题：没有 Trust Layer 的风险
+
+```
+Agent: "为什么认为这个人异常？"
+Memory: "因为历史记录显示异常"
+Agent: "历史记录从哪来？"
+Memory: "..."
+```
+
+→ **黑盒**。家属/社区无法追溯，Agent 解释不可信。
+
+#### Trust Layer 的组成
+
+每条 EpisodicRecord 必须携带 Trust Metadata：
+
+| 字段 | 语义 | 示例 |
+| --- | --- | --- |
+| `confidence` | 这条记忆的可信度 | 0.82 |
+| `source` | 数据来源标识 | `camera_01` / `device_002` |
+| `evidence_refs` | 引用的证据项 ID（链接 ADR-0022 EvidenceItem） | `[ev_001, ev_002]` |
+| `source_event_ids` | 源事件 ID（满足 I4 Explainability） | `[visitor_event_id, warning_event_id]` |
+| `model_version` | 产出该记忆的模型/规则版本 | `yolo-v8n` / `rule-engine-v1.2` |
+| `created_at` | 记忆产生时刻（满足 I3 Causality） | `2026-07-27T18:45:00Z` |
+
+> **实现中立**：本 ADR 只约束"必须携带上述信息"，不固定字段名/格式。具体 schema 由工程方案定。
+
+#### 与 ADR-0022 Evidence Chain 的连接
+
+```
+MemoryRecord (EpisodicRecord)
+      │
+      │ evidence_refs
+      │
+      ▼
+EvidenceReference ──────▶ ADR-0022 EvidenceItem
+      │                      │
+      │                      │ 类型化证据（视频片段/音频/规则触发）
+      │                      │
+      ▼                      ▼
+Trust Layer             Evidence Chain（可审计）
+```
+
+**连接关系**：
+
+- ADR-0022 定义 `EvidenceItem`（类型化证据）和 `EvidenceAggregator`（只整理不重推）
+- 本 ADR 的 EpisodicRecord 通过 `evidence_refs` 引用 `EvidenceItem`
+- Agent 解释时可沿 `MemoryRecord → evidence_refs → EvidenceItem` 检索原始证据
+
+#### Trust Layer 不做什么
+
+- ❌ **不重新推理**：Trust Layer 只记录可信度元数据，不重新跑模型/规则（ADR-0022 EvidenceAggregator 同样原则）
+- ❌ **不修改 Memory 内容**：Trust Layer 是附加元数据，不改 EpisodicRecord 本身（与 I2 Monotonicity 协同）
+- ❌ **不驱动决策**：DecisionPolicy 不读 Trust Layer；Agent 读 Trust Layer 仅用于解释，不用于提高/降低风险等级
+
+#### 为何不把 confidence 放进 DecisionPolicy
+
+```
+❌ 错误：DecisionPolicy 读取 Memory.confidence 调整风险等级
+   → Memory 变成第二决策中心（违反 ADR-0010）
+   → 循环论证（"高风险因为历史高风险"）
+
+✅ 正确：DecisionPolicy 只看当前帧的 RiskFeature
+         Agent 读 Memory + Trust Layer 用于解释
+         Memory 不影响风险等级，只影响解释质量
+```
+
+#### v1 约束
+
+v1 的 EpisodicMemory 落地时（Phase 4）必须同时落地 Trust Layer 基础字段（`confidence` / `source` / `evidence_refs` / `source_event_ids`）。`model_version` 在 Phase 5（Agent 消费）前必须完善。
+
 ---
 
 ## 4. 动机（Rationale）
@@ -653,9 +825,14 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | Memory Policy 抽象（transformation boundary） | ✅ 是 | 本 ADR §3.2 |
 | Episode Builder（Event Projection 层） | ✅ 是 | 本 ADR §3.2.1 |
 | Memory Policy 输入输出契约 | ✅ 是 | 本 ADR §3.2.2 |
+| Memory Policy Invariants（I1-I4） | ✅ 是 | 本 ADR §3.2.3 |
 | 主键策略 | ✅ 是 | 本 ADR §3.3 |
-| Memory Lifecycle 状态机 | ✅ 是 | 本 ADR §3.6 |
+| Memory Lifecycle 状态机（数据生命周期） | ✅ 是 | 本 ADR §3.6 |
 | Snapshot 原则（reconstructable vs derived） | ✅ 是 | 本 ADR §3.7 |
+| Memory Conflict Resolution 边界（存在性 + 归属） | ✅ 是（只定义边界） | 本 ADR §3.8 |
+| Memory Trust Layer 存在性 + 组成 | ✅ 是 | 本 ADR §3.9 |
+| Memory Conflict 具体解决策略（覆盖/衰减/版本化） | ❌ 否 | 未来 ADR-00xx Memory Consistency Policy |
+| Trust Layer confidence 计算/衰减算法 | ❌ 否 | 未来 ADR-00xx Memory Consistency Policy |
 | 存储格式（SQLite/Parquet/...） | ❌ 否 | 工程方案 |
 | 查询接口（REST/GraphQL/...） | ❌ 否 | 工程方案 |
 | Agent 推理逻辑 / Context Builder | ❌ 否 | Phase 5 ADR |
@@ -682,6 +859,9 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | O7 | 数据合规（老人隐私 / 数据删除权 / 审计要求） | 未来合规 ADR |
 | O8 | Episode Builder 的 summary 字段生成规则（模板? LLM? 混合?） | 工程方案 |
 | O9 | Memory Object schema 的版本管理策略 | 工程方案 |
+| O10 | Memory Conflict 具体策略（覆盖/衰减/版本化/contradiction handling） | 未来 ADR-00xx Memory Consistency Policy |
+| O11 | Trust Layer confidence 计算/衰减算法 | 未来 ADR-00xx Memory Consistency Policy |
+| O12 | Invariants I1-I4 的具体实现机制（upsert 策略/时间戳校验位置/evidence 引用校验） | 工程方案 |
 
 ---
 
@@ -690,10 +870,11 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | ADR | 关系 |
 | --- | --- |
 | **ADR-0021**（实时风险流） | 本 ADR 是 §7.1 预留的 Memory ADR；消费 ADR-0021 产出的 `BehaviorState` / `RiskSignal` |
-| **ADR-0023**（身份连续性） | `person_identity_id` 是 Memory 的主键；v1 为 None 限制了 Semantic Memory |
-| **ADR-0010**（WarningEvent 决策） | `WarningEvent` 是 Episodic Memory 的来源；Memory 不参与决策 |
+| **ADR-0023**（身份连续性） | `person_identity_id` 是 Memory 的主键；v1 为 None 限制了 Identity Semantic Memory |
+| **ADR-0010**（WarningEvent 决策） | `WarningEvent` 是 Episodic Memory 的来源；Memory 不参与决策（§3.9 Trust Layer 不驱动 DecisionPolicy） |
 | **ADR-0014**（三级冻结） | Memory 是新增旁路，不入 L1/L2/L3 冻结 |
-| **ADR-0022**（证据链） | `EvidenceItem` 随 Episodic Memory 保留，作为事件的可审计证据 |
+| **ADR-0022**（证据链） | EpisodicRecord 通过 `evidence_refs` 引用 `EvidenceItem`；Trust Layer（§3.9）连接 Evidence Chain 实现可审计 |
+| **未来 ADR-00xx**（Memory Consistency Policy） | 本 ADR §3.8 定义冲突处理边界；具体策略（覆盖/衰减/版本化）+ confidence 计算/衰减算法归未来 ADR |
 
 ---
 
