@@ -380,7 +380,32 @@ class FrameResult:
 
 每个 Stage 独立 PR、独立可回滚；任何 Stage 出问题，前一 Stage 的 main 状态即回退点。**Shadow Mode 是关键闸门：没有真实误报数据，不接决策。**
 
+### 9.1 Stage A 审查发现技术债务（Stage B 实现前需处理）
+
+> 来源：PR #60（feat/realtime-types · Stage A 类型与契约基础）合并后的代码审查。
+> 处理原则：发现 1-4 纳入 Stage B 技术债务追踪，不在 Stage A 修复（Stage A 已合并）；发现 7 在 Stage B 实现前补上；发现 5/6/8 为信息记录。
+
+| # | 类型 | 文件:行 | 严重度 | 内容 | 处理时机 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 代码复用 | `behavior_state.py:26-36` / `risk_signal.py:30-32,61-66` | ⚪ 建议 | `_require_utc` / `_utc_now` 在两个模块各自定义；`recent_behavior_store.py:24` 从 `behavior_state` 导入 `_require_utc`，但 `risk_signal.py` 的版本独立 | Stage B：提取到 `common/timeutil.py` 或包级 `_utils.py`，统一实现、减少维护摩擦 |
+| 2 | 输入校验 | `risk_signal.py:52-58` | ⚪ 建议 | `_coerce_uuid` 接受任何字符串作为 `signal_id`，不做 UUID 格式校验；下游传 `"not-a-uuid"` 不会报错 | Stage B：增加 `uuid.UUID(value)` 构造校验格式 |
+| 3 | 防御性校验 | `risk_signal.py:217-220` | ⚪ 建议 | `features` 非 dict 时黑名单检查静默跳过（`isinstance(self.features, dict)` 守卫）；若传 `None` 会跳过检查 | Stage B：构造期类型断言 `if not isinstance(self.features, dict): raise TypeError(...)` |
+| 4 | 内存泄漏 | `recent_behavior_store.py:74` | ⚪ 建议 | 过期列表为空时 `self._entries[visitor_instance_id] = in_window` 保留空键 `[]`；大量访客长期运行累积无意义空键 | Stage B：`if in_window: ... else: self._entries.pop(visitor_instance_id, None)` |
+| 5 | 跨域依赖 | `tests/test_risksignal_contract.py:278` | ⚪ 信息 | 测试 `from home_perception.analysis.warning import WarningEvent` 仅用于断言 `RiskSignal is not WarningEvent`，在 Stage A 测试中引入对 `warning.py` 的导入依赖 | 不阻塞；可考虑改为字段级断言消除跨模块导入 |
+| 6 | 配置化 | `behavior_state.py:39-45` | ⚪ 信息 | `compute_is_odd_hour` 的 22:00–06:00 窗口硬编码 UTC；跨时区部署需配置化 | 已知限制；docstring 已说明"展示层若需本地时区自行转换"；非合并阻塞 |
+| 7 | 缺失方法 | `risk_signal.py:222-241` / `behavior_state.py:128-144` | ⚪ 信息 | `RiskSignal` / `BehaviorState` 都有 `to_dict()` 但无 `from_dict()` / `from_json()`；Stage B/C 序列化数据传回时需反序列化路径 | **Stage B 实现前补上**，避免接口不对称 |
+| 8 | 测试覆盖 | `tests/test_risksignal_contract.py` | ⚪ 建议 | `_coerce_enum` 的非字符串非法类型分支（`raise TypeError`）未测试 | Stage B：补单元测试覆盖该边界 |
+
+**Stage B 准入清单**（合并 Stage B 前须完成）：
+- [ ] 处理发现 1（提取 `_require_utc` / `_utc_now` 到共用模块）
+- [ ] 处理发现 2（`signal_id` UUID 格式校验）
+- [ ] 处理发现 3（`features` 类型断言）
+- [ ] 处理发现 4（空键清理）
+- [ ] 补上发现 7（`from_dict()` / `from_json()` 反序列化方法）
+- [ ] 补上发现 8（`_coerce_enum` TypeError 分支测试）
+
 ---
+
 
 ## 10. Feature Flag
 
