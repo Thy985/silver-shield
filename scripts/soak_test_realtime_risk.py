@@ -104,6 +104,8 @@ class SoakMetrics:
 
     # —— Layer 3: Performance ——
     latency_samples_ms: List[float] = field(default_factory=list)
+    latency_spikes: int = 0  # 延迟抖动次数（> p99 * 3，用于相关性分析）
+    spike_frame_indices: List[int] = field(default_factory=list)  # 抖动发生的帧索引
 
     # —— Layer 4: Architecture Integrity ——
     historical_warning_count: int = 0  # 离场 VisitorEvent 触发的 Warning
@@ -242,6 +244,12 @@ class SoakMetrics:
             },
             "behavior_states_trend": self._behavior_states_trend(),
             "latency_ms": self._latency_stats(),
+            "latency_analysis": {
+                "spikes": self.latency_spikes,
+                "spike_frame_indices": self.spike_frame_indices,
+                "video_restart_count": 0,  # 由 caller 填入
+                "correlation": None,  # 由 caller 填入（spikes 与 video_restart_count 是否对齐）
+            },
             "warnings": {
                 "historical_count": self.historical_warning_count,
                 "realtime_count": self.realtime_warning_count,
@@ -257,7 +265,13 @@ class SoakMetrics:
 class LoopingVideoSource:
     """循环视频帧源（OpenCV 读取，支持 loop_count 次循环）。
 
-    不继承 FrameSource（pipeline 通过 run(frames) 接收 list，无需迭代器协议）。
+    流式读取：每次循环重开 VideoCapture，**不缓存所有帧**（避免内存爆）。
+    soak test 跑 10 次循环 * 720×1280×3 ≈ 26GB，必须流式。
+
+    使用方式：
+        source = LoopingVideoSource(path, loop_count=10)
+        for frame in source:  # 迭代所有循环的所有帧
+            process(frame)
     """
 
     def __init__(self, video_path: str, loop_count: int = 1, fps_target: int = 8):
@@ -269,19 +283,37 @@ class LoopingVideoSource:
         if not self._cap.isOpened():
             raise RuntimeError(f"无法打开视频：{video_path}")
         self._total_frames = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self._current_loop = 0
+        self._current_frame_in_loop = 0
+        self.video_restart_count = 0  # 视频重开次数（用于延迟抖动相关性分析）
 
-    def read_all_frames(self) -> List[Any]:
-        """读取所有帧（含循环），返回 list[np.ndarray]。"""
+    def __iter__(self):
+        """迭代所有循环的所有帧（流式，不缓存）。"""
         import cv2
-        frames: List[Any] = []
         for loop_idx in range(self.loop_count):
-            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # 回到起点
+            # 每次循环重开 VideoCapture（避免 seek 开销 + 防资源泄漏）
+            if loop_idx > 0:
+                self._cap.release()
+                self._cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
+                if not self._cap.isOpened():
+                    raise RuntimeError(f"循环 {loop_idx} 重新打开视频失败：{self.video_path}")
+                self.video_restart_count += 1  # 统计重开次数
+            self._current_loop = loop_idx
+            self._current_frame_in_loop = 0
             while True:
                 ret, frame = self._cap.read()
                 if not ret:
                     break
-                frames.append(frame)
-        return frames
+                yield frame
+                self._current_frame_in_loop += 1
+
+    @property
+    def current_loop(self) -> int:
+        return self._current_loop
+
+    @property
+    def current_frame_in_loop(self) -> int:
+        return self._current_frame_in_loop
 
     def release(self) -> None:
         if self._cap is not None:
@@ -300,22 +332,41 @@ def _load_scenario(path: Path) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+# 三种实验模式（对应工程方案 §9.2.7 历史路径零污染验证）
+# - historical: realtime_enabled=false, decision_enabled=true → 只历史路径产 Warning
+# - shadow:     realtime_enabled=true,  decision_enabled=false → 实时信号只观察不产 Warning
+# - realtime:   realtime_enabled=true,  decision_enabled=true → 历史路径 + 实时路径都产 Warning
+MODE_CONFIGS = {
+    "historical": {"realtime_enabled": False, "decision_enabled": True},
+    "shadow":     {"realtime_enabled": True,  "decision_enabled": False},
+    "realtime":   {"realtime_enabled": True,  "decision_enabled": True},
+}
+
+
 def _build_pipeline_with_realtime(
     scenario_cfg: Dict[str, Any],
+    mode: str = "realtime",
     device_id: str = "soak_test",
 ):
     """从场景配置装配带实时路径的 pipeline。
 
-    复用 PerceptionPipeline.from_settings，但强制开启 realtime + 注入 DemoClock。
+    mode 参数覆盖场景 YAML 的 realtime 配置（对应工程方案 §9.2.7 三模式对照实验）：
+    - historical: realtime_enabled=false → 只历史路径产 Warning，得 historical_warning_count = X
+    - shadow:     decision_enabled=false → 实时信号只观察不产 Warning，得 risk_signal_count = Y
+    - realtime:   完整模式 → 历史路径 + 实时路径都产 Warning，得 warning_count = Z
+    验证：Z >= X（历史路径零污染，允许 Cooldown 去重导致 Z < X + Y）。
     """
-    from home_perception.core.config import load_settings
+    from home_perception.core.config import Settings
     from home_perception.runtime.pipeline import DemoClock, PerceptionPipeline
 
-    settings = load_settings()
+    settings = Settings.load("config/default.yaml")
+    # mode 覆盖场景 YAML 的 realtime 配置
+    if mode not in MODE_CONFIGS:
+        raise ValueError(f"未知 mode: {mode}，应为 historical/shadow/realtime")
+    mode_cfg = MODE_CONFIGS[mode]
+    settings.realtime_risk.enabled = mode_cfg["realtime_enabled"]
+    settings.realtime_risk.decision_enabled = mode_cfg["decision_enabled"]
     realtime_cfg = scenario_cfg.get("realtime", {})
-    # 强制覆盖 realtime 配置
-    settings.realtime_risk.enabled = bool(realtime_cfg.get("enabled", True))
-    settings.realtime_risk.decision_enabled = bool(realtime_cfg.get("decision_enabled", False))
     settings.realtime_risk.eval_interval_frames = int(realtime_cfg.get("eval_interval_frames", 1))
 
     # 注入 DemoClock（加速时序）
@@ -345,14 +396,18 @@ def _get_store_entries(pipeline) -> int:
 def run_soak(
     scenario_path: Path,
     duration_s: int,
+    mode: str = "realtime",
     snapshot_interval_s: int = 60,
+    loop_count_override: Optional[int] = None,
 ) -> Dict[str, Any]:
     """运行一次 soak test。
 
     参数：
     - scenario_path: 场景 YAML 路径
     - duration_s: 墙钟预算（秒）；达到后停止
+    - mode: 实验模式（historical / shadow / realtime，对应工程方案 §9.2.7）
     - snapshot_interval_s: 采样间隔（秒）
+    - loop_count_override: 覆盖场景 YAML 的 loop_count（用于 R3 长跑；None 则用 YAML 值）
 
     返回：完整报告 dict（可 json.dump）。
     """
@@ -361,51 +416,53 @@ def run_soak(
 
     print(f"[soak] 场景: {scenario_name}")
     print(f"[soak] 描述: {scenario_cfg.get('description', '')}")
+    print(f"[soak] 模式: {mode}")
     print(f"[soak] 预算: {duration_s}s")
 
     # —— 装配 pipeline ——
-    pipeline, clock, settings = _build_pipeline_with_realtime(scenario_cfg)
+    pipeline, clock, settings = _build_pipeline_with_realtime(scenario_cfg, mode=mode)
     pipeline.load_detector()
 
-    # —— 读取视频帧 ——
+    # —— 读取视频帧（流式）——
     video_cfg = scenario_cfg.get("video", {})
     video_path = ROOT / video_cfg.get("source", "")
     if not video_path.is_file():
         raise FileNotFoundError(f"视频文件不存在：{video_path}")
-    loop_count = int(video_cfg.get("loop_count", 1))
+    loop_count = loop_count_override if loop_count_override is not None else int(video_cfg.get("loop_count", 1))
 
     print(f"[soak] 视频: {video_path}")
     print(f"[soak] 循环: {loop_count} 次")
 
     source = LoopingVideoSource(str(video_path), loop_count=loop_count)
-    frames = source.read_all_frames()
-    total_frames = len(frames)
-    print(f"[soak] 总帧数: {total_frames}")
+    # 流式：不预读 total_frames，按需迭代
 
     # —— 指标收集器 ——
     metrics = SoakMetrics()
     metrics.started_at = datetime.now(timezone.utc)
 
-    # —— 主循环 ——
+    # —— 主循环（流式）——
     wall_start = time.time()
     last_snapshot_wall = wall_start
     frame_index = 0
-    loop_boundary_frames = total_frames // loop_count  # 每个循环的帧数
+    last_loop_idx = 0
 
     try:
-        while (time.time() - wall_start) < duration_s:
-            frame = frames[frame_index % total_frames]
-            is_loop_boundary = (frame_index > 0 and frame_index % loop_boundary_frames == 0)
+        for frame in source:
+            # 检查时间预算
+            if (time.time() - wall_start) >= duration_s:
+                print(f"[soak] 达到时间预算 {duration_s}s，停止")
+                break
 
-            # 循环边界：记录 + 重置评估器（防 tracker ID 复用串号污染指标）
-            if is_loop_boundary:
+            # 循环边界检测：source.current_loop 变化
+            if source.current_loop > last_loop_idx:
                 metrics.loop_boundaries.append({
                     "frame_index": frame_index,
                     "action": "loop_boundary",
+                    "loop_idx": source.current_loop,
                     "sim_ts": clock.now().isoformat(),
                 })
+                last_loop_idx = source.current_loop
                 # 不重置 evaluator/tracker——让 soak test 暴露真实的跨循环行为
-                # 如果重置，反而掩盖了"track_id 复用串号"类问题
 
             # 推进 DemoClock（与 pipeline.run 行为一致）
             clock.tick(clock.interval_s)
@@ -417,24 +474,33 @@ def run_soak(
             metrics.record_latency(latency_ms)
             metrics.frames_processed += 1
 
+            # 延迟抖动检测（> 当前 p99 * 3 视为 spike，用于相关性分析）
+            if len(metrics.latency_samples_ms) >= 100:  # 至少 100 帧才计算 p99
+                p99 = metrics._latency_stats()["p99"]
+                if p99 > 0 and latency_ms > p99 * 3:
+                    metrics.latency_spikes += 1
+                    metrics.spike_frame_indices.append(frame_index)
+
             # 记录 RiskSignal
             for sig in result.risk_signals:
                 metrics.record_signal(sig)
 
-            # 记录 Warning（区分历史/实时）
-            # 历史路径 Warning：由 VisitorEvent 触发（result.n_visitor_events > 0 时）
-            # 实时路径 Warning：由 RAISED 信号触发（pipeline._decision_enabled）
-            if pipeline._decision_enabled and result.warnings:
-                # 简化判定：本帧有 risk_signals → 实时；否则历史
-                if result.risk_signals:
-                    for _ in result.warnings:
-                        metrics.record_warning("realtime")
-                else:
+            # 记录 Warning（按模式语义，对应工程方案 §9.2.7 三模式对照实验）
+            # - historical 模式（realtime_enabled=false）：所有 Warning 来自历史路径 → X
+            # - shadow 模式（decision_enabled=false）：不产生 Warning，只观察 risk_signals → Y
+            # - realtime 模式（realtime_enabled=true, decision_enabled=true）：所有 Warning → Z
+            #   （historical 基线 X 由 historical 模式单独运行获取，对照验证 Z >= X；
+            #    不要求 Z = X + Y，因 Cooldown 去重 / 决策合并）
+            if result.warnings:
+                if not settings.realtime_risk.enabled:
+                    # historical 模式：realtime 关闭，所有 Warning 来自历史路径
                     for _ in result.warnings:
                         metrics.record_warning("historical")
-            elif result.warnings:
-                for _ in result.warnings:
-                    metrics.record_warning("historical")
+                elif settings.realtime_risk.decision_enabled:
+                    # realtime 模式：完整模式，所有 Warning 记为 realtime（Z）
+                    for _ in result.warnings:
+                        metrics.record_warning("realtime")
+                # shadow 模式：decision_enabled=false，pipeline 不产 Warning，无需记录
 
             # 更新峰值
             ev = pipeline._realtime_evaluator
@@ -454,7 +520,6 @@ def run_soak(
                     latency_ms=latency_ms,
                 )
                 last_snapshot_wall = now_wall
-                # 触发 GC 防止采样本身被延迟影响
                 gc.collect()
 
             frame_index += 1
@@ -486,6 +551,7 @@ def run_soak(
     metadata = {
         "scenario": scenario_name,
         "description": scenario_cfg.get("description", ""),
+        "mode": mode,  # 实验模式（historical / shadow / realtime）
         "video_source": str(video_cfg.get("source", "")),
         "loop_count": loop_count,
         "duration_s": round(wall_duration, 2),
@@ -507,6 +573,25 @@ def run_soak(
         report["evaluator_state"]["active_tracks_end"] = ev.active_count
         report["evaluator_state"]["active_risk_end"] = ev.active_risk_count
 
+    # 填入延迟抖动相关性分析（latency_spikes vs video_restart_count）
+    report["latency_analysis"]["video_restart_count"] = source.video_restart_count
+    # 相关性判定：spike 帧索引是否对齐 loop_boundaries（允许 ±5 帧容差）
+    boundary_frames = {lb["frame_index"] for lb in metrics.loop_boundaries}
+    correlated_spikes = sum(
+        1 for idx in metrics.spike_frame_indices
+        if any(abs(idx - bf) <= 5 for bf in boundary_frames)
+    )
+    report["latency_analysis"]["correlation"] = {
+        "spikes_at_loop_boundaries": correlated_spikes,
+        "total_spikes": metrics.latency_spikes,
+        "interpretation": (
+            "all_at_boundaries" if correlated_spikes == metrics.latency_spikes and metrics.latency_spikes > 0
+            else "partial_at_boundaries" if correlated_spikes > 0
+            else "no_spikes" if metrics.latency_spikes == 0
+            else "non_boundary_spikes"
+        ),
+    }
+
     # —— 清理 ——
     pipeline.close()
     source.release()
@@ -526,6 +611,12 @@ def main() -> int:
         help="场景 YAML 路径（默认 S2 异常停留）",
     )
     ap.add_argument(
+        "--mode",
+        choices=["historical", "shadow", "realtime"],
+        default="realtime",
+        help="实验模式（默认 realtime）：historical=只历史路径；shadow=实时信号不接决策；realtime=完整",
+    )
+    ap.add_argument(
         "--duration",
         type=int,
         default=300,
@@ -536,6 +627,12 @@ def main() -> int:
         type=int,
         default=60,
         help="采样间隔（秒，默认 60）",
+    )
+    ap.add_argument(
+        "--loop-count",
+        type=int,
+        default=None,
+        help="覆盖场景 YAML 的 loop_count（用于 R3 长跑；默认 None = 用 YAML 值）",
     )
     ap.add_argument(
         "--output-dir",
@@ -556,22 +653,25 @@ def main() -> int:
     output_dir = ROOT / args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[soak] 开始运行（预算 {args.duration}s）")
+    print(f"[soak] 开始运行（模式 {args.mode}，预算 {args.duration}s）")
     report = run_soak(
         scenario_path=scenario_path,
         duration_s=args.duration,
+        mode=args.mode,
         snapshot_interval_s=args.snapshot_interval,
+        loop_count_override=args.loop_count,
     )
 
-    # 写报告
+    # 写报告（文件名包含 mode，便于对照实验归档）
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     scenario_name = report["metadata"]["scenario"]
-    output_path = output_dir / f"soak_{ts}_{scenario_name}.json"
+    mode = report["metadata"]["mode"]
+    output_path = output_dir / f"soak_{ts}_{scenario_name}_{mode}.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
 
     print(f"\n[soak] 报告已写入: {output_path}")
-    print(f"[soak] 摘要:")
+    print(f"[soak] 摘要 (mode={mode}):")
     print(f"  - 场景: {report['metadata']['scenario']}")
     print(f"  - 帧数: {report['metadata']['frames_processed']}")
     print(f"  - 加速比: {report['metadata']['acceleration_ratio']}x")
@@ -579,7 +679,9 @@ def main() -> int:
     print(f"  - unpaired_raised: {report['risk_signal']['unpaired_raised']}")
     print(f"  - paired_mismatched: {report['risk_signal']['paired_mismatched']}")
     print(f"  - active_tracks peak/end: {report['evaluator_state']['active_tracks_peak']}/{report['evaluator_state']['active_tracks_end']}")
-    print(f"  - latency p50/p95/p99: {report['latency_ms']['p50']}/{report['latency_ms']['p95']}/{report['latency_ms']['p99']} ms")
+    print(f"  - latency p50/p95/p99/max: {report['latency_ms']['p50']}/{report['latency_ms']['p95']}/{report['latency_ms']['p99']}/{report['latency_ms']['max']} ms")
+    la = report["latency_analysis"]
+    print(f"  - latency spikes: {la['spikes']} (video_restarts={la['video_restart_count']}, correlation={la['correlation']['interpretation']})")
     print(f"  - warnings historical/realtime: {report['warnings']['historical_count']}/{report['warnings']['realtime_count']}")
 
     # 不变式校验（不做硬退出，让用户看报告判断）
