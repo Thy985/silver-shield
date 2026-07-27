@@ -58,3 +58,6 @@ htmlcov/
 # --- 基准 / 运行产物（benchmark JSON、临时输出，不入库）---
 out/
 var/
+
+# --- Soak Test 报告（长时间运行产物，体积大，不入库）---
+reports/

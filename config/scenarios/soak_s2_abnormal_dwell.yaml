@@ -1,0 +1,32 @@
+# Soak Test 场景配置（ADR-0021 Stage E）
+# 对应 docs/DESIGN-realtime-riskstream-engineering-plan.md §9.2.4
+#
+# S2 异常停留：ADR-0021 核心场景，验证 RAISED→CLEARED 配对
+# 视频源：CCTV_Surveillance_Final.mp4（含可疑停留场景）
+# 期望：raised_count>=1, cleared_count==raised_count, unpaired_raised=0
+#
+# 加速策略：DemoClock interval_s=5.0，dwell 阈值 300s 在加速后
+# 只需 60s 真实时间触发 RAISED
+
+scenario_name: "S2_abnormal_dwell"
+description: "异常停留核心场景（CCTV 可疑停留循环，验证 RAISED→CLEARED 配对）"
+
+video:
+  source: "data/demo/CCTV_Surveillance_Final.mp4"
+  loop_count: 10  # 循环 10 次
+
+clock:
+  interval_s: 5.0  # 10x 加速，dwell=300s → 60s 真实时间触发
+
+realtime:
+  enabled: true
+  decision_enabled: true  # S2 接决策，验证 RAISED→Warning
+  eval_interval_frames: 1
+
+expected:
+  raised_count_min: 1  # 至少 1 次 RAISED
+  cleared_count_eq_raised: true  # CLEARED 数 == RAISED 数
+  unpaired_raised: 0
+  paired_mismatched: 0
+  active_tracks_end: 0
+  historical_warning_unchanged: true  # 历史路径零污染
