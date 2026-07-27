@@ -37,12 +37,15 @@ from ..action.dispatcher import ActionDispatcher
 from ..action.executor import ActionExecutor
 from ..action.notifier import MockNotifier
 from ..action.publisher import MockPublisher
+from ..analysis.behavior_builder import BehaviorBuilder
+from ..analysis.behavior_state import BehaviorState
 from ..analysis.decision_engine import DecisionEngine
 from ..analysis.decision_policy import RuleBasedDecisionPolicy
 from ..analysis.event import VisitorEvent
 from ..analysis.event_builder import VisitorEventBuilder
 from ..analysis.feature_extractor import FeatureExtractor
 from ..analysis.perception import PerceptionEvent
+from ..analysis.recent_behavior_store import RecentBehaviorStore
 from ..analysis.rule_engine import RuleEngine
 from ..analysis.warning import WarningEvent
 from ..common.logging import get_logger
@@ -115,6 +118,10 @@ class FrameResult:
     perception_events: List[PerceptionEvent] = field(default_factory=list)
     warnings: List[WarningEvent] = field(default_factory=list)
     commands: List[Any] = field(default_factory=list)
+    # —— Stage B 新增（默认空列表 = 向后兼容，flag 关闭时与基线逐字段一致）——
+    # behavior_states 即实时观察（Observation）：每帧在场访客的纯实时快照，
+    # 供 Demo Dashboard / 调试层展示"此刻门口正在发生什么"。Stage B 不产信号。
+    behavior_states: List[BehaviorState] = field(default_factory=list)
 
 
 @dataclass
@@ -190,6 +197,11 @@ class PerceptionPipeline:
         metrics: Optional[PipelineMetrics] = None,
         now_provider: Optional[NowProvider] = None,
         frame_interval_s: float = 0.0,
+        # —— Stage B 实时旁路组件（可选；flag 关闭时全 None，零运行时开销）——
+        behavior_builder: Optional[BehaviorBuilder] = None,
+        recent_behavior_store: Optional[RecentBehaviorStore] = None,
+        realtime_enabled: bool = False,
+        eval_interval_frames: int = 1,
     ):
         self.detector = detector
         self.tracker = tracker
@@ -202,6 +214,17 @@ class PerceptionPipeline:
         # Demo 时序源（now_provider 即 tick 对象）；frame_interval_s>0 时 run() 每帧推进
         self._clock = now_provider
         self._frame_interval_s = frame_interval_s
+        # 实时旁路（Stage B）：flag 关闭时组件为 None，process_frame 跳过旁路块
+        self._behavior_builder = behavior_builder
+        self._recent_behavior_store = recent_behavior_store
+        self._realtime_enabled = realtime_enabled
+        self._eval_interval_frames = max(1, int(eval_interval_frames))
+        if realtime_enabled and eval_interval_frames > 1:
+            log.warning(
+                "pipeline.realtime_eval_throttled",
+                eval_interval_frames=eval_interval_frames,
+                note="RAISED/CLEARED 最坏延迟约 N×帧间隔",
+            )
 
     # ------------------------------------------------------------------
     # 从配置装配
@@ -260,6 +283,17 @@ class PerceptionPipeline:
             notifier=notifier,
             max_retries=settings.action.max_retries,
         )
+        # —— Stage B 实时旁路装配 ——
+        # flag 关闭时不构造组件（零运行时开销）；开启时构造 BehaviorBuilder +
+        # RecentBehaviorStore，挂入 process_frame 旁路块。阈值复用 settings.rule
+        # （单一阈值来源，工程方案 §5.1）。
+        realtime_enabled = settings.realtime_risk.enabled
+        eval_interval = settings.realtime_risk.eval_interval_frames
+        behavior_builder: Optional[BehaviorBuilder] = None
+        recent_behavior_store: Optional[RecentBehaviorStore] = None
+        if realtime_enabled:
+            behavior_builder = BehaviorBuilder(event_builder=event_builder)
+            recent_behavior_store = RecentBehaviorStore()
         return cls(
             detector=det,
             tracker=tracker,
@@ -271,6 +305,10 @@ class PerceptionPipeline:
             metrics=PipelineMetrics(),
             now_provider=now_provider,
             frame_interval_s=frame_interval_s,
+            behavior_builder=behavior_builder,
+            recent_behavior_store=recent_behavior_store,
+            realtime_enabled=realtime_enabled,
+            eval_interval_frames=eval_interval,
         )
 
     # ------------------------------------------------------------------
@@ -313,6 +351,28 @@ class PerceptionPipeline:
             warnings.extend(ev_warnings)
             commands.extend(cmds)
 
+        # —— Stage B 实时旁路（feature flag 控制；关闭时零开销，行为与基线逐字段一致）——
+        # 仅产 behavior_states 供观察（Observation），不产信号（Stage C）、不接决策。
+        # 工程方案 §3.1 步骤 4：BehaviorBuilder 纯函数 + RecentBehaviorStore 跨访问账本。
+        behavior_states: List[BehaviorState] = []
+        if self._realtime_enabled and self._behavior_builder is not None:
+            # 跳帧对称（工程方案 §5.3）：仅在评估帧执行实时块，RAISED/CLEARED 延迟对称
+            is_eval_frame = (frame_index % self._eval_interval_frames) == 0
+            if is_eval_frame:
+                now = self._clock() if self._clock is not None else datetime.now(timezone.utc)
+                active_tracks = self.tracker.active()
+                behavior_states = self._behavior_builder.build(active_tracks, now)
+                # RecentBehaviorStore 跨访问账本更新（pipeline 遍历调用，见 Stage B Task Contract Q2）
+                if self._recent_behavior_store is not None:
+                    window_s = self.feature_extractor.frequency_window_s
+                    for vt in active_tracks:
+                        visitor_uuid = self.event_builder.visitor_id_for(vt.track_id)
+                        if visitor_uuid is None or vt.enter_time is None:
+                            continue
+                        self._recent_behavior_store.update(
+                            str(visitor_uuid), vt.enter_time, now, window_s
+                        )
+
         return FrameResult(
             frame_index=frame_index,
             n_detections=len(dets),
@@ -320,6 +380,7 @@ class PerceptionPipeline:
             perception_events=perception_events,
             warnings=warnings,
             commands=commands,
+            behavior_states=behavior_states,
         )
 
     def _act_on_event(

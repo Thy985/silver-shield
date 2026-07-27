@@ -304,6 +304,39 @@ class RuntimeConfig(BaseModel):
     demo_clock_start: str = "2026-07-19T23:30:00+00:00"
 
 
+class RealtimeRiskConfig(BaseModel):
+    """实时风险状态流开关（ADR-0021 · Migration Stage B 起）。
+
+    只放开关与实时特有项；**阈值不在此重复**（复用 ``rule`` 段，单一阈值来源）。
+    默认 ``enabled=false``——Stage B 起 main 合并后默认关闭，Demo 场景经
+    ``ScenarioConfig.rule_overrides`` 同型通道或 YAML 显式开启。
+
+    - ``enabled``：Feature Flag。关闭时 ``from_settings`` **不构造**实时组件，
+      ``process_frame`` 跳过旁路块（零运行时开销，边缘 CPU 友好）。
+    - ``eval_interval_frames``：每 N 帧评估一次（性能旋钮）。语义见工程方案 §5.3：
+      RAISED/CLEARED **对称延迟**，最坏延迟 ≈ N×帧间隔；评估帧消费
+      ``tracker.active()`` 全量在场主体（非增量）。
+    """
+
+    enabled: bool = False
+    eval_interval_frames: int = 1
+
+    @field_validator("eval_interval_frames", mode="before")
+    @classmethod
+    def _positive_int(cls, v):
+        # mode="before"：在 pydantic 把 bool 强转 int 之前拦截（bool 是 int 子类，
+        # 默认 mode 会把 True 当 1 通过，掩盖配置类型错误）
+        if isinstance(v, bool):
+            raise ValueError(f"eval_interval_frames 必须是整数，收到 bool {v!r}")
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ValueError(
+                f"eval_interval_frames 必须是 int，收到 {type(v).__name__} {v!r}"
+            )
+        if v < 1:
+            raise ValueError(f"eval_interval_frames 必须 >= 1，收到 {v!r}")
+        return v
+
+
 class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     ingestion: IngestionConfig = IngestionConfig()
@@ -315,6 +348,7 @@ class Settings(BaseModel):
     decision: DecisionConfig = DecisionConfig()
     action: ActionConfig = ActionConfig()
     runtime: RuntimeConfig = RuntimeConfig()
+    realtime_risk: RealtimeRiskConfig = RealtimeRiskConfig()
 
     @classmethod
     def load(cls, path: str | os.PathLike = "config/default.yaml") -> "Settings":

@@ -45,6 +45,8 @@ data/cache/**
 .idea/
 .vscode/
 .DS_Store
+# Windows 保留设备名副产品（重定向意外产生的"幽灵文件"，无法 del，强制忽略）
+nul
 
 # --- 测试 / 覆盖率缓存 ---
 .pytest_cache/
