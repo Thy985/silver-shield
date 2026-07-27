@@ -23,7 +23,7 @@ silver-shield/
 ├── scripts/                   # 运行 / Demo 脚本
 ├── benchmark/                 # 性能基准
 ├── docs/                      # 文档体系（00-09 + ADR + DX 四篇）
-└── data/                      # 本地运行数据（均 gitignore）
+└── data/                      # 本地运行数据（models/evidence/cache gitignore；demo/ 验证报告入库）
 ```
 
 ## `src/home_perception` 包结构
