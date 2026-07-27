@@ -28,7 +28,9 @@ from home_perception.analysis.decision_engine import DecisionEngine
 from home_perception.analysis.decision_policy import RuleBasedDecisionPolicy
 from home_perception.analysis.event_builder import VisitorEventBuilder
 from home_perception.analysis.feature_extractor import FeatureExtractor
+from home_perception.analysis.realtime_risk_evaluator import RealTimeRiskEvaluator
 from home_perception.analysis.recent_behavior_store import RecentBehaviorStore
+from home_perception.analysis.risk_signal import SignalTransition
 from home_perception.analysis.rule_engine import RuleEngine, ThresholdConfig
 from home_perception.core.config import Settings
 from home_perception.detection.detector import Detection, DetectionResult
@@ -89,14 +91,16 @@ def _build_pipeline(
     *,
     realtime_enabled: bool = False,
     eval_interval_frames: int = 1,
+    thresholds: Optional[ThresholdConfig] = None,
 ) -> PerceptionPipeline:
-    """构造 PerceptionPipeline，可选挂入 Stage B 实时旁路组件。"""
+    """构造 PerceptionPipeline，可选挂入 Stage B/C 实时旁路组件。"""
     tracker = VisitorTracker(absence_gap_s=5.0, now_provider=clock)
     event_builder = VisitorEventBuilder(tracker, source_video="demo/test", now_provider=clock)
+    th = thresholds or ThresholdConfig()
     feat = FeatureExtractor(frequency_window_s=1800.0)
     rule_engine = RuleEngine(
         device_id="demo/test", location="入户门",
-        thresholds=ThresholdConfig(), now_provider=clock,
+        thresholds=th, now_provider=clock,
     )
     decision = DecisionEngine(
         elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock,
@@ -109,9 +113,11 @@ def _build_pipeline(
 
     behavior_builder: Optional[BehaviorBuilder] = None
     recent_store: Optional[RecentBehaviorStore] = None
+    evaluator: Optional[RealTimeRiskEvaluator] = None
     if realtime_enabled:
         behavior_builder = BehaviorBuilder(event_builder=event_builder)
         recent_store = RecentBehaviorStore()
+        evaluator = RealTimeRiskEvaluator(thresholds=th, now_provider=clock)
 
     return PerceptionPipeline(
         detector=detector, tracker=tracker, event_builder=event_builder,
@@ -119,6 +125,7 @@ def _build_pipeline(
         executor=executor, now_provider=clock,
         behavior_builder=behavior_builder,
         recent_behavior_store=recent_store,
+        realtime_evaluator=evaluator,
         realtime_enabled=realtime_enabled,
         eval_interval_frames=eval_interval_frames,
     )
@@ -236,9 +243,10 @@ class TestFromSettingsAssembly:
         assert p._realtime_enabled is False
         assert p._behavior_builder is None
         assert p._recent_behavior_store is None
+        assert p._realtime_evaluator is None  # Stage C
 
     def test_flag_on_components_constructed(self):
-        """flag 开启：from_settings 构造实时组件。"""
+        """flag 开启：from_settings 构造实时组件（含 Stage C Evaluator）。"""
         s = Settings()
         s.realtime_risk.enabled = True
         from unittest.mock import MagicMock
@@ -247,6 +255,7 @@ class TestFromSettingsAssembly:
         assert p._realtime_enabled is True
         assert p._behavior_builder is not None
         assert p._recent_behavior_store is not None
+        assert p._realtime_evaluator is not None  # Stage C
 
 
 # ============================================================================
@@ -317,3 +326,145 @@ class TestRealtimeRiskConfig:
         s = Settings.load()
         assert s.realtime_risk.enabled is False
         assert s.realtime_risk.eval_interval_frames == 1
+
+
+# ============================================================================
+# 6. Stage C：risk_signals 旁路隔离 + Shadow Mode 不接决策
+# ============================================================================
+
+class TestStageCFlagOffSignals:
+    def test_flag_off_risk_signals_empty(self):
+        """flag 关闭：risk_signals 恒空（旁路零泄漏）。"""
+        clock = ManualClock()
+        plan = [_person(1), _person(1), []]
+        p = _build_pipeline(StubDetector(plan, clock), clock, realtime_enabled=False)
+        results = _run_frames(p, 3)
+        for r in results:
+            assert r.risk_signals == []
+
+    def test_flag_off_history_unchanged_vs_on(self):
+        """flag 开启 vs 关闭：同一帧序列下历史五字段逐字段一致（Stage C 旁路不污染主线）。
+
+        工程方案 §8.3 硬性合入门：risk_signals 旁路不得改变历史行为。
+        """
+        plan = [_person(1), _person(1), _person(1), [], []]
+
+        clock_off = ManualClock()
+        p_off = _build_pipeline(StubDetector(plan, clock_off), clock_off, realtime_enabled=False)
+        results_off = _run_frames(p_off, 5)
+
+        clock_on = ManualClock()
+        p_on = _build_pipeline(StubDetector(plan, clock_on), clock_on, realtime_enabled=True)
+        results_on = _run_frames(p_on, 5)
+
+        assert len(results_off) == len(results_on)
+        for i, (ro, rn) in enumerate(zip(results_off, results_on)):
+            assert _history_fields(ro) == _history_fields(rn), (
+                f"frame {i}: 历史字段不一致 (off={_history_fields(ro)} on={_history_fields(rn)})"
+            )
+
+
+class TestStageCShadowMode:
+    """Shadow Mode 核心断言：信号产出但不接决策（warnings/commands 不因 risk_signals 改变）。"""
+
+    def test_dwell_over_threshold_emits_raised(self):
+        """dwell 超阈 → 产出 RAISED 信号（事中可观察）。"""
+        # 阈值设小（1.5s），让 dwell 快速超阈
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        clock = ManualClock()
+        # 持续在场 3 帧（clock 每帧推进 1s，dwell=2s 触发）
+        plan = [_person(1), _person(1), _person(1)]
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=True, thresholds=th,
+        )
+        r0 = p.process_frame(None, frame_index=0)  # dwell≈0，不触发
+        r1 = p.process_frame(None, frame_index=1)  # dwell≈1s，不触发（<1.5）
+        r2 = p.process_frame(None, frame_index=2)  # dwell≈2s，触发 RAISED
+
+        assert r0.risk_signals == []
+        assert r1.risk_signals == []
+        # 帧 2 应产出 RAISED
+        raised = [s for s in r2.risk_signals if s.transition is SignalTransition.RAISED]
+        assert len(raised) == 1
+        assert raised[0].paired_signal_id is None  # RAISED 无配对
+
+    def test_leave_emits_cleared_paired(self):
+        """离场后产出配对 CLEARED（paired_signal_id 正确）。"""
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        clock = ManualClock()
+        # 在场 3 帧（触发 RAISED）+ 离场 6 帧（absence_gap_s=5.0，第 5 帧后离场）
+        plan = [_person(1), _person(1), _person(1)] + [[] for _ in range(6)]
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=True, thresholds=th,
+        )
+        results = _run_frames(p, len(plan))
+
+        # 找 RAISED + CLEARED
+        all_signals = [s for r in results for s in r.risk_signals]
+        raised = [s for s in all_signals if s.transition is SignalTransition.RAISED]
+        cleared = [s for s in all_signals if s.transition is SignalTransition.CLEARED]
+
+        assert len(raised) >= 1, "应有 RAISED 信号"
+        assert len(cleared) >= 1, "离场后应有 CLEARED 信号"
+        # 配对性：CLEARED.paired_signal_id 指向某个 RAISED.signal_id
+        raised_ids = {s.signal_id for s in raised}
+        for c in cleared:
+            assert c.paired_signal_id in raised_ids, (
+                f"CLEARED.paired_signal_id {c.paired_signal_id} 未对应任何 RAISED"
+            )
+
+    def test_shadow_mode_no_extra_warnings_or_commands(self):
+        """Shadow Mode：risk_signals 不接决策 → warnings/commands 与 flag 关闭态一致。
+
+        工程方案 §9 Stage C 验收：'decision_engine diff 为空；影子信号仅进 FrameResult'。
+        本测试用同一 plan 跑 flag off vs on，断言 warnings/commands 逐帧一致。
+        """
+        # 用会触发历史 Warning 的场景：odd_hour + long dwell
+        # 但 ThresholdConfig 默认 long_duration=300s，Demo 帧间 1s 不会触发历史路径
+        # 这里用小阈值让历史路径也触发，对比 flag on/off 的 warnings 是否一致
+        th = ThresholdConfig(long_duration_seconds=1.5, repeat_visit_count=3)
+        plan = [_person(1), _person(1), _person(1), []]
+
+        clock_off = ManualClock()
+        p_off = _build_pipeline(
+            StubDetector(plan, clock_off), clock_off,
+            realtime_enabled=False, thresholds=th,
+        )
+        results_off = _run_frames(p_off, 4)
+
+        clock_on = ManualClock()
+        p_on = _build_pipeline(
+            StubDetector(plan, clock_on), clock_on,
+            realtime_enabled=True, thresholds=th,
+        )
+        results_on = _run_frames(p_on, 4)
+
+        # 逐帧对比 warnings 数量 + commands 数量
+        for i, (ro, rn) in enumerate(zip(results_off, results_on)):
+            assert len(ro.warnings) == len(rn.warnings), (
+                f"frame {i}: warnings 数量不一致 (off={len(ro.warnings)} on={len(rn.warnings)})"
+            )
+            assert len(ro.commands) == len(rn.commands), (
+                f"frame {i}: commands 数量不一致 (off={len(ro.commands)} on={len(rn.commands)})"
+            )
+
+    def test_raised_not_repeated_while_active(self):
+        """ACTIVE_RISK 持续触发：不重复 RAISED（去抖第一层）。"""
+        th = ThresholdConfig(long_duration_seconds=1.0, repeat_visit_count=99)
+        clock = ManualClock()
+        # 持续在场 5 帧（dwell 持续超阈）
+        plan = [_person(1) for _ in range(5)]
+        p = _build_pipeline(
+            StubDetector(plan, clock), clock,
+            realtime_enabled=True, thresholds=th,
+        )
+        results = _run_frames(p, 5)
+
+        all_raised = [
+            s for r in results for s in r.risk_signals
+            if s.transition is SignalTransition.RAISED
+        ]
+        # 只应有一次 RAISED（首次触发后持续 ACTIVE_RISK 不重复）
+        assert len(all_raised) == 1, f"应有 1 次 RAISED，实际 {len(all_raised)}"
