@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -702,16 +702,23 @@ class SemanticAggregate:
 # ============================================================================
 
 def records_equal(a: Any, b: Any) -> bool:
-    """深度比较两个 Memory record 是否字段级相等。
+    """深度比较两个 Memory record 是否字段级相等（忽略 created_at）。
 
-    用于 Replay Test（§6.7）的 baseline 比对。直接使用 dataclass 生成的
-    `__eq__`（按字段逐字段比较，嵌套 dataclass 递归调用其 `__eq__`，
-    datetime 精确比较，List[str] 逐元素比较）。
+    用于 Replay Test（§6.7）的 baseline 比对。`created_at` 是运行时墙钟，
+    两次回放天然产生微秒级差异；Replay Test 关心的是**记忆内容**一致性，
+    不是创建时刻，因此本函数显式跳过 `created_at` 字段。
 
-    保留 `type(a) is not type(b)` 前置检查以拒绝跨类型比较（如 ShortTermRecord
-    vs EpisodicRecord），避免 dataclass `__eq__` 在跨类型时直接返回 False
-    的隐式行为显式化。
+    其他字段（含嵌套 dataclass 如 ActionSummary / EvidenceRef）按 dataclass
+    生成的 `__eq__` 递归比较；datetime 精确比较；List[str] 逐元素比较。
+
+    保留 `type(a) is not type(b)` 前置检查以拒绝跨类型比较。
     """
     if type(a) is not type(b):
         return False
-    return a == b
+    # 逐字段比较，跳过 created_at（运行时墙钟，非记忆内容）
+    for f in fields(a):
+        if f.name == "created_at":
+            continue
+        if getattr(a, f.name) != getattr(b, f.name):
+            return False
+    return True

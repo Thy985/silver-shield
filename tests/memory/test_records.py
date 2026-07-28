@@ -499,6 +499,14 @@ class TestRecordsEqual:
         b = _make_short_term()
         assert records_equal(a, b)
 
+    def test_equal_ignores_created_at(self):
+        """created_at 是运行时墙钟，records_equal 必须忽略（Replay Test 语义）。"""
+        a = _make_short_term()
+        b = _make_short_term()
+        # 强制设不同的 created_at，断言仍相等
+        b.created_at = a.created_at.replace(microsecond=a.created_at.microsecond + 999)
+        assert records_equal(a, b)
+
     def test_not_equal_different_type(self):
         a = _make_short_term()
         b = _make_episodic()
