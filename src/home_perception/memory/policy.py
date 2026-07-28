@@ -73,18 +73,24 @@ class MemoryPolicy(ABC):
         self,
         state_snapshot: "BehaviorState",
         transition: Optional["RiskSignal"],
+        current_record: Optional[ShortTermRecord] = None,
     ) -> Optional[ShortTermRecord]:
         """Short-term Memory 写入（ADR-0024 §3.1.1）。
 
         触发时机：
         - 状态转移（transition 非 None）：RAISED / CLEARED
-        - 周期快照（transition None，state_snapshot 非 None）
+        - 周期快照（transition None，current_record 非 None）：覆写当前 record
         - 访客离场（由上层调用 project_episode，本方法不处理）
 
         幂等键：`record_id = f"st-{visitor_instance_id}"`
 
+        `current_record` 参数用途：
+        - CLEARED 时继承 `raised_at`（transition 不携带此信息）
+        - 周期快照时继承 `phase` / `raised_signal_id` / `raised_at`
+        - 保持纯函数语义：不持有内部状态，靠参数传入"当前 record"
+
         返回 None 的场景：
-        - state_snapshot 与 transition 同时为 None（无写入触发）
+        - state_snapshot 与 transition 与 current_record 同时为 None（无写入触发）
         - visitor_instance_id 缺失（无法构造幂等键）
         - 其他子类自定义跳过条件
         """

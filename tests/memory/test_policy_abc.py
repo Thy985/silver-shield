@@ -33,7 +33,7 @@ def test_full_implementation_accepted():
     """子类实现全部 3 个抽象方法可实例化。"""
 
     class FullPolicy(MemoryPolicy):
-        def transform_short_term(self, state_snapshot, transition):
+        def transform_short_term(self, state_snapshot, transition, current_record=None):
             return None
 
         def project_episode(self, visitor_event, warnings, actions):
