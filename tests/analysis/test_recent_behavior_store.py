@@ -57,14 +57,14 @@ def test_multiple_visitors_sliding_window():
     snap = store.update("U", _utc(300), now=_utc(700), window_seconds=600)
     assert snap["visits_in_window"] == 1
     # V 此时单独查询应为 0
-    assert store.snapshot("V", now=_utc(700), window_seconds=600)["visits_in_window"] == 0
+    assert store.query_window("V", now=_utc(700), window_seconds=600)["visits_in_window"] == 0
 
 
 def test_window_length_edge():
     """窗口边界：enter_time == cutoff 仍计入（>=）。"""
     store = RecentBehaviorStore()
     store.update("V", _utc(100), now=_utc(700), window_seconds=600)  # cutoff=100
-    assert store.snapshot("V", now=_utc(700), window_seconds=600)["visits_in_window"] == 1
+    assert store.query_window("V", now=_utc(700), window_seconds=600)["visits_in_window"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ def test_keyed_by_visitor_instance_id():
     store.update("vid-ABC", _utc(0), now=_utc(0), window_seconds=600)
     store.update("vid-ABC", _utc(100), now=_utc(100), window_seconds=600)
     store.update("vid-ABC", _utc(200), now=_utc(200), window_seconds=600)
-    assert store.snapshot("vid-ABC", now=_utc(200), window_seconds=600)["visits_in_window"] == 3
+    assert store.query_window("vid-ABC", now=_utc(200), window_seconds=600)["visits_in_window"] == 3
 
 
 def test_distinct_instance_ids_separate():
@@ -85,8 +85,8 @@ def test_distinct_instance_ids_separate():
     store = RecentBehaviorStore()
     store.update("vid-A", _utc(0), now=_utc(0), window_seconds=600)
     store.update("vid-B", _utc(0), now=_utc(0), window_seconds=600)
-    assert store.snapshot("vid-A", now=_utc(0), window_seconds=600)["visits_in_window"] == 1
-    assert store.snapshot("vid-B", now=_utc(0), window_seconds=600)["visits_in_window"] == 1
+    assert store.query_window("vid-A", now=_utc(0), window_seconds=600)["visits_in_window"] == 1
+    assert store.query_window("vid-B", now=_utc(0), window_seconds=600)["visits_in_window"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ def test_volatile_restart_empty():
     assert not store.is_empty
     store.reset()
     assert store.is_empty
-    assert store.snapshot("V", now=_utc(0), window_seconds=600)["visits_in_window"] == 0
+    assert store.query_window("V", now=_utc(0), window_seconds=600)["visits_in_window"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ def test_empty_bucket_key_removal_does_not_affect_other_visitors():
     store.update("V", _utc(0), now=_utc(700), window_seconds=600)
     assert "V" not in store._entries
     assert "U" in store._entries
-    assert store.snapshot("U", now=_utc(700), window_seconds=600)["visits_in_window"] == 1
+    assert store.query_window("U", now=_utc(700), window_seconds=600)["visits_in_window"] == 1
 
 
 def test_empty_bucket_removal_is_empty_property():

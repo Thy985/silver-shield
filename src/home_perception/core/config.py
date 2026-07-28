@@ -345,6 +345,62 @@ class RealtimeRiskConfig(BaseModel):
         return v
 
 
+class MemoryConfig(BaseModel):
+    """ADR-0024 Slice 3（Stage C + Stage E）Snapshot Recovery 配置。
+
+    - ``enabled``：Memory Snapshot 总开关。默认 ``false``——Slice 3 合并后默认关闭，
+      经 YAML ``memory.enabled: true`` 显式开启（Stage F Shadow Mode 同型 gating）。
+    - ``snapshot_path``：JSON 持久化路径（原子写：先 .tmp 再 os.replace）。
+    - ``snapshot_interval_seconds``：周期快照间隔（默认 30s）；写入时机见工程方案 §5.3.6。
+    - ``snapshot_fresh_threshold_seconds``：FRESH/STALE 分界（默认 30s）。
+    - ``snapshot_ttl_seconds``：STALE/DISCARD 分界（默认 300s=5min）；超过则冷启动。
+    - ``recent_behavior_retention_seconds``：恢复时只保留 ``last_seen_at`` 在窗口内的
+      visitor（默认 3600s=1h），避免 TD-0024 旧条目累积重现。
+    - ``eviction_interval_frames``：每 N 帧内联 ``evict_expired()``（Stage D，默认 60）。
+    - ``cold_start_stale_confidence``：STALE 档恢复 confidence 值（默认 0.5）。
+    """
+
+    enabled: bool = False
+    snapshot_path: str = "data/memory/snapshot.json"
+    snapshot_interval_seconds: float = 30.0
+    snapshot_fresh_threshold_seconds: float = 30.0
+    snapshot_ttl_seconds: float = 300.0
+    recent_behavior_retention_seconds: float = 3600.0
+    eviction_interval_frames: int = 60
+    cold_start_stale_confidence: float = 0.5
+
+    @field_validator(
+        "snapshot_interval_seconds",
+        "snapshot_fresh_threshold_seconds",
+        "snapshot_ttl_seconds",
+        "recent_behavior_retention_seconds",
+    )
+    @classmethod
+    def _non_negative_seconds(cls, v: float) -> float:
+        # 配置攻击防护（ADR-0014 前置 #5）：负时长必须明确报错
+        if isinstance(v, float) and math.isnan(v):
+            raise ValueError(f"时长配置不能是 NaN，收到 {v!r}")
+        if v < 0:
+            raise ValueError(f"时长配置必须 >= 0，收到 {v!r}")
+        return v
+
+    @field_validator("snapshot_path")
+    @classmethod
+    def _non_empty_path(cls, v: str) -> str:
+        if not v or not str(v).strip():
+            raise ValueError("snapshot_path 不能为空")
+        return v
+
+    @field_validator("cold_start_stale_confidence")
+    @classmethod
+    def _confidence_unit_range(cls, v: float) -> float:
+        if isinstance(v, float) and math.isnan(v):
+            raise ValueError(f"cold_start_stale_confidence 不能是 NaN，收到 {v!r}")
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"cold_start_stale_confidence 必须在 [0, 1]，收到 {v!r}")
+        return v
+
+
 class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     ingestion: IngestionConfig = IngestionConfig()
@@ -357,6 +413,7 @@ class Settings(BaseModel):
     action: ActionConfig = ActionConfig()
     runtime: RuntimeConfig = RuntimeConfig()
     realtime_risk: RealtimeRiskConfig = RealtimeRiskConfig()
+    memory: MemoryConfig = MemoryConfig()
 
     @classmethod
     def load(cls, path: str | os.PathLike = "config/default.yaml") -> "Settings":

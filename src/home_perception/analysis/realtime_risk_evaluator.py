@@ -38,7 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 from ..common.logging import get_logger
@@ -52,6 +52,9 @@ from .risk_signal import (
     SubjectType,
 )
 from .rule_engine import ThresholdConfig
+
+if TYPE_CHECKING:
+    from ..memory.snapshot import ActiveTrackSnapshot
 
 log = get_logger(__name__)
 
@@ -70,13 +73,18 @@ class _TrackRiskState:
     - `phase`：RiskPhase.NONE | RiskPhase.ACTIVE_RISK
     - `raised_signal_id`：本次 RAISED 的 signal_id；CLEARED 时回填到 RiskSignal.paired_signal_id
     - `raised_at`：RAISED 时刻（datetime UTC），用于日志/审计
+    - `first_seen`：本次访问起点（datetime UTC），无法重算，Snapshot 持久化用
     - `last_track_id`：最近一次见到的 track_id（仅用于日志，不参与判定）
+    - `confidence`：冷启动恢复可信度（ADR-0024 §5.5）。FRESH 恢复=1.0；STALE 恢复=0.5；
+      新检测主体=1.0。confidence 单调上升（STALE→新帧重见→1.0），不下降。
     """
 
     phase: RiskPhase
     raised_signal_id: str
     raised_at: Optional[datetime]
+    first_seen: datetime
     last_track_id: Optional[int] = None
+    confidence: float = 1.0
 
 
 class RealTimeRiskEvaluator:
@@ -149,6 +157,7 @@ class RealTimeRiskEvaluator:
                         phase=RiskPhase.ACTIVE_RISK,
                         raised_signal_id=signal.signal_id,
                         raised_at=now,
+                        first_seen=now,
                         last_track_id=state.track_id,
                     )
                 else:
@@ -156,10 +165,14 @@ class RealTimeRiskEvaluator:
                         phase=RiskPhase.NONE,
                         raised_signal_id="",
                         raised_at=None,
+                        first_seen=now,
                         last_track_id=state.track_id,
                     )
             else:
-                # 已有条目
+                # 已有条目：重检测到同一 visitor → confidence 升至 1.0（单调上升，§5.5.0）
+                # STALE(0.5) 恢复的条目被重新见到即升为 FRESH，避免"重启即警报"后长期降级
+                if existing.confidence < 1.0:
+                    existing.confidence = 1.0
                 existing.last_track_id = state.track_id
                 if existing.phase is RiskPhase.ACTIVE_RISK:
                     # 已在风险中：回落或离场 → CLEARED
@@ -211,6 +224,57 @@ class RealTimeRiskEvaluator:
     def reset(self) -> None:
         """清空全部状态（volatile 语义：模拟重启丢弃，不补发 CLEARED，工程方案 §4.3）。"""
         self._active.clear()
+
+    # ------------------------------------------------------------------
+    # Snapshot 持久化 / 冷启动恢复（ADR-0024 Slice 3 Stage C / E，解 TD-0027）
+    # ------------------------------------------------------------------
+
+    def snapshot(self, now: datetime) -> "List[ActiveTrackSnapshot]":
+        """导出当前 `_active` 状态为可持久化快照（reconstructable only）。
+
+        公开方法，不暴露 `_active` 私有字段。只导出无法重算的字段
+        （visitor_instance_id / phase / raised_signal_id / raised_at / first_seen），
+        `last_seen_at` 取 `now`（Snapshot 写入时刻）。派生指标（dwell_seconds 等）
+        不导出，重启后由 `BehaviorBuilder` 重算。
+        """
+        from ..memory.snapshot import ActiveTrackSnapshot
+
+        return [
+            ActiveTrackSnapshot(
+                visitor_instance_id=vid,
+                phase=state.phase.value,
+                raised_signal_id=state.raised_signal_id,
+                raised_at=state.raised_at,
+                first_seen=state.first_seen,
+                last_seen_at=now,
+            )
+            for vid, state in self._active.items()
+        ]
+
+    def restore(
+        self,
+        snapshots: "List[ActiveTrackSnapshot]",
+        confidence: float = 1.0,
+    ) -> None:
+        """从快照恢复 `_active` 状态（ADR-0024 Slice 3 Stage E）。
+
+        语义：清空当前 `_active`，按 snapshots 重建。用于进程重启后的状态恢复
+        （TD-0027）。`confidence` 标记恢复可信度（FRESH=1.0 / STALE=0.5），
+        由 `ColdStartCoordinator` 按 snapshot 时效分档传入。
+
+        - `track_id` 不持久化，重启后未知 → `last_track_id=None`
+        - 恢复即视为"已见过"，`first_seen` 取快照值（访问起点不可重算）
+        """
+        self._active.clear()
+        for snap in snapshots:
+            self._active[snap.visitor_instance_id] = _TrackRiskState(
+                phase=RiskPhase(snap.phase),
+                raised_signal_id=snap.raised_signal_id,
+                raised_at=snap.raised_at,
+                first_seen=snap.first_seen,
+                last_track_id=None,  # track_id 不持久化，重启后未知
+                confidence=confidence,
+            )
 
     # ------------------------------------------------------------------
     # 内部：触发判定

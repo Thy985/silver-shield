@@ -31,7 +31,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+from uuid import uuid4
 
 from ..action.dispatcher import ActionDispatcher
 from ..action.executor import ActionExecutor
@@ -52,9 +54,11 @@ from ..analysis.rule_engine import RuleEngine
 from ..analysis.signal_adapter import risk_signal_to_perception
 from ..analysis.warning import WarningEvent
 from ..common.logging import get_logger
-from ..core.config import Settings
+from ..core.config import MemoryConfig, Settings
 from ..detection.detector import Detection, DetectionResult, YOLODetector
 from ..detection.tracker import VisitorTracker
+from ..memory.cold_start import ColdStartCoordinator
+from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
 from .config import build_dispatcher_config, build_threshold_config
 from .observability import PipelineMetrics
 
@@ -214,6 +218,10 @@ class PerceptionPipeline:
         eval_interval_frames: int = 1,
         # —— Stage D 决策接入开关（可选；默认 false，Shadow Mode 不产 Warning）——
         decision_enabled: bool = False,
+        # —— ADR-0024 Slice 3：Snapshot Recovery（Stage C + Stage E，解 TD-0027）——
+        # 可选；memory_config=None 或 enabled=False 时不触发，行为与基线逐字段一致。
+        # 开启时需要 realtime 旁路组件（evaluator/store）已存在，否则降级为纯冷启动无效。
+        memory_config: Optional[MemoryConfig] = None,
     ):
         self.detector = detector
         self.tracker = tracker
@@ -247,6 +255,31 @@ class PerceptionPipeline:
                 "pipeline.decision_enabled_without_realtime",
                 note="decision_enabled=true 但 realtime_enabled=false，决策开关无意义",
             )
+
+        # —— ADR-0024 Slice 3：Snapshot Recovery 接线（Stage C + Stage E）——
+        # memory_config 由 Settings.memory 注入。effective 激活需 enabled 且 realtime
+        # 旁路组件已就位（from_settings 在 memory 开启时会连带开启 realtime 装配）。
+        self._memory_config = memory_config
+        self._snapshot_store: Optional[SnapshotStore] = None
+        self._cold_start_coordinator: Optional[ColdStartCoordinator] = None
+        self._last_snapshot_at: Optional[datetime] = None
+        if memory_config is not None and memory_config.enabled:
+            if self._realtime_evaluator is not None and self._recent_behavior_store is not None:
+                self._snapshot_store = SnapshotStore(Path(memory_config.snapshot_path))
+                self._cold_start_coordinator = ColdStartCoordinator(
+                    self._snapshot_store,
+                    self._realtime_evaluator,
+                    self._recent_behavior_store,
+                    memory_config,
+                )
+                # 启动期立即冷启动恢复（解 TD-0027 进程重启状态恢复）
+                result = self._cold_start_coordinator.recover(self._now())
+                log.info("pipeline.cold_start_recover", **result.as_log_fields())
+            else:
+                log.warning(
+                    "pipeline.memory_enabled_without_realtime",
+                    note="memory.enabled=true 但 realtime 旁路组件缺失，已跳过 Snapshot/恢复",
+                )
 
     # ------------------------------------------------------------------
     # 从配置装配
@@ -310,7 +343,9 @@ class PerceptionPipeline:
         # RecentBehaviorStore + RealTimeRiskEvaluator，挂入 process_frame 旁路块。
         # 阈值复用 settings.rule（单一阈值来源，工程方案 §5.1）：同一 ThresholdConfig
         # 实例喂 RuleEngine 与 RealTimeRiskEvaluator，改一处 YAML 两路同时生效。
-        realtime_enabled = settings.realtime_risk.enabled
+        # Memory（ADR-0024 Slice 3）需要实时旁路组件才能持久化/恢复，故 memory 开启时
+        # 连带开启 realtime 装配（Shadow Mode，decision_enabled 仍按配置，默认关闭）。
+        realtime_enabled = settings.realtime_risk.enabled or settings.memory.enabled
         eval_interval = settings.realtime_risk.eval_interval_frames
         decision_enabled = settings.realtime_risk.decision_enabled
         behavior_builder: Optional[BehaviorBuilder] = None
@@ -323,6 +358,11 @@ class PerceptionPipeline:
             realtime_evaluator = RealTimeRiskEvaluator(
                 thresholds=thresholds,
                 now_provider=now_provider,
+            )
+        if settings.memory.enabled and not settings.realtime_risk.enabled:
+            log.info(
+                "pipeline.memory_implicitly_enables_realtime",
+                note="memory.enabled=true 但 realtime_risk.enabled=false，已连带开启实时旁路（Shadow Mode）",
             )
         return cls(
             detector=det,
@@ -341,6 +381,7 @@ class PerceptionPipeline:
             realtime_enabled=realtime_enabled,
             eval_interval_frames=eval_interval,
             decision_enabled=decision_enabled,
+            memory_config=settings.memory,
         )
 
     # ------------------------------------------------------------------
@@ -351,6 +392,44 @@ class PerceptionPipeline:
         """加载 YOLO 权重（懒加载，构造期不触发 torch 导入）。"""
         if hasattr(self.detector, "load"):
             self.detector.load()
+
+    # ------------------------------------------------------------------
+    # ADR-0024 Slice 3：Snapshot Recovery 辅助（Stage C 写入路径）
+    # ------------------------------------------------------------------
+
+    def _now(self) -> datetime:
+        """当前时刻：优先 now_provider（Demo 模拟时钟），否则墙钟 UTC。"""
+        if self._clock is not None:
+            return self._clock()
+        return datetime.now(timezone.utc)
+
+    def _save_snapshot(self, now: datetime) -> None:
+        """把当前实时状态写入 JSON snapshot（原子写，解 TD-0027 重启恢复）。"""
+        if (
+            self._snapshot_store is None
+            or self._realtime_evaluator is None
+            or self._recent_behavior_store is None
+        ):
+            return
+        snap = RuntimeSnapshot(
+            snapshot_id=str(uuid4()),
+            snapshot_at=now,
+            active_tracks=self._realtime_evaluator.snapshot(now),
+            recent_behavior=self._recent_behavior_store.snapshot(),
+        )
+        self._snapshot_store.save(snap)
+
+    def _maybe_save_snapshot(self, now: datetime) -> None:
+        """周期快照：距上次写入 >= snapshot_interval_seconds 才写（默认 30s）。"""
+        if self._snapshot_store is None or self._memory_config is None:
+            return
+        interval = self._memory_config.snapshot_interval_seconds
+        if (
+            self._last_snapshot_at is None
+            or (now - self._last_snapshot_at).total_seconds() >= interval
+        ):
+            self._save_snapshot(now)
+            self._last_snapshot_at = now
 
     def process_frame(self, frame: "object", frame_index: int = 0) -> FrameResult:
         """处理单帧：detector → tracker → builder → feature → rule → decision → action。
@@ -440,6 +519,10 @@ class PerceptionPipeline:
                         perception_events.extend(rt_percs)
                         warnings.extend(rt_warnings)
                         commands.extend(rt_cmds)
+
+                    # 周期快照（Stage C 持久化；冷启动恢复用）。仅当 memory 激活时。
+                    if self._snapshot_store is not None:
+                        self._maybe_save_snapshot(now)
 
         return FrameResult(
             frame_index=frame_index,
@@ -571,6 +654,9 @@ class PerceptionPipeline:
 
     def close(self) -> None:
         """释放资源（模型显存 / 内存）。detector 实例可复用，这里只置空内部模型。"""
+        # 优雅退出：flush 最终 snapshot（Stage C 持久化，冷启动恢复用）
+        if self._snapshot_store is not None:
+            self._save_snapshot(self._now())
         det = self.detector
         if hasattr(det, "unload"):
             det.unload()
