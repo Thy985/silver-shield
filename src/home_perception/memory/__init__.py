@@ -10,6 +10,10 @@
 > 不连存储、不接 pipeline。Episode Builder 实现见 Slice 4（Stage B），
 > Snapshot 持久化见 Slice 3（Stage C）。
 >
+> **Slice 3（本次）**：Snapshot 持久化（Stage C）+ 冷启动恢复（Stage E）。
+> `snapshot.py` 定义 `RuntimeSnapshot` / `SnapshotStore`；`cold_start.py` 定义
+> `ColdStartCoordinator`，由 `runtime/pipeline.py` 在启动期调用恢复运行时状态。
+>
 > **边界铁律**（ADR-0024 §3.2.2）：Memory Policy 只做 ObservationStream → MemoryRecord
 > 的确定性投影，不参与风险判定 / 行动决策 / LLM 推理。
 """
@@ -26,15 +30,29 @@ from .records import (
 )
 from .policy import MemoryPolicy
 from .short_term_policy import DefaultShortTermPolicy
+from .snapshot import (
+    ActiveTrackSnapshot,
+    RecentBehaviorSnapshot,
+    RuntimeSnapshot,
+    SnapshotStore,
+)
+from .cold_start import ColdStartConfidence, ColdStartCoordinator, RecoveryResult
 
 __all__ = [
     "ActionSummary",
+    "ActiveTrackSnapshot",
+    "ColdStartConfidence",
+    "ColdStartCoordinator",
     "DefaultShortTermPolicy",
     "EvidenceRef",
     "EpisodicRecord",
     "MemoryPolicy",
     "MemoryStatus",
+    "RecentBehaviorSnapshot",
     "RecordIdPrefix",
+    "RecoveryResult",
+    "RuntimeSnapshot",
     "SemanticAggregate",
     "ShortTermRecord",
+    "SnapshotStore",
 ]

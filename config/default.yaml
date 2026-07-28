@@ -116,3 +116,13 @@ realtime_risk:
   eval_interval_frames: 1         # 每 N 帧评估一次（性能旋钮，见工程方案 §5.3）；Demo 保持 1（dwell 阈值小）
   decision_enabled: false         # Stage D 决策接入开关：true 时 RAISED→Warning；需 enabled=true 才生效
 
+memory:
+  enabled: false                  # ADR-0024 Slice 3 Snapshot Recovery 总开关（Stage F Shadow Mode gating）
+  snapshot_path: data/memory/snapshot.json   # JSON 原子写路径
+  snapshot_interval_seconds: 30.0             # 周期快照间隔（秒）
+  snapshot_fresh_threshold_seconds: 30.0      # FRESH/STALE 分界（秒）
+  snapshot_ttl_seconds: 300.0                 # STALE/DISCARD 分界（秒，5min）
+  recent_behavior_retention_seconds: 3600.0   # 恢复时只保留 1h 内见过的 visitor
+  eviction_interval_frames: 60                # 每 N 帧内联 evict_expired（Stage D）
+  cold_start_stale_confidence: 0.5            # STALE 档恢复 confidence 值
+
