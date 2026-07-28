@@ -33,7 +33,7 @@ MemoryPolicy.aggregate_semantic(
 ) -> Optional[SemanticAggregate]
 ```
 
-**不变量**（ADR-0024 §3.2.3，由 InvariantValidator 在 Slice 2+ 强制）：
+**不变量**（ADR-0024 §3.2.3，Slice 2 由 `records.py` 各 Record 的 `__post_init__` 强制；入库边界的集中校验见 Slice 3）：
 - I1 Idempotency：同一 observation event 重复发送只产生同一条 MemoryRecord
 - I2 Monotonicity：Memory history 不能重写过去已有的 Episode
 - I3 Causality：MemoryRecord.timestamp >= source event.timestamp
@@ -59,7 +59,8 @@ class MemoryPolicy(ABC):
     """Memory Policy 抽象 —— ADR-0024 §3.2 transformation boundary。
 
     子类（如 `DefaultEpisodeBuilder`，Slice 4 实现）必须实现以下三个方法。
-    所有产出必须经 `InvariantValidator`（Slice 2 引入）校验后才能入库。
+    所有产出在构造时即由 `records.py` 各 Record 的 `__post_init__` 强制满足不变量
+    （Slice 2）；入库边界（Slice 3）可再加集中校验。
 
     **不做什么**（结构性保证）：
     - 不持有可变状态（无状态转换器，输入 → 输出纯函数语义）
