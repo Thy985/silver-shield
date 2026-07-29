@@ -56,3 +56,5 @@ __all__ = [
     "ShortTermRecord",
     "SnapshotStore",
 ]
+from .store import InMemoryStore, InvariantViolationError, MemoryStore
+__all__ += ["InMemoryStore", "InvariantViolationError", "MemoryStore"]
