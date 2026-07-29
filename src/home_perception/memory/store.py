@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
-from typing import Dict, List, TYPE_CHECKING
+from typing import Dict, List
 
 from .records import (
     EpisodicRecord,
