@@ -129,7 +129,53 @@ git branch -vv | grep ': gone]' | awk '{print $1}' | xargs git branch -d
 git tag before-refactor-<name>
 ```
 
-### 4.2 恢复点场景
+## 4. 分支清理规范
+
+### 4.1 本地分支限制
+
+**最多维护 2 个本地分支**：
+
+```
+main              # 主分支
+feat/<current>    # 当前开发分支（可选）
+```
+
+**规则**：
+- 完成任务后立即删除本地 feature 分支
+- 不保留已合并的分支
+- 不创建长期维护的功能分支
+
+### 4.2 远程分支清理
+
+**每周执行一次**：
+
+```bash
+# 1. 删除已合并的远程分支
+git branch -r --merged origin/main | grep -v "main" | sed 's/origin\///' | xargs -I {} git push origin --delete {}
+
+# 2. 清理远程追踪分支
+git remote prune origin
+
+# 3. 删除本地已合并的分支
+git branch --merged main | grep -v "main" | xargs git branch -d
+```
+
+### 4.3 一次性分支
+
+**定义**：用于单次任务，完成后不再使用
+
+```
+feat/<short-task>
+fix/<specific-bug>
+chore/<one-time-task>
+```
+
+**清理时机**：
+- 合并后立即删除
+- 放弃后立即删除
+- 超过 7 天未合并的一律删除
+
+### 4.4 恢复点场景
 
 | 场景 | 恢复点 |
 |------|--------|

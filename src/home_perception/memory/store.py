@@ -22,9 +22,6 @@ from .records import (
     ShortTermRecord,
 )
 
-if TYPE_CHECKING:
-    pass  # MemoryPolicy 在 TYPE_CHECKING 块中预留，供未来类型注解使用
-
 
 class InvariantViolationError(Exception):
     """Memory 不变量违反异常。"""
