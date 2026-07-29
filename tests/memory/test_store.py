@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
+
+import pytest
 
 from home_perception.analysis.event import VisitorEvent
 from home_perception.memory.episode_builder import DefaultEpisodeBuilder
@@ -59,17 +62,17 @@ def test_i2_idempotent():
     assert len(store.get_episodic_by_visitor(str(visitor.visitor_id))) == 1
 
 
-def test_i2_no_overwrite_different_content():
-    """I2：尝试写入相同 record_id 不同内容 → 抛异常。"""
-    from home_perception.memory.records import records_equal
+def test_i2_rejects_different_content():
+    """I2：同 record_id 不同内容 → 抛 InvariantViolationError。"""
     store = InMemoryStore()
     builder = DefaultEpisodeBuilder()
     visitor = make_visitor()
     rec1 = builder.project_episode(visitor, [], [])
     store.upsert_episodic(rec1)
-    # 构造不同内容的 rec（同一 event_id 理论上不会发生，此处测试防御）
-    # 实际 store 应该拒绝，但同一 VisitorEvent 不会产生不同内容
-    pass  # 防御性测试，实际场景不会发生
+    # 篡改字段构造不同内容的记录（保持 record_id 不变）
+    rec2 = replace(rec1, summary="different summary")
+    with pytest.raises(InvariantViolationError):
+        store.upsert_episodic(rec2)
 
 
 def test_get_active_only():
