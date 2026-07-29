@@ -1,0 +1,6 @@
+# Home 感知模块 - 运行时依赖（MVP）
+# 单一来源：pyproject.toml [project.dependencies]（核心 ML 栈）+ [demo] extra（Web 栈）。
+# 安装（开发/演示）：pip install -r requirements.txt  等价于  pip install -e ".[demo]"
+#   -e .[demo] 会拉取：opencv-python / numpy / ultralytics(torch) / paho-mqtt 等核心栈
+#                    + fastapi / uvicorn / websockets 演示网关栈
+-e .[demo]

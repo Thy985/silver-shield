@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "home-perception"
+version = "0.1.0"
+description = "SilverShield Home 感知模块 - 基于萤石摄像头的家庭入口实时感知与诈骗风险证据采集"
+readme = "README.md"
+requires-python = ">=3.11"
+
+# 运行时核心依赖（MVP）：必须声明，否则 `pip install -e ".[demo]"` 缺基础包导致导入失败。
+# home_perception 导入链在模块加载期即需要 structlog / pyyaml / pydantic / numpy /
+# opencv-python / ultralytics（runtime.pipeline 顶层 import detection.detector → ultralytics/cv2/torch）。
+# 单一来源：requirements.txt 已同步收敛为 `-e .[demo]`。
+dependencies = [
+    "opencv-python>=4.9.0",
+    "numpy>=1.26.0",
+    "requests>=2.31.0",
+    "pyyaml>=6.0.1",
+    "pydantic>=2.6.0",
+    "ultralytics>=8.2.0",
+    "paho-mqtt>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "structlog>=24.1.0",
+]
+
+# P0-11 展示层依赖（ADR-0015 §2.3）：fastapi / uvicorn / websockets 仅用于 Demo 网关，
+# 核心 home_perception 包保持零 Web 依赖（设备端 / 边缘部署 / 模型测试不受污染）。
+# 安装：pip install -e ".[demo]"
+[project.optional-dependencies]
+demo = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12.0",
+    "python-multipart>=0.0.9",  # P0-11.4 视频上传端点（UploadFile / multipart 表单）
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# 工程资产库（silver-engineering-assets/）是教学示例骨架，非生产代码；
+# 不参与 lint/format，避免示例代码风格阻塞 PR。
+extend-exclude = ["silver-engineering-assets"]
+
+[tool.black]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"

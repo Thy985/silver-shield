@@ -1,0 +1,65 @@
+# ============================================================
+# SilverShield Home 感知模块 - .gitignore
+# ============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- 本地 Agent 状态（项目记忆 / 工作笔记，禁止入库）---
+.workbuddy/
+
+# --- 密钥 / 本地配置（含真实凭证与设备序列号，禁止入库）---
+.env
+.env.local
+prototypes/
+config/devices.yaml
+
+# --- 模型权重 / 证据数据（体积大，不入库）---
+# YOLO 权重（含根目录误落下的 yolo11n.pt）；权重应放 ~/.cache 或 data/models/ 并下载，不入库
+*.pt
+*.onnx
+*.engine
+data/models/
+
+# --- 设计思路草稿（团队研究稿，非模块交付；终稿已沉淀到 docs/）---
+.doc/
+data/evidence/**
+data/cache/**
+*.mp4
+*.mpg
+*.avi
+*.jpg
+!data/evidence/.gitkeep
+
+# 注意：data/demo/ 入库（验证报告 + 区域审计，文本/JSON，体积小，长期资产）
+
+# --- 编辑器 / 系统 ---
+.idea/
+.vscode/
+.DS_Store
+# Windows 保留设备名副产品（重定向意外产生的"幽灵文件"，无法 del，强制忽略）
+nul
+
+# --- 测试 / 覆盖率缓存 ---
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- 基准 / 运行产物（benchmark JSON、临时输出，不入库）---
+out/
+var/
+
+# --- Soak Test 报告（长时间运行产物，体积大，不入库）---
+reports/
+# 例外：docs/reports/ 是固化的验证报告（文本资产，入库）
+!docs/reports/
