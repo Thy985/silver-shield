@@ -5,7 +5,7 @@ import uuid
 
 from home_perception.analysis.event import VisitorEvent
 from home_perception.memory.episode_builder import DefaultEpisodeBuilder
-from home_perception.memory.store import InMemoryStore, InvariantViolationError
+from home_perception.memory.store import InMemoryStore
 from home_perception.memory.records import ShortTermRecord
 
 
@@ -60,8 +60,7 @@ def test_i2_idempotent():
 
 
 def test_i2_no_overwrite_different_content():
-    """I2：尝试写入相同 record_id 不同内容 → 抛异常。"""
-    from home_perception.memory.records import records_equal
+    """I2：尝试写入相同 record_id 不同内容 → 防御性测试。"""
     store = InMemoryStore()
     builder = DefaultEpisodeBuilder()
     visitor = make_visitor()

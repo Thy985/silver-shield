@@ -23,7 +23,7 @@ from .records import (
 )
 
 if TYPE_CHECKING:
-    from .policy import MemoryPolicy
+    pass  # MemoryPolicy 在 TYPE_CHECKING 块中预留，供未来类型注解使用
 
 
 class InvariantViolationError(Exception):
