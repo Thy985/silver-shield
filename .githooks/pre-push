@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Repository Reliability System ②（本地层）：pre-push 守门。
+# 推送前强制跑本地 CI 守门 scripts/preflight.sh；
+# 失败则阻止推送，把事故挡在 push 之前（离事故最近的一道闸）。
+# 紧急绕过：SKIP_PREFLIGHT=1 git push（仅限确实无法本地跑的场景）。
+
+set -euo pipefail
+
+if [ "${SKIP_PREFLIGHT:-0}" = "1" ]; then
+  echo "[pre-push] SKIP_PREFLIGHT=1 -> 跳过守门（仅限紧急）"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+PREFLIGHT="$ROOT/scripts/preflight.sh"
+
+if [ ! -f "$PREFLIGHT" ]; then
+  echo "[pre-push] 未找到 $PREFLIGHT，推送中止。请先同步含 preflight.sh 的分支（如 chore/ci-governance）。" >&2
+  exit 1
+fi
+
+echo "[pre-push] 运行本地守门 preflight.sh ..."
+if bash "$PREFLIGHT"; then
+  echo "[pre-push] ✅ 守门通过，允许推送"
+  exit 0
+else
+  echo "[pre-push] ❌ 守门失败，推送已阻止。修复后重试（紧急用 SKIP_PREFLIGHT=1 git push 绕过）。" >&2
+  exit 1
+fi
