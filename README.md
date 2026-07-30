@@ -31,6 +31,23 @@
 - **当前运行路径**：仍为 MVP 历史事件流（`VisitorEvent` 离场生成 → `RuleEngine` → `WarningEvent`），`realtime_risk.enabled=false` 默认关闭。
 - 后续 Stage B/C/D（工程方案 §9）才逐步接入实时状态 / 信号 / 决策；详见 `docs/08_roadmap.md` §8.4 产品 Phase 1。
 
+### v2 Memory 架构（ADR-0024 · Slices 1–5 已合入 main）
+
+> **状态**：ADR-0024 已 `Accepted`（2026-07-28）；Slice 1–5 全部合入 `main`，单元测试全绿；**尚未接入生产 pipeline**
+> （Stage F Shadow Mode 默认关闭，v1 不产 Warning）。
+
+- **设计（ADR-0024）**：三类记忆模型（Short-term / Episodic / Semantic）+ Memory Policy 转换边界 + 四项不变量（I1 幂等 / I2 单调 / I3 因果 / I4 可解释）。
+- **工程落地（PR 已合入 main）**：
+  - **Slice 1**（#77 / #78）：Memory Core 基础模型 —— `records.py`（ShortTermRecord / EpisodicRecord / SemanticAggregate）+ `MemoryPolicy` ABC（含 I1–I4 校验）。
+  - **Slice 2**（#79 / #80，+ #81 文档修正）：`DefaultShortTermPolicy` 实现 `transform_short_term`（Stage A 投影）。
+  - **Slice 3**（#82）：Snapshot 持久化（Stage C）+ 冷启动恢复（Stage E，解 TD-0027）—— `snapshot.py` / `cold_start.py`，由 `runtime/pipeline.py` 启动期调用。
+  - **Slice 4**（#83）：`DefaultEpisodeBuilder` 实现 `project_episode`（Stage B）—— `VisitorEvent + WarningEvent + ActionCommand → EpisodicRecord`，确定性中文摘要（无 LLM）。
+  - **Slice 5**（#84）：`MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）+ `InvariantViolationError`。
+  - 附带修复（#85）：移除未使用的 `TYPE_CHECKING` 导入。
+- **包导出**：`home_perception.memory` 现导出 `DefaultShortTermPolicy` / `MemoryStore` / `SnapshotStore` / `ColdStartCoordinator` 等；`episode_builder` 模块已落盘，包级接线随 Stage F 进行。
+- **下一步**：Stage F Pipeline Shadow Mode 接入（默认关闭，仅观察不产 Warning）；Stage G/H Semantic 聚合器（依赖 Phase 4 ReID，v1 不实现）。
+- 详见 `docs/ADR/0024-memory-architecture.md` 与 `docs/DESIGN-memory-pipeline.md`。
+
 ## 架构总览（团队入口）
 
 ```

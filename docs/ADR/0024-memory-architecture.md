@@ -880,8 +880,25 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 
 ## 10. 状态
 
-本 ADR 为 **Proposed**，等待 Owner 评审。
+本 ADR 为 **Accepted**（2026-07-28），已在 `docs/ADR/README.md` 清单登记。
 
-评审通过后状态改为 `Accepted`，并在 `docs/ADR/README.md` 清单中登记。
+工程落地方案：`docs/DESIGN-memory-pipeline.md`（按 Stage A–H 拆分）。
 
-工程落地方案（`docs/DESIGN-memory-pipeline.md`）在本 ADR Accepted 后启动，按 Roadmap Phase 4-5 排期。
+### 10.1 实施进度（Slices 1–5 已合入 main）
+
+> 所有 Slice 均经 `ruff` + `pytest` 门禁；Memory 模块为新增旁路，**未接入生产 pipeline 写入路径**
+> （Stage F Shadow Mode 默认关闭，v1 不产 Warning）。PR 编号见 `docs/08_roadmap.md` §8.5。
+
+| Slice | 对应 Stage | 内容 | PR | 状态 |
+| --- | --- | --- | --- | --- |
+| Slice 1 | Stage A（基础） | `records.py`（ShortTermRecord / EpisodicRecord / SemanticAggregate）+ `MemoryPolicy` ABC + 不变量 I1–I4 校验 | #77 / #78 | ✅ 已合并 |
+| Slice 2 | Stage A（投影） | `DefaultShortTermPolicy` 实现 `transform_short_term` | #79 / #80（+ #81 文档修正） | ✅ 已合并 |
+| Slice 3 | Stage C + D + E | `snapshot.py` / `cold_start.py`（Snapshot 持久化 + 冷启动恢复，解 TD-0027） | #82 | ✅ 已合并 |
+| Slice 4 | Stage B | `episode_builder.py`：`DefaultEpisodeBuilder` 实现 `project_episode`（VisitorEvent + WarningEvent + ActionCommand → EpisodicRecord） | #83 | ✅ 已合并 |
+| Slice 5 | §5.6 | `store.py`：`MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）+ `InvariantViolationError` | #84 | ✅ 已合并 |
+| — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
+
+**待办（未实现，v1 范围外）**：
+- Stage F：Pipeline Shadow Mode 接入（默认关闭，仅观察不产 Warning）
+- Stage G：Environment Semantic Aggregator（占位，v1 不实现）
+- Stage H：Identity Semantic Aggregator（依赖 Phase 4 ReID，v1 不实现）

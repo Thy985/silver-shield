@@ -6,13 +6,15 @@
 > - `policy.py`：MemoryPolicy ABC（转换边界，ADR-0024 §3.2）
 > - `short_term_policy.py`：DefaultShortTermPolicy（transform_short_term 实现，Slice 2）
 >
-> **Slice 2 范围**：实现 Short-term Memory 投影（transform_short_term），
-> 不连存储、不接 pipeline。Episode Builder 实现见 Slice 4（Stage B），
-> Snapshot 持久化见 Slice 3（Stage C）。
+> **Slice 2**（#79/#80）：`DefaultShortTermPolicy` 实现 Short-term Memory 投影（transform_short_term）。
+> **Slice 3**（#82）：`snapshot.py` 定义 `RuntimeSnapshot` / `SnapshotStore`；`cold_start.py` 定义
+> `ColdStartCoordinator`，由 `runtime/pipeline.py` 在启动期调用恢复运行时状态（解 TD-0027）。
+> **Slice 4**（#83）：`episode_builder.py` 定义 `DefaultEpisodeBuilder`，实现 `project_episode`（Stage B）。
+> **Slice 5**（#84）：`store.py` 定义 `MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）。
 >
-> **Slice 3（本次）**：Snapshot 持久化（Stage C）+ 冷启动恢复（Stage E）。
-> `snapshot.py` 定义 `RuntimeSnapshot` / `SnapshotStore`；`cold_start.py` 定义
-> `ColdStartCoordinator`，由 `runtime/pipeline.py` 在启动期调用恢复运行时状态。
+> **实施进度**：Slices 1–5 已全部合入 `main`（PR #77–#85），单元测试全绿；
+> 尚未接入生产 pipeline 写入路径（Stage F Shadow Mode 默认关闭，v1 不产 Warning）。
+> `episode_builder` 与 `store` 已落盘，`episode_builder` 的包级导出随 Stage F 接线。
 >
 > **边界铁律**（ADR-0024 §3.2.2）：Memory Policy 只做 ObservationStream → MemoryRecord
 > 的确定性投影，不参与风险判定 / 行动决策 / LLM 推理。

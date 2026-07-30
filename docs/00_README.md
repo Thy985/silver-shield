@@ -52,6 +52,7 @@
 | ADR-0021 | [`ADR/0021-realtime-riskstream-concrete-design.md`](ADR/0021-realtime-riskstream-concrete-design.md) | **具体设计（Phase 1）**：Reality→State→Signal→Decision 四层 + `BehaviorState`/`RiskSignal`/`RealTimeRiskEvaluator`/adapter |
 | ADR-0022 | [`ADR/0022-evidence-chain-multimodal-interface.md`](ADR/0022-evidence-chain-multimodal-interface.md) | **具体设计（Phase 2）**：`EvidenceItem`(类型化证据) + `EvidenceAggregator`(只整理不重推) + `WarningEvent.evidence_items` |
 | ADR-0023 | [`ADR/0023-identity-continuity-system.md`](ADR/0023-identity-continuity-system.md) | **具体设计（Phase 4）**：track_id/visitor_instance_id/person_identity_id 三层 + `IdentityResolver`（v1 不冒充真实身份） |
+| ADR-0024 | [`ADR/0024-memory-architecture.md`](ADR/0024-memory-architecture.md) | **具体设计（Phase 4-5）**：三类记忆模型（Short-term / Episodic / Semantic）+ Memory Policy 转换边界 + Episode Builder + 不变量 I1–I4 + Trust Layer + Snapshot 原则；Slices 1–5 已合入 main |
 
 ### 开发手册（跨项目原则沉淀）
 
