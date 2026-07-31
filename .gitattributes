@@ -1,0 +1,23 @@
+# ============================================================
+# SilverShield - .gitattributes
+# 强制仓库内文本统一为 LF，避免 CRLF 污染 git 内部文件
+# （refs / packed-refs）以及跨平台 diff 噪音。
+# 仓库当前全量 LF，启用 eol=lf 不会触发大规模换行重写。
+# ============================================================
+
+# 默认：文本自动识别，入库归一为 LF，检出强制 LF
+* text=auto eol=lf
+
+# 二进制资产：禁止被当作文本归一
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.mp4 binary
+*.mov binary
+*.onnx binary
+*.pt binary
+*.engine binary
+*.zip binary
