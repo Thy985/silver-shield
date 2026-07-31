@@ -85,8 +85,8 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 
 `src/home_perception/runtime/pipeline.py`：
 
-- **接入点**：`process_frame` 在 `for ev in events` 循环内，对每个 `VisitorEvent` 调 `_record_episode`，受 `episodic_shadow` flag 门控（pipeline.py L564–568）。
-- **容错隔离**：`_record_episode`（pipeline.py L491–532）
+- **接入点**：`process_frame` 在 `for ev in events` 循环内，对每个 `VisitorEvent` 调 `MemoryHook.record`，受 `episodic_shadow` flag 门控（`runtime/memory_hook.py`）。
+- **容错隔离**：`MemoryHook.record`（`runtime/memory_hook.py`；由 Slice A 从 `pipeline.py` 内联 `_record_episode` 抽出）
   - 投影异常 → `metrics.errors += 1` + 记日志，跳过本 episode；
   - `InvariantViolationError`（I2 单调冲突）→ 仅 `log.warning`，**不计入 errors**（不崩溃主链路）；
   - 落库未知异常 → `errors += 1` + 记日志。
@@ -273,7 +273,7 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 
 ### Slice A — Memory Runtime Integration（运行时集成结构化）★ 实现第三优先（代码整理，非价值交付）
 
-**目标**：Memory 在 runtime 中从"内联 `if episodic_shadow: _record_episode(...)`"整理为清晰的 **Memory Hook** 结构（Stage F 已能跑，本 Slice 仅结构化）：
+**目标**：Memory 在 runtime 中从"内联 `if episodic_shadow: _record_episode(...)`"整理为清晰的 **MemoryHook** 结构（实现见 `runtime/memory_hook.py`；Stage F 已能跑，本 Slice 仅结构化）：
 
 ```
 Observation Stream
@@ -288,7 +288,7 @@ Observation Stream
 ```
 
 **落点**：
-- `pipeline.py` 抽出 `MemoryHook` 封装（当前内联逻辑原样搬迁，0 行为变化）；
+- 抽出 `MemoryHook`（`runtime/memory_hook.py`）封装原 `pipeline.py` 内联逻辑，0 行为变化；
 - 明确接线契约（输入 `VisitorEvent + warnings + actions`，输出 `episodes_recorded` / `errors`）。
 - **纪律**：`MemoryPolicy.project_episode` / `EpisodicRecord` / `VisitorEvent` 签名一律不动。
 
