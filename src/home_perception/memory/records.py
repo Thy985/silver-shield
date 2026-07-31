@@ -54,6 +54,34 @@ class MemoryStatus(str, Enum):
     INVALID = "invalid"         # 标记为无效（如发现误判）；保留可追溯但不消费
 
 
+class VisitorPresenceStatus(str, Enum):
+    """访客在场/风险视图状态（Product Closure，ADR-0024 Integration Closure · Slice C）。
+
+    ⚠️ 语义与 ``MemoryStatus`` 完全不同：``MemoryStatus`` 表示"记忆是否可被消费"
+    （active/deprecated/archived/invalid），本枚举表示"访客在某时间点是否处于在场/风险视图"。
+    两者命名近似但不可混用（review #5）。
+
+    取值含义（时间点语义，非实时）：
+    - ``IN_PROGRESS``：``as_of`` 落在某条**窗口内** episode 的 ``(enter_time, leave_time]``
+      区间内。注意这是**历史/回放**视角的时间点判定，**不是**实时在场——
+      真实数据流中 ``EpisodicRecord`` 仅在访客**离场后**由 ``project_episode`` 投影写入
+      （``runtime/pipeline.py``：「把一次访客离场投影为 EpisodicRecord」），故 ``leave_time``
+      恒为过去时刻，实时查询（``as_of=now``）恒为 ``CLEARED``。
+      **实时在场**应读 ``ShortTermRecord.phase == "active_risk"`` / ``last_seen_at``
+      （out of scope，见 review #1 / 设计稿 §3.6）。
+    - ``CLEARED``：窗口内有事件，且 ``as_of`` 已晚于其离场（曾活跃、现已离开）。
+    - ``NO_RECORD``：窗口内无任何相关 episode。
+    """
+
+    IN_PROGRESS = "IN_PROGRESS"
+    CLEARED = "CLEARED"
+    NO_RECORD = "NO_RECORD"
+
+
+# enum 闭合性基线（契约测试据此断言"枚举值不漂移"）
+VISITOR_PRESENCE_STATUS_VALUES: tuple[str, ...] = tuple(e.value for e in VisitorPresenceStatus)
+
+
 # record_id 前缀白名单（I1 幂等键派生约束，§5.1.1）
 RECORD_ID_PREFIXES: tuple[str, ...] = ("st-", "ep-", "sem-")
 
