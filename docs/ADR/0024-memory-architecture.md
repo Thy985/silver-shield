@@ -884,7 +884,7 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 
 工程落地方案：`docs/DESIGN-memory-pipeline.md`（按 Stage A–H 拆分）。
 
-### 10.1 实施进度（Slices 1–5 已合入 main）
+### 10.1 实施进度（Slices 1–6 + Stage F + Integration Closure 已合入 main）
 
 > 所有 Slice 均经 `ruff` + `pytest` 门禁。Stage F（Pipeline Shadow Mode 影子写入）已接线：
 > `runtime/pipeline.py` 在 `memory.enabled + memory.episodic_shadow` 同时为真时，把每次访客离场
@@ -903,7 +903,7 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | **Integration Closure · Slice B** | 外部闭环·真实链路 | `test_memory_closure_slice_b.py`：Contract E2E（cached detection 驱动整链）+ 重启恢复 + 失败隔离 + Lifecycle Closure（场景 1/2/3/4） | #93 | ✅ 已合并 |
 | **Integration Closure · Slice C** | 外部闭环·用户价值 | `memory/query.py`：`MemoryQuery.compose_context`（Product Closure，V0 边界冻结） | #91 | ✅ 已合并 |
 | **Integration Closure · Slice A** | 外部闭环·代码整理 | `runtime/memory_hook.py`：抽出 `MemoryHook`（0 行为变化，门控/容错/metrics 语义不变） | #94 | ✅ 已合并 |
-| **Integration Closure · Slice D** | 外部闭环·文档冻结 | 4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ 本 ADR 标注 | #95 | （本 PR 合入后完成） |
+| **Integration Closure · Slice D** | 外部闭环·文档冻结 | 4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ 本 ADR 标注 | #95 | ✅ 已合并 |
 
 **Integration Closure 完成标志**：System × Memory 外部闭环全部收口——
 B（真实链路闭环，证明系统存在）→ C（Product Closure，证明价值）→ A（MemoryHook 代码整理）→ D（文档冻结，纯文档不重构接口）。

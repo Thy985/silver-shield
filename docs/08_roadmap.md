@@ -420,7 +420,7 @@ D. 音频（增强，非第一价值；按 Phase 3 薄实现）
 ### 8.5 Memory 架构（ADR-0024）实施进度
 
 > ADR-0024（Accepted 2026-07-28）定义三类记忆模型 + Memory Policy 转换边界；工程方案 `docs/DESIGN-memory-pipeline.md` 按 Stage A–H 拆分。
-> **Slices 1–5 已全部合入 `main`**，单元测试全绿；**Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，由 `memory.episodic_shadow` 控制，**默认关闭，v1 不产 Warning**）。
+> **Slices 1–6 + Stage F + Integration Closure（B/C/A/D）已全部合入 `main`**，单元测试全绿；**Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，由 `memory.episodic_shadow` 控制，**默认关闭，v1 不产 Warning**）。**Integration Closure 已完成**（System × Memory 外部闭环，B→C→A→D）：Memory 融入整体架构并能产出可审计用户价值（设计稿 `DESIGN-memory-integration-closure.md`）。
 
 | Slice | Stage | 交付 | PR | 状态 |
 | --- | --- | --- | --- | --- |
@@ -432,6 +432,10 @@ D. 音频（增强，非第一价值；按 Phase 3 薄实现）
 | Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入；`memory.episodic_shadow` 默认关闭 | #87 | ✅ 已合并 |
 | Slice 6 | §8.8 | Memory Evaluation（压缩比 ≥100:1 / 信息保留字段校验 / Replay Test §6.7 一致性验证；**不实现 Semantic 聚合**）+ `DefaultEpisodeBuilder` 确定性修复（warning 排序 / 重投去重）+ `MemoryStore.short_term_count()` | #88 | ✅ 已合并 |
 | — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
+| **Integration Closure · Slice B** | 外部闭环·真实链路 | `test_memory_closure_slice_b.py`：Contract E2E（cached detection 驱动整链）+ 重启恢复 + 失败隔离 + Lifecycle Closure（场景 1/2/3/4） | #93 | ✅ 已合并 |
+| **Integration Closure · Slice C** | 外部闭环·用户价值 | `memory/query.py`：`MemoryQuery.compose_context`（Product Closure，V0 边界冻结） | #91 | ✅ 已合并 |
+| **Integration Closure · Slice A** | 外部闭环·代码整理 | `runtime/memory_hook.py`：抽出 `MemoryHook`（0 行为变化，门控/容错/metrics 语义不变） | #94 | ✅ 已合并 |
+| **Integration Closure · Slice D** | 外部闭环·文档冻结 | 4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ ADR-0024 §10.1 标注 | #95 | ✅ 已合并 |
 
 **待办（v1 范围外）**：Stage G/H Semantic 聚合器（G 可在 Phase 5 前启用，H 依赖 Phase 4 ReID）。Slice 6（Memory Evaluation）为验证切片，已落地（见上表），仅量化验收 Memory 系统有效性，不新增存储/聚合功能。
 

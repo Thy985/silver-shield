@@ -2,7 +2,7 @@
 
 > **阶段定位**：银龄盾「System × Memory 外部闭环」阶段
 > **依赖**：ADR-0024（Memory 架构）、`docs/DESIGN-memory-pipeline.md`（Memory 内部设计）、`tests/runtime/test_memory_e2e_closed_loop.py`（已落地的 E2E 内部闭环验收）
-> **状态**：✅ **设计稿已合入 main（PR #92）**；Slice B #93 / Slice C #91 / Slice A #94 已合并；Slice D #95 随本 PR 合入后完成，Integration Closure 即收口。Slice D 为纯文档冻结，不含代码改动。
+> **状态**：✅ **已合入 main（设计稿 PR #92；Slice B #93 / Slice C #91 / Slice A #94 / Slice D #95 全部合并，Integration Closure 完成）**。Slice D 为纯文档冻结，不含代码改动。
 > **约定**：本文档中的 `file:line` 均指 `main` 当前代码，用于锚定"现状已满足 / 待补"的判断。
 > **v2 修订**：① 多模态接口泛化**移出本阶段**（只出未来契约文档，不改当前代码）；② 新增 **Product Closure（用户价值验收）** 作为第一优先；③ 真实数据改用最小 committed fixture，不引入 CAVIAR。
 > **v3 修订（评审反馈）**：① **Detector 不是 Memory Closure 的核心验收条件**——验收目标是"真实系统事件能否进入 Memory"，不是"YOLO 准不准"；测试明确两级：**Contract E2E（CI，cached detection 驱动整链，torch-free 可重放）** vs **Production Demo（真机 camera→YOLO→tracker，人工验证）**，模型升级只动 Demo、不拖垮 Memory 测试。② **Slice 优先级重排：B → C → A → D**（B 先证"系统存在" → C 证"价值" → A 代码整理 → D 文档冻结）；A 仅代码组织、非价值交付，降到最后。③ **compose_context 冻结 V0**：输出契约固定为 `{Current Status, Reason, Episode History, Evidence, Action} + 元数据（visitor_instance_id / source_record_ids）`，明确禁止 Inference/Prediction/Recommendation，防止 Memory 侵入 Reasoning（Reason 为 Product Closure 核心交付，纳入 V0，非超范围）。
@@ -122,7 +122,7 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 - `episodic_shadow=True` 只记录、不接 `DecisionPolicy`、不产 `WarningEvent`。
 - 已有 E2E 覆盖：`test_memory_on_is_true_bypass_no_risk_change`（E2E-4）——memory 开/关，warnings/risk_signals/commands/behavior_states 逐帧一致。
 
-### 2.6 现状 vs 待补（历史差距表，Integration Closure 后均已闭环）
+### 2.6 历史差距表（Integration Closure 后均已闭环）
 
 | # | 用户提出的能力 | 代码现状 | 本阶段动作 |
 |---|---|---|---|
