@@ -42,6 +42,7 @@ from .snapshot import (
 )
 from .cold_start import ColdStartConfidence, ColdStartCoordinator, RecoveryResult
 from .episode_builder import DefaultEpisodeBuilder
+from .query import MemoryQuery
 
 __all__ = [
     "ActionSummary",
@@ -53,6 +54,7 @@ __all__ = [
     "EvidenceRef",
     "EpisodicRecord",
     "MemoryPolicy",
+    "MemoryQuery",
     "MemoryStatus",
     "RecentBehaviorSnapshot",
     "RecordIdPrefix",
