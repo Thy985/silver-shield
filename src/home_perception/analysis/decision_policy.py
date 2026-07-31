@@ -227,6 +227,11 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
             reason_summary=reasons,
             perception_score=agg_score,
             meta=meta,
+            # 与流水线其余组件一致：决策时刻取 ctx.now（注入的 now_provider / 模拟时钟），
+            # 而非墙钟。否则 Demo/测试场景下 WarningEvent.created_at 落在墙钟时间线，
+            # 与 VisitorEvent 的模拟时间线错位，导致下游按时间窗关联（如 ADR-0024
+            # Episode Builder 的 [enter, leave+60s] 窗口）失败。
+            created_at=ctx.now,
         )
 
     # --------------------------------------------------------------------

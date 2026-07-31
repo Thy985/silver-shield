@@ -886,8 +886,9 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 
 ### 10.1 实施进度（Slices 1–5 已合入 main）
 
-> 所有 Slice 均经 `ruff` + `pytest` 门禁；Memory 模块为新增旁路，**未接入生产 pipeline 写入路径**
-> （Stage F Shadow Mode 默认关闭，v1 不产 Warning）。PR 编号见 `docs/08_roadmap.md` §8.5。
+> 所有 Slice 均经 `ruff` + `pytest` 门禁。Stage F（Pipeline Shadow Mode 影子写入）已接线：
+> `runtime/pipeline.py` 在 `memory.enabled + memory.episodic_shadow` 同时为真时，把每次访客离场
+> 投影为 `EpisodicRecord` 写入 `InMemoryStore`（**默认关闭，v1 不产 Warning**）。PR 编号见 `docs/08_roadmap.md` §8.5。
 
 | Slice | 对应 Stage | 内容 | PR | 状态 |
 | --- | --- | --- | --- | --- |
@@ -896,9 +897,9 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | Slice 3 | Stage C + D + E | `snapshot.py` / `cold_start.py`（Snapshot 持久化 + 冷启动恢复，解 TD-0027） | #82 | ✅ 已合并 |
 | Slice 4 | Stage B | `episode_builder.py`：`DefaultEpisodeBuilder` 实现 `project_episode`（VisitorEvent + WarningEvent + ActionCommand → EpisodicRecord） | #83 | ✅ 已合并 |
 | Slice 5 | §5.6 | `store.py`：`MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）+ `InvariantViolationError` | #84 | ✅ 已合并 |
+| Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入（每访客离场 → `EpisodicRecord` 入 store）；`memory.episodic_shadow` 开关默认关闭；`DefaultEpisodeBuilder` 包级导出 | feat/memory-stage-f | ⏳ 待合入 main |
 | — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
 
 **待办（未实现，v1 范围外）**：
-- Stage F：Pipeline Shadow Mode 接入（默认关闭，仅观察不产 Warning）
 - Stage G：Environment Semantic Aggregator（占位，v1 不实现）
 - Stage H：Identity Semantic Aggregator（依赖 Phase 4 ReID，v1 不实现）
