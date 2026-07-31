@@ -65,3 +65,9 @@ var/
 reports/
 # 例外：docs/reports/ 是固化的验证报告（文本资产，入库）
 !docs/reports/
+
+# --- 沙箱恢复残留 / Agent 运行时产物（不入库）---
+# .agent/state/：Agent 运行时状态，非交付物，且曾在 2026-07-31 污染 git status
+.agent/state/
+# .git.broken/：2026-07-31 恢复时留的 .git 备份，真机可删，沙箱 safe-delete 拦删
+.git.broken/
