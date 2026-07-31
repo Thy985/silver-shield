@@ -900,8 +900,17 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入（每访客离场 → `EpisodicRecord` 入 store）；`memory.episodic_shadow` 开关默认关闭；`DefaultEpisodeBuilder` 包级导出 | #87 | ✅ 已合并 |
 | Slice 6 | §8.8 | Memory Evaluation（验证切片，**不实现** Semantic 聚合）：压缩比 ≥100:1（`test_memory_evaluation.py`）+ 信息保留字段校验 + Replay Test（`test_memory_replay.py` §6.7，baseline `tests/fixtures/memory_baseline.json`）。附带修复 `DefaultEpisodeBuilder` 确定性缺陷（均由新增用例暴露）：① 关联 warning 按 `created_at` 排序、关联 action 按 `command_id` 排序（**两处对称**），保证上游乱序投递 warning/action 时回放仍一致（I1/§6.7.2）；② 关联 warning/action 按 `warning_id`/`command_id` 去重——上游重试会使 `source_event_ids` 变长，令重投 record 与首投字段不等而触发 I2 违规（Shadow Mode 下 episode 被静默丢弃）。另为 `MemoryStore` 增补公共只读计数口 `short_term_count()`（评估用例不再依赖后端私有结构，v2 迁 SQLite 无感） | #88 | ✅ 已合并 |
 | — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
+| **Integration Closure · Slice B** | 外部闭环·真实链路 | `test_memory_closure_slice_b.py`：Contract E2E（cached detection 驱动整链）+ 重启恢复 + 失败隔离 + Lifecycle Closure（场景 1/2/3/4） | #93 | ✅ 已合并 |
+| **Integration Closure · Slice C** | 外部闭环·用户价值 | `memory/query.py`：`MemoryQuery.compose_context`（Product Closure，V0 边界冻结） | #91 | ✅ 已合并 |
+| **Integration Closure · Slice A** | 外部闭环·代码整理 | `runtime/memory_hook.py`：抽出 `MemoryHook`（0 行为变化，门控/容错/metrics 语义不变） | #94 | ✅ 已合并 |
+| **Integration Closure · Slice D** | 外部闭环·文档冻结 | 4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ 本 ADR 标注 | #95 | （本 PR 合入后完成） |
+
+**Integration Closure 完成标志**：System × Memory 外部闭环全部收口——
+B（真实链路闭环，证明系统存在）→ C（Product Closure，证明价值）→ A（MemoryHook 代码整理）→ D（文档冻结，纯文档不重构接口）。
+Memory 已真正融入整体架构：真实事件进入 Memory、能消费出可审计用户价值、结构清晰可单测。后续路线：Multimodal Evidence Fusion → Audio → Agent（见 `docs/DESIGN-memory-integration-closure.md` §6）。
 
 **待办（未实现，v1 范围外）**：
 - Slice 6（Memory Evaluation）已完成：仅量化验收 Memory 系统有效性（压缩/保留/一致性），不新增存储或聚合功能
 - Stage G：Environment Semantic Aggregator（占位，v1 不实现）
 - Stage H：Identity Semantic Aggregator（依赖 Phase 4 ReID，v1 不实现）
+- 多模态接口泛化（Observation 契约）→ 留待 Multimodal 阶段按 `docs/DESIGN-observation-contract.md` + 新 ADR 实施（本阶段只出契约文档，不改 `VisitorEvent`/`MemoryPolicy`/`EpisodeBuilder`/`EpisodicRecord`）

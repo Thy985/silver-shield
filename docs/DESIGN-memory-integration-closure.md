@@ -2,7 +2,7 @@
 
 > **阶段定位**：银龄盾「System × Memory 外部闭环」阶段
 > **依赖**：ADR-0024（Memory 架构）、`docs/DESIGN-memory-pipeline.md`（Memory 内部设计）、`tests/runtime/test_memory_e2e_closed_loop.py`（已落地的 E2E 内部闭环验收）
-> **状态**：设计稿 v3（评审反馈迭代中 → 拆 Slice 实现；Slice C 已在 PR #91 先行）
+> **状态**：✅ **设计稿已合入 main（PR #92）**；Slice B #93 / Slice C #91 / Slice A #94 已合并；Slice D #95 随本 PR 合入后完成，Integration Closure 即收口。Slice D 为纯文档冻结，不含代码改动。
 > **约定**：本文档中的 `file:line` 均指 `main` 当前代码，用于锚定"现状已满足 / 待补"的判断。
 > **v2 修订**：① 多模态接口泛化**移出本阶段**（只出未来契约文档，不改当前代码）；② 新增 **Product Closure（用户价值验收）** 作为第一优先；③ 真实数据改用最小 committed fixture，不引入 CAVIAR。
 > **v3 修订（评审反馈）**：① **Detector 不是 Memory Closure 的核心验收条件**——验收目标是"真实系统事件能否进入 Memory"，不是"YOLO 准不准"；测试明确两级：**Contract E2E（CI，cached detection 驱动整链，torch-free 可重放）** vs **Production Demo（真机 camera→YOLO→tracker，人工验证）**，模型升级只动 Demo、不拖垮 Memory 测试。② **Slice 优先级重排：B → C → A → D**（B 先证"系统存在" → C 证"价值" → A 代码整理 → D 文档冻结）；A 仅代码组织、非价值交付，降到最后。③ **compose_context 冻结 V0**：输出契约固定为 `{Current Status, Reason, Episode History, Evidence, Action} + 元数据（visitor_instance_id / source_record_ids）`，明确禁止 Inference/Prediction/Recommendation，防止 Memory 侵入 Reasoning（Reason 为 Product Closure 核心交付，纳入 V0，非超范围）。
@@ -122,14 +122,14 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 - `episodic_shadow=True` 只记录、不接 `DecisionPolicy`、不产 `WarningEvent`。
 - 已有 E2E 覆盖：`test_memory_on_is_true_bypass_no_risk_change`（E2E-4）——memory 开/关，warnings/risk_signals/commands/behavior_states 逐帧一致。
 
-### 2.6 现状 vs 待补（差距表）
+### 2.6 现状 vs 待补（历史差距表，Integration Closure 后均已闭环）
 
 | # | 用户提出的能力 | 代码现状 | 本阶段动作 |
 |---|---|---|---|
-| 1 | 数据流闭环（真实生产数据） | E2E 用 `StubDetector` 绕过 detection/tracking | **待补**：走真实 detector→tracker→event_builder（用最小 fixture + 缓存检测，Slice B 场景 1） |
+| 1 | 数据流闭环（真实生产数据） | E2E 用 `StubDetector` 绕过 detection/tracking | ✅ **已闭环**：Slice B 场景 1 用 `CachedDetectionDetector` 重放检测缓存驱动 `tracker→event_builder→rule→decision→memory`（#93，Contract E2E 进 CI） |
 | 2 | 生命周期闭环（Episode=Visitor Leave） | **已实现**（event_builder 仅离场产事件） | 仅测试固化（Slice B 场景 4） |
 | 3 | 决策–Memory 边界（ON/OFF 一致） | **已实现 + E2E-4 已测** | 扩大到系统级（Slice B/C） |
-| 4 | Agent 消费接口准备 | `EpisodicRecord` 含 time_range/risk/actions/evidence，但**无组合查询层** | **待补**：`compose_context()` 原型（Slice C，兼作 Product Closure） |
+| 4 | Agent 消费接口准备 | `EpisodicRecord` 含 time_range/risk/actions/evidence，但**无组合查询层** | ✅ **已闭环**：`MemoryQuery.compose_context()`（Slice C，#91，V0 边界冻结） |
 | 5 | 多模态扩展接口就绪 | `MemoryPolicy.project_episode(visitor_event: VisitorEvent, …)` **强耦合视觉** | **本阶段不改代码**；只出未来契约文档 `docs/DESIGN-observation-contract.md`（Slice D） |
 
 > **重要纪律（v2 新增）**：#5 的"接口泛化"**明确移出本阶段**。原因——当前链路 `VisitorEvent → Episode → Memory` 已稳定，为未来 Audio 提前改 `MemoryPolicy` ABC / `EpisodeBuilder` / 既有测试，属于"为未来重构现在稳定部分"，风险高、收益晚。**本阶段定义未来接口 ≠ 现在重构接口**。
@@ -317,12 +317,12 @@ Observation Stream
 
 | 维度 | 标准 | 现状 |
 |---|---|---|
-| 架构 | Memory 接入 runtime、不影响主链、数据流闭环 | 部分已满足（运行时接入✅ / 数据流闭环真实输入⚠️待 Slice B） |
-| 测试 | ≥3 端到端场景 + crash recovery + replay 稳定 + failure isolation | 部分已测（E2E 已含；补真实输入场景 + 场景 4） |
-| **产品价值 ★** | **能答"为什么今天报警"**：`compose_context()` 输出 `current_status + reason + evidence + handling + history`（V0 边界见 §3.6），且字段可溯源、可重放 | **✅ 已实现（PR #91 `MemoryQuery.compose_context`）；待 Slice B 真实输入复验** |
-| 文档 | ADR 冻结 + 工程方案 + 测试报告 + 未来契约文档 | ⚠️ 需 Slice D（纯文档，不重构接口） |
+| 架构 | Memory 接入 runtime、不影响主链、数据流闭环 | ✅ 已实现（运行时接入 + Slice B 真实输入闭环 + MemoryHook 接线，#93/#94） |
+| 测试 | ≥3 端到端场景 + crash recovery + replay 稳定 + failure isolation | ✅ 已测（E2E 4 类 + Slice B 场景 1/2/3/4 + Slice C compose_context；torch-free 进 CI） |
+| **产品价值 ★** | **能答"为什么今天报警"**：`compose_context()` 输出 `current_status + reason + evidence + handling + history`（V0 边界见 §3.6），且字段可溯源、可重放 | ✅ 已实现（PR #91 `MemoryQuery.compose_context`）+ Slice B 真实输入复验通过 |
+| 文档 | ADR 冻结 + 工程方案 + 测试报告 + 未来契约文档 | ✅ 已完成（Slice D：4 份文档 + ADR-0024 §10.1 标注，#95） |
 
-**完成标志**：以上全绿，且 `git` 走正常 PR 流程合入（`branch + commit + gh pr create + review + merge`，沙箱已恢复正常）。
+**完成标志**：以上全绿，且 `git` 走正常 PR 流程合入（`branch + commit + gh pr create + review + merge`）。**Integration Closure 已全部收口（B #93 / C #91 / A #94 / D #95 均合并 main）**。
 
 ---
 
