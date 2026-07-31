@@ -1,8 +1,12 @@
 name: CI
 
 on:
+  # 触发作用域收敛（Repository Reliability System，取自 math2）：
+  # push 仅监听 main → 主干合入后的 Release CI；feature 分支统一由 PR 触发验证，
+  # 彻底消除「同 commit 跑 push+PR 两次」的双触发，省算力且反馈更快。
+  # 配合 .githooks/pre-push 本地守门（scripts/preflight.sh）形成双保险。
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
