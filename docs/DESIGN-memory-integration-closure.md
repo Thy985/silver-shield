@@ -5,7 +5,7 @@
 > **状态**：设计稿 v3（评审反馈迭代中 → 拆 Slice 实现；Slice C 已在 PR #91 先行）
 > **约定**：本文档中的 `file:line` 均指 `main` 当前代码，用于锚定"现状已满足 / 待补"的判断。
 > **v2 修订**：① 多模态接口泛化**移出本阶段**（只出未来契约文档，不改当前代码）；② 新增 **Product Closure（用户价值验收）** 作为第一优先；③ 真实数据改用最小 committed fixture，不引入 CAVIAR。
-> **v3 修订（评审反馈）**：① **Detector 不是 Memory Closure 的核心验收条件**——验收目标是"真实系统事件能否进入 Memory"，不是"YOLO 准不准"；测试明确两级：**Contract E2E（CI，cached detection 驱动整链，torch-free 可重放）** vs **Production Demo（真机 camera→YOLO→tracker，人工验证）**，模型升级只动 Demo、不拖垮 Memory 测试。② **Slice 优先级重排：B → C → A → D**（B 先证"系统存在" → C 证"价值" → A 代码整理 → D 文档冻结）；A 仅代码组织、非价值交付，降到最后。③ **compose_context 冻结 V0**：仅 `{Current Status, Episode History, Evidence, Action}`，明确禁止 Inference/Prediction/Recommendation，防止 Memory 侵入 Reasoning。
+> **v3 修订（评审反馈）**：① **Detector 不是 Memory Closure 的核心验收条件**——验收目标是"真实系统事件能否进入 Memory"，不是"YOLO 准不准"；测试明确两级：**Contract E2E（CI，cached detection 驱动整链，torch-free 可重放）** vs **Production Demo（真机 camera→YOLO→tracker，人工验证）**，模型升级只动 Demo、不拖垮 Memory 测试。② **Slice 优先级重排：B → C → A → D**（B 先证"系统存在" → C 证"价值" → A 代码整理 → D 文档冻结）；A 仅代码组织、非价值交付，降到最后。③ **compose_context 冻结 V0**：输出契约固定为 `{Current Status, Reason, Episode History, Evidence, Action} + 元数据（visitor_instance_id / source_record_ids）`，明确禁止 Inference/Prediction/Recommendation，防止 Memory 侵入 Reasoning（Reason 为 Product Closure 核心交付，纳入 V0，非超范围）。
 
 ---
 
@@ -98,7 +98,7 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 
 `src/home_perception/analysis/event_builder.py`：
 
-- **`update()` 仅在 track 从 `active` → `left`（访客离场）时生成 `VisitorEvent`**（L116–147）；
+- **`update()` 仅在 track 从 `active` → `left`（访客离场）时生成 `VisitorEvent`**（L112–148）；
 - **不**为 enter / dwell / 风险升降生成事件；
 - `_build_event`（L176–190）校验 `enter_time`/`leave_time` 必存在才构造。
 
@@ -140,7 +140,9 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 
 ### 3.1 Data Flow Closure（数据流闭环）
 **问**：Memory 消费的数据是真实生产的，还是 `MemoryPolicy(input=test_data)`？
-**答（设计）**：至少 1 个走 **detector→tracker→event_builder→rule→decision→memory** 的场景（非 StubDetector）。**但验收目标必须说清：Memory Closure 验证的是"真实系统事件能否进入 Memory"，而不是"检测器准不准"。** detector 只是链路上一个**可替换**环节；它的精度由 Detection 团队 / 模型迭代负责，不应成为 Memory 测试挂不挂的开关。
+**答（设计）**：至少 1 个走真实链路的场景（**非 StubDetector**），即 `detector 产出（缓存）→ tracker → event_builder → rule → decision → memory`。**但验收目标必须说清：Memory Closure 验证的是"真实系统事件能否进入 Memory"，而不是"检测器准不准"。** detector 只是链路上一个**可替换**环节；它的精度由 Detection 团队 / 模型迭代负责，不应成为 Memory 测试挂不挂的开关。
+
+> **CI 不含 detector 运行时推理（v3 关键澄清）**：Contract E2E 用「真实 YOLO 预跑得到的检测缓存 `*.detections.json`」代偿 detector 产出，CI 执行路径上**没有任何 YOLO 推理**；运行时 detector 路径（`camera → YOLO → tracker`）只在 **Production Demo（真机 / 人工）** 验证，不进 CI。即 CI 验收路径不含运行时 detector，避免模型一升级 Memory 测试全挂（见下方两级测试）。
 
 **两级测试策略（v3 新增，关键）**：
 - **Contract E2E（CI 跑，Memory 的主验收）**：用**缓存检测结果**驱动 `tracker → event_builder → rule → decision → memory`，跳过 YOLO 推理。验收：缓存检测 → 风险事件 → EpisodicRecord，且 `source_event_ids` 能追溯到真实 visitor/warning/action。**torch-free、确定性、可重放**——这是 Memory Closure 的硬验收，与模型无关。
@@ -176,7 +178,7 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 > ```
 > 并约定"下一阶段 Multimodal Evidence Fusion 如何把 `Observation` 收敛成可喂给 `project_episode` 的事件"。**当前代码保持 `VisitorEvent` 不变、不新增 Audio 实现、不触碰 `EpisodicRecord` 不变量（I1–I4）。**
 
-### 3.6 Product Closure（用户价值验收）★ 本阶段最高优先
+### 3.6 Product Closure（用户价值验收）★ 价值收口（Slice C）
 **问**：银龄盾最终不是卖 Memory。Memory 到底有没有产生价值？
 **答（设计）**：用一个**无需 Agent、无需 LLM** 的 `compose_context()` 调用，证明 Memory 能回答用户最朴素的问题——"昨天为什么报警？"。这是 Integration Closure 的**价值收口**，比 schema 测试更重要。
 
@@ -200,11 +202,20 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 
 判定标准：该 JSON 能**由 Memory 存储的真实 EpisodicRecord + WarningEvent 组合生成**，且字段来源可追溯到具体 record/warning（信息不靠硬编码，靠 Memory 沉淀）。这就是"Memory 真的产生价值"的硬证明。
 
-**compose_context V0 边界（v3 冻结，防范围膨胀）**：`compose_context()` 只输出**四类、且全部可由 Memory 存储的真实记录组合生成**：
-- **Current Status**（当前 / 回放时间点状态）
-- **Episode History**（窗口内事件汇总）
+**compose_context V0 边界（v3 冻结，防范围膨胀）**：`compose_context()` 的输出契约固定为「四类 + Reason + 元数据」，全部可由 Memory 存储的真实记录组合生成——与 PR #91 已合并实现一致：
+
+业务字段：
+- **Current Status**（当前 / 回放时间点状态，枚举 `VisitorPresenceStatus`）
+- **Reason**（"为什么"——由 episode 真实字段派生的组合说明，如停留时长 + 风险等级 + 非常规时间；属**事实陈述，非推断**）
+- **Episode History**（窗口内事件汇总，对应实现字段 `history`）
 - **Evidence**（证据链，可溯源到 record/warning）
-- **Action**（处理 / 行动记录）
+- **Action**（处理 / 行动记录，对应实现字段 `handling`）
+
+元数据字段（回显 / 溯源，非业务结论，不计入"业务四类"但属 V0 契约一部分）：
+- `visitor_instance_id`：访客实例回显
+- `source_record_ids`：贡献来源 record_id 列表（可溯源）
+
+> 注：PR #91 已合并实现实际返回 7 字段——`visitor_instance_id` / `current_status` / `reason` / `evidence` / `handling` / `history` / `source_record_ids`，与上面「四类（Status / History / Evidence / Action）+ Reason + 元数据」一一对应（`handling`=Action、`history`=Episode History）。冻结口径以此为准，消除"文档说四类、实现有 reason"的错位。**Reason 是 Product Closure 的核心交付（见 §3.6 验收场景 JSON 与 Slice C 测试断言），必须纳入 V0，不得视为超范围。**
 
 **明确禁止**以下范畴进入 V0（否则 Memory 会越过边界、侵入 Reasoning）：
 - ❌ Inference（推断用户意图 / 画像）
@@ -217,8 +228,9 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 **问**：Data Flow Closure 要真实 detector 流程，数据从哪来？
 **答（设计）**：**不引入大体积 CAVIAR 帧**（untracked 大文件）。优先级方案：
 
-- **首选**：新增 committed 小 fixture `tests/fixtures/video/stranger_visit_short.mp4`（几十秒即可，**目标不是检测精度**，而是跑通 `video → detector → tracker → event → memory`）。
-- **更省 CI**：用「视频 + 已验证检测缓存」组合——`tests/fixtures/video/stranger_visit_short.mp4` + `tests/fixtures/detections/stranger_visit_short.detections.json`（预先跑过 YOLO+ByteTrack 的结果）。CI 用缓存检测结果驱动 tracker/event_builder，**避免模型推理拖死 CI**；真机/本地再跑完整 detect 路径验证。
+- **① 视频 fixture（Production Demo / 真机用）**：committed 小 fixture `tests/fixtures/video/stranger_visit_short.mp4`（几十秒即可，**目标不是检测精度**，而是跑通 `video → detector → tracker → event → memory`）。
+- **② 检测缓存（Contract E2E / CI 用）**：`tests/fixtures/detections/stranger_visit_short.detections.json`（预先跑过 YOLO+ByteTrack 的结果）。CI 用缓存检测结果驱动 tracker/event_builder，**避免模型推理拖死 CI**。
+- **二者配套成一套 fixture**：视频 + 检测缓存组合使用——CI 走缓存检测（Contract E2E），真机 / 本地再跑完整 detect 路径（Production Demo）。Slice B 场景 1 注（L248）已按此合并。
 
 > 这条与 §3.1 一致：**Memory 验收目标是"链路真实可运行 + 事件进入 Memory"，不是"检测更准"**。fixture 小、可提交、torch-free 也能跑通整链；cached detection 构成 Contract E2E（CI），完整 `camera→YOLO→tracker` 路径留作 Production Demo（真机 / 人工，不进 CI）。
 
@@ -254,7 +266,7 @@ Episode: 陌生访客异常停留 15 分钟 / 风险 HIGH / 已通知家属
 
 1. **信息损失评估（系统级）**：Raw Event → 1 条 Episode，关键字段保持：`visitor / time / risk / action / evidence`；补"跨阶段信息溯源"——从 Episode 反查 WarningEvent / ActionCommand。
 2. **Replay 稳定性（版本矩阵）**：不同 Memory 版本同输入结果一致。
-3. **用户价值验收 / Product Closure（核心）**：`MemoryQuery.compose_context(visitor, window)` 产出 §3.6 的 JSON（**V0 边界**，仅 Current Status + Episode History + Evidence + Action）。
+3. **用户价值验收 / Product Closure（核心）**：`MemoryQuery.compose_context(visitor, window)` 产出 §3.6 的 JSON（**V0 边界：「四类（Status / History / Evidence / Action）+ Reason + 元数据」，见 §3.6**）。
    **验收（不可妥协）**：JSON 必须由真实存储的 `EpisodicRecord` + `WarningEvent` 组合生成，字段可溯源、可重放。
 
 > **V0 边界（防膨胀）**：见 §3.6。compose_context 不输出 Inference / Prediction / Recommendation。
@@ -307,7 +319,7 @@ Observation Stream
 |---|---|---|
 | 架构 | Memory 接入 runtime、不影响主链、数据流闭环 | 部分已满足（运行时接入✅ / 数据流闭环真实输入⚠️待 Slice B） |
 | 测试 | ≥3 端到端场景 + crash recovery + replay 稳定 + failure isolation | 部分已测（E2E 已含；补真实输入场景 + 场景 4） |
-| **产品价值 ★** | **能答"为什么今天报警"**：`compose_context()` 输出 `current_status + reason + evidence + handling + history`，且字段可溯源、可重放 | **⚠️ 需 Slice C（最高优先）** |
+| **产品价值 ★** | **能答"为什么今天报警"**：`compose_context()` 输出 `current_status + reason + evidence + handling + history`（V0 边界见 §3.6），且字段可溯源、可重放 | **✅ 已实现（PR #91 `MemoryQuery.compose_context`）；待 Slice B 真实输入复验** |
 | 文档 | ADR 冻结 + 工程方案 + 测试报告 + 未来契约文档 | ⚠️ 需 Slice D（纯文档，不重构接口） |
 
 **完成标志**：以上全绿，且 `git` 走正常 PR 流程合入（`branch + commit + gh pr create + review + merge`，沙箱已恢复正常）。
@@ -339,7 +351,8 @@ Agent Reasoning
 3. **真实视频场景测试耗时/torch 依赖**：CI 合约（torch-free）外，用缓存检测（§3.7）规避模型推理；真机/本地再跑完整 detect 路径。参考既有 `tests/runtime` torch-free 约定 + `scripts/e2e_validate_demo.py` 真实集成路径。
 4. **Memory 腐化守护**：Decision–Memory 边界需常态化回归（E2E-4 思路），防止 Memory 静默变成决策源。
 5. **Product Closure 的"可溯源"断言**：Slice C 须保证 `compose_context()` 输出每字段能反查到 store 中的具体 `EpisodicRecord` / `WarningEvent`，避免"为了好看而硬编码"——这是 Product Closure 不被架空的关键。
-6. **compose_context 范围膨胀（v3 冻结 V0）**：`compose_context()` 严禁滑入 Inference / Prediction / Recommendation（用户画像、行为趋势、风险预测、诈骗模式等）。一旦开始加"推断 / 预测 / 建议"，Memory 就侵入 Reasoning，背离"纯记忆 + 可消费"定位。任何超出 V0 四件套（Current Status / Episode History / Evidence / Action）的字段，须走新 ADR 单独立项，不在此处膨胀。
+6. **compose_context 范围膨胀（v3 冻结 V0）**：`compose_context()` 严禁滑入 Inference / Prediction / Recommendation（用户画像、行为趋势、风险预测、诈骗模式等）。一旦开始加"推断 / 预测 / 建议"，Memory 就侵入 Reasoning，背离"纯记忆 + 可消费"定位。任何超出 V0 契约（Current Status / Reason / Episode History / Evidence / Action + 元数据）的字段，须走新 ADR 单独立项，不在此处膨胀。
+7. **Reason 字段的脆弱嗅探（P3，代码已带 TODO）**：`reason` 中的"非常规访问时间"来自对 `reason_summary` 文本的嗅探（`src/home_perception/memory/query.py:151-156`，代码自带 `TODO(review #4)`，P3 脆弱点）——与分析层规则摘要文案强耦合，措辞一改即静默失效。V0 冻结时须记录：Slice C 的"可溯源"断言（§5 产品价值行 / §7 风险项 #5）必须**覆盖 `reason` 字段本身**，而非仅覆盖 `evidence` / `source_record_ids`；未来应把"非常规时间"沉淀为 `EpisodicRecord` 的结构化标记（tags / rule_ids），由 query 端直接读取，消除文本嗅探。
 
 ---
 
@@ -349,7 +362,7 @@ Agent Reasoning
 - `docs/DESIGN-memory-pipeline.md` — Memory 内部设计
 - `tests/runtime/test_memory_e2e_closed_loop.py` — 已落地的 E2E 内部闭环（4 类 7 用例，torch-free）
 - `src/home_perception/runtime/pipeline.py` — Memory Hook 接线（L491–532, L564–568）
-- `src/home_perception/analysis/event_builder.py` — VisitorEvent 仅离场生成（L116–147）
+- `src/home_perception/analysis/event_builder.py` — VisitorEvent 仅离场生成（L112–148）
 - `src/home_perception/memory/episode_builder.py` — `project_episode`（L90–135）
 - `src/home_perception/memory/policy.py` — `MemoryPolicy` ABC（L99–118，`project_episode` 当前耦合 `VisitorEvent`，本阶段不动）
 - `scripts/e2e_validate_demo.py` — 真实 WS/HTTP 集成验证路径（参考）
