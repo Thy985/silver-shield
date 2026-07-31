@@ -12,9 +12,11 @@
 > **Slice 4**（#83）：`episode_builder.py` 定义 `DefaultEpisodeBuilder`，实现 `project_episode`（Stage B）。
 > **Slice 5**（#84）：`store.py` 定义 `MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）。
 >
-> **实施进度**：Slices 1–5 已全部合入 `main`（PR #77–#85），单元测试全绿；
-> 尚未接入生产 pipeline 写入路径（Stage F Shadow Mode 默认关闭，v1 不产 Warning）。
-> `episode_builder` 与 `store` 已落盘，`episode_builder` 的包级导出随 Stage F 接线。
+> **实施进度**：Slices 1–5 已全部合入 `main`（PR #77–#85），单元测试全绿。
+> **Stage F**（Slice 5 收尾）：`DefaultEpisodeBuilder` 已包级导出；流水线侧接线见
+> `runtime/pipeline.py`——`memory.enabled + memory.episodic_shadow` 同时为真时，每次访客离场
+> 经 `project_episode` 投影为 `EpisodicRecord` 写入 `InMemoryStore`（Shadow Mode：只记录、
+> 不接决策、不产 Warning）。默认 `episodic_shadow=false`，与 Snapshot Recovery 相互独立。
 >
 > **边界铁律**（ADR-0024 §3.2.2）：Memory Policy 只做 ObservationStream → MemoryRecord
 > 的确定性投影，不参与风险判定 / 行动决策 / LLM 推理。
@@ -39,12 +41,14 @@ from .snapshot import (
     SnapshotStore,
 )
 from .cold_start import ColdStartConfidence, ColdStartCoordinator, RecoveryResult
+from .episode_builder import DefaultEpisodeBuilder
 
 __all__ = [
     "ActionSummary",
     "ActiveTrackSnapshot",
     "ColdStartConfidence",
     "ColdStartCoordinator",
+    "DefaultEpisodeBuilder",
     "DefaultShortTermPolicy",
     "EvidenceRef",
     "EpisodicRecord",

@@ -420,7 +420,7 @@ D. 音频（增强，非第一价值；按 Phase 3 薄实现）
 ### 8.5 Memory 架构（ADR-0024）实施进度
 
 > ADR-0024（Accepted 2026-07-28）定义三类记忆模型 + Memory Policy 转换边界；工程方案 `docs/DESIGN-memory-pipeline.md` 按 Stage A–H 拆分。
-> **Slices 1–5 已全部合入 `main`**，单元测试全绿；**尚未接入生产 pipeline**（Stage F 默认关闭，v1 不产 Warning）。
+> **Slices 1–5 已全部合入 `main`**，单元测试全绿；**Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，由 `memory.episodic_shadow` 控制，**默认关闭，v1 不产 Warning**）。
 
 | Slice | Stage | 交付 | PR | 状态 |
 | --- | --- | --- | --- | --- |
@@ -429,8 +429,9 @@ D. 音频（增强，非第一价值；按 Phase 3 薄实现）
 | Slice 3 | C+D+E | `snapshot.py` / `cold_start.py`（Snapshot 持久化 + 冷启动恢复，解 TD-0027） | #82 | ✅ 已合并 |
 | Slice 4 | B | `episode_builder.py`：`DefaultEpisodeBuilder.project_episode` | #83 | ✅ 已合并 |
 | Slice 5 | §5.6 | `store.py`：`MemoryStore` / `InMemoryStore`（v1 内存 + JSON 序列化） | #84 | ✅ 已合并 |
+| Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入；`memory.episodic_shadow` 默认关闭 | feat/memory-stage-f | ⏳ 待合入 main |
 | — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
 
-**待办（v1 范围外）**：Stage F Pipeline Shadow Mode 接入（默认关闭）；Stage G/H Semantic 聚合器（G 可在 Phase 5 前启用，H 依赖 Phase 4 ReID）。
+**待办（v1 范围外）**：Stage G/H Semantic 聚合器（G 可在 Phase 5 前启用，H 依赖 Phase 4 ReID）。
 
 > 与 §8.2 MVP RC 基线的关系：Memory 为 v2 增量旁路，MVP RC 基线（289 测试全绿）保持不变；Memory 新增测试计入 v2 增量，不回改 RC 里程碑。

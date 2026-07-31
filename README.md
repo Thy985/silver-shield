@@ -33,8 +33,9 @@
 
 ### v2 Memory 架构（ADR-0024 · Slices 1–5 已合入 main）
 
-> **状态**：ADR-0024 已 `Accepted`（2026-07-28）；Slice 1–5 全部合入 `main`，单元测试全绿；**尚未接入生产 pipeline**
-> （Stage F Shadow Mode 默认关闭，v1 不产 Warning）。
+> **状态**：ADR-0024 已 `Accepted`（2026-07-28）；Slice 1–5 全部合入 `main`，单元测试全绿；
+> **Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，
+> 由 `memory.episodic_shadow` 开关控制，**默认关闭，v1 不产 Warning**）。
 
 - **设计（ADR-0024）**：三类记忆模型（Short-term / Episodic / Semantic）+ Memory Policy 转换边界 + 四项不变量（I1 幂等 / I2 单调 / I3 因果 / I4 可解释）。
 - **工程落地（PR 已合入 main）**：
@@ -44,8 +45,8 @@
   - **Slice 4**（#83）：`DefaultEpisodeBuilder` 实现 `project_episode`（Stage B）—— `VisitorEvent + WarningEvent + ActionCommand → EpisodicRecord`，确定性中文摘要（无 LLM）。
   - **Slice 5**（#84）：`MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）+ `InvariantViolationError`。
   - 附带修复（#85）：移除未使用的 `TYPE_CHECKING` 导入。
-- **包导出**：`home_perception.memory` 现导出 `DefaultShortTermPolicy` / `MemoryStore` / `SnapshotStore` / `ColdStartCoordinator` 等；`episode_builder` 模块已落盘，包级接线随 Stage F 进行。
-- **下一步**：Stage F Pipeline Shadow Mode 接入（默认关闭，仅观察不产 Warning）；Stage G/H Semantic 聚合器（依赖 Phase 4 ReID，v1 不实现）。
+- **包导出**：`home_perception.memory` 现导出 `DefaultShortTermPolicy` / `DefaultEpisodeBuilder` / `MemoryStore` / `SnapshotStore` / `ColdStartCoordinator` 等（含 `episode_builder` 包级导出，Stage F 已接线）。
+- **下一步**：Stage G/H Semantic 聚合器（依赖 Phase 4 ReID，v1 不实现）。
 - 详见 `docs/ADR/0024-memory-architecture.md` 与 `docs/DESIGN-memory-pipeline.md`。
 
 ## 架构总览（团队入口）

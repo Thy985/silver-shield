@@ -59,6 +59,12 @@ from ..detection.detector import Detection, DetectionResult, YOLODetector
 from ..detection.tracker import VisitorTracker
 from ..memory.cold_start import ColdStartCoordinator
 from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
+from ..memory import (
+    DefaultEpisodeBuilder,
+    InMemoryStore,
+    InvariantViolationError,
+    MemoryStore,
+)
 from .config import build_dispatcher_config, build_threshold_config
 from .observability import PipelineMetrics
 
@@ -151,6 +157,7 @@ class RunSummary:
     warnings_by_level: Dict[str, int] = field(default_factory=dict)
     n_commands: int = 0
     commands_by_type: Dict[str, int] = field(default_factory=dict)
+    episodes_recorded: int = 0  # ADR-0024 Slice 5 · Stage F 影子写入落库计数
     publish_count: int = 0
     notify_family: int = 0
     notify_community: int = 0
@@ -171,6 +178,7 @@ class RunSummary:
             "warnings_by_level": dict(self.warnings_by_level),
             "n_commands": self.n_commands,
             "commands_by_type": dict(self.commands_by_type),
+            "episodes_recorded": self.episodes_recorded,
             "publish_count": self.publish_count,
             "notify_family": self.notify_family,
             "notify_community": self.notify_community,
@@ -222,6 +230,11 @@ class PerceptionPipeline:
         # 可选；memory_config=None 或 enabled=False 时不触发，行为与基线逐字段一致。
         # 开启时需要 realtime 旁路组件（evaluator/store）已存在，否则降级为纯冷启动无效。
         memory_config: Optional[MemoryConfig] = None,
+        # —— ADR-0024 Slice 5：Episodic Memory Store + Stage F 影子写入（可选；
+        #    默认全 None/false，零运行时开销；仅 memory.enabled + episodic_shadow 时激活）——
+        memory_store: Optional[MemoryStore] = None,
+        episode_builder: Optional[DefaultEpisodeBuilder] = None,
+        episodic_shadow: bool = False,
     ):
         self.detector = detector
         self.tracker = tracker
@@ -280,6 +293,20 @@ class PerceptionPipeline:
                     "pipeline.memory_enabled_without_realtime",
                     note="memory.enabled=true 但 realtime 旁路组件缺失，已跳过 Snapshot/恢复",
                 )
+
+        # —— ADR-0024 Slice 5：Episodic Memory Store（Stage F 影子写入后端）——
+        # memory_store 由 from_settings 在 episodic_shadow 激活时注入 InMemoryStore；
+        # episode_builder 投影 VisitorEvent → EpisodicRecord；episodic_shadow 为运行期开关。
+        self._memory_store = memory_store
+        self._episode_builder = episode_builder
+        self._episodic_shadow = bool(episodic_shadow)
+        if self._episodic_shadow and (
+            self._memory_store is None or self._episode_builder is None
+        ):
+            log.warning(
+                "pipeline.episodic_shadow_without_store",
+                note="episodic_shadow=true 但 store/episode_builder 缺失，影子写入静默跳过",
+            )
 
     # ------------------------------------------------------------------
     # 从配置装配
@@ -364,6 +391,29 @@ class PerceptionPipeline:
                 "pipeline.memory_implicitly_enables_realtime",
                 note="memory.enabled=true 但 realtime_risk.enabled=false，已连带开启实时旁路（Shadow Mode）",
             )
+        # —— ADR-0024 Slice 5：Episodic Memory Store + Stage F 影子写入接线 ——
+        # memory.enabled 为 Memory 子系统总开关（含 Slice 3 Snapshot Recovery）；
+        # episodic_shadow 为 Stage F 独立子开关（默认 off）：仅当二者同时为真才构造
+        # InMemoryStore + DefaultEpisodeBuilder 并开启影子写入。Shadow Mode 只记录
+        # EpisodicRecord，不接决策、不产 Warning。
+        memory_store: Optional[MemoryStore] = None
+        episode_builder: Optional[DefaultEpisodeBuilder] = None
+        episodic_shadow = False
+        if settings.memory.enabled:
+            if settings.memory.episodic_shadow:
+                memory_store = InMemoryStore()
+                episode_builder = DefaultEpisodeBuilder()
+                episodic_shadow = True
+            else:
+                log.info(
+                    "pipeline.memory_snapshot_only",
+                    note="memory.enabled=true 但 episodic_shadow=false，仅 Snapshot Recovery 激活",
+                )
+        elif settings.memory.episodic_shadow:
+            log.warning(
+                "pipeline.episodic_shadow_requires_memory",
+                note="episodic_shadow=true 但 memory.enabled=false，影子模式未激活",
+            )
         return cls(
             detector=det,
             tracker=tracker,
@@ -382,6 +432,9 @@ class PerceptionPipeline:
             eval_interval_frames=eval_interval,
             decision_enabled=decision_enabled,
             memory_config=settings.memory,
+            memory_store=memory_store,
+            episode_builder=episode_builder,
+            episodic_shadow=episodic_shadow,
         )
 
     # ------------------------------------------------------------------
@@ -431,6 +484,53 @@ class PerceptionPipeline:
             self._save_snapshot(now)
             self._last_snapshot_at = now
 
+    # ------------------------------------------------------------------
+    # ADR-0024 Slice 5：Stage F Episodic Memory 影子写入（Shadow Mode）
+    # ------------------------------------------------------------------
+
+    def _record_episode(
+        self,
+        ev: "VisitorEvent",
+        warnings: List["WarningEvent"],
+        actions: List[Any],
+    ) -> None:
+        """把一次访客离场投影为 EpisodicRecord 并写入 MemoryStore（Shadow Mode）。
+
+        触发时机：``process_frame`` 中每个 ``VisitorEvent`` 产出后立即调用（含其关联的
+        ``warnings`` / ``actions``）。影子写入**只记录、不接决策、不产 Warning**，
+        因此开启 ``episodic_shadow`` 不会改变流水线任何历史行为（工程方案 §8.3 合入门）。
+
+        容错（AGENTS.md §2.5：记忆写入失败不崩溃主链路）：
+        - 投影异常 / 落库未知异常 → 计 ``errors`` + 记日志，跳过本 episode；
+        - ``InvariantViolationError``（I2 单调性：字段冲突）→ 防御性告警，不计入 errors。
+        """
+        if self._episode_builder is None or self._memory_store is None:
+            return
+        try:
+            record = self._episode_builder.project_episode(ev, warnings, actions)
+        except Exception:  # 投影失败（理论上 DefaultEpisodeBuilder 为纯函数不应抛）
+            self.metrics.errors += 1
+            log.exception(
+                "pipeline.episode_build_failed",
+                event_id=getattr(ev, "event_id", None),
+            )
+            return
+        if record is None:
+            return
+        try:
+            self._memory_store.upsert_episodic(record)
+        except InvariantViolationError as exc:
+            # I2 单调保护：字段冲突属防御性告警，不计入 errors（不崩溃流水线）
+            log.warning("pipeline.episode_invariant_violation", error=str(exc))
+            return
+        except Exception:
+            self.metrics.errors += 1
+            log.exception(
+                "pipeline.episode_store_failed", record_id=record.record_id
+            )
+            return
+        self.metrics.episodes_recorded += 1
+
     def process_frame(self, frame: "object", frame_index: int = 0) -> FrameResult:
         """处理单帧：detector → tracker → builder → feature → rule → decision → action。
 
@@ -461,6 +561,11 @@ class PerceptionPipeline:
             perception_events.extend(percs)
             warnings.extend(ev_warnings)
             commands.extend(cmds)
+            # —— ADR-0024 Slice 5：Stage F Episodic Memory 影子写入 ——
+            # 仅记录本次访客离场的投影（含其已产出的 warning/action），
+            # 不接决策、不产 Warning，开启影子开关不改变任何历史行为。
+            if self._episodic_shadow:
+                self._record_episode(ev, ev_warnings, cmds)
 
         # —— Stage B/C 实时旁路（feature flag 控制；关闭时零开销，行为与基线逐字段一致）——
         # Stage B：BehaviorBuilder 纯函数 + RecentBehaviorStore 跨访问账本 → behavior_states（观察）
@@ -645,6 +750,7 @@ class PerceptionPipeline:
             warnings_by_level=dict(self.metrics.warnings_by_level),
             n_commands=self.metrics.commands,
             commands_by_type=dict(self.metrics.commands_by_type),
+            episodes_recorded=self.metrics.episodes_recorded,
             publish_count=self.executor.publisher.publish_count,
             notify_family=self.executor.notifier.family_count,
             notify_community=self.executor.notifier.community_count,

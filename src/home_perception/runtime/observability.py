@@ -31,6 +31,7 @@ class PipelineMetrics:
     perception_events: int = 0
     warnings: int = 0
     commands: int = 0
+    episodes_recorded: int = 0  # ADR-0024 Slice 5 · Stage F 影子写入落库计数
     errors: int = 0
     perception_by_type: Dict[str, int] = field(default_factory=dict)
     warnings_by_level: Dict[str, int] = field(default_factory=dict)
@@ -63,6 +64,10 @@ class PipelineMetrics:
         self.commands += 1
         self.commands_by_type[command_type] = self.commands_by_type.get(command_type, 0) + 1
 
+    def record_episode(self) -> None:
+        """Stage F：一次 EpisodicRecord 成功落 InMemoryStore。"""
+        self.episodes_recorded += 1
+
     def snapshot(self) -> Dict[str, Any]:
         """structlog-safe 纯 dict 快照（无 datetime 对象 / 无 numpy 类型）。"""
         return {
@@ -76,6 +81,7 @@ class PipelineMetrics:
             "warnings_by_level": dict(self.warnings_by_level),
             "commands": self.commands,
             "commands_by_type": dict(self.commands_by_type),
+            "episodes_recorded": self.episodes_recorded,
             "errors": self.errors,
             "elapsed_s": self.elapsed_s,
         }

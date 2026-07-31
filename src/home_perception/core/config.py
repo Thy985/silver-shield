@@ -348,8 +348,14 @@ class RealtimeRiskConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """ADR-0024 Slice 3（Stage C + Stage E）Snapshot Recovery 配置。
 
-    - ``enabled``：Memory Snapshot 总开关。默认 ``false``——Slice 3 合并后默认关闭，
-      经 YAML ``memory.enabled: true`` 显式开启（Stage F Shadow Mode 同型 gating）。
+    - ``enabled``：Memory 子系统总开关（含 Slice 3 Snapshot Recovery）。默认 ``false``
+      ——Slice 3 合并后默认关闭，经 YAML ``memory.enabled: true`` 显式开启。
+    - ``episodic_shadow``：ADR-0024 Slice 5 · Stage F Episodic Memory 影子写入开关。
+      默认 ``false``——**Stage F Shadow Mode 默认关闭，v1 不产 Warning**。仅当
+      ``memory.enabled=true`` **且** ``episodic_shadow=true`` 时，流水线才把每次访客离场
+      经 ``DefaultEpisodeBuilder.project_episode`` 投影为 ``EpisodicRecord`` 并写入
+      ``InMemoryStore``。影子写入只记录、不接决策、不产 Warning；是否开启与 Snapshot
+      Recovery 相互独立（可仅开快照恢复，不落 Episode）。
     - ``snapshot_path``：JSON 持久化路径（原子写：先 .tmp 再 os.replace）。
     - ``snapshot_interval_seconds``：周期快照间隔（默认 30s）；写入时机见工程方案 §5.3.6。
     - ``snapshot_fresh_threshold_seconds``：FRESH/STALE 分界（默认 30s）。
@@ -361,6 +367,8 @@ class MemoryConfig(BaseModel):
     """
 
     enabled: bool = False
+    # Stage F（Slice 5）Episodic Memory 影子写入开关；默认关闭（v1 不产 Warning）。
+    episodic_shadow: bool = False
     snapshot_path: str = "data/memory/snapshot.json"
     snapshot_interval_seconds: float = 30.0
     snapshot_fresh_threshold_seconds: float = 30.0
