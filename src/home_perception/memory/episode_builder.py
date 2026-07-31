@@ -169,6 +169,10 @@ class DefaultEpisodeBuilder(MemoryPolicy):
             if not self._warning_mentions_visitor(w, vid):
                 continue
             result.append(w)
+        # 按 created_at 排序：保证关联 warning 的顺序确定（I1 幂等 / 回放一致性
+        # §6.7.2——上游乱序投递 warning 也产出相同 record，且 reason_summary /
+        # source_event_ids 顺序可复现）。稳定排序，同 created_at 保留输入顺序。
+        result.sort(key=lambda w: w.created_at)
         return result
 
     @staticmethod

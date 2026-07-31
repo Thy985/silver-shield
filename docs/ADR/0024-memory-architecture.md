@@ -898,8 +898,10 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | Slice 4 | Stage B | `episode_builder.py`：`DefaultEpisodeBuilder` 实现 `project_episode`（VisitorEvent + WarningEvent + ActionCommand → EpisodicRecord） | #83 | ✅ 已合并 |
 | Slice 5 | §5.6 | `store.py`：`MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）+ `InvariantViolationError` | #84 | ✅ 已合并 |
 | Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入（每访客离场 → `EpisodicRecord` 入 store）；`memory.episodic_shadow` 开关默认关闭；`DefaultEpisodeBuilder` 包级导出 | feat/memory-stage-f | ⏳ 待合入 main |
+| Slice 6 | §8.8 | Memory Evaluation（验证切片，**不实现** Semantic 聚合）：压缩比 ≥100:1（`test_memory_evaluation.py`）+ 信息保留字段校验 + Replay Test（`test_memory_replay.py` §6.7，baseline `tests/fixtures/memory_baseline.json`）；并修复 `DefaultEpisodeBuilder` 关联 warning 按 `created_at` 排序以保证回放确定性（I1/§6.7.2） | feat/memory-slice-6 | ⏳ 待合入 main |
 | — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
 
 **待办（未实现，v1 范围外）**：
+- Slice 6（Memory Evaluation）已完成：仅量化验收 Memory 系统有效性（压缩/保留/一致性），不新增存储或聚合功能
 - Stage G：Environment Semantic Aggregator（占位，v1 不实现）
 - Stage H：Identity Semantic Aggregator（依赖 Phase 4 ReID，v1 不实现）
