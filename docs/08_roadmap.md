@@ -420,7 +420,7 @@ D. 音频（增强，非第一价值；按 Phase 3 薄实现）
 ### 8.5 Memory 架构（ADR-0024）实施进度
 
 > ADR-0024（Accepted 2026-07-28）定义三类记忆模型 + Memory Policy 转换边界；工程方案 `docs/DESIGN-memory-pipeline.md` 按 Stage A–H 拆分。
-> **Slices 1–6 + Stage F + Integration Closure（B/C/A/D）已全部合入 `main`**，单元测试全绿；**Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，由 `memory.episodic_shadow` 控制，**默认关闭，v1 不产 Warning**）。**Integration Closure 已完成**（System × Memory 外部闭环，B→C→A→D）：Memory 融入整体架构并能产出可审计用户价值（设计稿 `DESIGN-memory-integration-closure.md`）。
+> **Slices 1–6 + Stage F 已合入 `main`**，单元测试全绿；**Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，由 `memory.episodic_shadow` 控制，**默认关闭，v1 不产 Warning**）。**Integration Closure（System × Memory 外部闭环，B→C→A→D）已完成**：Memory 融入整体架构并能产出可审计用户价值（设计稿 `DESIGN-memory-integration-closure.md`）。
 
 | Slice | Stage | 交付 | PR | 状态 |
 | --- | --- | --- | --- | --- |
