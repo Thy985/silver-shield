@@ -29,36 +29,18 @@ torch-free，进 CI 每 PR 合约子集。
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
-from home_perception.action import (
-    ActionDispatcher,
-    ActionExecutor,
-    DispatcherConfig,
-    MockNotifier,
-    MockPublisher,
-)
-from home_perception.analysis.behavior_builder import BehaviorBuilder
-from home_perception.analysis.decision_engine import DecisionEngine
-from home_perception.analysis.decision_policy import RuleBasedDecisionPolicy
-from home_perception.analysis.event_builder import VisitorEventBuilder
-from home_perception.analysis.feature_extractor import FeatureExtractor
-from home_perception.analysis.realtime_risk_evaluator import (
-    RealTimeRiskEvaluator,
-    RiskPhase,
-)
-from home_perception.analysis.recent_behavior_store import RecentBehaviorStore
+from home_perception.analysis.realtime_risk_evaluator import RiskPhase
 from home_perception.analysis.risk_signal import SignalTransition
-from home_perception.analysis.rule_engine import RuleEngine, ThresholdConfig
-from home_perception.core.config import MemoryConfig
 from home_perception.detection.detector import Detection, DetectionResult
-from home_perception.detection.tracker import VisitorTracker
 from home_perception.memory import DefaultEpisodeBuilder, InMemoryStore
 from home_perception.memory.records import EpisodicRecord
 from home_perception.memory.store import InvariantViolationError
-from home_perception.runtime import PerceptionPipeline
+
+from _helpers import ManualClock, TH_HIGH, memory_config, build_full_pipeline, drive
 
 
 # ===========================================================================
@@ -108,22 +90,6 @@ def _canon_record(rec: "EpisodicRecord") -> dict:
 # ===========================================================================
 # 测试辅助
 # ===========================================================================
-class ManualClock:
-    """可控时钟：now() 返回当前时间，advance() 推进。"""
-
-    def __init__(self, base: Optional[datetime] = None):
-        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=timezone.utc)
-
-    def now(self) -> datetime:
-        return self._t
-
-    def __call__(self) -> datetime:
-        return self.now()
-
-    def advance(self, seconds: float = 1.0) -> None:
-        self._t = self._t + timedelta(seconds=seconds)
-
-
 class SteppingStubDetector:
     """按 plan 返回 Detection 列表；**不**自动推进时钟（由调用方显式 advance）。
 
@@ -150,89 +116,6 @@ def _person(track_id: int = 1) -> List[Detection]:
         class_id=0, class_name="person", confidence=0.9,
         bbox=[0, 0, 10, 10], timestamp=0.0, track_id=track_id,
     )]
-
-
-def _th_high() -> ThresholdConfig:
-    """让一次访问同时命中三条基础规则 → 组合规则产 high_risk_approach → HIGH。
-
-    - long_duration_seconds=60：停留 >=60s 即触发（生命周期里远超限）；
-    - repeat_visit_count=1：单次访问 visits_in_window=1 即命中（组合规则的"重复"腿）；
-    - odd_hour_set={18}：访问发生在 18 点，命中 OddHourRule 腿。
-    三者同命中 → HighRiskApproachRule → high_risk_approach → HIGH/ESCALATE_COMMUNITY。
-    """
-    return ThresholdConfig(
-        long_duration_seconds=60.0,
-        repeat_visit_count=1,
-        odd_hour_set={18},
-    )
-
-
-def _build_full_pipeline(
-    detector,
-    clock: ManualClock,
-    *,
-    thresholds: Optional[ThresholdConfig] = None,
-    memory_store: Optional[InMemoryStore] = None,
-    episode_builder: Optional[DefaultEpisodeBuilder] = None,
-    episodic_shadow: bool = False,
-    memory_config: Optional[MemoryConfig] = None,
-    decision_enabled: bool = False,
-    eval_interval_frames: int = 1,
-):
-    """构造完整 PerceptionPipeline（实时旁路 + 可选 Memory 影子写入 + 可选快照恢复）。"""
-    th = thresholds or ThresholdConfig()
-    tracker = VisitorTracker(absence_gap_s=5.0, now_provider=clock)
-    event_builder = VisitorEventBuilder(tracker, source_video="demo/test", now_provider=clock)
-    feat = FeatureExtractor(frequency_window_s=1800.0)
-    rule_engine = RuleEngine(
-        device_id="demo/test", location="入户门",
-        thresholds=th, now_provider=clock,
-    )
-    decision = DecisionEngine(
-        elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock,
-    )
-    dispatcher = ActionDispatcher(DispatcherConfig())
-    executor = ActionExecutor(
-        dispatcher=dispatcher, publisher=MockPublisher(),
-        notifier=MockNotifier(), max_retries=3,
-    )
-    behavior_builder = BehaviorBuilder(event_builder=event_builder)
-    recent_store = RecentBehaviorStore()
-    evaluator = RealTimeRiskEvaluator(thresholds=th, now_provider=clock)
-    return PerceptionPipeline(
-        detector=detector, tracker=tracker, event_builder=event_builder,
-        feature_extractor=feat, rule_engine=rule_engine, decision_engine=decision,
-        executor=executor, now_provider=clock,
-        behavior_builder=behavior_builder, recent_behavior_store=recent_store,
-        realtime_evaluator=evaluator, realtime_enabled=True,
-        eval_interval_frames=eval_interval_frames, decision_enabled=decision_enabled,
-        memory_store=memory_store, episode_builder=episode_builder,
-        episodic_shadow=episodic_shadow, memory_config=memory_config,
-    )
-
-
-def _memory_config(path: Path, **over) -> MemoryConfig:
-    base = dict(
-        enabled=True,
-        snapshot_path=str(path),
-        snapshot_interval_seconds=1.0,
-        snapshot_fresh_threshold_seconds=30.0,
-        snapshot_ttl_seconds=300.0,
-        recent_behavior_retention_seconds=3600.0,
-        eviction_interval_frames=60,
-        cold_start_stale_confidence=0.5,
-    )
-    base.update(over)
-    return MemoryConfig(**base)
-
-
-def _drive(p: PerceptionPipeline, clock: ManualClock, plan: List[List[Detection]], step_s: float):
-    """逐帧推进时钟并 process_frame，返回 FrameResult 列表。"""
-    results = []
-    for i in range(len(plan)):
-        clock.advance(step_s)
-        results.append(p.process_frame(None, frame_index=i))
-    return results
 
 
 def _lifecycle_plan(n_present: int = 30, step_s: float = 30.0) -> List[List[Detection]]:
@@ -262,11 +145,11 @@ class TestE2ELifecycle:
 
         clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
         store, builder, _ = InMemoryStore(), DefaultEpisodeBuilder(), True
-        p = _build_full_pipeline(
-            SteppingStubDetector(plan), clock, thresholds=_th_high(),
+        p = build_full_pipeline(
+            SteppingStubDetector(plan), clock, thresholds=TH_HIGH(),
             memory_store=store, episode_builder=builder, episodic_shadow=True,
         )
-        results = _drive(p, clock, plan, step_s)
+        results = drive(p, clock, plan, step_s)
 
         # 1) 生命周期中 RiskStateMachine 确实产过 RAISED（RiskSignal 步骤）
         all_signals = [s for r in results for s in r.risk_signals]
@@ -312,17 +195,17 @@ class TestE2ERestartRecovery:
         ❌ 旧 risk_score 不恢复（snapshot 无 risk_score 字段）。
         """
         snap_path = tmp_path / "snapshot.json"
-        th = _th_high()
+        th = TH_HIGH()
 
         # --- Phase 1：运行中访问，触发 ACTIVE_RISK，写快照 ---
         clock1 = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
         present = [_person(1) for _ in range(5)]  # 在场（无离场）→ 访问进行中
-        p1 = _build_full_pipeline(
+        p1 = build_full_pipeline(
             SteppingStubDetector(present), clock1, thresholds=th,
-            memory_config=_memory_config(snap_path),
+            memory_config=memory_config(snap_path),
             episodic_shadow=False,
         )
-        _drive(p1, clock1, present, 30.0)
+        drive(p1, clock1, present, 30.0)
         # 断言 Phase 1 期间确实进入 ACTIVE_RISK
         assert p1._realtime_evaluator.active_risk_count == 1
         p1.close()  # flush 最终快照
@@ -341,9 +224,9 @@ class TestE2ERestartRecovery:
         # Phase1 末帧 clock1=18:32:30 → 快照 snapshot_at=18:32:30；
         # clock2=18:32:45 → age=15s < fresh_threshold(30s) → 恢复为 FRESH（非 DISCARD）。
         clock2 = ManualClock(base=datetime(2026, 7, 31, 18, 32, 45, tzinfo=timezone.utc))
-        p2 = _build_full_pipeline(
+        p2 = build_full_pipeline(
             SteppingStubDetector([[]]), clock2, thresholds=th,
-            memory_config=_memory_config(snap_path),
+            memory_config=memory_config(snap_path),
             episodic_shadow=False,
         )
 
@@ -373,7 +256,7 @@ class TestE2EReplayStability:
         - 确定性：两次回放产出语义一致（records_equal 忽略 created_at）；
         - 可审计 / Agent 输入稳定：归一 created_at 后 to_dict 字节相等。
         """
-        th = _th_high()
+        th = TH_HIGH()
         plan = _lifecycle_plan(30, 30.0)
         step_s = 30.0
 
@@ -381,11 +264,11 @@ class TestE2EReplayStability:
             clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
             store = InMemoryStore()
             builder = DefaultEpisodeBuilder()
-            p = _build_full_pipeline(
+            p = build_full_pipeline(
                 SteppingStubDetector(plan), clock, thresholds=th,
                 memory_store=store, episode_builder=builder, episodic_shadow=True,
             )
-            _drive(p, clock, plan, step_s)
+            drive(p, clock, plan, step_s)
             return sorted(store.get_active_episodic(), key=lambda r: r.record_id)
 
         A = run_once()
@@ -415,25 +298,25 @@ class TestE2EReplayStability:
 class TestE2ERuntimeWiring:
     def test_memory_on_is_true_bypass_no_risk_change(self):
         """memory 开启 vs 关闭：同一帧序列下 warnings/risk_signals/commands 逐帧一致。"""
-        th = _th_high()
+        th = TH_HIGH()
         plan = _lifecycle_plan(30, 30.0)
         step_s = 30.0
 
         # 关闭
         clock_off = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
-        p_off = _build_full_pipeline(
+        p_off = build_full_pipeline(
             SteppingStubDetector(plan), clock_off, thresholds=th, episodic_shadow=False,
         )
-        res_off = _drive(p_off, clock_off, plan, step_s)
+        res_off = drive(p_off, clock_off, plan, step_s)
 
         # 开启（影子写入）
         clock_on = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
         store, builder, _ = InMemoryStore(), DefaultEpisodeBuilder(), True
-        p_on = _build_full_pipeline(
+        p_on = build_full_pipeline(
             SteppingStubDetector(plan), clock_on, thresholds=th,
             memory_store=store, episode_builder=builder, episodic_shadow=True,
         )
-        res_on = _drive(p_on, clock_on, plan, step_s)
+        res_on = drive(p_on, clock_on, plan, step_s)
 
         assert len(res_off) == len(res_on)
         for i, (ro, rn) in enumerate(zip(res_off, res_on)):
@@ -453,16 +336,16 @@ class TestE2ERuntimeWiring:
             def project_episode(self, *a, **k):
                 raise RuntimeError("memory store down")
 
-        th = _th_high()
+        th = TH_HIGH()
         plan = _lifecycle_plan(30, 30.0)
         step_s = 30.0
         clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
-        p = _build_full_pipeline(
+        p = build_full_pipeline(
             SteppingStubDetector(plan), clock, thresholds=th,
             memory_store=InMemoryStore(), episode_builder=BoomBuilder(), episodic_shadow=True,
         )
         # 必须不抛异常
-        results = _drive(p, clock, plan, step_s)
+        results = drive(p, clock, plan, step_s)
 
         # 历史风险决策仍然发生（RiskSignal / Warning 照常产出）
         assert any(s.transition == SignalTransition.RAISED
@@ -480,16 +363,16 @@ class TestE2ERuntimeWiring:
             def upsert_episodic(self, record):
                 raise InvariantViolationError("simulated conflict")
 
-        th = _th_high()
+        th = TH_HIGH()
         plan = _lifecycle_plan(30, 30.0)
         step_s = 30.0
         clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
-        p = _build_full_pipeline(
+        p = build_full_pipeline(
             SteppingStubDetector(plan), clock, thresholds=th,
             memory_store=StrictStore(), episode_builder=DefaultEpisodeBuilder(),
             episodic_shadow=True,
         )
-        results = _drive(p, clock, plan, step_s)
+        results = drive(p, clock, plan, step_s)
 
         assert sum(len(r.warnings) for r in results) > 0, "Warning 仍应产生"
         assert p.metrics.episodes_recorded == 0
@@ -503,29 +386,29 @@ class TestE2ERuntimeWiring:
         """
         import time
 
-        th = _th_high()
+        th = TH_HIGH()
         n = 40
         plan = [_person(1) for _ in range(n - 2)] + [[] for _ in range(2)]
         step_s = 30.0
 
         # 关闭
         clock_off = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
-        p_off = _build_full_pipeline(
+        p_off = build_full_pipeline(
             SteppingStubDetector(plan), clock_off, thresholds=th, episodic_shadow=False,
         )
         t0 = time.perf_counter()
-        _drive(p_off, clock_off, plan, step_s)
+        drive(p_off, clock_off, plan, step_s)
         t_off = time.perf_counter() - t0
 
         # 开启
         clock_on = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
         store, builder, _ = InMemoryStore(), DefaultEpisodeBuilder(), True
-        p_on = _build_full_pipeline(
+        p_on = build_full_pipeline(
             SteppingStubDetector(plan), clock_on, thresholds=th,
             memory_store=store, episode_builder=builder, episodic_shadow=True,
         )
         t0 = time.perf_counter()
-        _drive(p_on, clock_on, plan, step_s)
+        drive(p_on, clock_on, plan, step_s)
         t_on = time.perf_counter() - t0
 
         # 宽松上界：守护「Memory 是旁路」不被 O(n) 拖垮
