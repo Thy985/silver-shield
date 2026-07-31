@@ -31,6 +31,7 @@ from .records import (
     RecordIdPrefix,
     SemanticAggregate,
     ShortTermRecord,
+    VisitorPresenceStatus,
 )
 from .policy import MemoryPolicy
 from .short_term_policy import DefaultShortTermPolicy
@@ -42,6 +43,7 @@ from .snapshot import (
 )
 from .cold_start import ColdStartConfidence, ColdStartCoordinator, RecoveryResult
 from .episode_builder import DefaultEpisodeBuilder
+from .query import MemoryQuery
 
 __all__ = [
     "ActionSummary",
@@ -53,6 +55,7 @@ __all__ = [
     "EvidenceRef",
     "EpisodicRecord",
     "MemoryPolicy",
+    "MemoryQuery",
     "MemoryStatus",
     "RecentBehaviorSnapshot",
     "RecordIdPrefix",
@@ -61,6 +64,7 @@ __all__ = [
     "SemanticAggregate",
     "ShortTermRecord",
     "SnapshotStore",
+    "VisitorPresenceStatus",
 ]
 from .store import InMemoryStore, InvariantViolationError, MemoryStore
 __all__ += ["InMemoryStore", "InvariantViolationError", "MemoryStore"]
