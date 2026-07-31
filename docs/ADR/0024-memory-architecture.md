@@ -897,8 +897,8 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | Slice 3 | Stage C + D + E | `snapshot.py` / `cold_start.py`（Snapshot 持久化 + 冷启动恢复，解 TD-0027） | #82 | ✅ 已合并 |
 | Slice 4 | Stage B | `episode_builder.py`：`DefaultEpisodeBuilder` 实现 `project_episode`（VisitorEvent + WarningEvent + ActionCommand → EpisodicRecord） | #83 | ✅ 已合并 |
 | Slice 5 | §5.6 | `store.py`：`MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）+ `InvariantViolationError` | #84 | ✅ 已合并 |
-| Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入（每访客离场 → `EpisodicRecord` 入 store）；`memory.episodic_shadow` 开关默认关闭；`DefaultEpisodeBuilder` 包级导出 | feat/memory-stage-f | ⏳ 待合入 main |
-| Slice 6 | §8.8 | Memory Evaluation（验证切片，**不实现** Semantic 聚合）：压缩比 ≥100:1（`test_memory_evaluation.py`）+ 信息保留字段校验 + Replay Test（`test_memory_replay.py` §6.7，baseline `tests/fixtures/memory_baseline.json`）；并修复 `DefaultEpisodeBuilder` 关联 warning 按 `created_at` 排序以保证回放确定性（I1/§6.7.2） | feat/memory-slice-6 | ⏳ 待合入 main |
+| Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入（每访客离场 → `EpisodicRecord` 入 store）；`memory.episodic_shadow` 开关默认关闭；`DefaultEpisodeBuilder` 包级导出 | #87 | ✅ 已合并 |
+| Slice 6 | §8.8 | Memory Evaluation（验证切片，**不实现** Semantic 聚合）：压缩比 ≥100:1（`test_memory_evaluation.py`）+ 信息保留字段校验 + Replay Test（`test_memory_replay.py` §6.7，baseline `tests/fixtures/memory_baseline.json`）。附带修复 `DefaultEpisodeBuilder` 两处确定性缺陷（均由新增用例暴露）：① 关联 warning 按 `created_at` 排序，保证乱序投递下回放一致（I1/§6.7.2）；② 关联 warning/action 按 `warning_id`/`command_id` 去重——上游重试会使 `source_event_ids` 变长，令重投 record 与首投字段不等而触发 I2 违规（Shadow Mode 下 episode 被静默丢弃）。另为 `MemoryStore` 增补公共只读计数口 `short_term_count()`（评估用例不再依赖后端私有结构，v2 迁 SQLite 无感） | feat/memory-slice-6 | ⏳ 待合入 main |
 | — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
 
 **待办（未实现，v1 范围外）**：

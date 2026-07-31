@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from itertools import permutations
 from uuid import UUID
 
 from home_perception.analysis.event import VisitorEvent
@@ -132,6 +133,13 @@ def _load_or_write_baseline(log):
     """读取 baseline；缺失或 MEMORY_UPDATE_BASELINE=1 时生成并写回。
 
     返回 EpisodicRecord[]（由 baseline 派生，用于 records_equal 比较）。
+
+    ⚠️ **自动生成只是本地首跑的便利**：`memory_baseline.json` 已入库，CI 上永远走
+    「读取 + 比对」分支。改算法时请显式 `MEMORY_UPDATE_BASELINE=1` 重生成，并在
+    PR 里逐行 diff 该文件——它是 §6.7.4 的回归硬约束，静默更新等于绕过门禁。
+
+    `sort_keys=True` 让字段按字典序落盘：新增 `EpisodicRecord` 字段时，diff 会
+    插在字母序位置而非文件末尾，review 时需留意（不是 bug，是阅读习惯）。
     """
     store = InMemoryStore()
     _run_replay(store, log)
@@ -195,21 +203,26 @@ def test_replay_baseline_snapshot_match():
 
 
 def test_replay_order_independent_for_disjoint_visitors():
-    """两个不相关 visitor 的事件交错输入 vs 顺序输入，产出相同。"""
+    """不相关 visitor 的事件**乱序**到达，各自投影不受影响（全部 6 种排列等价）。
+
+    穷举 3 个独立 visitor 的全排列而非只试一种顺序——否则「顺序无关」只是碰巧成立。
+    """
     a, b, c = _build_event_log()
     sequential = [a, b, c]
-    interleaved = [a, b, c]  # 三个独立 visitor，replay 顺序不影响各自投影
 
     store_seq = InMemoryStore()
-    store_int = InMemoryStore()
     _run_replay(store_seq, sequential)
-    _run_replay(store_int, interleaved)
-
     rs = sorted(store_seq.get_active_episodic(), key=lambda r: r.record_id)
-    ri = sorted(store_int.get_active_episodic(), key=lambda r: r.record_id)
-    assert [r.record_id for r in rs] == [r.record_id for r in ri]
-    for s, i in zip(rs, ri):
-        assert records_equal(s, i)
+
+    for shuffled in permutations([a, b, c]):
+        order = [v.event_id for v, _, _ in shuffled]
+        store_shuf = InMemoryStore()
+        _run_replay(store_shuf, list(shuffled))
+        rx = sorted(store_shuf.get_active_episodic(), key=lambda r: r.record_id)
+
+        assert [r.record_id for r in rs] == [r.record_id for r in rx], f"顺序 {order} 产出集合不同"
+        for s, x in zip(rs, rx):
+            assert records_equal(s, x), f"顺序 {order} 下 {s.record_id} 产出不一致"
 
 
 def test_replay_order_dependent_for_same_visitor():
@@ -230,22 +243,59 @@ def test_replay_order_dependent_for_same_visitor():
 
 
 def test_replay_with_warning_retry():
-    """上游重试导致 WarningEvent 重复投递，MemoryStore 中只有 1 条 EpisodicRecord。"""
-    va, warnings, actions = _build_event_log()[0]
-    dup_warnings = list(warnings) + list(warnings)  # 同一 warning 重复投递
+    """上游重试：同一次访问经**两次独立 pipeline 调用**到达，store 中仍只有 1 条记录。
 
+    真实 retry 是跨调用的——每次调用各自 `project_episode` 再各自 `upsert_episodic`，
+    第二次应命中 I2 幂等（返回 False、不抛异常），而非靠单次调用内部去重蒙混过关。
+    """
+    va, warnings, actions = _build_event_log()[0]
     store = InMemoryStore()
     builder = DefaultEpisodeBuilder()
-    store.upsert_episodic(builder.project_episode(va, warnings=dup_warnings, actions=actions))
 
-    records = store.get_episodic_by_visitor(str(va.visitor_id))
-    assert len(records) == 1, "重复 warning 投递不应产生多条 EpisodicRecord（I1）"
+    first = store.upsert_episodic(
+        builder.project_episode(va, warnings=list(warnings), actions=list(actions))
+    )
+    second = store.upsert_episodic(
+        builder.project_episode(va, warnings=list(warnings), actions=list(actions))
+    )
+
+    assert first is True, "首次投递应写入新记录"
+    assert second is False, "重试投递应命中 I2 幂等，不新增记录"
+    assert len(store.get_episodic_by_visitor(str(va.visitor_id))) == 1
+
+
+def test_replay_with_duplicated_events_in_same_batch():
+    """同批次内 warning / action 被重复投递，产出与「无重复」批次逐字段相等。
+
+    回归用例（Slice 6 review 发现的真实缺陷）：`_filter_warnings` / `_filter_actions`
+    若不按 id 去重，`source_event_ids` 会随投递次数变长 → 重投版本与首投版本字段不等
+    → `upsert_episodic` 抛 `InvariantViolationError`，Shadow Mode 下 episode 被静默丢弃。
+    """
+    va, warnings, actions = _build_event_log()[0]
+    builder = DefaultEpisodeBuilder()
+
+    clean = builder.project_episode(va, warnings=list(warnings), actions=list(actions))
+    duped = builder.project_episode(
+        va, warnings=list(warnings) * 2, actions=list(actions) * 2
+    )
+
+    assert records_equal(clean, duped), "重复投递不应改变投影结果"
+    assert len(duped.source_event_ids) == len(set(duped.source_event_ids)), \
+        "source_event_ids 不得含重复 id（I4 可追溯性）"
+    assert len(duped.actions) == len(clean.actions)
+
+    # 端到端：先收干净批次、再收重复批次，store 不得抛 I2 违规
+    store = InMemoryStore()
+    store.upsert_episodic(clean)
+    assert store.upsert_episodic(duped) is False
+    assert len(store.get_episodic_by_visitor(str(va.visitor_id))) == 1
 
 
 def test_replay_after_cold_start():
     """回放 → 写 Snapshot → 重置 store → 从 Snapshot 恢复 → 继续回放 → 与连续回放一致。"""
     log = _build_event_log()
-    half = len(log) // 2 or 1
+    assert len(log) >= 2, "冷启动用例需要至少 2 个事件才能切分前后半段"
+    half = len(log) // 2
     first_half, second_half = log[:half], log[half:]
 
     # 连续回放基线

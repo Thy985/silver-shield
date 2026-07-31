@@ -161,6 +161,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
             seconds=self.ACTION_TOLERANCE_SECONDS
         )
         result: List["WarningEvent"] = []
+        seen_ids: set[str] = set()
         for w in warnings or []:
             # 时间窗（created_at 为 UTC，与 enter/leave 同基准）
             if w.created_at < visitor_event.enter_time or w.created_at > window_end:
@@ -168,6 +169,13 @@ class DefaultEpisodeBuilder(MemoryPolicy):
             # visitor 关联
             if not self._warning_mentions_visitor(w, vid):
                 continue
+            # 按 warning_id 去重：上游重试会把同一条 WarningEvent 重复投递，若不去重，
+            # source_event_ids / reason_summary 会随投递次数变长 → 同一次访问在
+            # 「首投」与「重投」下产出字段不等的 record → upsert_episodic 抛 I2 违规。
+            wid = str(w.warning_id)
+            if wid in seen_ids:
+                continue
+            seen_ids.add(wid)
             result.append(w)
         # 按 created_at 排序：保证关联 warning 的顺序确定（I1 幂等 / 回放一致性
         # §6.7.2——上游乱序投递 warning 也产出相同 record，且 reason_summary /
@@ -204,11 +212,25 @@ class DefaultEpisodeBuilder(MemoryPolicy):
     def _filter_actions(
         related_warnings: List["WarningEvent"], actions: List["ActionCommand"]
     ) -> List["ActionCommand"]:
-        """按 warning_id 关联 ActionCommand。"""
+        """按 warning_id 关联 ActionCommand（按 command_id 去重）。
+
+        与 `_filter_warnings` 同理：上游重试可能重复投递同一条 ActionCommand，
+        不去重会让 `actions` / `source_event_ids` 随投递次数变长（I2 冲突）。
+        """
         warning_ids = {str(w.warning_id) for w in related_warnings}
         if not warning_ids:
             return []
-        return [a for a in (actions or []) if str(a.warning_id) in warning_ids]
+        result: List["ActionCommand"] = []
+        seen_ids: set[str] = set()
+        for a in actions or []:
+            if str(a.warning_id) not in warning_ids:
+                continue
+            cid = str(a.command_id)
+            if cid in seen_ids:
+                continue
+            seen_ids.add(cid)
+            result.append(a)
+        return result
 
     @staticmethod
     def _pick_max_risk(
