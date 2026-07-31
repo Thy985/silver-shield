@@ -62,10 +62,10 @@ from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
 from ..memory import (
     DefaultEpisodeBuilder,
     InMemoryStore,
-    InvariantViolationError,
     MemoryStore,
 )
 from .config import build_dispatcher_config, build_threshold_config
+from .memory_hook import MemoryHook
 from .observability import PipelineMetrics
 
 log = get_logger(__name__)
@@ -308,6 +308,18 @@ class PerceptionPipeline:
                 note="episodic_shadow=true 但 store/episode_builder 缺失，影子写入静默跳过",
             )
 
+        # —— ADR-0024 Integration Closure Slice A：Memory Hook 接线点 ——
+        # 把内联的 ``_record_episode`` 抽出为 ``MemoryHook``（0 行为变化）：门控 / 容错 /
+        # metrics 语义与抽出前一致；process_frame 中每个 VisitorEvent 经
+        # ``self._memory_hook.record`` 投影落库，不再内联。
+        # 保留下方三个字段仅因既有 Stage F 测试直接断言它们（接口未变）。
+        self._memory_hook = MemoryHook(
+            self._episode_builder,
+            self._memory_store,
+            self._episodic_shadow,
+            self.metrics,
+        )
+
     # ------------------------------------------------------------------
     # 从配置装配
     # ------------------------------------------------------------------
@@ -486,50 +498,10 @@ class PerceptionPipeline:
 
     # ------------------------------------------------------------------
     # ADR-0024 Slice 5：Stage F Episodic Memory 影子写入（Shadow Mode）
+    # 逻辑已抽取为 ``MemoryHook``（Integration Closure Slice A，见
+    # ``runtime/memory_hook.py``）。本类仅持有 ``self._memory_hook``，
+    # process_frame 中每个 VisitorEvent 经 ``self._memory_hook.record`` 投影落库。
     # ------------------------------------------------------------------
-
-    def _record_episode(
-        self,
-        ev: "VisitorEvent",
-        warnings: List["WarningEvent"],
-        actions: List[Any],
-    ) -> None:
-        """把一次访客离场投影为 EpisodicRecord 并写入 MemoryStore（Shadow Mode）。
-
-        触发时机：``process_frame`` 中每个 ``VisitorEvent`` 产出后立即调用（含其关联的
-        ``warnings`` / ``actions``）。影子写入**只记录、不接决策、不产 Warning**，
-        因此开启 ``episodic_shadow`` 不会改变流水线任何历史行为（工程方案 §8.3 合入门）。
-
-        容错（AGENTS.md §2.5：记忆写入失败不崩溃主链路）：
-        - 投影异常 / 落库未知异常 → 计 ``errors`` + 记日志，跳过本 episode；
-        - ``InvariantViolationError``（I2 单调性：字段冲突）→ 防御性告警，不计入 errors。
-        """
-        if self._episode_builder is None or self._memory_store is None:
-            return
-        try:
-            record = self._episode_builder.project_episode(ev, warnings, actions)
-        except Exception:  # 投影失败（理论上 DefaultEpisodeBuilder 为纯函数不应抛）
-            self.metrics.errors += 1
-            log.exception(
-                "pipeline.episode_build_failed",
-                event_id=getattr(ev, "event_id", None),
-            )
-            return
-        if record is None:
-            return
-        try:
-            self._memory_store.upsert_episodic(record)
-        except InvariantViolationError as exc:
-            # I2 单调保护：字段冲突属防御性告警，不计入 errors（不崩溃流水线）
-            log.warning("pipeline.episode_invariant_violation", error=str(exc))
-            return
-        except Exception:
-            self.metrics.errors += 1
-            log.exception(
-                "pipeline.episode_store_failed", record_id=record.record_id
-            )
-            return
-        self.metrics.episodes_recorded += 1
 
     def process_frame(self, frame: "object", frame_index: int = 0) -> FrameResult:
         """处理单帧：detector → tracker → builder → feature → rule → decision → action。
@@ -561,11 +533,11 @@ class PerceptionPipeline:
             perception_events.extend(percs)
             warnings.extend(ev_warnings)
             commands.extend(cmds)
-            # —— ADR-0024 Slice 5：Stage F Episodic Memory 影子写入 ——
+            # —— ADR-0024 Slice 5：Stage F Episodic Memory 影子写入（经 MemoryHook）——
             # 仅记录本次访客离场的投影（含其已产出的 warning/action），
             # 不接决策、不产 Warning，开启影子开关不改变任何历史行为。
-            if self._episodic_shadow:
-                self._record_episode(ev, ev_warnings, cmds)
+            if self._memory_hook.enabled:
+                self._memory_hook.record(ev, ev_warnings, cmds)
 
         # —— Stage B/C 实时旁路（feature flag 控制；关闭时零开销，行为与基线逐字段一致）——
         # Stage B：BehaviorBuilder 纯函数 + RecentBehaviorStore 跨访问账本 → behavior_states（观察）
