@@ -44,6 +44,15 @@ class MemoryStore:
     def get_active_episodic(self) -> List[EpisodicRecord]:
         raise NotImplementedError
 
+    def short_term_count(self) -> int:
+        """当前保留的 ShortTermRecord 条数（工作记忆规模）。
+
+        公共观测口：短期记忆应为 O(活跃 visitor) 而非 O(帧数)，Slice 6 压缩比
+        验收（§8.8.1）需要读取该规模。提供公共方法以免调用方触碰后端私有结构
+        （v2 迁 SQLite 时实现换成 `SELECT COUNT(*)`，调用方无感）。
+        """
+        raise NotImplementedError
+
     def snapshot(self) -> Dict:
         raise NotImplementedError
 
@@ -84,6 +93,9 @@ class InMemoryStore(MemoryStore):
             ep for ep in self._episodic.values()
             if ep.memory_status == MemoryStatus.ACTIVE
         ]
+
+    def short_term_count(self) -> int:
+        return len(self._short_term)
 
     @staticmethod
     def _fields_differ(a: EpisodicRecord, b: EpisodicRecord) -> bool:

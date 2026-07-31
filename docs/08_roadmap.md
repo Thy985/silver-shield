@@ -429,9 +429,10 @@ D. 音频（增强，非第一价值；按 Phase 3 薄实现）
 | Slice 3 | C+D+E | `snapshot.py` / `cold_start.py`（Snapshot 持久化 + 冷启动恢复，解 TD-0027） | #82 | ✅ 已合并 |
 | Slice 4 | B | `episode_builder.py`：`DefaultEpisodeBuilder.project_episode` | #83 | ✅ 已合并 |
 | Slice 5 | §5.6 | `store.py`：`MemoryStore` / `InMemoryStore`（v1 内存 + JSON 序列化） | #84 | ✅ 已合并 |
-| Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入；`memory.episodic_shadow` 默认关闭 | feat/memory-stage-f | ⏳ 待合入 main |
+| Stage F | Pipeline Shadow Mode | `runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入；`memory.episodic_shadow` 默认关闭 | #87 | ✅ 已合并 |
+| Slice 6 | §8.8 | Memory Evaluation（压缩比 ≥100:1 / 信息保留字段校验 / Replay Test §6.7 一致性验证；**不实现 Semantic 聚合**）+ `DefaultEpisodeBuilder` 确定性修复（warning 排序 / 重投去重）+ `MemoryStore.short_term_count()` | feat/memory-slice-6 | ⏳ 待合入 main |
 | — | 清理 | 移除未使用的 `TYPE_CHECKING` 导入 | #85 | ✅ 已合并 |
 
-**待办（v1 范围外）**：Stage G/H Semantic 聚合器（G 可在 Phase 5 前启用，H 依赖 Phase 4 ReID）。
+**待办（v1 范围外）**：Stage G/H Semantic 聚合器（G 可在 Phase 5 前启用，H 依赖 Phase 4 ReID）。Slice 6（Memory Evaluation）为验证切片，已落地（见上表），仅量化验收 Memory 系统有效性，不新增存储/聚合功能。
 
 > 与 §8.2 MVP RC 基线的关系：Memory 为 v2 增量旁路，MVP RC 基线（289 测试全绿）保持不变；Memory 新增测试计入 v2 增量，不回改 RC 里程碑。

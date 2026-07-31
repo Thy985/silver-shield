@@ -1284,7 +1284,7 @@ def consumable_episodes(store: MemoryStore) -> List[EpisodicRecord]:
 | `test_pipeline_shutdown_flushes_snapshot` | `shutdown()` 调用后 snapshot 文件存在 |
 | `test_pipeline_recover_on_init` | 构造时调用 `ColdStartCoordinator.recover()` |
 
-### 6.7 Memory Replay Test（跨 Stage，`tests/memory/test_memory_replay.py`）
+### 6.7 Memory Replay Test（跨 Stage，`tests/memory/test_memory_replay.py` · ✅ 已实装）
 
 > **Memory 系统的核心测试**：相同事件流回放必须产出相同的 MemoryRecord。这是 I1 幂等性的端到端验证，也是 v1→v2 后端迁移时的回归基线。
 
@@ -1736,7 +1736,7 @@ store.get_episodic_by_visitor(visitor_id)
 
 ---
 
-### 8.8 Slice 6：Memory Evaluation
+### 8.8 Slice 6：Memory Evaluation（✅ 已落地）
 
 **目标**：验证 Memory 系统的有效性。Memory 不是写完就结束，需要量化验证。
 
