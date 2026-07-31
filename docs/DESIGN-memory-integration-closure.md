@@ -358,7 +358,7 @@ Agent Reasoning
 
 ## 8. 参考
 
-- `docs/ADR/0024-memory-architecture.md` — Memory 架构（Slice 1–6 + Stage F）
+- `docs/ADR/0024-memory-architecture.md` — Memory 架构（Slice 1–6 + Stage F + Integration Closure）
 - `docs/DESIGN-memory-pipeline.md` — Memory 内部设计
 - `tests/runtime/test_memory_e2e_closed_loop.py` — 已落地的 E2E 内部闭环（4 类 7 用例，torch-free）
 - `src/home_perception/runtime/pipeline.py` — Memory Hook 接线（L491–532, L564–568）
