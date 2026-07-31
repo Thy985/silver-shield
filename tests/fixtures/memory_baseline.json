@@ -15,7 +15,7 @@
       }
     ],
     "corrections": [],
-    "created_at": "2026-07-31T01:02:07.901578+00:00",
+    "created_at": "1970-01-01T00:00:00+00:00",
     "duration_seconds": 180.0,
     "enter_time": "2026-07-28T18:32:00+00:00",
     "evidence_refs": [],
@@ -42,7 +42,7 @@
   {
     "actions": [],
     "corrections": [],
-    "created_at": "2026-07-31T01:02:07.901612+00:00",
+    "created_at": "1970-01-01T00:00:00+00:00",
     "duration_seconds": 180.0,
     "enter_time": "2026-07-28T19:02:00+00:00",
     "evidence_refs": [],
@@ -71,7 +71,7 @@
       }
     ],
     "corrections": [],
-    "created_at": "2026-07-31T01:02:07.901665+00:00",
+    "created_at": "1970-01-01T00:00:00+00:00",
     "duration_seconds": 180.0,
     "enter_time": "2026-07-28T21:10:00+00:00",
     "evidence_refs": [],

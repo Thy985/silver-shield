@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from itertools import permutations
 from uuid import UUID
 
+import pytest
+
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.warning import WarningEvent
 from home_perception.action.command import ActionCommand
@@ -148,8 +150,14 @@ def _load_or_write_baseline(log):
 
     if os.environ.get("MEMORY_UPDATE_BASELINE") == "1" or not os.path.exists(_baseline_path()):
         payload = [r.to_dict() for r in expected]
+        # 归一 created_at：避免每次重生成都因墙钟不同而产出噪音 diff（records_equal
+        # 本就跳过 created_at，比对逻辑不受影响）。固定纪元值让 review 一眼看出
+        # created_at 差异是「自动归一」而非真实数据变化。
+        for d in payload:
+            d["created_at"] = "1970-01-01T00:00:00+00:00"
         with open(_baseline_path(), "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
+            fh.write("\n")  # 末尾换行，避免 `\ No newline at end of file` 噪音
         # 重新读回，保证与磁盘一致
         return [EpisodicRecord.from_dict(d) for d in payload]
 
@@ -225,7 +233,7 @@ def test_replay_order_independent_for_disjoint_visitors():
             assert records_equal(s, x), f"顺序 {order} 下 {s.record_id} 产出不一致"
 
 
-def test_replay_order_dependent_for_same_visitor():
+def test_replay_order_independent_for_same_visitor():
     """同一 visitor 的 warning 列表乱序输入，投影产出相同（关联顺序无关）。"""
     # 取双 warning 的 visitor（visit-c），验证 warning 顺序不影响投影
     vc, vc_warns, vc_acts = _build_event_log()[2]
@@ -240,6 +248,30 @@ def test_replay_order_dependent_for_same_visitor():
     rf = store_fwd.get_active_episodic()[0]
     rr = store_rev.get_active_episodic()[0]
     assert records_equal(rf, rr)
+
+
+def test_replay_action_order_independent_for_same_visitor():
+    """同一 visitor 的 ActionCommand 列表乱序输入，投影产出相同（关联动作顺序无关）。
+
+    双 action 访客（visit-a，command_id = 3333 / 4444）。若 `_filter_actions` 只去重
+    不排序，重投时 action 以相反顺序到达会让 `actions` / `source_event_ids` 尾部顺序
+    漂移，与首次投影字段不等 → I2 冲突。本用例与 `test_replay_order_independent_for_same_visitor`
+    （warning 侧）对称，确保顺序确定性修复是**完整的**（结论：问题 1 对应）。
+    """
+    va, va_warns, va_acts = _build_event_log()[0]  # va_acts = [act(3333), act(4444)]
+    acts_forward = list(va_acts)
+    acts_reversed = list(reversed(va_acts))  # [act(4444), act(3333)]
+
+    store_fwd, store_rev = InMemoryStore(), InMemoryStore()
+    builder = DefaultEpisodeBuilder()
+    store_fwd.upsert_episodic(builder.project_episode(va, warnings=va_warns, actions=acts_forward))
+    store_rev.upsert_episodic(builder.project_episode(va, warnings=va_warns, actions=acts_reversed))
+
+    rf = store_fwd.get_active_episodic()[0]
+    rr = store_rev.get_active_episodic()[0]
+    assert records_equal(rf, rr)
+    # source_event_ids 尾部（action 部分）顺序必须确定：forward 与 reversed 应一致
+    assert rf.source_event_ids == rr.source_event_ids
 
 
 def test_replay_with_warning_retry():
@@ -318,10 +350,11 @@ def test_replay_after_cold_start():
         assert records_equal(full, rest)
 
 
+@pytest.mark.skip(reason="v2 SQLiteStore 未实现（待 Phase 5 迁移），本用例为迁移回归占位")
 def test_replay_v1_v2_backend_equivalence():
     """v2 SQLite 后端落地后：相同事件流在 v1/v2 产出深度相等。
 
-    当前 v2 未实现，跳过（待 Phase 5 迁移后启用）。
+    当前 v2 未实现，跳过（待 Phase 5 迁移后启用）。`@pytest.mark.skip` 装饰器使
+    `pytest --collect-only` 能直接看到 skip 状态（比函数内 import+skip 更符合惯例）。
     """
-    import pytest
-    pytest.skip("v2 SQLiteStore 未实现（待 Phase 5 迁移），本用例为迁移回归占位")
+    pass

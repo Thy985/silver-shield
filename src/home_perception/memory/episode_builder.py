@@ -230,6 +230,13 @@ class DefaultEpisodeBuilder(MemoryPolicy):
                 continue
             seen_ids.add(cid)
             result.append(a)
+        # 按 command_id 排序：与 `_filter_warnings` 按 created_at 排序对称，保证关联
+        # action 的顺序确定（I1 幂等 / 回放一致性 §6.7.2）。若只去重不排序，上游在
+        # 重投时若以不同顺序投递 ActionCommand（与 warning 乱序同类、同样会发生），
+        # 投影出的 `actions` 列表 / `source_event_ids` 尾部顺序将不一致 → 第二次
+        # `upsert_episodic` 抛 I2 → Shadow Mode 静默丢弃 episode。这正是本 PR 声称
+        # 修复的那类缺陷，原本对 action 漏做了一半。command_id 唯一，无并列歧义。
+        result.sort(key=lambda a: str(a.command_id))
         return result
 
     @staticmethod

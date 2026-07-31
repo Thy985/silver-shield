@@ -124,9 +124,14 @@ def _stored_record_count(store) -> int:
 def test_compression_ratio_meets_threshold():
     """N 帧原始观测 → M 条 Memory 记录，压缩比 N/M ≥ 100:1（§8.8.1）。
 
+    **真实口径（勿与 PR 描述简化版混淆）**：本用例 = 5 访客 × 2000 帧 = 10000 帧
+    原始观测 → 实际保留 **10 条**记录（短期记忆每访客 1 条 = 5，长期记忆每访问 1 条
+    = 5），比率 1000:1，远超阈值。PR 描述里「10000 帧 → 1 条 episode」是简化说法
+    （实际每**访问** 1 条 episode，共 5 条），此处以 store **实际记录数**做分母，
+    而不是假定 1 条——否则又退化成常量算术（上轮 review 问题 1 的教训）。
+
     Memory 不逐帧落盘（ADR-0024 §3.1.1）：`dwell_seconds` 等是易变态，逐帧存储
-    会爆炸。这里真实驱动逐帧 `upsert_short_term`，用 store 的**实际记录数**做分母，
-    而不是假定 1 条。
+    会爆炸。这里真实驱动逐帧 `upsert_short_term`，用 store 的**实际记录数**做分母。
     """
     N_VISITORS = 5
     FRAMES_PER_VISITOR = 2000  # 合计 10000 帧原始观测
