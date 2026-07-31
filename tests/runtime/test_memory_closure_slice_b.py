@@ -1,28 +1,36 @@
 """Memory Integration Closure — Slice B：闭环场景测试（真实 detector 路径）。
 
 torch-free，进 CI 合约子集。与 ``test_memory_e2e_closed_loop.py`` 的区别：本文件用
-``CachedDetectionDetector`` **重放真实 YOLO+ByteTrack 预跑的检测缓存**
+``CachedDetectionDetector`` **重放模拟真实检测缓存 schema 的最小合成 fixture**
 (``tests/fixtures/detections/stranger_visit_short.detections.json``) 驱动
 ``tracker→event_builder→rule→decision→memory``，证明「真实系统事件进入 Memory」——
 而非 ``StubDetector`` 绕过 detection/tracking。
 
+诚实声明（评审 #2）：该 fixture 是**合成**的（bbox/confidence 恒定，无真实
+YOLO+ByteTrack 抖动），仅保真检测缓存 schema；分布特性由 Production Demo 真机验证。
+它走的是真实 tracker→event_builder→memory 代码路径，证明力等价「更精致的 StubDetector」，
+不冒充真实检测输出。
+
 两级测试（见 DESIGN-memory-integration-closure.md §3.1）：
 - **Contract E2E（本文件，CI）**：cached detection 驱动整链，跳过 YOLO 推理；
 - **Production Demo（真机 / 人工）**：完整 ``camera→YOLO→tracker``，不进 CI。
+
+共享辅助件在 ``_helpers``（ManualClock/TH_HIGH/memory_config/build_full_pipeline/drive），
+detector 专属件在 ``_closed_loop_helpers``。
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from _closed_loop_helpers import (
-    CachedDetectionDetector,
+from _closed_loop_helpers import CachedDetectionDetector, load_cached_detections
+from _helpers import (
     ManualClock,
     TH_HIGH,
-    _memory_config,
     build_full_pipeline,
-    drive_cached,
-    load_cached_detections,
+    drive,
+    memory_config,
 )
 from home_perception.analysis.realtime_risk_evaluator import RiskPhase
 from home_perception.analysis.risk_signal import SignalTransition
@@ -63,7 +71,7 @@ class TestContractE2E:
             CachedDetectionDetector(frames), clock, thresholds=TH_HIGH(),
             memory_store=store, episode_builder=builder, episodic_shadow=True,
         )
-        results = drive_cached(p, clock, frames, step)
+        results = drive(p, clock, frames, step)
 
         # 真实风险链路：生命周期中确实产过 RAISED
         assert any(s.transition == SignalTransition.RAISED
@@ -72,7 +80,7 @@ class TestContractE2E:
 
         # 离场后落一条 episode
         assert p.metrics.episodes_recorded == 1, "一次访客离场应落一条 episode"
-        vevents = p.event_builder._events
+        vevents = p.event_builder.events
         assert vevents, "event_builder 应产出 VisitorEvent"
         ve = vevents[-1]
         recs = store.get_episodic_by_visitor(str(ve.visitor_id))
@@ -105,15 +113,20 @@ class TestContractE2E:
 
 
 # ===========================================================================
-# Slice B 场景 4：Lifecycle Closure（episode 不截断在风险解除点，聚合全窗口）
+# Slice B 场景 4：Lifecycle Closure（episode 覆盖完整在场窗口，聚合全窗口 max risk）
 # ===========================================================================
 class TestLifecycleClosure:
     def test_episode_spans_full_visit_and_aggregates_max_risk(self):
-        """陌生访客→风险降→继续聊天→离开：episode 仍记完整访问（不截断在风险解除点）。
+        """陌生访客恒定停留→离场：episode 覆盖完整在场窗口（不截断），聚合全窗口 max risk。
 
-        当前 pipeline 在离场时按 enter→leave 全窗口投影：聚合 max risk + 全部 action。
-        验收：1 条 episode；enter/leave 均存在且覆盖完整在场窗口；risk 保留 HIGH（max）；
-        actions 非空（全部 action 聚合，不丢）。
+        本最小 fixture 是「恒定在场 30 帧 + 离场 2 帧」，**没有风险回落相位**：它验证的是
+        Lifecycle Closure 的**机制**——离场时按 enter→leave 全窗口投影，聚合 max risk + 全部
+        action，而非只取单帧快照。
+
+        诚实边界（评审 #1）：设计 §2.2 / Slice B 场景 4 原设想「风险降→继续聊天→离开」
+        （episode 不截断在风险解除点）。该场景需要**风险随停留回落**的数据，而单访客链路中
+        risk 一旦 HIGH 不会中途回落（决策策略无去升级腿），故本 fixture 不覆盖「风险解除点」
+        本身；要真正固化该场景，需更丰富的 fixture（如多阶段 visit 或去升级策略），留作后续。
         """
         data = load_cached_detections(FIXTURE)
         frames = data["frames"]
@@ -125,10 +138,10 @@ class TestLifecycleClosure:
             CachedDetectionDetector(frames), clock, thresholds=TH_HIGH(),
             memory_store=store, episode_builder=builder, episodic_shadow=True,
         )
-        drive_cached(p, clock, frames, step)
+        drive(p, clock, frames, step)
 
         assert p.metrics.episodes_recorded == 1
-        ve = p.event_builder._events[-1]
+        ve = p.event_builder.events[-1]
         rec = store.get_episodic_by_visitor(str(ve.visitor_id))[0]
 
         # 完整访问窗口：enter/leave 均存在，时长覆盖长时段（非单帧级）
@@ -161,7 +174,7 @@ class TestFailureIsolation:
             memory_store=InMemoryStore(), episode_builder=BoomBuilder(),
             episodic_shadow=True,
         )
-        results = drive_cached(p, clock, frames, step)
+        results = drive(p, clock, frames, step)
 
         assert any(s.transition == SignalTransition.RAISED
                    for r in results for s in r.risk_signals), "风险信号仍应产生"
@@ -185,7 +198,7 @@ class TestFailureIsolation:
             memory_store=StrictStore(), episode_builder=DefaultEpisodeBuilder(),
             episodic_shadow=True,
         )
-        results = drive_cached(p, clock, frames, step)
+        results = drive(p, clock, frames, step)
 
         assert sum(len(r.warnings) for r in results) > 0, "Warning 仍应产生"
         assert p.metrics.episodes_recorded == 0
@@ -215,14 +228,14 @@ class TestRestartRecovery:
         clock1 = ManualClock(base=base)
         p1 = build_full_pipeline(
             CachedDetectionDetector(present_frames), clock1, thresholds=th,
-            memory_config=_memory_config(snap_path), episodic_shadow=False,
+            memory_config=memory_config(snap_path), episodic_shadow=False,
         )
-        drive_cached(p1, clock1, present_frames, step)
+        drive(p1, clock1, present_frames, step)
         assert p1._realtime_evaluator.active_risk_count == 1
         p1.close()
 
         # 快照结构校验：只存 reconstructable 字段
-        raw = __import__("json").loads(snap_path.read_text())
+        raw = json.loads(snap_path.read_text())
         assert len(raw["active_tracks"]) == 1
         at = raw["active_tracks"][0]
         assert at["phase"] == "active_risk"
@@ -235,7 +248,7 @@ class TestRestartRecovery:
         clock2 = ManualClock(base=base + timedelta(minutes=2, seconds=45))
         p2 = build_full_pipeline(
             CachedDetectionDetector([{"detections": []}]), clock2, thresholds=th,
-            memory_config=_memory_config(snap_path), episodic_shadow=False,
+            memory_config=memory_config(snap_path), episodic_shadow=False,
         )
 
         # 恢复验证（recover 在 __init__ 完成）

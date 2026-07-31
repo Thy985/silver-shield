@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
   "source_video": "stranger_visit_short.mp4",
-  "model": "yolo11n.pt",
-  "tracker": "bytetrack",
+  "model": "synthetic-fixture",
+  "tracker": "synthetic-fixture",
+  "synthetic": true,
   "conf_threshold": 0.45,
   "source_size": [
     288,
@@ -10,7 +11,7 @@
   ],
   "frame_interval_s": 30.0,
   "base_time": "2026-07-31T18:30:00+00:00",
-  "note": "CI Contract E2E fixture for Memory Integration Closure Slice B. Cached YOLO+ByteTrack detections replayed to prove detector->tracker->event_builder->memory without running YOLO (torch-free). Person track_id=1 present for 30 frames (~15 min logical) then 2 empty frames trigger leave. The real video (stranger_visit_short.mp4) is for Production Demo only and is NOT committed (gitignore *.mp4).",
+  "note": "CI Contract E2E fixture for Memory Integration Closure Slice B. SYNTHETIC (not a real YOLO+ByteTrack run): bbox/confidence are constant per frame to keep the fixture deterministic and committed. It only preserves the DETECTION CACHE SCHEMA so the real tracker->event_builder->memory code path runs torch-free in CI. It does NOT reproduce real detection jitter/distribution; that is verified by the Production Demo (real camera->YOLO) which is NOT committed (gitignore *.mp4). Person track_id=1 present for 30 frames (~15 min logical) then 2 empty frames trigger leave.",
   "frames": [
     {
       "frame_index": 0,
