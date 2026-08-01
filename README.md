@@ -31,9 +31,9 @@
 - **当前运行路径**：仍为 MVP 历史事件流（`VisitorEvent` 离场生成 → `RuleEngine` → `WarningEvent`），`realtime_risk.enabled=false` 默认关闭。
 - 后续 Stage B/C/D（工程方案 §9）才逐步接入实时状态 / 信号 / 决策；详见 `docs/08_roadmap.md` §8.4 产品 Phase 1。
 
-### v2 Memory 架构（ADR-0024 · Slices 1–5 已合入 main）
+### v2 Memory 架构（ADR-0024 · Slices 1–6 + Stage F + Integration Closure（B/C/A/D）已合入 main）
 
-> **状态**：ADR-0024 已 `Accepted`（2026-07-28）；Slice 1–5 全部合入 `main`，单元测试全绿；
+> **状态**：ADR-0024 已 `Accepted`（2026-07-28）；Slices 1–6 + Stage F + Integration Closure（B/C/A/D）全部合入 `main`，单元测试全绿；
 > **Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，
 > 由 `memory.episodic_shadow` 开关控制，**默认关闭，v1 不产 Warning**）。
 
@@ -44,7 +44,13 @@
   - **Slice 3**（#82）：Snapshot 持久化（Stage C）+ 冷启动恢复（Stage E，解 TD-0027）—— `snapshot.py` / `cold_start.py`，由 `runtime/pipeline.py` 启动期调用。
   - **Slice 4**（#83）：`DefaultEpisodeBuilder` 实现 `project_episode`（Stage B）—— `VisitorEvent + WarningEvent + ActionCommand → EpisodicRecord`，确定性中文摘要（无 LLM）。
   - **Slice 5**（#84）：`MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）+ `InvariantViolationError`。
+  - **Stage F**（#87）：`runtime/pipeline.py`：`InMemoryStore` + `DefaultEpisodeBuilder` 影子写入（Pipeline Shadow Mode），由 `memory.episodic_shadow` 开关控制，**默认关闭，v1 不产 Warning**。
+  - **Slice 6**（#88）：Memory Evaluation（压缩比 ≥100:1 / 信息保留字段校验 / Replay Test §6.7 一致性验证）+ `DefaultEpisodeBuilder` 确定性修复（warning 排序 / 重投去重）+ `MemoryStore.short_term_count()`。
   - 附带修复（#85）：移除未使用的 `TYPE_CHECKING` 导入。
+  - **Integration Closure · Slice B**（#93）：闭环测试 `test_memory_closure_slice_b.py` —— Contract E2E（cached detection 驱动整链）+ 重启恢复 + 失败隔离 + Lifecycle Closure（场景 1/2/3/4）。
+  - **Integration Closure · Slice C**（#91）：`memory/query.py`：`MemoryQuery.compose_context`（Product Closure，V0 边界冻结）。
+  - **Integration Closure · Slice A**（#94）：`runtime/memory_hook.py`：抽出 `MemoryHook`（门控 / 容错 / metrics 语义不变，0 行为变化）。
+  - **Integration Closure · Slice D**（#95）：4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ ADR-0024 §10.1 标注。
 - **包导出**：`home_perception.memory` 现导出 `DefaultShortTermPolicy` / `DefaultEpisodeBuilder` / `MemoryStore` / `SnapshotStore` / `ColdStartCoordinator` 等（含 `episode_builder` 包级导出，Stage F 已接线）。
 - **下一步**：Stage G/H Semantic 聚合器（依赖 Phase 4 ReID，v1 不实现）。
 - 详见 `docs/ADR/0024-memory-architecture.md` 与 `docs/DESIGN-memory-pipeline.md`。
