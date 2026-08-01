@@ -3,11 +3,12 @@
 > **P0-7b = 风险语义层。** Rule 消费 RiskFeature → PerceptionEvent（§7.2 5 类）。
 > 继续 ADR-0007 / ADR-0008 / ADR-0009 边界：Feature 不掺判断、Rule 不读 Event、score 是强度非诈骗概率。
 """
+
 from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -31,13 +32,13 @@ from home_perception.analysis.rule_engine import (
     ThresholdConfig,
 )
 
-
 # ============================================================================
 # 时区 helper
 # ============================================================================
 
+
 def utc(year, month, day, hour=0, minute=0, second=0):
-    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
 
 
 def make_risk(
@@ -53,17 +54,38 @@ def make_risk(
     v_id = visitor_id or uuid.uuid4()
     t = computed_at or utc(2026, 7, 19, hour, 0, 0)
     return RiskFeature(
-        visitor_id=v_id, event_id=event_id, source_video=source_video, computed_at=t,
-        duration=DurationFeature(visitor_id=v_id, event_id=event_id, source_video=source_video, duration_seconds=duration_s, computed_at=t),
-        frequency=VisitFrequencyFeature(visitor_id=v_id, event_id=event_id, source_video=source_video, visits_in_window=visits, window_seconds=1800.0, computed_at=t),
-        time=TimeFeature.from_datetime(t, visitor_id=v_id, event_id=event_id, source_video=source_video, computed_at=t),
-        trajectory=TrajectoryFeature(visitor_id=v_id, event_id=event_id, source_video=source_video, computed_at=t),
+        visitor_id=v_id,
+        event_id=event_id,
+        source_video=source_video,
+        computed_at=t,
+        duration=DurationFeature(
+            visitor_id=v_id,
+            event_id=event_id,
+            source_video=source_video,
+            duration_seconds=duration_s,
+            computed_at=t,
+        ),
+        frequency=VisitFrequencyFeature(
+            visitor_id=v_id,
+            event_id=event_id,
+            source_video=source_video,
+            visits_in_window=visits,
+            window_seconds=1800.0,
+            computed_at=t,
+        ),
+        time=TimeFeature.from_datetime(
+            t, visitor_id=v_id, event_id=event_id, source_video=source_video, computed_at=t
+        ),
+        trajectory=TrajectoryFeature(
+            visitor_id=v_id, event_id=event_id, source_video=source_video, computed_at=t
+        ),
     )
 
 
 # ============================================================================
 # ThresholdConfig
 # ============================================================================
+
 
 class TestThresholdConfig:
     def test_defaults(self):
@@ -73,7 +95,11 @@ class TestThresholdConfig:
         assert 23 in cfg.odd_hour_set
         assert 3 in cfg.odd_hour_set
         assert cfg.cooldown_seconds == 600.0
-        assert cfg.high_risk_required_rules == {"LongDurationRule", "RepeatVisitRule", "OddHourRule"}
+        assert cfg.high_risk_required_rules == {
+            "LongDurationRule",
+            "RepeatVisitRule",
+            "OddHourRule",
+        }
 
     def test_weight_for(self):
         cfg = ThresholdConfig()
@@ -93,6 +119,7 @@ class TestThresholdConfig:
 # RuleResult 领域对象
 # ============================================================================
 
+
 class TestRuleResult:
     def test_matched_requires_event_type(self):
         with pytest.raises(ValueError, match="matched=True"):
@@ -100,16 +127,27 @@ class TestRuleResult:
 
     def test_score_out_of_range(self):
         with pytest.raises(ValueError, match="perception_score"):
-            RuleResult(rule_name="X", matched=True, event_type="abnormal_dwell", perception_score=1.5)
+            RuleResult(
+                rule_name="X", matched=True, event_type="abnormal_dwell", perception_score=1.5
+            )
 
     def test_repeat_count_non_negative(self):
         with pytest.raises(ValueError, match="repeat_count"):
-            RuleResult(rule_name="X", matched=True, event_type="repeat_visit", perception_score=0.3, repeat_count=-1)
+            RuleResult(
+                rule_name="X",
+                matched=True,
+                event_type="repeat_visit",
+                perception_score=0.3,
+                repeat_count=-1,
+            )
 
     def test_to_dict(self):
         r = RuleResult(
-            rule_name="LongDurationRule", matched=True, event_type="abnormal_dwell",
-            perception_score=0.5, evidence={"duration_seconds": 600.0},
+            rule_name="LongDurationRule",
+            matched=True,
+            event_type="abnormal_dwell",
+            perception_score=0.5,
+            evidence={"duration_seconds": 600.0},
         )
         d = r.to_dict()
         assert d["matched"] is True
@@ -119,6 +157,7 @@ class TestRuleResult:
 # ============================================================================
 # LongDurationRule
 # ============================================================================
+
 
 class TestLongDurationRule:
     def test_triggered_above_threshold(self):
@@ -156,6 +195,7 @@ class TestLongDurationRule:
 # RepeatVisitRule
 # ============================================================================
 
+
 class TestRepeatVisitRule:
     def test_triggered_above_threshold(self):
         rule = RepeatVisitRule(weight=0.3)
@@ -177,6 +217,7 @@ class TestRepeatVisitRule:
 # ============================================================================
 # OddHourRule
 # ============================================================================
+
 
 class TestOddHourRule:
     def test_triggered_in_odd_hour(self):
@@ -200,6 +241,7 @@ class TestOddHourRule:
 # PendingVerifyRule（v2 接口）
 # ============================================================================
 
+
 class TestPendingVerifyRule:
     def test_raises_without_whitelist(self):
         rule = PendingVerifyRule(weight=0.3)
@@ -212,6 +254,7 @@ class TestPendingVerifyRule:
         class StubWL:
             def is_whitelisted(self, vid):
                 return True
+
         rule = PendingVerifyRule(weight=0.3)
         ctx = RuleContext(thresholds=ThresholdConfig(), extra={"whitelist": StubWL()})
         risk = make_risk()
@@ -223,6 +266,7 @@ class TestPendingVerifyRule:
         class StubWL:
             def is_whitelisted(self, vid):
                 return False
+
         rule = PendingVerifyRule(weight=0.3)
         ctx = RuleContext(thresholds=ThresholdConfig(), extra={"whitelist": StubWL()})
         risk = make_risk()
@@ -235,15 +279,31 @@ class TestPendingVerifyRule:
 # HighRiskApproachRule (Composite)
 # ============================================================================
 
+
 class TestHighRiskApproachRule:
     def test_triggered_when_all_required_match(self):
         rule = HighRiskApproachRule(weight=0.9)
         ctx = RuleContext(thresholds=ThresholdConfig())
         risk = make_risk()
         prior = [
-            RuleResult(rule_name="LongDurationRule", matched=True, event_type="abnormal_dwell", perception_score=0.5),
-            RuleResult(rule_name="RepeatVisitRule", matched=True, event_type="repeat_visit", perception_score=0.3),
-            RuleResult(rule_name="OddHourRule", matched=True, event_type="visit_normal", perception_score=0.1),
+            RuleResult(
+                rule_name="LongDurationRule",
+                matched=True,
+                event_type="abnormal_dwell",
+                perception_score=0.5,
+            ),
+            RuleResult(
+                rule_name="RepeatVisitRule",
+                matched=True,
+                event_type="repeat_visit",
+                perception_score=0.3,
+            ),
+            RuleResult(
+                rule_name="OddHourRule",
+                matched=True,
+                event_type="visit_normal",
+                perception_score=0.1,
+            ),
         ]
         results = rule.evaluate(ctx, risk, prior)
         assert len(results) == 1
@@ -257,7 +317,12 @@ class TestHighRiskApproachRule:
         ctx = RuleContext(thresholds=ThresholdConfig())
         risk = make_risk()
         prior = [
-            RuleResult(rule_name="LongDurationRule", matched=True, event_type="abnormal_dwell", perception_score=0.5),
+            RuleResult(
+                rule_name="LongDurationRule",
+                matched=True,
+                event_type="abnormal_dwell",
+                perception_score=0.5,
+            ),
             RuleResult(rule_name="RepeatVisitRule", matched=False, perception_score=0.0),
         ]
         results = rule.evaluate(ctx, risk, prior)
@@ -267,6 +332,7 @@ class TestHighRiskApproachRule:
 # ============================================================================
 # CooldownGate 状态机
 # ============================================================================
+
 
 class TestCooldownGate:
     def test_first_trigger_allowed(self):
@@ -332,11 +398,16 @@ class TestCooldownGate:
 # PerceptionEvent 领域对象
 # ============================================================================
 
+
 class TestPerceptionEvent:
     def test_basic(self):
         e = PerceptionEvent(
-            device_id="home01", event_type="abnormal_dwell", score=0.5,
-            visitor_id=uuid.uuid4(), source_video="cam01", timestamp=1000.0,
+            device_id="home01",
+            event_type="abnormal_dwell",
+            score=0.5,
+            visitor_id=uuid.uuid4(),
+            source_video="cam01",
+            timestamp=1000.0,
             meta={"rule": "LongDurationRule"},
         )
         assert e.device_id == "home01"
@@ -347,32 +418,51 @@ class TestPerceptionEvent:
         """event_type 必须是 §7.2 5 类之一（守住枚举边界）。"""
         with pytest.raises(ValueError, match="event_type"):
             PerceptionEvent(
-                device_id="home01", event_type="FRAUD", score=0.9,
-                visitor_id=uuid.uuid4(), source_video="cam01", timestamp=1000.0,
+                device_id="home01",
+                event_type="FRAUD",
+                score=0.9,
+                visitor_id=uuid.uuid4(),
+                source_video="cam01",
+                timestamp=1000.0,
                 meta={"rule": "BadRule"},
             )
 
     def test_score_out_of_range(self):
         with pytest.raises(ValueError, match="score"):
             PerceptionEvent(
-                device_id="home01", event_type="abnormal_dwell", score=1.5,
-                visitor_id=uuid.uuid4(), source_video="cam01", timestamp=1000.0,
+                device_id="home01",
+                event_type="abnormal_dwell",
+                score=1.5,
+                visitor_id=uuid.uuid4(),
+                source_video="cam01",
+                timestamp=1000.0,
                 meta={"rule": "LongDurationRule"},
             )
 
     def test_meta_rule_required(self):
         with pytest.raises(ValueError, match="meta"):
             PerceptionEvent(
-                device_id="home01", event_type="abnormal_dwell", score=0.5,
-                visitor_id=uuid.uuid4(), source_video="cam01", timestamp=1000.0,
+                device_id="home01",
+                event_type="abnormal_dwell",
+                score=0.5,
+                visitor_id=uuid.uuid4(),
+                source_video="cam01",
+                timestamp=1000.0,
                 meta={"notes": "no rule"},
             )
 
     def test_to_dict_includes_all(self):
         e = PerceptionEvent(
-            device_id="home01", event_type="repeat_visit", score=0.3,
-            visitor_id=uuid.uuid4(), source_video="cam01", timestamp=1000.0,
-            track_id=17, location="入户门", repeat_count=5, is_odd_hour=False,
+            device_id="home01",
+            event_type="repeat_visit",
+            score=0.3,
+            visitor_id=uuid.uuid4(),
+            source_video="cam01",
+            timestamp=1000.0,
+            track_id=17,
+            location="入户门",
+            repeat_count=5,
+            is_odd_hour=False,
             meta={"rule": "RepeatVisitRule"},
         )
         d = e.to_dict()
@@ -387,6 +477,7 @@ class TestPerceptionEvent:
 # ============================================================================
 # RuleEngine 编排器
 # ============================================================================
+
 
 class TestRuleEngine:
     def test_single_long_duration_risk(self):
@@ -429,6 +520,7 @@ class TestRuleEngine:
     def test_cooldown_suppresses_repeat(self):
         """同 visitor_id + 同 rule 在 cooldown 内不重复触发。"""
         from home_perception.analysis.cooldown import CooldownGate
+
         gate = CooldownGate(cooldown_seconds=600.0, reset_gap_seconds=1800.0)
         engine = RuleEngine(device_id="home01", cooldown=gate)
         v_id = uuid.uuid4()
@@ -437,7 +529,9 @@ class TestRuleEngine:
         events1 = engine.evaluate(risk1)
         assert len(events1) >= 1
         # 100s 后再次 evaluate 同 visitor → cooldown 抑制 LongDuration 重复触发
-        risk2 = make_risk(visitor_id=v_id, duration_s=400.0, computed_at=t0 + timedelta(seconds=100))
+        risk2 = make_risk(
+            visitor_id=v_id, duration_s=400.0, computed_at=t0 + timedelta(seconds=100)
+        )
         events2 = engine.evaluate(risk2)
         # LongDurationRule 第二次触发应被 cooldown 抑制
         long_dur_in_2 = [e for e in events2 if e.event_type == "abnormal_dwell"]
@@ -445,12 +539,15 @@ class TestRuleEngine:
 
     def test_different_visitor_not_affected_by_cooldown(self):
         from home_perception.analysis.cooldown import CooldownGate
+
         gate = CooldownGate(cooldown_seconds=600.0, reset_gap_seconds=1800.0)
         engine = RuleEngine(device_id="home01", cooldown=gate)
         t0 = utc(2026, 7, 19, 10, 0, 0)
         engine.evaluate(make_risk(visitor_id=uuid.uuid4(), duration_s=400.0, computed_at=t0))
         # 不同 visitor 立即触发
-        events = engine.evaluate(make_risk(visitor_id=uuid.uuid4(), duration_s=400.0, computed_at=t0))
+        events = engine.evaluate(
+            make_risk(visitor_id=uuid.uuid4(), duration_s=400.0, computed_at=t0)
+        )
         assert any(e.event_type == "abnormal_dwell" for e in events)
 
     def test_to_json(self):
@@ -470,20 +567,33 @@ class TestRuleEngine:
 # 契约边界：PerceptionEvent 严格不含"最终判定"字段（ADR-0009）
 # ============================================================================
 
+
 class TestPerceptionEventContractBoundary:
     """PerceptionEvent 严格不含最终判定字段（中心综合判断不是 Rule 层的责任）。"""
 
-    FORBIDDEN = {
-        "fraud_result", "crime_probability", "final_decision", "verdict",
-        "is_scammer", "is_fraud", "judgment", "is_guilty",
-        # 与 P0-6 / P0-7a 共享的禁止项
-        "risk_level",
-    }
+    FORBIDDEN = frozenset(
+        {
+            "fraud_result",
+            "crime_probability",
+            "final_decision",
+            "verdict",
+            "is_scammer",
+            "is_fraud",
+            "judgment",
+            "is_guilty",
+            # 与 P0-6 / P0-7a 共享的禁止项
+            "risk_level",
+        }
+    )
 
     def test_no_final_judgment_fields(self):
         e = PerceptionEvent(
-            device_id="home01", event_type="high_risk_approach", score=0.9,
-            visitor_id=uuid.uuid4(), source_video="cam01", timestamp=1000.0,
+            device_id="home01",
+            event_type="high_risk_approach",
+            score=0.9,
+            visitor_id=uuid.uuid4(),
+            source_video="cam01",
+            timestamp=1000.0,
             meta={"rule": "HighRiskApproachRule"},
         )
         d = e.to_dict()
@@ -505,13 +615,15 @@ CAVIAR_ONE_STOP_ENTER = "tests/fixtures/doorway/one_stop_enter"
 def test_caviar_end_to_end_pipeline_yields_perception_events():
     """CAVIAR OneStopEnter1cor: detector → tracker → event → feature → rule 全链路。"""
     pytest.importorskip("ultralytics")
-    import cv2
     from pathlib import Path
-    from home_perception.detection.detector import YOLODetector
-    from home_perception.detection.tracker import VisitorTracker
+
+    import cv2
+
     from home_perception.analysis.event_builder import VisitorEventBuilder
     from home_perception.analysis.feature_extractor import FeatureExtractor
     from home_perception.analysis.rule_engine import RuleEngine
+    from home_perception.detection.detector import YOLODetector
+    from home_perception.detection.tracker import VisitorTracker
 
     p = Path(CAVIAR_ONE_STOP_ENTER)
     if not p.is_dir() or not list(p.glob("frame_*.jpg")):
@@ -526,9 +638,13 @@ def test_caviar_end_to_end_pipeline_yields_perception_events():
         pytest.skip("CAVIAR frames 解析失败")
 
     det = YOLODetector(
-        model="yolo11n.pt", conf_threshold=0.25,
-        classes=[0], imgsz=416, device="cpu",
-        enable_track=True, tracker="bytetrack",
+        model="yolo11n.pt",
+        conf_threshold=0.25,
+        classes=[0],
+        imgsz=416,
+        device="cpu",
+        enable_track=True,
+        tracker="bytetrack",
     ).load()
     tracker = VisitorTracker(absence_gap_s=5.0)
     event_builder = VisitorEventBuilder(tracker, source_video="CAVIAR/OneStopEnter1cor")

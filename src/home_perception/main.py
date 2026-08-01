@@ -4,6 +4,7 @@
 > 按 runtime.mode 路由到装配层"，不引入任何风险判定逻辑。
 > 比赛 Demo 用 `runtime.mode: demo`（CAVIAR 复现）；realtime 接真实萤石留待 v1。
 """
+
 from __future__ import annotations
 
 import sys
@@ -11,9 +12,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # 便于脚本直接运行
 
-from .common.logging import get_logger, setup_logging  # noqa: E402
-from .core.config import Settings  # noqa: E402
-from .runtime.lifecycle import run_demo  # noqa: E402
+from .common.logging import get_logger, setup_logging
+from .core.config import Settings
+from .runtime.lifecycle import run_demo
 
 __version__ = "0.1.0"
 

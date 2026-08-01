@@ -4,15 +4,16 @@
 > ActionCommand 按 warning_id 关联 / max risk 选取 / reason 去重 / 幂等键 /
 > summary 生成 / None 守卫。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import uuid
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from home_perception.action.command import ActionCommand
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.warning import WarningEvent
-from home_perception.action.command import ActionCommand
 from home_perception.memory.episode_builder import DefaultEpisodeBuilder
 from home_perception.memory.records import EpisodicRecord, records_equal
 
@@ -21,7 +22,7 @@ from home_perception.memory.records import EpisodicRecord, records_equal
 # 测试夹具
 # ---------------------------------------------------------------------------
 def _utc(year, month, day, hour, minute, second=0):
-    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
 
 
 def _make_visitor(visitor_id=None, enter=None, leave=None, duration=180.0):
@@ -100,8 +101,11 @@ def test_associates_warning_by_visitor_and_timewindow():
     visitor = _make_visitor(enter=_utc(2026, 7, 28, 18, 32), leave=_utc(2026, 7, 28, 18, 44))
     created_at = _utc(2026, 7, 28, 18, 40)  # 落在 [enter, leave+60s] 内
     warning = _make_warning(
-        visitor.visitor_id, "HIGH", "NOTIFY_FAMILY",
-        ["异常停留"], created_at,
+        visitor.visitor_id,
+        "HIGH",
+        "NOTIFY_FAMILY",
+        ["异常停留"],
+        created_at,
     )
 
     rec = builder.project_episode(visitor, warnings=[warning], actions=[])
@@ -164,7 +168,9 @@ def test_max_risk_picked():
     """多条 Warning（LOW + HIGH）→ 取 HIGH 的 risk_level 与 recommended_action。"""
     builder = DefaultEpisodeBuilder()
     visitor = _make_visitor(enter=_utc(2026, 7, 28, 22, 10), leave=_utc(2026, 7, 28, 22, 25))
-    low = _make_warning(visitor.visitor_id, "LOW", "MONITOR", ["重复来访"], _utc(2026, 7, 28, 22, 12))
+    low = _make_warning(
+        visitor.visitor_id, "LOW", "MONITOR", ["重复来访"], _utc(2026, 7, 28, 22, 12)
+    )
     high = _make_warning(
         visitor.visitor_id, "HIGH", "ESCALATE_COMMUNITY", ["高风险接近"], _utc(2026, 7, 28, 22, 15)
     )
@@ -183,8 +189,16 @@ def test_reason_summary_dedup():
     """多 Warning 的 reason_summary 合并去重保序。"""
     builder = DefaultEpisodeBuilder()
     visitor = _make_visitor()
-    w1 = _make_warning(visitor.visitor_id, "MEDIUM", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 14, 33))
-    w2 = _make_warning(visitor.visitor_id, "HIGH", "ESCALATE_COMMUNITY", ["异常停留", "高风险接近"], _utc(2026, 7, 28, 14, 34))
+    w1 = _make_warning(
+        visitor.visitor_id, "MEDIUM", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 14, 33)
+    )
+    w2 = _make_warning(
+        visitor.visitor_id,
+        "HIGH",
+        "ESCALATE_COMMUNITY",
+        ["异常停留", "高风险接近"],
+        _utc(2026, 7, 28, 14, 34),
+    )
 
     rec = builder.project_episode(visitor, warnings=[w1, w2], actions=[])
 
@@ -195,7 +209,9 @@ def test_summary_action_phrase():
     """HIGH + 两类 action → summary 含 '已通知家属 + 升级社区。'。"""
     builder = DefaultEpisodeBuilder()
     visitor = _make_visitor(enter=_utc(2026, 7, 28, 18, 32), leave=_utc(2026, 7, 28, 18, 44))
-    warning = _make_warning(visitor.visitor_id, "HIGH", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 18, 40))
+    warning = _make_warning(
+        visitor.visitor_id, "HIGH", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 18, 40)
+    )
     actions = [
         _make_action("SEND_FAMILY_MESSAGE", warning.warning_id),
         _make_action("CREATE_COMMUNITY_TASK", warning.warning_id),
@@ -228,7 +244,9 @@ def test_record_roundtrip_dict():
     """to_dict → from_dict 内容一致（records_equal 忽略 created_at）。"""
     builder = DefaultEpisodeBuilder()
     visitor = _make_visitor(enter=_utc(2026, 7, 28, 18, 32), leave=_utc(2026, 7, 28, 18, 44))
-    warning = _make_warning(visitor.visitor_id, "HIGH", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 18, 40))
+    warning = _make_warning(
+        visitor.visitor_id, "HIGH", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 18, 40)
+    )
     action = _make_action("SEND_FAMILY_MESSAGE", warning.warning_id)
 
     rec = builder.project_episode(visitor, warnings=[warning], actions=[action])

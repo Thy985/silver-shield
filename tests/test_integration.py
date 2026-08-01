@@ -25,12 +25,12 @@
 - 故障注入（Publisher 失败 / 重复执行 / 数据缺失）
 - CAVIAR 三个真实场景（OneStopEnter1cor / OneLeaveShopReenter1cor / Meet_WalkTogether1）
 """
+
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Set
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -51,23 +51,27 @@ from home_perception.analysis.rule_engine import RuleEngine
 from home_perception.analysis.warning import WarningEvent
 from home_perception.common.timeutil import now_dt
 
-
 # ============================================================================
 # 时区 helper
 # ============================================================================
 
-def utc(year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0) -> datetime:
-    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+
+def utc(
+    year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0
+) -> datetime:
+    return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
 
 
 # ============================================================================
 # Stub WhitelistProvider（Scenario 5 用）
 # ============================================================================
 
+
 @dataclass
 class StubWhitelist:
     """白名单 stub：测试时可配置。"""
-    whitelisted_ids: Set[UUID] = field(default_factory=set)
+
+    whitelisted_ids: set[UUID] = field(default_factory=set)
 
     def is_whitelisted(self, visitor_id: UUID) -> bool:
         return visitor_id in self.whitelisted_ids
@@ -77,9 +81,11 @@ class StubWhitelist:
 # Pipeline 工厂
 # ============================================================================
 
+
 @dataclass
 class IntegrationPipeline:
     """完整 Pipeline 句柄：FeatureExtractor + RuleEngine + DecisionEngine + ActionExecutor。"""
+
     feature_extractor: FeatureExtractor
     rule_engine: RuleEngine
     decision_engine: DecisionEngine
@@ -89,18 +95,18 @@ class IntegrationPipeline:
     notifier: MockNotifier
     whitelist: StubWhitelist
     # 内部追踪
-    perception_events: List = field(default_factory=list)
-    warnings: List[WarningEvent] = field(default_factory=list)
-    commands: List = field(default_factory=list)
+    perception_events: list = field(default_factory=list)
+    warnings: list[WarningEvent] = field(default_factory=list)
+    commands: list = field(default_factory=list)
 
 
 def make_pipeline(
     elder_id: str = "elder_001",
     device_id: str = "home_entry_01",
-    family_contact: Optional[FamilyContact] = None,
+    family_contact: FamilyContact | None = None,
     community_endpoint: str = "https://community.example/api/v1/tasks",
     enable_whitelist: bool = False,
-    whitelist_ids: Optional[Set[UUID]] = None,
+    whitelist_ids: set[UUID] | None = None,
     max_retries: int = 3,
 ) -> IntegrationPipeline:
     """构造端到端 Pipeline。"""
@@ -116,10 +122,12 @@ def make_pipeline(
         elder_id=elder_id,
         policy=RuleBasedDecisionPolicy(),
     )
-    dispatcher = ActionDispatcher(DispatcherConfig(
-        family_contact=family_contact,
-        community_endpoint=community_endpoint,
-    ))
+    dispatcher = ActionDispatcher(
+        DispatcherConfig(
+            family_contact=family_contact,
+            community_endpoint=community_endpoint,
+        )
+    )
     pub = MockPublisher()
     notifier = MockNotifier()
     executor = ActionExecutor(
@@ -141,8 +149,8 @@ def make_pipeline(
 
 
 def make_visitor_event(
-    visitor_id: Optional[UUID] = None,
-    enter_time: Optional[datetime] = None,
+    visitor_id: UUID | None = None,
+    enter_time: datetime | None = None,
     duration_seconds: float = 30.0,
     source_video: str = "test/integration",
 ) -> VisitorEvent:
@@ -312,7 +320,9 @@ class TestScenario4HighRiskApproach:
         # CompositeRule 触发 high_risk_approach（HIGH）
         high_risk = [e for e in pipeline.perception_events if e.event_type == "high_risk_approach"]
         assert len(high_risk) == 1, f"期望 1 个 high_risk_approach，实际 {len(high_risk)}"
-        assert high_risk[0].score >= 0.5, f"high_risk_approach score 应 >= 0.5，实际 {high_risk[0].score}"
+        assert high_risk[0].score >= 0.5, (
+            f"high_risk_approach score 应 >= 0.5，实际 {high_risk[0].score}"
+        )
 
         # 决策层：HIGH → ESCALATE_COMMUNITY（场景内至少 1 个 HIGH）
         high_warnings = [w for w in pipeline.warnings if w.risk_level == "HIGH"]
@@ -323,11 +333,15 @@ class TestScenario4HighRiskApproach:
 
         # 行动层：CREATE_COMMUNITY_TASK（走 publisher）
         community_cmds = [c for c in pipeline.commands if c.command_type == "CREATE_COMMUNITY_TASK"]
-        assert len(community_cmds) == 1, f"期望 1 个 CREATE_COMMUNITY_TASK，实际 {len(community_cmds)}"
+        assert len(community_cmds) == 1, (
+            f"期望 1 个 CREATE_COMMUNITY_TASK，实际 {len(community_cmds)}"
+        )
         assert community_cmds[0].status == "DONE"
         assert pipeline.publisher.publish_count == 1
         assert "silvershield/home" in pipeline.publisher.published[0]["topic"]
-        assert pipeline.notifier.community_count == 0, "ESCALATE_COMMUNITY 走 publisher，不走 notifier"
+        assert pipeline.notifier.community_count == 0, (
+            "ESCALATE_COMMUNITY 走 publisher，不走 notifier"
+        )
 
 
 class TestScenario5WhitelistSuppression:
@@ -354,7 +368,9 @@ class TestScenario5WhitelistSuppression:
         # 但不应产生 HIGH 或 ESCALATE_COMMUNITY
         for w in pipeline.warnings:
             assert w.risk_level != "HIGH", "白名单场景不应升级到 HIGH"
-            assert w.recommended_action != "ESCALATE_COMMUNITY", "白名单场景不应升级到 ESCALATE_COMMUNITY"
+            assert w.recommended_action != "ESCALATE_COMMUNITY", (
+                "白名单场景不应升级到 ESCALATE_COMMUNITY"
+            )
             assert w.recommended_action in ("NOTIFY_FAMILY", "MONITOR")
 
         # 关键断言：publisher（社区通道）未触发
@@ -387,7 +403,9 @@ class TestScenario6Idempotency:
         cmds2 = pipeline.executor.execute(warning)
         # 关键断言：返回已有 commands 但不重复发送
         assert len(cmds2) == 1, "幂等命中应返回已有 commands"
-        assert pipeline.publisher.publish_count == 1, f"第 2 次执行 publish_count 应仍为 1，实际 {pipeline.publisher.publish_count}"
+        assert pipeline.publisher.publish_count == 1, (
+            f"第 2 次执行 publish_count 应仍为 1，实际 {pipeline.publisher.publish_count}"
+        )
         assert pipeline.executor.dispatched_count == 1, "executor 内部 _dispatched set 应去重"
 
 
@@ -402,11 +420,15 @@ class TestStateMachineWarningEvent:
     def test_happy_path_created_to_resolved(self):
         contact = FamilyContact(elder_id="e1", name="子女", phone="+86", relation="子女")
         pipeline = make_pipeline(family_contact=contact)
-        warning = pipeline.decision_engine.evaluate([
-            _make_perception(event_type="abnormal_dwell", score=0.5),
-        ])
+        warning = pipeline.decision_engine.evaluate(
+            [
+                _make_perception(event_type="abnormal_dwell", score=0.5),
+            ]
+        )
         assert warning is not None
-        assert warning.status == "CREATED", f"DecisionEngine 刚产出，期望 CREATED，实际 {warning.status}"
+        assert warning.status == "CREATED", (
+            f"DecisionEngine 刚产出，期望 CREATED，实际 {warning.status}"
+        )
 
         # execute 触发 CREATED → PENDING → CONFIRMED（成功）
         pipeline.executor.execute(warning)
@@ -438,6 +460,7 @@ class TestStateMachineWarningEvent:
     def test_transition_invalid_raises(self):
         """非法翻转：CREATED → CONFIRMED（跳过 PENDING）必须拒绝。"""
         from home_perception.action.command import assert_transition_warning
+
         with pytest.raises(ValueError, match="不能从"):
             assert_transition_warning("CREATED", "CONFIRMED")
 
@@ -448,9 +471,11 @@ class TestStateMachineActionCommand:
     def test_action_command_independent_of_warning(self):
         """ActionCommand 状态翻转不影响 WarningEvent.status（反之亦然）。"""
         pipeline = make_pipeline()
-        warning = pipeline.decision_engine.evaluate([
-            _make_perception(event_type="abnormal_dwell", score=0.5),
-        ])
+        warning = pipeline.decision_engine.evaluate(
+            [
+                _make_perception(event_type="abnormal_dwell", score=0.5),
+            ]
+        )
         assert warning is not None
 
         # execute：成功路径
@@ -507,9 +532,11 @@ class TestFailureInjection:
     def test_publisher_failure_keeps_warning_pending(self):
         """Publisher 抛异常（Mock 返 False）→ Warning 保持 PENDING 不丢。"""
         pipeline = make_pipeline(max_retries=3)
-        warning = pipeline.decision_engine.evaluate([
-            _make_perception(event_type="abnormal_dwell", score=0.5),
-        ])
+        warning = pipeline.decision_engine.evaluate(
+            [
+                _make_perception(event_type="abnormal_dwell", score=0.5),
+            ]
+        )
         assert warning is not None
         # 强制走 publisher 路径
         warning.recommended_action = "ESCALATE_COMMUNITY"
@@ -530,9 +557,11 @@ class TestFailureInjection:
     def test_retry_eventually_succeeds(self):
         """重试成功路径。"""
         pipeline = make_pipeline(max_retries=3)
-        warning = pipeline.decision_engine.evaluate([
-            _make_perception(event_type="abnormal_dwell", score=0.5),
-        ])
+        warning = pipeline.decision_engine.evaluate(
+            [
+                _make_perception(event_type="abnormal_dwell", score=0.5),
+            ]
+        )
         warning.recommended_action = "ESCALATE_COMMUNITY"
         warning.risk_level = "HIGH"
 
@@ -552,9 +581,11 @@ class TestFailureInjection:
     def test_idempotency_under_repeated_execute(self):
         """MQTT ACK 丢失模拟：重复 execute → 幂等（publish_count 不变）。"""
         pipeline = make_pipeline()
-        warning = pipeline.decision_engine.evaluate([
-            _make_perception(event_type="abnormal_dwell", score=0.5),
-        ])
+        warning = pipeline.decision_engine.evaluate(
+            [
+                _make_perception(event_type="abnormal_dwell", score=0.5),
+            ]
+        )
         warning.recommended_action = "ESCALATE_COMMUNITY"
         warning.risk_level = "HIGH"
 
@@ -566,7 +597,9 @@ class TestFailureInjection:
         # 重复 5 次模拟 ACK 丢失
         for i in range(5):
             pipeline.executor.execute(warning)
-        assert pipeline.publisher.publish_count == 1, f"重复执行后 publish_count 应仍为 1，实际 {pipeline.publisher.publish_count}"
+        assert pipeline.publisher.publish_count == 1, (
+            f"重复执行后 publish_count 应仍为 1，实际 {pipeline.publisher.publish_count}"
+        )
         assert warning.status == "CONFIRMED", "重复执行不应改变 warning.status"
 
     def test_missing_leave_time_does_not_produce_invalid_warning(self):
@@ -600,11 +633,13 @@ CAVIAR_SCENARIOS = [
 def test_caviar_end_to_end_full_pipeline(fixture_dir, scenario_name):
     """CAVIAR 真实场景：frame → ActionCommand 全链路跑通。"""
     pytest.importorskip("ultralytics")
-    import cv2
     from pathlib import Path
+
+    import cv2
+
+    from home_perception.analysis.event_builder import VisitorEventBuilder
     from home_perception.detection.detector import YOLODetector
     from home_perception.detection.tracker import VisitorTracker
-    from home_perception.analysis.event_builder import VisitorEventBuilder
 
     p = Path(fixture_dir)
     if not p.is_dir() or not list(p.glob("frame_*.jpg")):
@@ -621,9 +656,13 @@ def test_caviar_end_to_end_full_pipeline(fixture_dir, scenario_name):
     # 端到端 Pipeline
     pipeline = make_pipeline(device_id=scenario_name)
     det = YOLODetector(
-        model="yolo11n.pt", conf_threshold=0.25,
-        classes=[0], imgsz=416, device="cpu",
-        enable_track=True, tracker="bytetrack",
+        model="yolo11n.pt",
+        conf_threshold=0.25,
+        classes=[0],
+        imgsz=416,
+        device="cpu",
+        enable_track=True,
+        tracker="bytetrack",
     ).load()
     tracker = VisitorTracker(absence_gap_s=5.0)
     event_builder = VisitorEventBuilder(tracker, source_video=scenario_name)
@@ -638,8 +677,16 @@ def test_caviar_end_to_end_full_pipeline(fixture_dir, scenario_name):
     # 1) WarningEvent 字段无业务判定（黑名单）
     for w in pipeline.warnings:
         d = w.to_dict()
-        for forbidden in ("fraud_result", "fraud_probability", "is_fraud", "is_scammer",
-                          "verdict", "crime_probability", "final_decision", "guilt_score"):
+        for forbidden in (
+            "fraud_result",
+            "fraud_probability",
+            "is_fraud",
+            "is_scammer",
+            "verdict",
+            "crime_probability",
+            "final_decision",
+            "guilt_score",
+        ):
             assert forbidden not in d, f"WarningEvent 含禁止字段 {forbidden}：{scenario_name}"
             assert forbidden not in (w.meta or {}), f"WarningEvent.meta 含禁止字段 {forbidden}"
 
@@ -663,8 +710,11 @@ def test_caviar_end_to_end_full_pipeline(fixture_dir, scenario_name):
 # ============================================================================
 
 
-def _make_perception(event_type: str = "visit_normal", score: float = 0.5, is_odd_hour: bool = False):
+def _make_perception(
+    event_type: str = "visit_normal", score: float = 0.5, is_odd_hour: bool = False
+):
     from home_perception.analysis.perception import PerceptionEvent
+
     return PerceptionEvent(
         device_id="home_entry_01",
         event_type=event_type,
@@ -677,19 +727,24 @@ def _make_perception(event_type: str = "visit_normal", score: float = 0.5, is_od
     )
 
 
-def _make_warning(status: str = "CREATED", risk_level: str = "MEDIUM", recommended_action: str = "NOTIFY_FAMILY"):
+def _make_warning(
+    status: str = "CREATED", risk_level: str = "MEDIUM", recommended_action: str = "NOTIFY_FAMILY"
+):
     from home_perception.analysis.warning import WarningEvent
+
     return WarningEvent(
         elder_id="elder_001",
         device_id="home_entry_01",
         risk_level=risk_level,
         recommended_action=recommended_action,
-        trigger_events=[{
-            "event_id": f"{uuid.uuid4()}:abnormal_dwell",
-            "event_type": "abnormal_dwell",
-            "score": 0.5,
-            "timestamp": 1.0,
-        }],
+        trigger_events=[
+            {
+                "event_id": f"{uuid.uuid4()}:abnormal_dwell",
+                "event_type": "abnormal_dwell",
+                "score": 0.5,
+                "timestamp": 1.0,
+            }
+        ],
         reason_summary=["异常停留"],
         warning_id=uuid.uuid4(),
         status=status,

@@ -10,6 +10,7 @@
                                    ↑
     home_perception.core.config.Settings（冻结包，读 config/default.yaml）
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -43,7 +44,7 @@ class DemoSettings(BaseModel):
     max_upload_mb: float = 1024.0  # 上传视频软上限；超过则 413 拒绝（Demo 不做文件管理/存储）
 
     @classmethod
-    def from_env(cls) -> "DemoSettings":
+    def from_env(cls) -> DemoSettings:
         """从环境变量构造（DEMO_HOST / DEMO_PORT / DEMO_SCENARIO 可覆盖）。
 
         保持与 AGENTS.md §1.3 一致：凭证/配置走环境变量，不硬编码。

@@ -20,9 +20,9 @@
 - 黑名单字段（fraud/suspect/verdict 等）结构性拒绝（``PerceptionEvent.__post_init__`` 已守，
   本适配器不再额外校验，但 docstring 明示此约束）。
 """
+
 from __future__ import annotations
 
-from typing import Optional
 from uuid import UUID
 
 from .perception import PerceptionEvent
@@ -32,8 +32,8 @@ from .risk_signal import RiskSignal, SignalTransition
 def risk_signal_to_perception(
     signal: RiskSignal,
     device_id: str,
-    location: Optional[str] = None,
-) -> Optional[PerceptionEvent]:
+    location: str | None = None,
+) -> PerceptionEvent | None:
     """把 RiskSignal 翻译为 PerceptionEvent（RAISED → 事件；CLEARED → None）。
 
     参数：
@@ -102,6 +102,7 @@ def risk_signal_to_perception(
 # 内部：features → EventType 映射
 # ============================================================================
 
+
 def _map_features_to_event(features: dict) -> tuple[str, float]:
     """按 features 主导证据映射 EventType + 计算 score。
 
@@ -109,7 +110,9 @@ def _map_features_to_event(features: dict) -> tuple[str, float]:
     score 基于阈值比例（如 dwell_seconds / threshold），clamp [0,1]；
     无阈值信息时回退 0.5（中性强度）。
     """
-    thresholds = features.get("thresholds", {}) if isinstance(features.get("thresholds"), dict) else {}
+    thresholds = (
+        features.get("thresholds", {}) if isinstance(features.get("thresholds"), dict) else {}
+    )
     dwell_threshold = thresholds.get("long_duration_seconds")
     visits_threshold = thresholds.get("repeat_visit_count")
 
@@ -147,7 +150,7 @@ def _map_features_to_event(features: dict) -> tuple[str, float]:
     return "visit_pending_verify", 0.5
 
 
-def _extract_int(features: dict, key: str) -> Optional[int]:
+def _extract_int(features: dict, key: str) -> int | None:
     """从 features 提取 int 值（防 bool/str 误传）。"""
     v = features.get(key)
     if isinstance(v, bool):

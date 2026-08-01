@@ -7,6 +7,7 @@
 RuleEngine / DecisionPolicy / ActionExecutor，以及各 Protocol（Publisher / Notifier /
 EvidenceCollector / EvidenceStorage / NowProvider）。
 """
+
 from __future__ import annotations
 
 import inspect
@@ -41,9 +42,7 @@ def _params(cls, method: str) -> list[str]:
 def _assert_method(cls, method: str, expected_params: list[str]) -> None:
     assert hasattr(cls, method), f"{cls.__name__} 缺少方法 {method}"
     got = _params(cls, method)
-    assert got == expected_params, (
-        f"{cls.__name__}.{method} 参数应为 {expected_params}，实为 {got}"
-    )
+    assert got == expected_params, f"{cls.__name__}.{method} 参数应为 {expected_params}，实为 {got}"
 
 
 def test_detector_interface():

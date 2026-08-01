@@ -26,12 +26,19 @@ torch-free，进 CI 每 PR 合约子集。
 - E2E-4 运行时接线：memory 开启是真旁路 —— 不影响 latency / 风险决策 / WarningEvent，
   且 Memory 异常不会拖垮风险系统。
 """
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+
+# ===========================================================================
+# Replay 稳定性（E2E-3）规范化辅助
+# ===========================================================================
+import re as _re
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import List
+
+from _helpers import TH_HIGH, ManualClock, build_full_pipeline, drive, memory_config
 
 from home_perception.analysis.realtime_risk_evaluator import RiskPhase
 from home_perception.analysis.risk_signal import SignalTransition
@@ -40,20 +47,12 @@ from home_perception.memory import DefaultEpisodeBuilder, InMemoryStore
 from home_perception.memory.records import EpisodicRecord
 from home_perception.memory.store import InvariantViolationError
 
-from _helpers import ManualClock, TH_HIGH, memory_config, build_full_pipeline, drive
-
-
-# ===========================================================================
-# Replay 稳定性（E2E-3）规范化辅助
-# ===========================================================================
-import re as _re
-
 _UUID_RE = _re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 
 
-def _canon_record(rec: "EpisodicRecord") -> dict:
+def _canon_record(rec: EpisodicRecord) -> dict:
     """把记录中所有 UUID 归一为稳定索引（U0/U1/...），保留其余内容。
 
     Replay 稳定性的正确语义：同一 Observation Stream 两次回放，记忆**内容**
@@ -69,6 +68,7 @@ def _canon_record(rec: "EpisodicRecord") -> dict:
 
     def _norm(v):
         if isinstance(v, str):
+
             def _sub(m):
                 seen = _norm.seen  # type: ignore[attr-defined]
                 return seen.setdefault(m.group(0), f"U{len(seen)}")
@@ -97,7 +97,7 @@ class SteppingStubDetector:
     而非真的喂 900 帧。
     """
 
-    def __init__(self, plan: List[List[Detection]]):
+    def __init__(self, plan: list[list[Detection]]):
         self.plan = plan
         self.i = 0
 
@@ -106,19 +106,29 @@ class SteppingStubDetector:
         dets = self.plan[idx]
         self.i += 1
         return DetectionResult(
-            detections=dets, timestamp=0.0, inference_ms=0.0,
-            source_size=(1, 1), inference_size=(1, 1), model="stub",
+            detections=dets,
+            timestamp=0.0,
+            inference_ms=0.0,
+            source_size=(1, 1),
+            inference_size=(1, 1),
+            model="stub",
         )
 
 
-def _person(track_id: int = 1) -> List[Detection]:
-    return [Detection(
-        class_id=0, class_name="person", confidence=0.9,
-        bbox=[0, 0, 10, 10], timestamp=0.0, track_id=track_id,
-    )]
+def _person(track_id: int = 1) -> list[Detection]:
+    return [
+        Detection(
+            class_id=0,
+            class_name="person",
+            confidence=0.9,
+            bbox=[0, 0, 10, 10],
+            timestamp=0.0,
+            track_id=track_id,
+        )
+    ]
 
 
-def _lifecycle_plan(n_present: int = 30, step_s: float = 30.0) -> List[List[Detection]]:
+def _lifecycle_plan(n_present: int = 30, step_s: float = 30.0) -> list[list[Detection]]:
     """在场 n_present 帧 + 离场 2 帧 → 触发一次离场 + 落 episode。
 
     配合 step_s=30：30 帧在场 = 约 15 分钟停留（非 900 帧）。
@@ -143,18 +153,23 @@ class TestE2ELifecycle:
         plan = _lifecycle_plan(30, step_s)
         assert len(plan) <= 50, "应用少量帧模拟长时段，而非成百上千帧"
 
-        clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         store, builder, _ = InMemoryStore(), DefaultEpisodeBuilder(), True
         p = build_full_pipeline(
-            SteppingStubDetector(plan), clock, thresholds=TH_HIGH(),
-            memory_store=store, episode_builder=builder, episodic_shadow=True,
+            SteppingStubDetector(plan),
+            clock,
+            thresholds=TH_HIGH(),
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=True,
         )
         results = drive(p, clock, plan, step_s)
 
         # 1) 生命周期中 RiskStateMachine 确实产过 RAISED（RiskSignal 步骤）
         all_signals = [s for r in results for s in r.risk_signals]
-        assert any(s.transition == SignalTransition.RAISED for s in all_signals), \
+        assert any(s.transition == SignalTransition.RAISED for s in all_signals), (
             "生命周期中应出现 RAISED 风险信号（dwell abnormal 触发）"
+        )
 
         # 2) 离场后落一条 EpisodicRecord
         assert p.metrics.episodes_recorded == 1, "一次访客离场应落一条 episode"
@@ -163,8 +178,7 @@ class TestE2ELifecycle:
         rec = episodes[0]
 
         # 3) 语义验收：时长 ≈ 15 分钟（±2 分钟，容忍一帧边界）
-        assert 840 <= rec.duration_seconds <= 960, \
-            f"duration 应≈15min，收到 {rec.duration_seconds}"
+        assert 840 <= rec.duration_seconds <= 960, f"duration 应≈15min，收到 {rec.duration_seconds}"
         assert rec.duration_seconds >= 600, "停留应≥10分钟级（非单帧级）"
 
         # 4) 风险等级与动作
@@ -198,10 +212,12 @@ class TestE2ERestartRecovery:
         th = TH_HIGH()
 
         # --- Phase 1：运行中访问，触发 ACTIVE_RISK，写快照 ---
-        clock1 = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock1 = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         present = [_person(1) for _ in range(5)]  # 在场（无离场）→ 访问进行中
         p1 = build_full_pipeline(
-            SteppingStubDetector(present), clock1, thresholds=th,
+            SteppingStubDetector(present),
+            clock1,
+            thresholds=th,
             memory_config=memory_config(snap_path),
             episodic_shadow=False,
         )
@@ -223,9 +239,11 @@ class TestE2ERestartRecovery:
         # --- Phase 2：重启（新时钟、同快照路径；时钟仅略过 Phase1，快照仍 FRESH） ---
         # Phase1 末帧 clock1=18:32:30 → 快照 snapshot_at=18:32:30；
         # clock2=18:32:45 → age=15s < fresh_threshold(30s) → 恢复为 FRESH（非 DISCARD）。
-        clock2 = ManualClock(base=datetime(2026, 7, 31, 18, 32, 45, tzinfo=timezone.utc))
+        clock2 = ManualClock(base=datetime(2026, 7, 31, 18, 32, 45, tzinfo=UTC))
         p2 = build_full_pipeline(
-            SteppingStubDetector([[]]), clock2, thresholds=th,
+            SteppingStubDetector([[]]),
+            clock2,
+            thresholds=th,
             memory_config=memory_config(snap_path),
             episodic_shadow=False,
         )
@@ -260,13 +278,17 @@ class TestE2EReplayStability:
         plan = _lifecycle_plan(30, 30.0)
         step_s = 30.0
 
-        def run_once() -> List[EpisodicRecord]:
-            clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        def run_once() -> list[EpisodicRecord]:
+            clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
             store = InMemoryStore()
             builder = DefaultEpisodeBuilder()
             p = build_full_pipeline(
-                SteppingStubDetector(plan), clock, thresholds=th,
-                memory_store=store, episode_builder=builder, episodic_shadow=True,
+                SteppingStubDetector(plan),
+                clock,
+                thresholds=th,
+                memory_store=store,
+                episode_builder=builder,
+                episodic_shadow=True,
             )
             drive(p, clock, plan, step_s)
             return sorted(store.get_active_episodic(), key=lambda r: r.record_id)
@@ -282,6 +304,7 @@ class TestE2EReplayStability:
         assert ca == cb, "相同输入两次回放应内容一致（UUID 归一后）"
         # 2) Agent 输入字节稳定：规范化 to_dict 可直接序列化比对
         import json as _json
+
         assert _json.dumps(ca, sort_keys=True, ensure_ascii=False) == _json.dumps(
             cb, sort_keys=True, ensure_ascii=False
         ), "相同输入两次回放，Agent 查询输入（UUID 归一后）应字节级稳定"
@@ -303,18 +326,25 @@ class TestE2ERuntimeWiring:
         step_s = 30.0
 
         # 关闭
-        clock_off = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock_off = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         p_off = build_full_pipeline(
-            SteppingStubDetector(plan), clock_off, thresholds=th, episodic_shadow=False,
+            SteppingStubDetector(plan),
+            clock_off,
+            thresholds=th,
+            episodic_shadow=False,
         )
         res_off = drive(p_off, clock_off, plan, step_s)
 
         # 开启（影子写入）
-        clock_on = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock_on = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         store, builder, _ = InMemoryStore(), DefaultEpisodeBuilder(), True
         p_on = build_full_pipeline(
-            SteppingStubDetector(plan), clock_on, thresholds=th,
-            memory_store=store, episode_builder=builder, episodic_shadow=True,
+            SteppingStubDetector(plan),
+            clock_on,
+            thresholds=th,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=True,
         )
         res_on = drive(p_on, clock_on, plan, step_s)
 
@@ -323,7 +353,9 @@ class TestE2ERuntimeWiring:
             assert len(ro.warnings) == len(rn.warnings), f"frame {i}: warnings 不一致"
             assert len(ro.risk_signals) == len(rn.risk_signals), f"frame {i}: risk_signals 不一致"
             assert len(ro.commands) == len(rn.commands), f"frame {i}: commands 不一致"
-            assert len(ro.behavior_states) == len(rn.behavior_states), f"frame {i}: behavior_states 不一致"
+            assert len(ro.behavior_states) == len(rn.behavior_states), (
+                f"frame {i}: behavior_states 不一致"
+            )
 
         # 影子确实跑了（旁路产生 episode，但不影响主线）
         assert p_on.metrics.episodes_recorded == 1
@@ -339,17 +371,22 @@ class TestE2ERuntimeWiring:
         th = TH_HIGH()
         plan = _lifecycle_plan(30, 30.0)
         step_s = 30.0
-        clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         p = build_full_pipeline(
-            SteppingStubDetector(plan), clock, thresholds=th,
-            memory_store=InMemoryStore(), episode_builder=BoomBuilder(), episodic_shadow=True,
+            SteppingStubDetector(plan),
+            clock,
+            thresholds=th,
+            memory_store=InMemoryStore(),
+            episode_builder=BoomBuilder(),
+            episodic_shadow=True,
         )
         # 必须不抛异常
         results = drive(p, clock, plan, step_s)
 
         # 历史风险决策仍然发生（RiskSignal / Warning 照常产出）
-        assert any(s.transition == SignalTransition.RAISED
-                   for r in results for s in r.risk_signals), "风险信号仍应产生"
+        assert any(
+            s.transition == SignalTransition.RAISED for r in results for s in r.risk_signals
+        ), "风险信号仍应产生"
         assert sum(len(r.warnings) for r in results) > 0, "Warning 仍应产生"
 
         # Memory 故障被隔离：episode 0 条，errors 计 1 次（仅投影失败）
@@ -366,10 +403,13 @@ class TestE2ERuntimeWiring:
         th = TH_HIGH()
         plan = _lifecycle_plan(30, 30.0)
         step_s = 30.0
-        clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         p = build_full_pipeline(
-            SteppingStubDetector(plan), clock, thresholds=th,
-            memory_store=StrictStore(), episode_builder=DefaultEpisodeBuilder(),
+            SteppingStubDetector(plan),
+            clock,
+            thresholds=th,
+            memory_store=StrictStore(),
+            episode_builder=DefaultEpisodeBuilder(),
             episodic_shadow=True,
         )
         results = drive(p, clock, plan, step_s)
@@ -392,27 +432,32 @@ class TestE2ERuntimeWiring:
         step_s = 30.0
 
         # 关闭
-        clock_off = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock_off = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         p_off = build_full_pipeline(
-            SteppingStubDetector(plan), clock_off, thresholds=th, episodic_shadow=False,
+            SteppingStubDetector(plan),
+            clock_off,
+            thresholds=th,
+            episodic_shadow=False,
         )
         t0 = time.perf_counter()
         drive(p_off, clock_off, plan, step_s)
         t_off = time.perf_counter() - t0
 
         # 开启
-        clock_on = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=timezone.utc))
+        clock_on = ManualClock(base=datetime(2026, 7, 31, 18, 30, 0, tzinfo=UTC))
         store, builder, _ = InMemoryStore(), DefaultEpisodeBuilder(), True
         p_on = build_full_pipeline(
-            SteppingStubDetector(plan), clock_on, thresholds=th,
-            memory_store=store, episode_builder=builder, episodic_shadow=True,
+            SteppingStubDetector(plan),
+            clock_on,
+            thresholds=th,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=True,
         )
         t0 = time.perf_counter()
         drive(p_on, clock_on, plan, step_s)
         t_on = time.perf_counter() - t0
 
         # 宽松上界：守护「Memory 是旁路」不被 O(n) 拖垮
-        assert t_on < t_off * 10 + 0.05, (
-            f"Memory 开启不应显著拖慢：on={t_on:.4f}s off={t_off:.4f}s"
-        )
+        assert t_on < t_off * 10 + 0.05, f"Memory 开启不应显著拖慢：on={t_on:.4f}s off={t_off:.4f}s"
         assert p_on.metrics.episodes_recorded == 1, "影子写入应正常发生"

@@ -15,17 +15,18 @@
 - `FAILED`  ：执行失败（待重试）
 - `RETRYING`：正在重试
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _coerce_uuid(value) -> UUID:
@@ -42,27 +43,27 @@ def _coerce_uuid(value) -> UUID:
 
 # ActionCommand 类型（3 类路由 + 1 个兜底）
 COMMAND_TYPES: tuple = (
-    "LOG_ONLY",                # MONITOR 推荐动作：仅记录
-    "SEND_FAMILY_MESSAGE",     # NOTIFY_FAMILY：通知家属
-    "CREATE_COMMUNITY_TASK",    # ESCALATE_COMMUNITY：创建社区工单
+    "LOG_ONLY",  # MONITOR 推荐动作：仅记录
+    "SEND_FAMILY_MESSAGE",  # NOTIFY_FAMILY：通知家属
+    "CREATE_COMMUNITY_TASK",  # ESCALATE_COMMUNITY：创建社区工单
 )
 
 # ActionCommand 状态（执行层内部状态机，独立于 WarningEvent.status）
 COMMAND_STATUSES: tuple = (
-    "PENDING",    # 已构造命令，等待执行
-    "DONE",       # 执行成功
-    "FAILED",     # 执行失败（待重试）
-    "RETRYING",   # 正在重试
-    "GIVEN_UP",   # 重试耗尽（不再尝试）
+    "PENDING",  # 已构造命令，等待执行
+    "DONE",  # 执行成功
+    "FAILED",  # 执行失败（待重试）
+    "RETRYING",  # 正在重试
+    "GIVEN_UP",  # 重试耗尽（不再尝试）
 )
 
 # WarningEvent 状态翻转规则（守 P0-8 决策生命周期）
-WARNING_TRANSITIONS: Dict[str, frozenset] = {
-    "CREATED":   frozenset({"PENDING", "REJECTED"}),
-    "PENDING":   frozenset({"CONFIRMED", "RESOLVED", "REJECTED"}),
+WARNING_TRANSITIONS: dict[str, frozenset] = {
+    "CREATED": frozenset({"PENDING", "REJECTED"}),
+    "PENDING": frozenset({"CONFIRMED", "RESOLVED", "REJECTED"}),
     "CONFIRMED": frozenset({"RESOLVED", "REJECTED"}),
-    "RESOLVED":  frozenset(),  # 终态
-    "REJECTED":  frozenset(),  # 终态
+    "RESOLVED": frozenset(),  # 终态
+    "REJECTED": frozenset(),  # 终态
 }
 
 
@@ -72,16 +73,27 @@ WARNING_TRANSITIONS: Dict[str, frozenset] = {
 
 # ActionCommand 任何字段（含 meta + payload）禁止出现的业务判定字段
 # 与 WarningEvent 黑名单保持一致；行动层也只是'执行'，不做最终判定
-FORBIDDEN_ACTION_FIELDS: frozenset = frozenset({
-    "fraud_result", "fraud_probability", "is_fraud", "is_scammer",
-    "verdict", "crime_probability", "final_decision", "guilt_score",
-    "is_criminal", "arrest_probability", "deception_score",
-})
+FORBIDDEN_ACTION_FIELDS: frozenset = frozenset(
+    {
+        "fraud_result",
+        "fraud_probability",
+        "is_fraud",
+        "is_scammer",
+        "verdict",
+        "crime_probability",
+        "final_decision",
+        "guilt_score",
+        "is_criminal",
+        "arrest_probability",
+        "deception_score",
+    }
+)
 
 
 # ============================================================================
 # ActionCommand
 # ============================================================================
+
 
 @dataclass
 class ActionCommand:
@@ -108,12 +120,12 @@ class ActionCommand:
 
     command_type: str
     warning_id: UUID
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     command_id: UUID = field(default_factory=uuid4)
     status: str = "PENDING"
     attempts: int = 0
-    error: Optional[str] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
 
@@ -128,9 +140,7 @@ class ActionCommand:
                 f"command_type 必须是 {COMMAND_TYPES} 之一，收到 {self.command_type!r}"
             )
         if self.status not in COMMAND_STATUSES:
-            raise ValueError(
-                f"status 必须是 {COMMAND_STATUSES} 之一，收到 {self.status!r}"
-            )
+            raise ValueError(f"status 必须是 {COMMAND_STATUSES} 之一，收到 {self.status!r}")
 
         # attempts 范围
         if self.attempts < 0:
@@ -145,18 +155,12 @@ class ActionCommand:
         # 黑名单（payload + meta）
         leaked_payload = FORBIDDEN_ACTION_FIELDS.intersection(self.payload.keys())
         if leaked_payload:
-            raise ValueError(
-                f"payload 包含禁止的业务判定字段 {leaked_payload}；"
-                f"行动层不做最终判定"
-            )
+            raise ValueError(f"payload 包含禁止的业务判定字段 {leaked_payload}；行动层不做最终判定")
         leaked_meta = FORBIDDEN_ACTION_FIELDS.intersection(self.meta.keys())
         if leaked_meta:
-            raise ValueError(
-                f"meta 包含禁止的业务判定字段 {leaked_meta}；"
-                f"行动层不做最终判定"
-            )
+            raise ValueError(f"meta 包含禁止的业务判定字段 {leaked_meta}；行动层不做最终判定")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典。"""
         return {
             "command_id": str(self.command_id),
@@ -178,6 +182,7 @@ class ActionCommand:
 # ============================================================================
 # 状态翻转工具
 # ============================================================================
+
 
 def can_transition_warning(from_status: str, to_status: str) -> bool:
     """检查 WarningEvent.status 是否可从 from_status 翻转到 to_status。"""

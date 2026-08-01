@@ -3,9 +3,10 @@
 覆盖工程方案 §6.4：Eviction 只清理"超过 retention 未再出现的 visitor 条目"，
 不影响滑窗计数语义（window_seconds 与 retention_seconds 两个独立时间尺度）。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from home_perception.analysis.recent_behavior_store import (
     BehaviorHistory,
@@ -15,7 +16,7 @@ from home_perception.analysis.recent_behavior_store import (
 
 def _utc(sec: int) -> datetime:
     """测试时钟：以 epoch 秒表达，返回 datetime UTC。"""
-    return datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=sec)
+    return datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=sec)
 
 
 # ---------------------------------------------------------------------------
@@ -26,12 +27,8 @@ def _utc(sec: int) -> datetime:
 def test_evict_expired_removes_old_entries():
     """last_seen_at < cutoff 的条目被清。"""
     store = RecentBehaviorStore()
-    store._entries["OLD"] = BehaviorHistory(
-        enter_times=[_utc(0)], last_seen_at=_utc(0)
-    )
-    store._entries["NEW"] = BehaviorHistory(
-        enter_times=[_utc(100)], last_seen_at=_utc(100)
-    )
+    store._entries["OLD"] = BehaviorHistory(enter_times=[_utc(0)], last_seen_at=_utc(0))
+    store._entries["NEW"] = BehaviorHistory(enter_times=[_utc(100)], last_seen_at=_utc(100))
     # retention=60：cutoff = now(200) - 60 = 140；OLD(last_seen=0) < 140 被清，NEW(100<140?) 100<140 → 也被清
     # 调整：让 NEW 在窗口内
     store._entries["NEW"] = BehaviorHistory(enter_times=[_utc(150)], last_seen_at=_utc(150))
@@ -55,9 +52,7 @@ def test_evict_expired_returns_count():
     """返回被清理条目数。"""
     store = RecentBehaviorStore()
     for i in range(3):
-        store._entries[f"V{i}"] = BehaviorHistory(
-            enter_times=[_utc(0)], last_seen_at=_utc(0)
-        )
+        store._entries[f"V{i}"] = BehaviorHistory(enter_times=[_utc(0)], last_seen_at=_utc(0))
     assert store.evict_expired(_utc(200), retention_seconds=60) == 3
     assert len(store._entries) == 0
 

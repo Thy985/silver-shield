@@ -15,9 +15,10 @@ Stage F）抽取为独立、可单测的 ``MemoryHook``（Integration Closure **
   Hook 对象；``MemoryPolicy.project_episode`` / ``EpisodicRecord`` /
   ``VisitorEvent`` 签名一律不动。
 """
+
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any
 
 from ..analysis.event import VisitorEvent
 from ..analysis.warning import WarningEvent
@@ -36,8 +37,8 @@ class MemoryHook:
 
     def __init__(
         self,
-        episode_builder: Optional[DefaultEpisodeBuilder],
-        memory_store: Optional[MemoryStore],
+        episode_builder: DefaultEpisodeBuilder | None,
+        memory_store: MemoryStore | None,
         enabled: bool,
         metrics: PipelineMetrics,
     ) -> None:
@@ -54,8 +55,8 @@ class MemoryHook:
     def record(
         self,
         ev: VisitorEvent,
-        warnings: List[WarningEvent],
-        actions: List[Any],
+        warnings: list[WarningEvent],
+        actions: list[Any],
     ) -> None:
         """把一次访客离场投影为 EpisodicRecord 并写入 MemoryStore（Shadow Mode）。
 
@@ -88,8 +89,6 @@ class MemoryHook:
             return
         except Exception:
             self._metrics.errors += 1
-            log.exception(
-                "pipeline.episode_store_failed", record_id=record.record_id
-            )
+            log.exception("pipeline.episode_store_failed", record_id=record.record_id)
             return
         self._metrics.episodes_recorded += 1

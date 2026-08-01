@@ -12,12 +12,15 @@
 ``DemoFrameSource`` 与冻结 ``FrameSource`` 接口"结构一致、各自独立"——正是 ADR-0014
 「实现可替换」在消费者侧的体现：消费者可自由提供自己的输入源，无需改动 Pipeline / 展示层。
 """
+
 from __future__ import annotations
 
+import math
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator, Optional, Tuple
+from typing import Any
 
 from home_perception.runtime.config import read_caviar_frames
 
@@ -35,8 +38,8 @@ class Source:
     """
 
     def __init__(self) -> None:
-        self._inner: Optional[DemoFrameSource] = None
-        self.scenario: Optional[ScenarioConfig] = None
+        self._inner: DemoFrameSource | None = None
+        self.scenario: ScenarioConfig | None = None
         self.frame_count: int = -1
 
     def load(self, scenario: ScenarioConfig, hp_settings: Any) -> None:
@@ -45,7 +48,7 @@ class Source:
         self._inner = build_frame_source(scenario, hp_settings)
         self.frame_count = self._inner.frame_count
 
-    def __iter__(self) -> Iterator[Tuple[float, Any]]:
+    def __iter__(self) -> Iterator[tuple[float, Any]]:
         """产出 ``(timestamp, frame)`` 元组流（委托底层帧源）。"""
         if self._inner is None:
             raise RuntimeError("Source 未 load，请先调用 load(scenario, hp_settings)")
@@ -62,7 +65,7 @@ class DemoFrameSource(ABC):
     frame_count: int = -1  # -1 表示未知（流式 / 未探测）
 
     @abstractmethod
-    def __iter__(self) -> Iterator[Tuple[float, Any]]:
+    def __iter__(self) -> Iterator[tuple[float, Any]]:
         """产出 ``(timestamp: float, frame)`` 元组流。"""
         ...
 
@@ -88,7 +91,7 @@ class CaviarJpgFrameSource(DemoFrameSource):
         self.fps_target = fps_target
         self.frame_count = len(self._frames)
 
-    def __iter__(self) -> Iterator[Tuple[float, Any]]:
+    def __iter__(self) -> Iterator[tuple[float, Any]]:
         for frame in self._frames:
             yield time.time(), frame
 
@@ -137,14 +140,14 @@ class VideoFileFrameSource(DemoFrameSource):
             if cap.isOpened():
                 n = cap.get(cv2.CAP_PROP_FRAME_COUNT)
                 src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
-                total = int(n) if n == n and n > 0 else 0  # NaN 守卫
+                total = int(n) if not math.isnan(n) and n > 0 else 0  # NaN 守卫
                 if self.fps_target > 0 and src_fps > 0:
                     self._skip = max(1, round(src_fps / self.fps_target))
                 # 产出帧数 = ceil(total / skip)
                 self.frame_count = (total + self._skip - 1) // self._skip if total > 0 else -1
                 cap.release()
 
-    def __iter__(self) -> Iterator[Tuple[float, Any]]:
+    def __iter__(self) -> Iterator[tuple[float, Any]]:
         if not Path(self.path).is_file():
             raise RuntimeError(f"视频文件不存在: {self.path!r}（P0-11.3 真实输入源）")
         cap = self._cv2.VideoCapture(str(self.path))
@@ -190,9 +193,7 @@ def build_frame_source(scenario: ScenarioConfig, hp_settings: Any) -> DemoFrameS
     if source_type == "video_file":
         media_path = scenario.media_path
         if not media_path:
-            raise ValueError(
-                f"video_file 源需要 media_path，场景 {scenario.scenario_id!r} 缺失"
-            )
+            raise ValueError(f"video_file 源需要 media_path，场景 {scenario.scenario_id!r} 缺失")
         return VideoFileFrameSource(str(media_path), fps_target=scenario.fps_target)
 
     # 默认 CAVIAR jpg 目录

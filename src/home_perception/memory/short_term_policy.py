@@ -17,9 +17,8 @@
 
 **纯函数语义**：不持有内部状态，所有"当前 record"信息通过 `current_record` 参数传入。
 """
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 from ..analysis.behavior_state import BehaviorState
 from ..analysis.risk_signal import RiskSignal, SignalTransition
@@ -35,10 +34,10 @@ class DefaultShortTermPolicy(MemoryPolicy):
 
     def transform_short_term(
         self,
-        state_snapshot: Optional[BehaviorState],
-        transition: Optional[RiskSignal],
-        current_record: Optional[ShortTermRecord] = None,
-    ) -> Optional[ShortTermRecord]:
+        state_snapshot: BehaviorState | None,
+        transition: RiskSignal | None,
+        current_record: ShortTermRecord | None = None,
+    ) -> ShortTermRecord | None:
         """把 BehaviorState + RiskSignal 投影为 ShortTermRecord。
 
         返回 None 的场景（DESIGN §8.4 "无跃迁时不写"）：
@@ -66,9 +65,7 @@ class DefaultShortTermPolicy(MemoryPolicy):
                 visitor_id, first_seen, last_seen_at, transition, current_record
             )
         # transition is None, current_record is not None → 周期快照
-        return self._from_snapshot(
-            visitor_id, first_seen, last_seen_at, current_record
-        )
+        return self._from_snapshot(visitor_id, first_seen, last_seen_at, current_record)
 
     # ------------------------------------------------------------------
     # 分支实现
@@ -80,10 +77,10 @@ class DefaultShortTermPolicy(MemoryPolicy):
         first_seen,
         last_seen_at,
         transition: RiskSignal,
-        current_record: Optional[ShortTermRecord],
+        current_record: ShortTermRecord | None,
     ) -> ShortTermRecord:
         """状态转移触发：RAISED / CLEARED。"""
-        source_event_ids: List[str] = [transition.signal_id]
+        source_event_ids: list[str] = [transition.signal_id]
 
         if transition.transition is SignalTransition.RAISED:
             # NONE → ACTIVE_RISK：新建/覆写 record
@@ -95,9 +92,8 @@ class DefaultShortTermPolicy(MemoryPolicy):
             phase = "none"
             # raised_signal_id 从 CLEARED.paired_signal_id 回填（如有），
             # 否则从 current_record 继承（如无则为 None）
-            raised_signal_id = (
-                transition.paired_signal_id
-                or (current_record.raised_signal_id if current_record else None)
+            raised_signal_id = transition.paired_signal_id or (
+                current_record.raised_signal_id if current_record else None
             )
             # raised_at 从 current_record 继承（transition 不携带此信息）
             raised_at = current_record.raised_at if current_record else None
@@ -138,10 +134,10 @@ class DefaultShortTermPolicy(MemoryPolicy):
 
     @staticmethod
     def _resolve_visitor_id(
-        transition: Optional[RiskSignal],
-        state_snapshot: Optional[BehaviorState],
-        current_record: Optional[ShortTermRecord],
-    ) -> Optional[str]:
+        transition: RiskSignal | None,
+        state_snapshot: BehaviorState | None,
+        current_record: ShortTermRecord | None,
+    ) -> str | None:
         """解析 visitor_instance_id（优先级：transition > state_snapshot > current_record）。"""
         if transition is not None and transition.visitor_instance_id:
             return transition.visitor_instance_id
@@ -153,8 +149,8 @@ class DefaultShortTermPolicy(MemoryPolicy):
 
     @staticmethod
     def _resolve_times(
-        state_snapshot: Optional[BehaviorState],
-        current_record: Optional[ShortTermRecord],
+        state_snapshot: BehaviorState | None,
+        current_record: ShortTermRecord | None,
     ):
         """解析 first_seen / last_seen_at（优先 state_snapshot，回退 current_record）。"""
         first_seen = None
@@ -174,8 +170,8 @@ class DefaultShortTermPolicy(MemoryPolicy):
 
     def project_episode(self, visitor_event, warnings, actions):
         """v1 占位（Slice 4 实现 DefaultEpisodeBuilder）。"""
-        return None
+        return
 
     def aggregate_semantic(self, episodes, dimension, period_key):
         """v1 占位（Stage G/H 实现 Semantic 聚合）。"""
-        return None
+        return

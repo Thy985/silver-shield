@@ -5,11 +5,11 @@ torch-free，进 CI 每 PR 合约子集。验证：
 - memory 启用 + realtime 启用 → 启动期 recover() 冷启动 / 从 snapshot 恢复
 - 周期快照：评估帧触发写文件；close() 兜底 flush 最终 snapshot
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
 
 from home_perception.action import (
     ActionDispatcher,
@@ -40,8 +40,8 @@ from home_perception.runtime import PerceptionPipeline
 
 
 class ManualClock:
-    def __init__(self, base: Optional[datetime] = None):
-        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=timezone.utc)
+    def __init__(self, base: datetime | None = None):
+        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC)
 
     def now(self) -> datetime:
         return self._t
@@ -54,7 +54,7 @@ class ManualClock:
 
 
 class StubDetector:
-    def __init__(self, plan: List[List[Detection]], clock: Optional[ManualClock] = None):
+    def __init__(self, plan: list[list[Detection]], clock: ManualClock | None = None):
         self.plan = plan
         self.clock = clock
         self.i = 0
@@ -66,16 +66,26 @@ class StubDetector:
         dets = self.plan[idx]
         self.i += 1
         return DetectionResult(
-            detections=dets, timestamp=0.0, inference_ms=0.0,
-            source_size=(1, 1), inference_size=(1, 1), model="stub",
+            detections=dets,
+            timestamp=0.0,
+            inference_ms=0.0,
+            source_size=(1, 1),
+            inference_size=(1, 1),
+            model="stub",
         )
 
 
-def _person(track_id: int = 1) -> List[Detection]:
-    return [Detection(
-        class_id=0, class_name="person", confidence=0.9,
-        bbox=[0, 0, 10, 10], timestamp=0.0, track_id=track_id,
-    )]
+def _person(track_id: int = 1) -> list[Detection]:
+    return [
+        Detection(
+            class_id=0,
+            class_name="person",
+            confidence=0.9,
+            bbox=[0, 0, 10, 10],
+            timestamp=0.0,
+            track_id=track_id,
+        )
+    ]
 
 
 def _build_pipeline(
@@ -83,43 +93,57 @@ def _build_pipeline(
     clock: ManualClock,
     *,
     realtime_enabled: bool = True,
-    memory_config: Optional[MemoryConfig] = None,
+    memory_config: MemoryConfig | None = None,
 ) -> PerceptionPipeline:
     tracker = VisitorTracker(absence_gap_s=5.0, now_provider=clock)
     event_builder = VisitorEventBuilder(tracker, source_video="demo/test", now_provider=clock)
     th = ThresholdConfig()
     feat = FeatureExtractor(frequency_window_s=1800.0)
-    rule_engine = RuleEngine(device_id="demo/test", location="入户门", thresholds=th, now_provider=clock)
-    decision = DecisionEngine(elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock)
+    rule_engine = RuleEngine(
+        device_id="demo/test", location="入户门", thresholds=th, now_provider=clock
+    )
+    decision = DecisionEngine(
+        elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock
+    )
     dispatcher = ActionDispatcher(DispatcherConfig())
-    executor = ActionExecutor(dispatcher=dispatcher, publisher=MockPublisher(), notifier=MockNotifier(), max_retries=3)
+    executor = ActionExecutor(
+        dispatcher=dispatcher, publisher=MockPublisher(), notifier=MockNotifier(), max_retries=3
+    )
 
     behavior_builder = BehaviorBuilder(event_builder=event_builder)
     recent_store = RecentBehaviorStore()
     evaluator = RealTimeRiskEvaluator(thresholds=th, now_provider=clock)
 
     return PerceptionPipeline(
-        detector=detector, tracker=tracker, event_builder=event_builder,
-        feature_extractor=feat, rule_engine=rule_engine, decision_engine=decision,
-        executor=executor, now_provider=clock,
-        behavior_builder=behavior_builder, recent_behavior_store=recent_store,
-        realtime_evaluator=evaluator, realtime_enabled=realtime_enabled,
-        eval_interval_frames=1, decision_enabled=False,
+        detector=detector,
+        tracker=tracker,
+        event_builder=event_builder,
+        feature_extractor=feat,
+        rule_engine=rule_engine,
+        decision_engine=decision,
+        executor=executor,
+        now_provider=clock,
+        behavior_builder=behavior_builder,
+        recent_behavior_store=recent_store,
+        realtime_evaluator=evaluator,
+        realtime_enabled=realtime_enabled,
+        eval_interval_frames=1,
+        decision_enabled=False,
         memory_config=memory_config,
     )
 
 
 def _memory_config(path: Path, **over) -> MemoryConfig:
-    base = dict(
-        enabled=True,
-        snapshot_path=str(path),
-        snapshot_interval_seconds=1.0,
-        snapshot_fresh_threshold_seconds=30.0,
-        snapshot_ttl_seconds=300.0,
-        recent_behavior_retention_seconds=3600.0,
-        eviction_interval_frames=60,
-        cold_start_stale_confidence=0.5,
-    )
+    base = {
+        "enabled": True,
+        "snapshot_path": str(path),
+        "snapshot_interval_seconds": 1.0,
+        "snapshot_fresh_threshold_seconds": 30.0,
+        "snapshot_ttl_seconds": 300.0,
+        "recent_behavior_retention_seconds": 3600.0,
+        "eviction_interval_frames": 60,
+        "cold_start_stale_confidence": 0.5,
+    }
     base.update(over)
     return MemoryConfig(**base)
 
@@ -127,7 +151,9 @@ def _memory_config(path: Path, **over) -> MemoryConfig:
 def test_memory_disabled_no_snapshot_store():
     """memory_config=None → 无 snapshot store，process_frame 不崩溃（向后兼容）。"""
     clock = ManualClock()
-    p = _build_pipeline(StubDetector([_person(1), _person(1), []], clock), clock, memory_config=None)
+    p = _build_pipeline(
+        StubDetector([_person(1), _person(1), []], clock), clock, memory_config=None
+    )
     assert p._snapshot_store is None
     assert p._cold_start_coordinator is None
     # 跑帧不抛异常

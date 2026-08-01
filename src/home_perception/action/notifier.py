@@ -9,16 +9,18 @@
 > - 重试（→ ActionExecutor 责任）
 > - 状态翻转（→ ActionExecutor 责任）
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Protocol
+from datetime import UTC, datetime
+from typing import Any, Protocol
 
 
 @dataclass
 class FamilyContact:
     """家属联系方式（MVP 从 devices.yaml 读；v2 从中心 RiskTwin 拉）。"""
+
     elder_id: str
     name: str
     phone: str
@@ -38,7 +40,7 @@ class NotificationAdapter(Protocol):
         """通知家属。True 成功 / False 失败。"""
         ...
 
-    def notify_community(self, endpoint: str, task: Dict[str, Any]) -> bool:
+    def notify_community(self, endpoint: str, task: dict[str, Any]) -> bool:
         """通知社区（创建工单 / 推送消息）。True 成功 / False 失败。"""
         ...
 
@@ -55,30 +57,34 @@ class MockNotifier:
     """
 
     def __init__(self):
-        self.family_messages: List[Dict[str, Any]] = []
-        self.community_messages: List[Dict[str, Any]] = []
+        self.family_messages: list[dict[str, Any]] = []
+        self.community_messages: list[dict[str, Any]] = []
         self.fail_next: bool = False
 
     def notify_family(self, contact: FamilyContact, message: str) -> bool:
         if self.fail_next:
             self.fail_next = False
             return False
-        self.family_messages.append({
-            "contact": contact,
-            "message": message,
-            "ts": datetime.now(timezone.utc).isoformat(),
-        })
+        self.family_messages.append(
+            {
+                "contact": contact,
+                "message": message,
+                "ts": datetime.now(UTC).isoformat(),
+            }
+        )
         return True
 
-    def notify_community(self, endpoint: str, task: Dict[str, Any]) -> bool:
+    def notify_community(self, endpoint: str, task: dict[str, Any]) -> bool:
         if self.fail_next:
             self.fail_next = False
             return False
-        self.community_messages.append({
-            "endpoint": endpoint,
-            "task": task,
-            "ts": datetime.now(timezone.utc).isoformat(),
-        })
+        self.community_messages.append(
+            {
+                "endpoint": endpoint,
+                "task": task,
+                "ts": datetime.now(UTC).isoformat(),
+            }
+        )
         return True
 
     @property

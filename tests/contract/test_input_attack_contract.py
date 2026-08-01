@@ -15,19 +15,20 @@
 
 这些测试现在全绿（CI 不破），并构成冻结前置清理后的回归网。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
+from home_perception.action.command import ActionCommand
 from home_perception.action.dispatcher import ActionDispatcher, DispatcherConfig
 from home_perception.action.executor import ActionExecutor
 from home_perception.action.notifier import MockNotifier
 from home_perception.action.publisher import MockPublisher
-from home_perception.action.command import ActionCommand
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.perception import PerceptionEvent
 from home_perception.analysis.warning import WarningEvent
@@ -35,7 +36,7 @@ from home_perception.runtime.pipeline import PerceptionPipeline, RunSummary
 
 
 def _utc(offset_s: int = 0) -> datetime:
-    return datetime.now(timezone.utc) + timedelta(seconds=offset_s)
+    return datetime.now(UTC) + timedelta(seconds=offset_s)
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +70,8 @@ def test_naive_datetime_rejected():
     with pytest.raises(ValueError):
         VisitorEvent(
             visitor_id=uuid4(),
-            enter_time=datetime(2026, 1, 1, 0, 0, 0),  # 无 tz
-            leave_time=datetime(2026, 1, 1, 0, 0, 10),
+            enter_time=datetime(2026, 1, 1, 0, 0, 0),  # noqa: DTZ001 (naive test)
+            leave_time=datetime(2026, 1, 1, 0, 0, 10),  # noqa: DTZ001 (naive test)
             duration_seconds=10.0,
         )
 
@@ -182,7 +183,9 @@ def test_empty_video_returns_empty_summary():
 
 def test_publisher_failure_keeps_warning_pending():
     """通道失败 → Warning 保持 PENDING（不丢、不误翻 CONFIRMED）。"""
-    dispatcher = ActionDispatcher(DispatcherConfig(community_endpoint="http://community.example.com"))
+    dispatcher = ActionDispatcher(
+        DispatcherConfig(community_endpoint="http://community.example.com")
+    )
     pub = MockPublisher()
     pub.fail_next = True  # 下一次 publish 失败
     notifier = MockNotifier()

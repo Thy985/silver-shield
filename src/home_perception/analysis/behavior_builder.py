@@ -17,9 +17,8 @@
 - 时刻一律 ``datetime``（UTC）；时长 ``float`` 秒。
 - ``dwell_seconds = (now - enter_time).total_seconds()``，二者均 datetime。
 """
-from __future__ import annotations
 
-from typing import List
+from __future__ import annotations
 
 from ..common.logging import get_logger
 from ..common.timeutil import require_utc
@@ -47,7 +46,7 @@ class BehaviorBuilder:
             raise ValueError("event_builder 不能为空")
         self._event_builder = event_builder
 
-    def build(self, tracks: List[VisitorTrack], now) -> List[BehaviorState]:
+    def build(self, tracks: list[VisitorTrack], now) -> list[BehaviorState]:
         """把当前在场 VisitorTrack 列表投影成 BehaviorState 快照。
 
         参数：
@@ -62,7 +61,7 @@ class BehaviorBuilder:
         """
         require_utc(now, "now")
 
-        states: List[BehaviorState] = []
+        states: list[BehaviorState] = []
         for vt in tracks:
             if vt.enter_time is None:
                 # 防御：active track 的 enter_time 应已被 tracker 回填

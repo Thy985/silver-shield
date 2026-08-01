@@ -15,12 +15,13 @@
   与 ADR-0007；**禁止 float unix 戳表达时刻**。
 - 时长一律 `float` 秒（如 `dwell_seconds = (last_seen - first_seen).total_seconds()`）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict
+from typing import Any
 
 from ..common.timeutil import require_utc
 
@@ -37,11 +38,11 @@ def compute_is_odd_hour(dt: datetime) -> bool:
 class BehaviorPhase(str, Enum):
     """访问生命周期阶段（枚举化，杜绝裸字符串拼写漂移）。"""
 
-    ONGOING = "ongoing"        # 在场进行中（Phase 1 主态）
-    LEFT = "left"              # 已离场（触发 CLEARED 兜底，见 ADR-0021 §3.3.1）
+    ONGOING = "ongoing"  # 在场进行中（Phase 1 主态）
+    LEFT = "left"  # 已离场（触发 CLEARED 兜底，见 ADR-0021 §3.3.1）
     # —— 预留（Phase 1 不产出，接口先留）——
     APPROACHING = "approaching"  # 正在接近门口（未来 proximity_score 上升趋势）
-    DEPARTING = "departing"      # 正在远离（未来轨迹判定，早于 LEFT）
+    DEPARTING = "departing"  # 正在远离（未来轨迹判定，早于 LEFT）
 
 
 BEHAVIOR_PHASE_VALUES: tuple = tuple(e.value for e in BehaviorPhase)
@@ -95,9 +96,7 @@ class BehaviorState:
 
         # 3) last_seen >= first_seen
         if self.last_seen < self.first_seen:
-            raise ValueError(
-                f"last_seen ({self.last_seen}) 必须 >= first_seen ({self.first_seen})"
-            )
+            raise ValueError(f"last_seen ({self.last_seen}) 必须 >= first_seen ({self.first_seen})")
 
         # 4) dwell_seconds 非负
         if self.dwell_seconds < 0:
@@ -114,7 +113,7 @@ class BehaviorState:
         if not isinstance(self.schema_version, int) or self.schema_version < 1:
             raise ValueError(f"schema_version 必须是 >=1 的 int，收到 {self.schema_version!r}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典（时间转 ISO、枚举转 value）。
 
         注意：**不含 `visits_in_window`**（跨访问统计归 RecentBehaviorStore，
@@ -133,7 +132,7 @@ class BehaviorState:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BehaviorState":
+    def from_dict(cls, data: dict[str, Any]) -> BehaviorState:
         """从 to_dict() 产出的字典反序列化（枚举 value → 枚举实例、ISO 字符串 → datetime）。
 
         用于 Stage B/C 跨进程传递 / 日志回放 / 测试构造。与 `to_dict()` 严格对称。
@@ -162,7 +161,7 @@ class RealtimeContext:
     """
 
     current_state: BehaviorState
-    recent_behavior: Dict[str, Any] = field(default_factory=dict)
+    recent_behavior: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.current_state, BehaviorState):
@@ -174,7 +173,7 @@ class RealtimeContext:
                 f"recent_behavior 必须是 dict，收到 {type(self.recent_behavior).__name__}"
             )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """组合体序列化（current_state 走 BehaviorState.to_dict，recent_behavior 透传）。"""
         return {
             "current_state": self.current_state.to_dict(),

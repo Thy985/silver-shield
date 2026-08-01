@@ -9,6 +9,7 @@
 P0-11.4 是纯前端深化：网关已在每帧广播 ``active_warnings`` 与 ``routed_commands``
 （含完整 payload + warning_id），本测试只锁契约，不改动后端。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -86,15 +87,15 @@ def test_dashboard_contains_p0_11_4_anchors() -> None:
     """dashboard/index.html 必须含 P0-11.4 深化锚点，防止回归为骨架。"""
     html = DASHBOARD.read_text(encoding="utf-8")
     anchors = [
-        "rc-reason",        # 区域③ 人话原因
-        "rc-triggers",      # 区域③ 触发规则
-        "trig-chip",        # 区域③ 触发规则 chip
-        "规则命中强度",      # 区域③ perception_score 标注（非诈骗概率）
-        "task family",      # 区域④ 家属端任务卡
-        "task community",   # 区域④ 社区端任务卡
-        "commandMap",       # 区域④ 按 warning_id 联动累积
-        "lookupCommands",   # 区域④ 取任务卡
-        "cl-reasons",       # 区域④ 风险原因联动
+        "rc-reason",  # 区域③ 人话原因
+        "rc-triggers",  # 区域③ 触发规则
+        "trig-chip",  # 区域③ 触发规则 chip
+        "规则命中强度",  # 区域③ perception_score 标注（非诈骗概率）
+        "task family",  # 区域④ 家属端任务卡
+        "task community",  # 区域④ 社区端任务卡
+        "commandMap",  # 区域④ 按 warning_id 联动累积
+        "lookupCommands",  # 区域④ 取任务卡
+        "cl-reasons",  # 区域④ 风险原因联动
     ]
     missing = [a for a in anchors if a not in html]
     assert not missing, f"dashboard 缺少 P0-11.4 锚点：{missing}"

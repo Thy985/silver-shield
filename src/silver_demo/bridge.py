@@ -14,16 +14,17 @@
 - ``frame`` 是 ``np.ndarray``（BGR），经 OpenCV JPEG 编码 → base64 字符串。
 - 不引入业务判定逻辑（本模块不做风险解释，只做格式转换）。
 """
+
 from __future__ import annotations
 
 import base64
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def encode_frame_to_base64_jpeg(
     frame: Any,
     quality: int = 50,
-) -> Optional[str]:
+) -> str | None:
     """把 BGR np.ndarray 编码为 base64 JPEG 字符串。
 
     Args:
@@ -46,16 +47,16 @@ def encode_frame_to_base64_jpeg(
         if not ok:
             return None
         return base64.b64encode(buf.tobytes()).decode("ascii")
-    except Exception:  # 编码失败不崩溃网关（AGENTS.md §2.5 可恢复）
+    except Exception:  # noqa: BLE001  # 编码失败不崩溃网关（AGENTS.md §2.5 可恢复）
         return None
 
 
 def frame_result_to_view(
     frame_result: Any,
     frame_index: int,
-    frame_base64: Optional[str],
-    demo_time: Optional[str] = None,
-) -> Dict[str, Any]:
+    frame_base64: str | None,
+    demo_time: str | None = None,
+) -> dict[str, Any]:
     """把 FrameResult 翻译成 Dashboard view-model（JSON-serializable）。
 
     Args:
@@ -82,12 +83,13 @@ def frame_result_to_view(
     冻结合规：对 warnings/commands/perception_events 只调 ``to_dict()``，
     不调构造器、不改字段。若对象无 to_dict 则降级为空 dict（防御性，不崩溃）。
     """
-    def _safe_to_dict(obj: Any) -> Dict[str, Any]:
+
+    def _safe_to_dict(obj: Any) -> dict[str, Any]:
         """调 obj.to_dict()，失败返回空 dict（不崩溃网关）。"""
         try:
             d = obj.to_dict()
             return d if isinstance(d, dict) else {}
-        except Exception:
+        except Exception:  # noqa: BLE001  # to_dict 失败不崩溃网关
             return {}
 
     perception_events = [_safe_to_dict(p) for p in getattr(frame_result, "perception_events", [])]
@@ -120,7 +122,7 @@ def frame_result_to_view(
     }
 
 
-def collect_active_warnings(warnings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def collect_active_warnings(warnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """从 view-model 的 warnings 列表中筛出"待处理"的（status != RESOLVED/REJECTED）。
 
     供 AI 风险中心"风险解释卡片"展示当前活跃风险（P0-11.3 消费）。
@@ -128,10 +130,14 @@ def collect_active_warnings(warnings: List[Dict[str, Any]]) -> List[Dict[str, An
 
     防御：非 dict 元素（None / 其他类型）直接跳过，不崩溃（公开函数，可能被直接调用）。
     """
-    return [w for w in warnings if isinstance(w, dict) and w.get("status") not in ("RESOLVED", "REJECTED")]
+    return [
+        w
+        for w in warnings
+        if isinstance(w, dict) and w.get("status") not in ("RESOLVED", "REJECTED")
+    ]
 
 
-def route_commands(commands: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+def route_commands(commands: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """按 command_type 路由 ActionCommand 到三端（ADR-0015 §2.2）。
 
     Returns:
@@ -145,9 +151,9 @@ def route_commands(commands: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, A
 
     防御：非 dict 元素（None / 其他类型）直接跳过，不崩溃（公开函数，可能被直接调用）。
     """
-    family: List[Dict[str, Any]] = []
-    community: List[Dict[str, Any]] = []
-    log_only: List[Dict[str, Any]] = []
+    family: list[dict[str, Any]] = []
+    community: list[dict[str, Any]] = []
+    log_only: list[dict[str, Any]] = []
     for c in commands:
         if not isinstance(c, dict):
             continue  # 防御：非 dict 元素跳过，不崩溃

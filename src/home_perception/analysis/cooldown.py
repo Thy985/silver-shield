@@ -24,17 +24,17 @@ INACTIVE      ← reset
 
 **CompositeRule 不走 CooldownGate**（它消费其他 Rule 的"已冷却"结果，自身不产生重复触发）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Dict, Optional
 from uuid import UUID
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class CooldownState(str, Enum):
@@ -46,9 +46,10 @@ class CooldownState(str, Enum):
 @dataclass
 class _CooldownEntry:
     """单个 (visitor_id, rule_name) 的冷却状态。"""
+
     state: CooldownState = CooldownState.INACTIVE
-    last_trigger_at: Optional[datetime] = None  # 最近一次触发 ACTIVE 的时间
-    last_seen_at: Optional[datetime] = None     # 最近一次任何触发（包含 COOLDOWN 抑制）
+    last_trigger_at: datetime | None = None  # 最近一次触发 ACTIVE 的时间
+    last_seen_at: datetime | None = None  # 最近一次任何触发（包含 COOLDOWN 抑制）
 
 
 class CooldownGate:
@@ -69,7 +70,7 @@ class CooldownGate:
                     emit_perception_event(result)
     """
 
-    DEFAULT_COOLDOWN_S: float = 600.0    # 10 分钟
+    DEFAULT_COOLDOWN_S: float = 600.0  # 10 分钟
     DEFAULT_RESET_GAP_S: float = 1800.0  # 30 分钟
 
     def __init__(
@@ -84,7 +85,7 @@ class CooldownGate:
         self.cooldown_seconds = cooldown_seconds
         self.reset_gap_seconds = reset_gap_seconds
         # (visitor_id, rule_name) → _CooldownEntry
-        self._entries: Dict[tuple, _CooldownEntry] = {}
+        self._entries: dict[tuple, _CooldownEntry] = {}
 
     def try_trigger(self, visitor_id: UUID, rule_name: str, now: datetime | None = None) -> bool:
         """尝试触发 (visitor_id, rule_name)；允许触发返回 True（应发 PerceptionEvent），抑制返回 False。"""

@@ -21,11 +21,12 @@
   reenter 复用，程序重启/视频切换后新 track 视为新访客分配新 UUID。
 - 中心侧用 UUID 严格去重与 RiskTwin 关联，不受 ByteTrack ID 局部复用影响。
 """
+
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, Dict, List
 
 from ..common.logging import get_logger
 from ..common.timeutil import now_dt
@@ -72,14 +73,14 @@ class VisitorEventBuilder:
         # 已为本 track_id 生成过事件（离场后未重新进入前不再生成）
         self._emitted_track_ids: set[int] = set()
         # 上一轮各 track_id 的 status（用于检测 active→left / left→active 状态翻转）
-        self._last_status: Dict[int, str] = {}
+        self._last_status: dict[int, str] = {}
         # 已确认消费（ack）的事件 event_id
         self._acked_ids: set[str] = set()
         # 已生成事件列表（顺序：生成时间）
-        self._events: List[VisitorEvent] = []
+        self._events: list[VisitorEvent] = []
         # track_id → UUID 映射（本会话内稳定；程序重启/视频切换后清空）
         # ADR-0007：visitor_id 是 UUID，不是 ByteTrack track_id。
-        self._track_to_visitor: Dict[int, uuid.UUID] = {}
+        self._track_to_visitor: dict[int, uuid.UUID] = {}
 
     # ---------------- 公开接口 ----------------
 
@@ -93,11 +94,11 @@ class VisitorEventBuilder:
         self._source_video = value
 
     @property
-    def events(self) -> List[VisitorEvent]:
+    def events(self) -> list[VisitorEvent]:
         """已生成的 VisitorEvent 列表（只读快照；调用方不应原地修改）。"""
         return list(self._events)
 
-    def pending(self) -> List[VisitorEvent]:
+    def pending(self) -> list[VisitorEvent]:
         """未确认消费的事件（`ack` 后从待消费移除；用于 MQTT 失败的本地缓冲）。"""
         return [e for e in self._events if e.event_id not in self._acked_ids]
 
@@ -109,7 +110,7 @@ class VisitorEventBuilder:
         """查询某 track_id 当前对应的 visitor_id（UUID）。track 未出现过则返回 None。"""
         return self._track_to_visitor.get(track_id)
 
-    def update(self, detections: List[Detection]) -> List[VisitorEvent]:
+    def update(self, detections: list[Detection]) -> list[VisitorEvent]:
         """同步 Tracker + 扫描状态变化，返回**本轮新生成**的事件列表。
 
         事件生成规则：
@@ -121,7 +122,7 @@ class VisitorEventBuilder:
         # 1) 同步 Tracker（内部会按 absence_gap 判定 left）
         self._tracker.update(detections)
         # 2) 扫描变 LEFT 的 track，生成事件
-        new_events: List[VisitorEvent] = []
+        new_events: list[VisitorEvent] = []
         for vid, vt in self._tracker.active_tracks.items():
             prev_status = self._last_status.get(vid)
             if vt.status == ACTIVE:
@@ -177,9 +178,7 @@ class VisitorEventBuilder:
         """从已 left 的 VisitorTrack 构造 VisitorEvent（不含业务判断字段）。"""
         if vt.enter_time is None or vt.leave_time is None:
             # 防御：理论上 left 时 leave_time 必被回填；但显式校验避免脏数据
-            raise ValueError(
-                f"track_id={vt.track_id} 状态 left 但 enter_time/leave_time 缺失"
-            )
+            raise ValueError(f"track_id={vt.track_id} 状态 left 但 enter_time/leave_time 缺失")
         return VisitorEvent(
             visitor_id=visitor_id,
             enter_time=vt.enter_time,

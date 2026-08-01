@@ -8,6 +8,7 @@
 - snapshot() 含客户端恢复所需的 visitor_seq / behavior_seen 等键
 - meta() 提供状态面板 / 晚连恢复所需的运行时元数据
 """
+
 from __future__ import annotations
 
 from silver_demo.state import DemoAggregateState
@@ -16,19 +17,35 @@ from silver_demo.state import DemoAggregateState
 def _sample() -> dict:
     return {
         "active_warnings": [
-            {"warning_id": "w1", "risk_level": "LOW", "status": "PENDING",
-             "created_at": "2026-01-01T00:00:01", "reason_summary": ["夜间异常"]},
-            {"warning_id": "w2", "risk_level": "HIGH", "status": "PENDING",
-             "created_at": "2026-01-01T00:00:02"},
+            {
+                "warning_id": "w1",
+                "risk_level": "LOW",
+                "status": "PENDING",
+                "created_at": "2026-01-01T00:00:01",
+                "reason_summary": ["夜间异常"],
+            },
+            {
+                "warning_id": "w2",
+                "risk_level": "HIGH",
+                "status": "PENDING",
+                "created_at": "2026-01-01T00:00:02",
+            },
         ],
         "perception_events": [
-            {"visitor_id": "v1", "event_type": "abnormal_dwell", "created_at": "t",
-             "location": "门口", "score": 0.7, "repeat_count": 1},
+            {
+                "visitor_id": "v1",
+                "event_type": "abnormal_dwell",
+                "created_at": "t",
+                "location": "门口",
+                "score": 0.7,
+                "repeat_count": 1,
+            },
         ],
         "all_warnings": [],
         "routed": {
-            "family": [{"command_id": "c1", "warning_id": "w1",
-                        "command_type": "SEND_FAMILY_MESSAGE"}],
+            "family": [
+                {"command_id": "c1", "warning_id": "w1", "command_type": "SEND_FAMILY_MESSAGE"}
+            ],
             "community": [],
             "log_only": [],
         },
@@ -40,14 +57,20 @@ def _sample() -> dict:
 def test_ingest_accumulates_warnings_behaviors_commands():
     a = DemoAggregateState()
     s = _sample()
-    a.ingest(s["active_warnings"], s["perception_events"], s["all_warnings"],
-             s["routed"], s["frame_index"], s["loop_count"])
+    a.ingest(
+        s["active_warnings"],
+        s["perception_events"],
+        s["all_warnings"],
+        s["routed"],
+        s["frame_index"],
+        s["loop_count"],
+    )
 
     assert set(a.warnings.keys()) == {"w1", "w2"}
     keys = {b["key"] for b in a.behaviors}
-    assert "enter|v1" in keys              # 访客首次出现
+    assert "enter|v1" in keys  # 访客首次出现
     assert any(k.startswith("pe|v1|") for k in keys)  # 行为里程碑
-    assert "warn|w1" in keys and "warn|w2" in keys     # 风险预警里程碑
+    assert "warn|w1" in keys and "warn|w2" in keys  # 风险预警里程碑
     assert "w1" in a.commands and "c1" in a.commands["w1"]["family"]
     assert a.frame_index == 7 and a.loop_count == 2
 
@@ -55,12 +78,10 @@ def test_ingest_accumulates_warnings_behaviors_commands():
 def test_ingest_is_idempotent_on_repeat_frame():
     a = DemoAggregateState()
     s = _sample()
-    a.ingest(s["active_warnings"], s["perception_events"], s["all_warnings"],
-             s["routed"], 7, 2)
+    a.ingest(s["active_warnings"], s["perception_events"], s["all_warnings"], s["routed"], 7, 2)
     n_before = len(a.behaviors)
     # 重复同一帧：行为里程碑不应翻倍（去重键生效）
-    a.ingest(s["active_warnings"], s["perception_events"], s["all_warnings"],
-             s["routed"], 8, 2)
+    a.ingest(s["active_warnings"], s["perception_events"], s["all_warnings"], s["routed"], 8, 2)
     assert len(a.behaviors) == n_before
     assert set(a.warnings.keys()) == {"w1", "w2"}
 
@@ -68,9 +89,12 @@ def test_ingest_is_idempotent_on_repeat_frame():
 def test_last_warning_picks_highest_risk():
     a = DemoAggregateState()
     a.ingest(
-        [{"warning_id": "w1", "risk_level": "LOW"},
-         {"warning_id": "w2", "risk_level": "HIGH"}],
-        [], [], {"family": [], "community": [], "log_only": []}, 0, 0,
+        [{"warning_id": "w1", "risk_level": "LOW"}, {"warning_id": "w2", "risk_level": "HIGH"}],
+        [],
+        [],
+        {"family": [], "community": [], "log_only": []},
+        0,
+        0,
     )
     assert a.last_warning["warning_id"] == "w2"
 
@@ -78,17 +102,21 @@ def test_last_warning_picks_highest_risk():
 def test_terminal_status_removed():
     a = DemoAggregateState()
     a.ingest(
-        [{"warning_id": "w1", "risk_level": "LOW", "status": "RESOLVED",
-          "created_at": "t"}],
-        [], [], {"family": [], "community": [], "log_only": []}, 0, 0,
+        [{"warning_id": "w1", "risk_level": "LOW", "status": "RESOLVED", "created_at": "t"}],
+        [],
+        [],
+        {"family": [], "community": [], "log_only": []},
+        0,
+        0,
     )
     assert "w1" not in a.warnings
 
 
 def test_clear_resets_accumulation():
     a = DemoAggregateState()
-    a.ingest(_sample()["active_warnings"], _sample()["perception_events"],
-             [], _sample()["routed"], 7, 2)
+    a.ingest(
+        _sample()["active_warnings"], _sample()["perception_events"], [], _sample()["routed"], 7, 2
+    )
     a.clear()
     assert a.warnings == {}
     assert a.behaviors == []
@@ -106,14 +134,13 @@ def test_clear_reset_session_refreshes_started_at():
 def test_snapshot_roundtrip_carries_client_restore_keys():
     a = DemoAggregateState()
     s = _sample()
-    a.ingest(s["active_warnings"], s["perception_events"], s["all_warnings"],
-             s["routed"], 7, 2)
+    a.ingest(s["active_warnings"], s["perception_events"], s["all_warnings"], s["routed"], 7, 2)
     snap = a.snapshot()
     assert len(snap["warnings"]) == 2
     assert len(snap["behaviors"]) >= 4
-    assert snap["visitor_seq"]            # 访客友好名映射（客户端恢复）
-    assert snap["behavior_seen"]          # 去重键集合（客户端恢复）
-    assert snap["visitor_first"]          # 首次出现记录
+    assert snap["visitor_seq"]  # 访客友好名映射（客户端恢复）
+    assert snap["behavior_seen"]  # 去重键集合（客户端恢复）
+    assert snap["visitor_first"]  # 首次出现记录
     assert "w1" in snap["commands"]
 
 
@@ -137,8 +164,12 @@ def test_warning_prune_respects_max():
     a = DemoAggregateState()
     # 注入 35 条全 PENDING warning（无终态移除），应修剪到 _WARNING_MAX(30)
     warns = [
-        {"warning_id": f"w{i}", "risk_level": "LOW", "status": "PENDING",
-         "created_at": f"2026-01-01T00:00:{i:02d}"}
+        {
+            "warning_id": f"w{i}",
+            "risk_level": "LOW",
+            "status": "PENDING",
+            "created_at": f"2026-01-01T00:00:{i:02d}",
+        }
         for i in range(35)
     ]
     a.ingest(warns, [], [], {"family": [], "community": [], "log_only": []}, 0, 0)
@@ -152,8 +183,12 @@ def test_behavior_prune_respects_max():
     a = DemoAggregateState()
     # 注入 125 条去重的行为里程碑（不同 visitor_id），应修剪到 _BEHAVIOR_MAX(120)
     pes = [
-        {"visitor_id": f"v{i}", "event_type": "abnormal_dwell",
-         "created_at": f"2026-01-01T00:00:{i:02d}", "repeat_count": 1}
+        {
+            "visitor_id": f"v{i}",
+            "event_type": "abnormal_dwell",
+            "created_at": f"2026-01-01T00:00:{i:02d}",
+            "repeat_count": 1,
+        }
         for i in range(125)
     ]
     a.ingest([], pes, [], {"family": [], "community": [], "log_only": []}, 0, 0)
@@ -173,8 +208,14 @@ def test_merge_commands_single_bucket_capped_at_24():
 
 def test_snapshot_restores_warnings_into_fresh_state():
     a = DemoAggregateState()
-    a.ingest(_sample()["active_warnings"], _sample()["perception_events"],
-             _sample()["all_warnings"], _sample()["routed"], 7, 2)
+    a.ingest(
+        _sample()["active_warnings"],
+        _sample()["perception_events"],
+        _sample()["all_warnings"],
+        _sample()["routed"],
+        7,
+        2,
+    )
     snap = a.snapshot()
     # 晚连客户端（或新聚合实例）用 snapshot 重建：warnings 集合应与源一致
     # （镜像前端 applySnapshot 用 snapshot.warnings 恢复 warningMap 的端到端可达性）

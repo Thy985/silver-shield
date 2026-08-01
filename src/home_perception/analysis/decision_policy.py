@@ -7,12 +7,13 @@
 > - DecisionPolicy 不直接执行（不调 MQTT / 不通知家属 / 不升级社区）—— 留给 P0-9
 > - 策略可替换：MVP = RuleBasedDecisionPolicy；v2 = ML 评分；v3 = LLM 解释
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from .perception import PerceptionEvent
 from .warning import (
@@ -23,12 +24,13 @@ from .warning import (
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ============================================================================
 # DecisionContext：决策上下文（向 DecisionPolicy 注入时间 / 老人 ID / 业务配置等）
 # ============================================================================
+
 
 @dataclass
 class DecisionContext:
@@ -47,12 +49,13 @@ class DecisionContext:
 
     elder_id: str
     now: datetime = field(default_factory=_utc_now)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 # ============================================================================
 # DecisionPolicy 抽象基类
 # ============================================================================
+
 
 class DecisionPolicy(ABC):
     """决策策略抽象基类。所有具体策略必须实现 `decide(perception_events, ctx)`。
@@ -70,9 +73,9 @@ class DecisionPolicy(ABC):
     @abstractmethod
     def decide(
         self,
-        perception_events: List[PerceptionEvent],
+        perception_events: list[PerceptionEvent],
         ctx: DecisionContext,
-    ) -> Optional[WarningEvent]:
+    ) -> WarningEvent | None:
         """消费 PerceptionEvent 列表，输出 WarningEvent 或 None。
 
         返回 None 的典型情况：
@@ -89,21 +92,22 @@ class DecisionPolicy(ABC):
 # 默认事件类型 → (risk_level, recommended_action, human_reason) 路由表
 # 注意：visit_normal 单独（无 is_odd_hour 叠加）→ 抑制（不警告），仅 is_odd_hour=true 时
 # 经 `decide()` 过滤后进入 candidates 才会查表得 LOW
-DEFAULT_ROUTING_TABLE: Dict[str, Tuple[str, str, str]] = {
-    "high_risk_approach":    ("HIGH",   "ESCALATE_COMMUNITY", "多风险规则同时命中"),
-    "abnormal_dwell":        ("LOW",    "NOTIFY_FAMILY",      "异常停留"),
-    "repeat_visit":          ("LOW",    "NOTIFY_FAMILY",      "重复访问"),
-    "visit_pending_verify":  ("LOW",    "MONITOR",            "未在白名单"),
-    "visit_normal":          ("LOW",    "MONITOR",            "异常时段访问"),
+DEFAULT_ROUTING_TABLE: dict[str, tuple[str, str, str]] = {
+    "high_risk_approach": ("HIGH", "ESCALATE_COMMUNITY", "多风险规则同时命中"),
+    "abnormal_dwell": ("LOW", "NOTIFY_FAMILY", "异常停留"),
+    "repeat_visit": ("LOW", "NOTIFY_FAMILY", "重复访问"),
+    "visit_pending_verify": ("LOW", "MONITOR", "未在白名单"),
+    "visit_normal": ("LOW", "MONITOR", "异常时段访问"),
 }
 
 # 风险等级优先级（数字越大越严重，max 取最严重的）
-LEVEL_PRIORITY: Dict[str, int] = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+LEVEL_PRIORITY: dict[str, int] = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
 
 
 # ============================================================================
 # RuleBasedDecisionPolicy：MVP 规则版决策策略
 # ============================================================================
+
 
 class RuleBasedDecisionPolicy(DecisionPolicy):
     """MVP 决策策略：按 `PerceptionEvent.event_type` 优先级路由。
@@ -128,7 +132,7 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
 
     def __init__(
         self,
-        routing_table: Optional[Dict[str, Tuple[str, str, str]]] = None,
+        routing_table: dict[str, tuple[str, str, str]] | None = None,
     ):
         """路由表：per-event (level, action, reason) 三元组。
 
@@ -154,15 +158,15 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
 
     def decide(
         self,
-        perception_events: List[PerceptionEvent],
+        perception_events: list[PerceptionEvent],
         ctx: DecisionContext,
-    ) -> Optional[WarningEvent]:
+    ) -> WarningEvent | None:
         if not perception_events:
             return None
 
         # 1) 过滤 visit_normal：单独 visit_normal → 抑制；is_odd_hour 叠加 → LOW
-        significant: List[PerceptionEvent] = []
-        odd_hour_events: List[PerceptionEvent] = []
+        significant: list[PerceptionEvent] = []
+        odd_hour_events: list[PerceptionEvent] = []
         for ev in perception_events:
             if ev.event_type == "visit_normal":
                 if ev.is_odd_hour:
@@ -247,7 +251,7 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
 
     def _aggregate_level(
         self,
-        candidates: List[PerceptionEvent],
+        candidates: list[PerceptionEvent],
         chosen_level: str,
     ) -> str:
         """聚合 risk_level：取所有 candidates 的 max level。
@@ -267,10 +271,10 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
                 max_level = lvl
         return max_level
 
-    def _merge_reasons(self, candidates: List[PerceptionEvent]) -> List[str]:
+    def _merge_reasons(self, candidates: list[PerceptionEvent]) -> list[str]:
         """合并 reason_summary：按 candidates 顺序去重。"""
         seen: set = set()
-        reasons: List[str] = []
+        reasons: list[str] = []
         for ev in candidates:
             if ev.event_type in self.routing_table:
                 reason = self.routing_table[ev.event_type][2]

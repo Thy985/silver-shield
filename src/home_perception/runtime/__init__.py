@@ -3,6 +3,7 @@
 把 P0-3~P0-9 已验证组件装配成可运行 Demo（CAVIAR 复现）。
 边界：只解决"怎么启动系统"的工程问题，不验证逻辑正确性（已由 P0 Integration Validation 验证）。
 """
+
 from __future__ import annotations
 
 from .config import (
@@ -15,16 +16,16 @@ from .observability import PipelineMetrics
 from .pipeline import DemoClock, FrameResult, PerceptionPipeline, RunSummary
 
 __all__ = [
+    "DemoClock",
+    "FrameResult",
     # 装配器
     "PerceptionPipeline",
-    "FrameResult",
-    "RunSummary",
-    "DemoClock",
     # 指标
     "PipelineMetrics",
+    "RunSummary",
+    "build_dispatcher_config",
     # 配置转换（仅导出对外的公共转换函数）
     "build_threshold_config",
-    "build_dispatcher_config",
     "read_caviar_frames",
     # 生命周期 / Demo
     "run_demo",

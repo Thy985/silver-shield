@@ -14,6 +14,7 @@
 **冷启动语义**：``load()`` 对「文件缺失 / JSON 损坏 / schema 不符」一律返回 ``None``，
 调用方据此走冷启动（reset），不抛异常、不阻塞启动。
 """
+
 from __future__ import annotations
 
 import json
@@ -21,7 +22,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -30,8 +31,8 @@ class ActiveTrackSnapshot:
 
     visitor_instance_id: str
     phase: str  # RiskPhase.value
-    raised_signal_id: Optional[str]
-    raised_at: Optional[datetime]
+    raised_signal_id: str | None
+    raised_at: datetime | None
     first_seen: datetime
     last_seen_at: datetime
 
@@ -41,7 +42,7 @@ class RecentBehaviorSnapshot:
     """RecentBehaviorStore 单 visitor 快照。"""
 
     visitor_instance_id: str
-    enter_times: List[datetime]  # 窗口内进入时刻列表
+    enter_times: list[datetime]  # 窗口内进入时刻列表
     last_seen_at: datetime
 
 
@@ -52,8 +53,8 @@ class RuntimeSnapshot:
     snapshot_id: str  # uuid4，每次写入新生成
     snapshot_at: datetime  # 写入时刻（UTC）
     schema_version: int = 1
-    active_tracks: List[ActiveTrackSnapshot] = field(default_factory=list)
-    recent_behavior: List[RecentBehaviorSnapshot] = field(default_factory=list)
+    active_tracks: list[ActiveTrackSnapshot] = field(default_factory=list)
+    recent_behavior: list[RecentBehaviorSnapshot] = field(default_factory=list)
     # 不含 BehaviorState derived 字段，重启后由 BehaviorBuilder 重算
 
 
@@ -104,7 +105,7 @@ class SnapshotStore:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         os.replace(self._tmp_path, self._path)  # Windows/Linux 均原子
 
-    def load(self) -> Optional[RuntimeSnapshot]:
+    def load(self) -> RuntimeSnapshot | None:
         """读 snapshot；不存在 / 解析失败返回 None（视为冷启动）。"""
         if not self._path.exists():
             return None
@@ -116,7 +117,7 @@ class SnapshotStore:
             # 损坏的 snapshot 视为冷启动，不阻塞启动
             return None
 
-    def _deserialize(self, payload: Dict[str, Any]) -> RuntimeSnapshot:
+    def _deserialize(self, payload: dict[str, Any]) -> RuntimeSnapshot:
         active_tracks = [
             ActiveTrackSnapshot(
                 visitor_instance_id=s["visitor_instance_id"],

@@ -2,6 +2,7 @@
 
 输出《架构设计完善版》定义的 5 类门前标签；不直接下"诈骗人员"结论。
 """
+
 from .behavior_state import (
     BehaviorPhase,
     BehaviorState,
@@ -20,16 +21,16 @@ from .risk_signal import (
 )
 
 __all__ = [
+    "FORBIDDEN_RISKSIGNAL_FIELDS",
+    "RISKSIGNAL_DICT_KEYS",
     "BehaviorPhase",
     "BehaviorState",
     "RealtimeContext",
-    "compute_is_odd_hour",
     "RecentBehaviorStore",
     "RiskSignal",
     "SignalCategory",
-    "SourceModality",
     "SignalTransition",
+    "SourceModality",
     "SubjectType",
-    "RISKSIGNAL_DICT_KEYS",
-    "FORBIDDEN_RISKSIGNAL_FIELDS",
+    "compute_is_odd_hour",
 ]

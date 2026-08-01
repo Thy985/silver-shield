@@ -11,9 +11,10 @@
 - is_odd_hour 纯函数
 - RealtimeContext 组合体
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -28,11 +29,12 @@ from home_perception.analysis.behavior_state import (
 
 def _utc(y: int, mo: int, d: int, h: int, mi: int = 0, s: int = 0) -> datetime:
     """测试用注入时钟（now_provider 的等价物，返回 datetime UTC）。"""
-    return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+    return datetime(y, mo, d, h, mi, s, tzinfo=UTC)
 
 
-def _state_at(phase: BehaviorPhase, enter: datetime, now: datetime, track_id: int = 1,
-              vid: str = "vid-1") -> BehaviorState:
+def _state_at(
+    phase: BehaviorPhase, enter: datetime, now: datetime, track_id: int = 1, vid: str = "vid-1"
+) -> BehaviorState:
     return BehaviorState(
         track_id=track_id,
         visitor_instance_id=vid,
@@ -47,6 +49,7 @@ def _state_at(phase: BehaviorPhase, enter: datetime, now: datetime, track_id: in
 # ---------------------------------------------------------------------------
 # 进入 → dwell 累计 → 离开 phase 翻转（now_provider 驱动）
 # ---------------------------------------------------------------------------
+
 
 def test_lifecycle_dwell_accumulation_and_phase_flip():
     enter = _utc(2026, 7, 26, 10, 0, 0)
@@ -66,7 +69,7 @@ def test_lifecycle_dwell_accumulation_and_phase_flip():
 
 def test_is_odd_hour_changes_with_injected_clock():
     """is_odd_hour 由注入时刻驱动，不依赖墙钟。"""
-    day = _utc(2026, 7, 26, 12, 0, 0)   # 中午，非异时
+    day = _utc(2026, 7, 26, 12, 0, 0)  # 中午，非异时
     night = _utc(2026, 7, 26, 23, 30, 0)  # 深夜，异时
     assert _state_at(BehaviorPhase.ONGOING, day, day).is_odd_hour is False
     assert _state_at(BehaviorPhase.ONGOING, night, night).is_odd_hour is True
@@ -76,6 +79,7 @@ def test_is_odd_hour_changes_with_injected_clock():
 # schema_version = 1
 # ---------------------------------------------------------------------------
 
+
 def test_schema_version_default_one():
     s = _state_at(BehaviorPhase.ONGOING, _utc(2026, 7, 26, 10), _utc(2026, 7, 26, 10))
     assert s.schema_version == 1
@@ -84,6 +88,7 @@ def test_schema_version_default_one():
 # ---------------------------------------------------------------------------
 # 纯态断言：无 visits_in_window
 # ---------------------------------------------------------------------------
+
 
 def test_no_visits_in_window_field():
     """BehaviorState 是纯当前生命周期态，不含跨访问统计 visits_in_window。"""
@@ -96,13 +101,16 @@ def test_no_visits_in_window_field():
 # proximity_score clamp [0,1]
 # ---------------------------------------------------------------------------
 
+
 def test_proximity_score_clamped():
     enter = _utc(2026, 7, 26, 10)
     now = _utc(2026, 7, 26, 10, 0, 5)
-    over = BehaviorState(1, "vid", BehaviorPhase.ONGOING, enter, now, 5.0, False,
-                         proximity_score=1.7)
-    under = BehaviorState(1, "vid", BehaviorPhase.ONGOING, enter, now, 5.0, False,
-                          proximity_score=-0.3)
+    over = BehaviorState(
+        1, "vid", BehaviorPhase.ONGOING, enter, now, 5.0, False, proximity_score=1.7
+    )
+    under = BehaviorState(
+        1, "vid", BehaviorPhase.ONGOING, enter, now, 5.0, False, proximity_score=-0.3
+    )
     assert over.proximity_score == 1.0
     assert under.proximity_score == 0.0
 
@@ -116,6 +124,7 @@ def test_proximity_score_default_zero():
 # BehaviorPhase 枚举闭合（含预留）
 # ---------------------------------------------------------------------------
 
+
 def test_behavior_phase_enum_closed():
     assert set(BEHAVIOR_PHASE_VALUES) == {
         "ongoing",
@@ -126,8 +135,7 @@ def test_behavior_phase_enum_closed():
 
 
 def test_phase_accepts_str():
-    s = BehaviorState(1, "vid", "ongoing", _utc(2026, 7, 26, 10),
-                      _utc(2026, 7, 26, 10), 0.0, False)
+    s = BehaviorState(1, "vid", "ongoing", _utc(2026, 7, 26, 10), _utc(2026, 7, 26, 10), 0.0, False)
     assert s.phase is BehaviorPhase.ONGOING
 
 
@@ -135,27 +143,50 @@ def test_phase_accepts_str():
 # 时间不变式
 # ---------------------------------------------------------------------------
 
+
 def test_rejects_naive_datetime():
     with pytest.raises(ValueError):
-        BehaviorState(1, "vid", BehaviorPhase.ONGOING, datetime(2026, 7, 26, 10),
-                      _utc(2026, 7, 26, 10), 0.0, False)
+        BehaviorState(
+            1,
+            "vid",
+            BehaviorPhase.ONGOING,
+            datetime(2026, 7, 26, 10),  # noqa: DTZ001 (naive test)
+            _utc(2026, 7, 26, 10),
+            0.0,
+            False,
+        )
 
 
 def test_rejects_last_before_first():
     with pytest.raises(ValueError):
-        BehaviorState(1, "vid", BehaviorPhase.ONGOING, _utc(2026, 7, 26, 10, 5),
-                      _utc(2026, 7, 26, 10, 0), 0.0, False)
+        BehaviorState(
+            1,
+            "vid",
+            BehaviorPhase.ONGOING,
+            _utc(2026, 7, 26, 10, 5),
+            _utc(2026, 7, 26, 10, 0),
+            0.0,
+            False,
+        )
 
 
 def test_rejects_negative_dwell():
     with pytest.raises(ValueError):
-        BehaviorState(1, "vid", BehaviorPhase.ONGOING, _utc(2026, 7, 26, 10),
-                      _utc(2026, 7, 26, 10), -1.0, False)
+        BehaviorState(
+            1,
+            "vid",
+            BehaviorPhase.ONGOING,
+            _utc(2026, 7, 26, 10),
+            _utc(2026, 7, 26, 10),
+            -1.0,
+            False,
+        )
 
 
 # ---------------------------------------------------------------------------
 # RealtimeContext 组合体
 # ---------------------------------------------------------------------------
+
 
 def test_realtime_context_combines_state_and_recent():
     enter = _utc(2026, 7, 26, 10)
@@ -175,6 +206,7 @@ def test_realtime_context_requires_behavior_state():
 # ---------------------------------------------------------------------------
 # from_dict 反序列化（与 to_dict 严格对称）
 # ---------------------------------------------------------------------------
+
 
 def test_from_dict_roundtrip():
     """to_dict → from_dict → to_dict 应产出相同字典（round-trip 对称）。"""

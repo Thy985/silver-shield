@@ -10,11 +10,12 @@
 下行消息（网关 → Dashboard）：
     {"type": "frame", "view": {...frame_result_to_view...}, "state": {...snapshot...}}
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
 from fastapi import WebSocket
 
@@ -30,7 +31,7 @@ class ConnectionHub:
     """
 
     def __init__(self) -> None:
-        self.active: Set[WebSocket] = set()
+        self.active: set[WebSocket] = set()
         self._lock = asyncio.Lock()
 
     async def connect(self, ws: WebSocket) -> None:
@@ -42,7 +43,7 @@ class ConnectionHub:
         async with self._lock:
             self.active.discard(ws)
 
-    async def broadcast(self, message: Dict[str, Any]) -> None:
+    async def broadcast(self, message: dict[str, Any]) -> None:
         """向所有活跃连接推送 JSON 消息；失败的连接静默移除。"""
         text = json.dumps(message, ensure_ascii=False)
         dead: list[WebSocket] = []
@@ -52,21 +53,21 @@ class ConnectionHub:
         for ws in conns:
             try:
                 await ws.send_text(text)
-            except Exception:
+            except Exception:  # noqa: BLE001  # 发送失败：标记为 dead 待清理
                 dead.append(ws)
         if dead:
             async with self._lock:
                 for ws in dead:
                     self.active.discard(ws)
 
-    async def send_to(self, ws: WebSocket, message: Dict[str, Any]) -> None:
+    async def send_to(self, ws: WebSocket, message: dict[str, Any]) -> None:
         """向单个连接推送 JSON 消息（用于新连接首连 ``snapshot`` 等）。
 
         失败的连接静默移除（视为已断开）。
         """
         try:
             await ws.send_text(json.dumps(message, ensure_ascii=False))
-        except Exception:
+        except Exception:  # noqa: BLE001  # 广播失败：从活跃集合移除
             async with self._lock:
                 self.active.discard(ws)
 
@@ -75,7 +76,7 @@ async def handle_upstream(
     ws: WebSocket,
     raw: str,
     store: DemoStateStore,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """处理 Dashboard 上行的 JSON 消息。
 
     目前仅支持 ``type=action``：解析 warning_id / operator / action → 写入 DemoStateStore。
@@ -101,7 +102,7 @@ async def handle_upstream(
     # action → 目标状态映射（与 ADR-0015 §2.5 状态机一致）
     # family 的 [认识] / [通知社区] → family_handled
     # community 的 [接受] / [完成] → community_done
-    target_status: Optional[str] = None
+    target_status: str | None = None
     if operator == "family":
         target_status = "family_handled"
     elif operator == "community":

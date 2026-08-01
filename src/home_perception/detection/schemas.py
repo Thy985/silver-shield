@@ -8,11 +8,11 @@
   跨天重复识别属于 P0-6 / P1（VisitorFeature / VisitorHistory / 外观 embedding / 人工确认），
   不在本层引入（见 Owner P0-5 说明）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Tuple
 
 # 访客当前状态：在场 / 已离场（离场宽限内未再见）
 ACTIVE = "active"
@@ -28,15 +28,15 @@ class VisitorTrack:
     - `VisitorEvent` 是**离散事件**（离场/异常时由 analysis 生成，供上报）。
     """
 
-    track_id: int                       # 来自 YOLO/ByteTrack 的帧间一致 ID（仅本摄像头会话内有效）
-    first_seen: datetime                # 首次出现
-    last_seen: datetime                 # 最近一次出现
-    frame_count: int = 1                # 累计被检出的帧数
-    bbox: Optional[Tuple[float, float, float, float]] = None  # 最近一帧 bbox（原始帧坐标）
-    confidence: float = 0.0             # 最近一帧置信度
-    status: str = ACTIVE                # active | left
-    enter_time: Optional[datetime] = None   # 本次在场进入时刻
-    leave_time: Optional[datetime] = None   # 本次在场离开时刻（离场后回填）
+    track_id: int  # 来自 YOLO/ByteTrack 的帧间一致 ID（仅本摄像头会话内有效）
+    first_seen: datetime  # 首次出现
+    last_seen: datetime  # 最近一次出现
+    frame_count: int = 1  # 累计被检出的帧数
+    bbox: tuple[float, float, float, float] | None = None  # 最近一帧 bbox（原始帧坐标）
+    confidence: float = 0.0  # 最近一帧置信度
+    status: str = ACTIVE  # active | left
+    enter_time: datetime | None = None  # 本次在场进入时刻
+    leave_time: datetime | None = None  # 本次在场离开时刻（离场后回填）
 
     @property
     def duration_s(self) -> float:

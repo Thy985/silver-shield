@@ -2,6 +2,7 @@
 
 默认 MQTT；中心不可达时本地环形缓冲，恢复后补发（风险 T7）。
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -11,8 +12,7 @@ from ..analysis.perception import PerceptionEvent
 
 class Publisher(ABC):
     @abstractmethod
-    def publish(self, event: PerceptionEvent) -> None:
-        ...
+    def publish(self, event: PerceptionEvent) -> None: ...
 
 
 class MQTTPublisher(Publisher):

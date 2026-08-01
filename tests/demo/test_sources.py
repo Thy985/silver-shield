@@ -5,22 +5,23 @@
 
 冻结合规：本测试与 silver_demo 同源，仅消费白名单（runtime.config 经 silver_demo.sources 间接）。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import cv2
 import numpy as np
 import pytest
 
+from silver_demo.scenarios import ScenarioConfig, load_scenario
 from silver_demo.sources import (
     CaviarJpgFrameSource,
     DemoFrameSource,
     VideoFileFrameSource,
     build_frame_source,
 )
-from silver_demo.scenarios import ScenarioConfig, load_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAVIAR_BASE = REPO_ROOT / "tests" / "fixtures" / "doorway"
@@ -152,7 +153,7 @@ def test_build_frame_source_video_file(tmp_path) -> None:
         source="x",
         source_type="video_file",
         media_path=str(mp4),
-        start_time=datetime(2026, 7, 19, 23, 30, tzinfo=timezone.utc),
+        start_time=datetime(2026, 7, 19, 23, 30, tzinfo=UTC),
     )
     src = build_frame_source(scenario, hp_settings=None)
     assert isinstance(src, VideoFileFrameSource)
@@ -166,7 +167,7 @@ def test_build_frame_source_caviar() -> None:
         scenario_id="night_visit",
         source="one_leave_reenter",
         source_type="caviar_jpg",
-        start_time=datetime(2026, 7, 19, 23, 30, tzinfo=timezone.utc),
+        start_time=datetime(2026, 7, 19, 23, 30, tzinfo=UTC),
     )
 
     class _Runtime:
@@ -187,7 +188,7 @@ def test_build_frame_source_video_file_missing_media_path_raises() -> None:
         source="x",
         source_type="video_file",
         media_path=None,
-        start_time=datetime(2026, 7, 19, 23, 30, tzinfo=timezone.utc),
+        start_time=datetime(2026, 7, 19, 23, 30, tzinfo=UTC),
     )
     with pytest.raises(ValueError):
         build_frame_source(scenario, hp_settings=None)

@@ -3,6 +3,7 @@
 - 无 torch 常跑：用 FakeDetector 验证指标聚合、warmup 排除、目标校验逻辑。
 - 有 torch/ultralytics 时：跑一小段真实合成基准，确认 YOLODetector 能被基准消费。
 """
+
 from __future__ import annotations
 
 import time
@@ -31,7 +32,7 @@ class FakeDetector(Detector):
         self._inference_ms = inference_ms
         self.loaded = False
 
-    def load(self) -> "FakeDetector":
+    def load(self) -> FakeDetector:
         self.loaded = True
         return self
 
@@ -95,26 +96,60 @@ def test_run_benchmark_aggregation_with_fake_detector():
 
 def test_check_targets_pass_and_fail():
     fast = BenchmarkReport(
-        mode="synthetic", model="m", device="cpu", resolution="1920x1080",
-        imgsz=640, frames=100, warmup=5, elapsed_s=10.0,
-        camera_fps=20.0, inference_fps=40.0,
-        inference_ms_avg=25.0, inference_ms_p50=24.0, inference_ms_p95=30.0, inference_ms_max=35.0,
-        e2e_ms_avg=50.0, e2e_ms_p50=48.0, e2e_ms_p95=60.0, e2e_ms_max=70.0,
-        capture_ms_avg=1.0, cpu_percent_avg=50.0, cpu_percent_max=80.0,
-        mem_rss_avg_mb=500.0, mem_rss_max_mb=600.0, resource_available=True,
+        mode="synthetic",
+        model="m",
+        device="cpu",
+        resolution="1920x1080",
+        imgsz=640,
+        frames=100,
+        warmup=5,
+        elapsed_s=10.0,
+        camera_fps=20.0,
+        inference_fps=40.0,
+        inference_ms_avg=25.0,
+        inference_ms_p50=24.0,
+        inference_ms_p95=30.0,
+        inference_ms_max=35.0,
+        e2e_ms_avg=50.0,
+        e2e_ms_p50=48.0,
+        e2e_ms_p95=60.0,
+        e2e_ms_max=70.0,
+        capture_ms_avg=1.0,
+        cpu_percent_avg=50.0,
+        cpu_percent_max=80.0,
+        mem_rss_avg_mb=500.0,
+        mem_rss_max_mb=600.0,
+        resource_available=True,
         detections_total=100,
     )
     checks = check_targets(fast)
     assert all(c["pass"] for c in checks)
 
     slow = BenchmarkReport(
-        mode="synthetic", model="m", device="cpu", resolution="1920x1080",
-        imgsz=640, frames=100, warmup=5, elapsed_s=100.0,
-        camera_fps=3.0, inference_fps=2.0,
-        inference_ms_avg=500.0, inference_ms_p50=480.0, inference_ms_p95=600.0, inference_ms_max=700.0,
-        e2e_ms_avg=800.0, e2e_ms_p50=780.0, e2e_ms_p95=900.0, e2e_ms_max=1000.0,
-        capture_ms_avg=5.0, cpu_percent_avg=95.0, cpu_percent_max=100.0,
-        mem_rss_avg_mb=800.0, mem_rss_max_mb=900.0, resource_available=True,
+        mode="synthetic",
+        model="m",
+        device="cpu",
+        resolution="1920x1080",
+        imgsz=640,
+        frames=100,
+        warmup=5,
+        elapsed_s=100.0,
+        camera_fps=3.0,
+        inference_fps=2.0,
+        inference_ms_avg=500.0,
+        inference_ms_p50=480.0,
+        inference_ms_p95=600.0,
+        inference_ms_max=700.0,
+        e2e_ms_avg=800.0,
+        e2e_ms_p50=780.0,
+        e2e_ms_p95=900.0,
+        e2e_ms_max=1000.0,
+        capture_ms_avg=5.0,
+        cpu_percent_avg=95.0,
+        cpu_percent_max=100.0,
+        mem_rss_avg_mb=800.0,
+        mem_rss_max_mb=900.0,
+        resource_available=True,
         detections_total=100,
     )
     checks = check_targets(slow)

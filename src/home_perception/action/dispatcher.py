@@ -11,16 +11,15 @@
 >
 > 一个 WarningEvent 可产生 0-N 个 ActionCommand（MVP 1 个，v2 可拆多通道）
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
 
-from ..common.logging import get_logger
 from ..analysis.warning import WarningEvent
+from ..common.logging import get_logger
 from .command import ActionCommand
 from .notifier import FamilyContact
-
 
 log = get_logger(__name__)
 
@@ -29,11 +28,13 @@ log = get_logger(__name__)
 # ActionDispatcher
 # ============================================================================
 
+
 @dataclass
 class DispatcherConfig:
     """Dispatcher 配置（MVP 从 devices.yaml 读，v2 从中心 RiskTwin 拉）。"""
-    family_contact: Optional[FamilyContact] = None
-    community_endpoint: Optional[str] = None  # e.g., "https://community.example.com/api/v1/tasks"
+
+    family_contact: FamilyContact | None = None
+    community_endpoint: str | None = None  # e.g., "https://community.example.com/api/v1/tasks"
     mqtt_topic_prefix: str = "silvershield/home"  # silvershield/home/{device_id}/warning
 
 
@@ -51,10 +52,10 @@ class ActionDispatcher:
         # commands 可能是 []（dispatcher 决定无需动作）或 1+ 个 ActionCommand
     """
 
-    def __init__(self, config: Optional[DispatcherConfig] = None):
+    def __init__(self, config: DispatcherConfig | None = None):
         self.config = config or DispatcherConfig()
 
-    def dispatch(self, warning: WarningEvent) -> List[ActionCommand]:
+    def dispatch(self, warning: WarningEvent) -> list[ActionCommand]:
         """根据 warning.recommended_action 路由到对应 ActionCommand 构造器。"""
         rec = warning.recommended_action
         if rec == "MONITOR":

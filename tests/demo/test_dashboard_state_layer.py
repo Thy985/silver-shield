@@ -12,6 +12,7 @@
 
 本层纯前端（silver_demo/dashboard），零改动 home_perception 冻结契约，故只锁前端锚点。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,10 +25,10 @@ def test_dashboard_has_warning_keepalive_anchors() -> None:
     """区域③④ 必须经 warningMap 保活 + activeWarningList 聚合，而非逐帧覆盖。"""
     html = DASHBOARD.read_text(encoding="utf-8")
     anchors = [
-        "warningMap",           # 按 warning_id 跨帧保活
-        "ingestWarnings",       # 每帧 upsert + 终态移除
-        "pruneWarnings",        # 超上限按 created_at 修剪
-        "activeWarningList",    # 区域③④ 共用的聚合列表
+        "warningMap",  # 按 warning_id 跨帧保活
+        "ingestWarnings",  # 每帧 upsert + 终态移除
+        "pruneWarnings",  # 超上限按 created_at 修剪
+        "activeWarningList",  # 区域③④ 共用的聚合列表
     ]
     missing = [a for a in anchors if a not in html]
     assert not missing, f"dashboard 缺少 Warning 保活锚点：{missing}"
@@ -46,11 +47,11 @@ def test_dashboard_has_behavior_timeline_anchors() -> None:
     """区域② 必须是累积去重的行为里程碑时间线，而非逐帧 perception_events 快照。"""
     html = DASHBOARD.read_text(encoding="utf-8")
     anchors = [
-        "ingestBehavior",       # 跨帧累积行为里程碑
-        "behaviorEvents",       # 累积去重后的里程碑列表
-        "friendlyVisitor",      # visitor_id → 访客#N 友好名
-        "首次出现",              # 行为演化：进入
-        "AI 行为时间线",         # 区域② 标题（从 "AI 时间线 / PerceptionEvent 流" 升级）
+        "ingestBehavior",  # 跨帧累积行为里程碑
+        "behaviorEvents",  # 累积去重后的里程碑列表
+        "friendlyVisitor",  # visitor_id → 访客#N 友好名
+        "首次出现",  # 行为演化：进入
+        "AI 行为时间线",  # 区域② 标题（从 "AI 时间线 / PerceptionEvent 流" 升级）
     ]
     missing = [a for a in anchors if a not in html]
     assert not missing, f"dashboard 缺少 AI 行为时间线锚点：{missing}"

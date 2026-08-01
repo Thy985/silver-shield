@@ -32,6 +32,7 @@ MQTT / SMS / 社区工单
 
 详细设计见 `docs/ADR/0011-action-layer-architecture.md`。
 """
+
 from __future__ import annotations
 
 from .command import (
@@ -46,27 +47,26 @@ from .command import (
 from .dispatcher import ActionDispatcher, DispatcherConfig
 from .executor import ActionExecutor
 from .notifier import FamilyContact, MockNotifier, NotificationAdapter
-from .publisher import MQTTPublisher, MockPublisher
-
+from .publisher import MockPublisher, MQTTPublisher
 
 __all__ = [
+    # 状态
+    "COMMAND_STATUSES",
+    "COMMAND_TYPES",
+    "FORBIDDEN_ACTION_FIELDS",
+    "WARNING_TRANSITIONS",
     # 核心
     "ActionCommand",
     "ActionDispatcher",
     "ActionExecutor",
     "DispatcherConfig",
+    "FamilyContact",
     # 接口
     "MQTTPublisher",
-    "NotificationAdapter",
+    "MockNotifier",
     # Mock
     "MockPublisher",
-    "MockNotifier",
-    "FamilyContact",
-    # 状态
-    "COMMAND_STATUSES",
-    "COMMAND_TYPES",
-    "WARNING_TRANSITIONS",
-    "FORBIDDEN_ACTION_FIELDS",
-    "can_transition_warning",
+    "NotificationAdapter",
     "assert_transition_warning",
+    "can_transition_warning",
 ]

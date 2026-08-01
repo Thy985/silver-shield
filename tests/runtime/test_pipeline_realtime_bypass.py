@@ -9,10 +9,10 @@ torch-free，进 CI 每 PR 合约子集。
 - **flag 关闭零组件构造**：``from_settings`` 装配后实时组件为 None（零运行时开销）
 - **eval_interval_frames 跳帧**：非评估帧 ``behavior_states == []``，评估帧才产出
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -37,16 +37,16 @@ from home_perception.detection.detector import Detection, DetectionResult
 from home_perception.detection.tracker import VisitorTracker
 from home_perception.runtime import FrameResult, PerceptionPipeline
 
-
 # ============================================================================
 # 测试辅助（模式复用自 tests/test_runtime.py，保持 Stage B 自包含）
 # ============================================================================
 
+
 class ManualClock:
     """可控时钟：now() 返回当前时间，advance() 推进。"""
 
-    def __init__(self, base: Optional[datetime] = None):
-        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=timezone.utc)
+    def __init__(self, base: datetime | None = None):
+        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC)
 
     def now(self) -> datetime:
         return self._t
@@ -61,7 +61,7 @@ class ManualClock:
 class StubDetector:
     """按 plan 返回 Detection 列表；可选 clock 每次 detect 推进 1s。"""
 
-    def __init__(self, plan: List[List[Detection]], clock: Optional[ManualClock] = None):
+    def __init__(self, plan: list[list[Detection]], clock: ManualClock | None = None):
         self.plan = plan
         self.clock = clock
         self.i = 0
@@ -73,16 +73,26 @@ class StubDetector:
         dets = self.plan[idx]
         self.i += 1
         return DetectionResult(
-            detections=dets, timestamp=0.0, inference_ms=0.0,
-            source_size=(1, 1), inference_size=(1, 1), model="stub",
+            detections=dets,
+            timestamp=0.0,
+            inference_ms=0.0,
+            source_size=(1, 1),
+            inference_size=(1, 1),
+            model="stub",
         )
 
 
-def _person(track_id: int = 1) -> List[Detection]:
-    return [Detection(
-        class_id=0, class_name="person", confidence=0.9,
-        bbox=[0, 0, 10, 10], timestamp=0.0, track_id=track_id,
-    )]
+def _person(track_id: int = 1) -> list[Detection]:
+    return [
+        Detection(
+            class_id=0,
+            class_name="person",
+            confidence=0.9,
+            bbox=[0, 0, 10, 10],
+            timestamp=0.0,
+            track_id=track_id,
+        )
+    ]
 
 
 def _build_pipeline(
@@ -91,7 +101,7 @@ def _build_pipeline(
     *,
     realtime_enabled: bool = False,
     eval_interval_frames: int = 1,
-    thresholds: Optional[ThresholdConfig] = None,
+    thresholds: ThresholdConfig | None = None,
     decision_enabled: bool = False,
 ) -> PerceptionPipeline:
     """构造 PerceptionPipeline，可选挂入 Stage B/C/D 实时旁路组件。"""
@@ -100,30 +110,41 @@ def _build_pipeline(
     th = thresholds or ThresholdConfig()
     feat = FeatureExtractor(frequency_window_s=1800.0)
     rule_engine = RuleEngine(
-        device_id="demo/test", location="入户门",
-        thresholds=th, now_provider=clock,
+        device_id="demo/test",
+        location="入户门",
+        thresholds=th,
+        now_provider=clock,
     )
     decision = DecisionEngine(
-        elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock,
+        elder_id="elder_001",
+        policy=RuleBasedDecisionPolicy(),
+        now_provider=clock,
     )
     dispatcher = ActionDispatcher(DispatcherConfig())
     executor = ActionExecutor(
-        dispatcher=dispatcher, publisher=MockPublisher(),
-        notifier=MockNotifier(), max_retries=3,
+        dispatcher=dispatcher,
+        publisher=MockPublisher(),
+        notifier=MockNotifier(),
+        max_retries=3,
     )
 
-    behavior_builder: Optional[BehaviorBuilder] = None
-    recent_store: Optional[RecentBehaviorStore] = None
-    evaluator: Optional[RealTimeRiskEvaluator] = None
+    behavior_builder: BehaviorBuilder | None = None
+    recent_store: RecentBehaviorStore | None = None
+    evaluator: RealTimeRiskEvaluator | None = None
     if realtime_enabled:
         behavior_builder = BehaviorBuilder(event_builder=event_builder)
         recent_store = RecentBehaviorStore()
         evaluator = RealTimeRiskEvaluator(thresholds=th, now_provider=clock)
 
     return PerceptionPipeline(
-        detector=detector, tracker=tracker, event_builder=event_builder,
-        feature_extractor=feat, rule_engine=rule_engine, decision_engine=decision,
-        executor=executor, now_provider=clock,
+        detector=detector,
+        tracker=tracker,
+        event_builder=event_builder,
+        feature_extractor=feat,
+        rule_engine=rule_engine,
+        decision_engine=decision,
+        executor=executor,
+        now_provider=clock,
         behavior_builder=behavior_builder,
         recent_behavior_store=recent_store,
         realtime_evaluator=evaluator,
@@ -133,7 +154,7 @@ def _build_pipeline(
     )
 
 
-def _run_frames(p: PerceptionPipeline, n: int) -> List[FrameResult]:
+def _run_frames(p: PerceptionPipeline, n: int) -> list[FrameResult]:
     """跑 n 帧 None，返回每帧 FrameResult。"""
     return [p.process_frame(None, frame_index=i) for i in range(n)]
 
@@ -141,14 +162,19 @@ def _run_frames(p: PerceptionPipeline, n: int) -> List[FrameResult]:
 def _history_fields(r: FrameResult) -> tuple:
     """提取历史五字段（不含 behavior_states）用于逐字段对比。"""
     return (
-        r.frame_index, r.n_detections, r.n_visitor_events,
-        len(r.perception_events), len(r.warnings), len(r.commands),
+        r.frame_index,
+        r.n_detections,
+        r.n_visitor_events,
+        len(r.perception_events),
+        len(r.warnings),
+        len(r.commands),
     )
 
 
 # ============================================================================
 # 1. flag 关闭：golden 回归（behavior_states 空 + 历史字段正常）
 # ============================================================================
+
 
 class TestFlagOffGolden:
     def test_flag_off_behavior_states_empty(self):
@@ -179,6 +205,7 @@ class TestFlagOffGolden:
 # ============================================================================
 # 2. flag 开启：仅多 behavior_states，历史字段逐字段一致
 # ============================================================================
+
 
 class TestFlagOnBypassIsolation:
     def test_flag_on_history_unchanged_vs_off(self):
@@ -232,6 +259,7 @@ class TestFlagOnBypassIsolation:
 # 3. flag 关闭零组件构造（from_settings 装配验证）
 # ============================================================================
 
+
 class TestFromSettingsAssembly:
     def test_flag_off_no_components_constructed(self):
         """flag 关闭：from_settings 不构造实时组件（零运行时开销）。"""
@@ -240,6 +268,7 @@ class TestFromSettingsAssembly:
         # 不传 detector → from_settings 会试图构造 YOLODetector，但构造期不触发 torch
         # 这里只验证装配逻辑：用 mock detector 跳过 YOLO
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._realtime_enabled is False
@@ -252,6 +281,7 @@ class TestFromSettingsAssembly:
         s = Settings()
         s.realtime_risk.enabled = True
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._realtime_enabled is True
@@ -264,21 +294,24 @@ class TestFromSettingsAssembly:
 # 4. eval_interval_frames 跳帧对称
 # ============================================================================
 
+
 class TestEvalIntervalFrames:
     def test_eval_interval_skips_non_eval_frames(self):
         """eval_interval_frames=2：非评估帧 behavior_states 空，评估帧才产出。"""
         clock = ManualClock()
         plan = [_person(1), _person(1), _person(1), _person(1)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=True, eval_interval_frames=2,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=True,
+            eval_interval_frames=2,
         )
         results = _run_frames(p, 4)
         # frame_index 0, 2 是评估帧（0%2==0, 2%2==0）；1, 3 非评估帧
         assert len(results[0].behavior_states) >= 1  # 评估帧
-        assert results[1].behavior_states == []       # 非评估帧
-        assert len(results[2].behavior_states) >= 1   # 评估帧
-        assert results[3].behavior_states == []       # 非评估帧
+        assert results[1].behavior_states == []  # 非评估帧
+        assert len(results[2].behavior_states) >= 1  # 评估帧
+        assert results[3].behavior_states == []  # 非评估帧
 
     def test_eval_interval_history_unchanged(self):
         """eval_interval_frames>1 不影响历史字段（跳帧只影响实时旁路）。"""
@@ -286,15 +319,19 @@ class TestEvalIntervalFrames:
 
         clock1 = ManualClock()
         p1 = _build_pipeline(
-            StubDetector(plan, clock1), clock1,
-            realtime_enabled=True, eval_interval_frames=1,
+            StubDetector(plan, clock1),
+            clock1,
+            realtime_enabled=True,
+            eval_interval_frames=1,
         )
         r1 = _run_frames(p1, 4)
 
         clock2 = ManualClock()
         p2 = _build_pipeline(
-            StubDetector(plan, clock2), clock2,
-            realtime_enabled=True, eval_interval_frames=2,
+            StubDetector(plan, clock2),
+            clock2,
+            realtime_enabled=True,
+            eval_interval_frames=2,
         )
         r2 = _run_frames(p2, 4)
 
@@ -306,20 +343,24 @@ class TestEvalIntervalFrames:
 # 5. RealtimeRiskConfig 校验
 # ============================================================================
 
+
 class TestRealtimeRiskConfig:
     def test_defaults(self):
         from home_perception.core.config import RealtimeRiskConfig
+
         c = RealtimeRiskConfig()
         assert c.enabled is False
         assert c.eval_interval_frames == 1
 
     def test_rejects_eval_interval_below_one(self):
         from home_perception.core.config import RealtimeRiskConfig
+
         with pytest.raises(ValueError):
             RealtimeRiskConfig(eval_interval_frames=0)
 
     def test_rejects_bool_eval_interval(self):
         from home_perception.core.config import RealtimeRiskConfig
+
         with pytest.raises(ValueError):
             RealtimeRiskConfig(eval_interval_frames=True)
 
@@ -333,6 +374,7 @@ class TestRealtimeRiskConfig:
     def test_decision_enabled_default_false(self):
         """Stage D 决策开关默认关闭。"""
         from home_perception.core.config import RealtimeRiskConfig
+
         c = RealtimeRiskConfig()
         assert c.decision_enabled is False
 
@@ -340,6 +382,7 @@ class TestRealtimeRiskConfig:
 # ============================================================================
 # 6. Stage C：risk_signals 旁路隔离 + Shadow Mode 不接决策
 # ============================================================================
+
 
 class TestStageCFlagOffSignals:
     def test_flag_off_risk_signals_empty(self):
@@ -384,8 +427,10 @@ class TestStageCShadowMode:
         # 持续在场 3 帧（clock 每帧推进 1s，dwell=2s 触发）
         plan = [_person(1), _person(1), _person(1)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=True, thresholds=th,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=True,
+            thresholds=th,
         )
         r0 = p.process_frame(None, frame_index=0)  # dwell≈0，不触发
         r1 = p.process_frame(None, frame_index=1)  # dwell≈1s，不触发（<1.5）
@@ -405,8 +450,10 @@ class TestStageCShadowMode:
         # 在场 3 帧（触发 RAISED）+ 离场 6 帧（absence_gap_s=5.0，第 5 帧后离场）
         plan = [_person(1), _person(1), _person(1)] + [[] for _ in range(6)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=True, thresholds=th,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=True,
+            thresholds=th,
         )
         results = _run_frames(p, len(plan))
 
@@ -438,15 +485,19 @@ class TestStageCShadowMode:
 
         clock_off = ManualClock()
         p_off = _build_pipeline(
-            StubDetector(plan, clock_off), clock_off,
-            realtime_enabled=False, thresholds=th,
+            StubDetector(plan, clock_off),
+            clock_off,
+            realtime_enabled=False,
+            thresholds=th,
         )
         results_off = _run_frames(p_off, 4)
 
         clock_on = ManualClock()
         p_on = _build_pipeline(
-            StubDetector(plan, clock_on), clock_on,
-            realtime_enabled=True, thresholds=th,
+            StubDetector(plan, clock_on),
+            clock_on,
+            realtime_enabled=True,
+            thresholds=th,
         )
         results_on = _run_frames(p_on, 4)
 
@@ -466,14 +517,15 @@ class TestStageCShadowMode:
         # 持续在场 5 帧（dwell 持续超阈）
         plan = [_person(1) for _ in range(5)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=True, thresholds=th,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=True,
+            thresholds=th,
         )
         results = _run_frames(p, 5)
 
         all_raised = [
-            s for r in results for s in r.risk_signals
-            if s.transition is SignalTransition.RAISED
+            s for r in results for s in r.risk_signals if s.transition is SignalTransition.RAISED
         ]
         # 只应有一次 RAISED（首次触发后持续 ACTIVE_RISK 不重复）
         assert len(all_raised) == 1, f"应有 1 次 RAISED，实际 {len(all_raised)}"
@@ -482,6 +534,7 @@ class TestStageCShadowMode:
 # ============================================================================
 # 7. Stage D：决策接入（RAISED → adapter → DecisionEngine → Warning）
 # ============================================================================
+
 
 class TestStageDFlagOffDecision:
     """flag 关闭时 decision_enabled 无意义（无论取值，无实时 Warning）。"""
@@ -492,8 +545,11 @@ class TestStageDFlagOffDecision:
         clock = ManualClock()
         plan = [_person(1), _person(1), _person(1)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=False, thresholds=th, decision_enabled=False,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=False,
+            thresholds=th,
+            decision_enabled=False,
         )
         results = _run_frames(p, 3)
         # 无实时路径，无 risk_signals，无实时 Warning
@@ -510,8 +566,11 @@ class TestStageDFlagOffDecision:
         clock = ManualClock()
         plan = [_person(1), _person(1), _person(1)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=False, thresholds=th, decision_enabled=True,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=False,
+            thresholds=th,
+            decision_enabled=True,
         )
         results = _run_frames(p, 3)
         for r in results:
@@ -527,8 +586,11 @@ class TestStageDShadowModeNoWarning:
         clock = ManualClock()
         plan = [_person(1), _person(1), _person(1)]  # 帧 2 dwell=2s 触发
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=True, thresholds=th, decision_enabled=False,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=True,
+            thresholds=th,
+            decision_enabled=False,
         )
         results = _run_frames(p, 3)
 
@@ -542,8 +604,11 @@ class TestStageDShadowModeNoWarning:
         # 这里只断言"实时路径未额外增加 Warning"——与 flag off 基线对比
         clock_base = ManualClock()
         p_base = _build_pipeline(
-            StubDetector(plan, clock_base), clock_base,
-            realtime_enabled=False, thresholds=th, decision_enabled=False,
+            StubDetector(plan, clock_base),
+            clock_base,
+            realtime_enabled=False,
+            thresholds=th,
+            decision_enabled=False,
         )
         results_base = _run_frames(p_base, 3)
 
@@ -564,8 +629,11 @@ class TestStageDDecisionOn:
         # 持续在场 3 帧，帧 2 dwell=2s 触发 RAISED
         plan = [_person(1), _person(1), _person(1)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=True, thresholds=th, decision_enabled=True,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=True,
+            thresholds=th,
+            decision_enabled=True,
         )
         results = _run_frames(p, 3)
 
@@ -578,8 +646,11 @@ class TestStageDDecisionOn:
         # 与 Shadow Mode 对比：decision on 应比 decision off 多出实时 Warning
         clock_shadow = ManualClock()
         p_shadow = _build_pipeline(
-            StubDetector(plan, clock_shadow), clock_shadow,
-            realtime_enabled=True, thresholds=th, decision_enabled=False,
+            StubDetector(plan, clock_shadow),
+            clock_shadow,
+            realtime_enabled=True,
+            thresholds=th,
+            decision_enabled=False,
         )
         results_shadow = _run_frames(p_shadow, 3)
 
@@ -592,7 +663,9 @@ class TestStageDDecisionOn:
 
         # 实时路径产出的 PerceptionEvent 应含 meta.realtime=True
         rt_percs = [
-            p for r in results for p in r.perception_events
+            p
+            for r in results
+            for p in r.perception_events
             if (p.meta or {}).get("realtime") is True
         ]
         assert len(rt_percs) >= 1, "应有来自实时路径的 PerceptionEvent"
@@ -607,14 +680,18 @@ class TestStageDDecisionOn:
         # 在场 3 帧（触发 RAISED）+ 离场 6 帧（触发 CLEARED）
         plan = [_person(1), _person(1), _person(1)] + [[] for _ in range(6)]
         p = _build_pipeline(
-            StubDetector(plan, clock), clock,
-            realtime_enabled=True, thresholds=th, decision_enabled=True,
+            StubDetector(plan, clock),
+            clock,
+            realtime_enabled=True,
+            thresholds=th,
+            decision_enabled=True,
         )
         results = _run_frames(p, len(plan))
 
         # 找 CLEARED 信号所在帧
         cleared_frames = [
-            (i, s) for i, r in enumerate(results)
+            (i, s)
+            for i, r in enumerate(results)
             for s in r.risk_signals
             if s.transition is SignalTransition.CLEARED
         ]
@@ -624,14 +701,12 @@ class TestStageDDecisionOn:
         for i, sig in cleared_frames:
             r = results[i]
             rt_percs_in_frame = [
-                p for p in r.perception_events
-                if (p.meta or {}).get("realtime") is True
+                p for p in r.perception_events if (p.meta or {}).get("realtime") is True
             ]
             # CLEARED 不产 PerceptionEvent；但同帧可能有其他 RAISED（多主体场景）
             # 本测试单主体，CLEARED 帧不应有实时 PerceptionEvent
             assert rt_percs_in_frame == [], (
-                f"frame {i}: CLEARED 帧不应有实时 PerceptionEvent，"
-                f"实际 {len(rt_percs_in_frame)} 个"
+                f"frame {i}: CLEARED 帧不应有实时 PerceptionEvent，实际 {len(rt_percs_in_frame)} 个"
             )
 
     def test_history_unchanged_vs_shadow_mode(self):
@@ -645,15 +720,21 @@ class TestStageDDecisionOn:
 
         clock_shadow = ManualClock()
         p_shadow = _build_pipeline(
-            StubDetector(plan, clock_shadow), clock_shadow,
-            realtime_enabled=True, thresholds=th, decision_enabled=False,
+            StubDetector(plan, clock_shadow),
+            clock_shadow,
+            realtime_enabled=True,
+            thresholds=th,
+            decision_enabled=False,
         )
         results_shadow = _run_frames(p_shadow, 5)
 
         clock_dec = ManualClock()
         p_dec = _build_pipeline(
-            StubDetector(plan, clock_dec), clock_dec,
-            realtime_enabled=True, thresholds=th, decision_enabled=True,
+            StubDetector(plan, clock_dec),
+            clock_dec,
+            realtime_enabled=True,
+            thresholds=th,
+            decision_enabled=True,
         )
         results_dec = _run_frames(p_dec, 5)
 
@@ -680,6 +761,7 @@ class TestStageDFromSettingsAssembly:
         s.realtime_risk.enabled = False
         s.realtime_risk.decision_enabled = False
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._realtime_enabled is False
@@ -692,6 +774,7 @@ class TestStageDFromSettingsAssembly:
         s.realtime_risk.enabled = True
         s.realtime_risk.decision_enabled = False
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._realtime_enabled is True
@@ -704,6 +787,7 @@ class TestStageDFromSettingsAssembly:
         s.realtime_risk.enabled = True
         s.realtime_risk.decision_enabled = True
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._realtime_enabled is True

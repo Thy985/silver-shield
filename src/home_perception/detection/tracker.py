@@ -12,10 +12,11 @@ P0-5 的关键认知：
 - `YOLODetector` 实例必须在相机循环里**复用**，否则每帧重建模型会使 `track_id` 不断重置
   （`detect()` 已对 `model.track()` 传 `persist=True`，前提是同一实例）。
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, List, Optional
 
 from ..common.logging import get_logger
 from ..common.timeutil import now_dt
@@ -53,7 +54,7 @@ class VisitorTracker:
         # track_id -> VisitorTrack（持续维护，离场后保留以便 revisit 计数）
         self.active_tracks: dict[int, VisitorTrack] = {}
 
-    def update(self, detections: List[Detection]) -> List[VisitorTrack]:
+    def update(self, detections: list[Detection]) -> list[VisitorTrack]:
         """根据当前帧的检测结果更新访客状态，返回当前所有 VisitorTrack 快照列表。
 
         逻辑：
@@ -97,7 +98,8 @@ class VisitorTracker:
                     vt.enter_time = now
                     vt.leave_time = None
                     log.info(
-                        "visitor_track.reenter", **vt.to_log(),
+                        "visitor_track.reenter",
+                        **vt.to_log(),
                     )
                 else:
                     vt.status = ACTIVE
@@ -114,9 +116,9 @@ class VisitorTracker:
 
         return list(self.active_tracks.values())
 
-    def active(self) -> List[VisitorTrack]:
+    def active(self) -> list[VisitorTrack]:
         """当前在场（status=active）的访客快照列表。"""
         return [vt for vt in self.active_tracks.values() if vt.status == ACTIVE]
 
-    def get(self, track_id: int) -> Optional[VisitorTrack]:
+    def get(self, track_id: int) -> VisitorTrack | None:
         return self.active_tracks.get(track_id)

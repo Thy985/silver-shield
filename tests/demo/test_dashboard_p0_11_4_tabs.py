@@ -10,6 +10,7 @@ DemoAggregateState（切 Tab 不重订 WS）。本测试守结构性合约：
 
 端到端「同一 warning_id 流过三视图」由集成 + 5b 剧本手测保证。
 """
+
 from __future__ import annotations
 
 import re
@@ -37,8 +38,12 @@ def test_tab_views_exist_with_hidden_default():
     assert 'id="view-family"' in html, "缺少 #view-family"
     assert 'id="view-community"' in html, "缺少 #view-community"
     # 默认 hidden
-    assert re.search(r'<section[^>]*id="view-family"[^>]*\bhidden\b', html), "#view-family 应默认 hidden"
-    assert re.search(r'<section[^>]*id="view-community"[^>]*\bhidden\b', html), "#view-community 应默认 hidden"
+    assert re.search(r'<section[^>]*id="view-family"[^>]*\bhidden\b', html), (
+        "#view-family 应默认 hidden"
+    )
+    assert re.search(r'<section[^>]*id="view-community"[^>]*\bhidden\b', html), (
+        "#view-community 应默认 hidden"
+    )
 
 
 def test_switchTab_does_not_reconnect_websocket():
@@ -47,7 +52,7 @@ def test_switchTab_does_not_reconnect_websocket():
     idx = html.find("function switchTab")
     assert idx > -1, "switchTab 函数未找到"
     # 取函数后 ~800 字符窗口（switchTab 约 15 行，远小于此）
-    window = html[idx:idx + 800]
+    window = html[idx : idx + 800]
     assert "new WebSocket" not in window, (
         "switchTab 内出现 new WebSocket(，违反「切 Tab 不重订 WS」设计（D4）"
     )

@@ -10,11 +10,11 @@
 - 只编排"启动 → 跑 → 收尾"，不引入任何风险判定逻辑
 - 复用已验证组件；不接真实萤石（demo 模式用 CAVIAR；realtime 留待 v1）
 """
+
 from __future__ import annotations
 
 import signal as _signal
 from datetime import datetime
-from typing import List
 
 from ..common.logging import get_logger
 from ..core.config import Settings
@@ -45,7 +45,8 @@ def _install_shutdown_handler() -> None:
     非主线程 / 不支持的平台静默跳过（不阻塞 Demo 启动）。
     """
     try:
-        def _handler(signum, frame):  # noqa: ANN001
+
+        def _handler(signum, frame):
             raise KeyboardInterrupt()
 
         _signal.signal(_signal.SIGINT, _handler)
@@ -56,7 +57,7 @@ def _install_shutdown_handler() -> None:
         pass
 
 
-def run_demo(settings: Settings) -> List[RunSummary]:
+def run_demo(settings: Settings) -> list[RunSummary]:
     """P0-10 Demo 主流程：CAVIAR 三个场景端到端跑通并产出汇总。
 
     Returns:
@@ -90,7 +91,7 @@ def run_demo(settings: Settings) -> List[RunSummary]:
         caviar_base_dir=settings.runtime.caviar_base_dir,
     )
     detector_loaded = False
-    summaries: List[RunSummary] = []
+    summaries: list[RunSummary] = []
 
     try:
         for scenario in settings.runtime.demo_scenarios:
@@ -101,8 +102,11 @@ def run_demo(settings: Settings) -> List[RunSummary]:
                 interval_s=0.5,
             )
             pipeline = PerceptionPipeline.from_settings(
-                settings, detector=shared_detector, device_id=scenario,
-                now_provider=clock, frame_interval_s=0.5,
+                settings,
+                detector=shared_detector,
+                device_id=scenario,
+                now_provider=clock,
+                frame_interval_s=0.5,
             )
             if not detector_loaded:
                 pipeline.load_detector()
@@ -128,14 +132,14 @@ def run_demo(settings: Settings) -> List[RunSummary]:
         # 释放 detector 模型引用（跨场景复用实例，退出前统一清理）
         try:
             shared_detector.unload()
-        except Exception:  # pragma: no cover - 防御性
-            pass
+        except Exception as e:  # noqa: BLE001  # pragma: no cover - 退出前防御性清理
+            log.warning("demo.detector_unload_failed", error=str(e))
 
     _emit_demo_summary(summaries)
     return summaries
 
 
-def _emit_demo_summary(summaries: List[RunSummary]) -> None:
+def _emit_demo_summary(summaries: list[RunSummary]) -> None:
     """汇总所有场景的运行指标，输出一条结构化日志（供评委/CI 复核）。"""
     totals = {
         "scenarios_run": len(summaries),

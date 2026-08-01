@@ -11,19 +11,20 @@
 `tests/fixtures/memory_baseline.json`；后续 Episode Builder 算法升级时，人工 diff 后
 确认更新，否则视为回归（§6.7.4 硬约束）。
 """
+
 from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from itertools import permutations
 from uuid import UUID
 
 import pytest
 
+from home_perception.action.command import ActionCommand
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.warning import WarningEvent
-from home_perception.action.command import ActionCommand
 from home_perception.memory.episode_builder import DefaultEpisodeBuilder
 from home_perception.memory.records import EpisodicRecord, records_equal
 from home_perception.memory.store import InMemoryStore
@@ -33,7 +34,7 @@ from home_perception.memory.store import InMemoryStore
 # 固定 ID 与夹具
 # ---------------------------------------------------------------------------
 def _utc(y, m, d, h, mi, s=0):
-    return datetime(y, m, d, h, mi, s, tzinfo=timezone.utc)
+    return datetime(y, m, d, h, mi, s, tzinfo=UTC)
 
 
 def _vid(hex8: str) -> UUID:
@@ -51,8 +52,15 @@ def _make_visitor(visitor_id: UUID, event_id: str, enter, leave, duration=180.0)
     )
 
 
-def _make_warning(visitor_id: UUID, warning_id: UUID, risk_level, rec_action,
-                  reasons, created_at, event_type="abnormal_dwell"):
+def _make_warning(
+    visitor_id: UUID,
+    warning_id: UUID,
+    risk_level,
+    rec_action,
+    reasons,
+    created_at,
+    event_type="abnormal_dwell",
+):
     trigger = {
         "event_id": f"{visitor_id}:{event_type}",
         "event_type": event_type,
@@ -91,23 +99,31 @@ def _build_event_log():
     wa = _vid("aaaaaaaa2222")
     aa1 = _vid("aaaaaaaa3333")
     aa2 = _vid("aaaaaaaa4444")
-    visitor_a = _make_visitor(va, "ev-visit-a", _utc(2026, 7, 28, 18, 32), _utc(2026, 7, 28, 18, 45))
+    visitor_a = _make_visitor(
+        va, "ev-visit-a", _utc(2026, 7, 28, 18, 32), _utc(2026, 7, 28, 18, 45)
+    )
     warn_a = _make_warning(va, wa, "HIGH", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 18, 40))
     act_a1 = _make_action("SEND_FAMILY_MESSAGE", wa, aa1)
     act_a2 = _make_action("CREATE_COMMUNITY_TASK", wa, aa2)
 
     # visitor B：无风险（仅访问）
     vb = _vid("bbbbbbbb1111")
-    visitor_b = _make_visitor(vb, "ev-visit-b", _utc(2026, 7, 28, 19, 2), _utc(2026, 7, 28, 19, 5), duration=180.0)
+    visitor_b = _make_visitor(
+        vb, "ev-visit-b", _utc(2026, 7, 28, 19, 2), _utc(2026, 7, 28, 19, 5), duration=180.0
+    )
 
     # visitor C：两条 warning（LOW + HIGH），max 取 HIGH
     vc = _vid("cccccccc1111")
     wc1 = _vid("cccccccc2222")
     wc2 = _vid("cccccccc3333")
     ac1 = _vid("cccccccc4444")
-    visitor_c = _make_visitor(vc, "ev-visit-c", _utc(2026, 7, 28, 21, 10), _utc(2026, 7, 28, 21, 25))
+    visitor_c = _make_visitor(
+        vc, "ev-visit-c", _utc(2026, 7, 28, 21, 10), _utc(2026, 7, 28, 21, 25)
+    )
     warn_c1 = _make_warning(vc, wc1, "LOW", "MONITOR", ["重复来访"], _utc(2026, 7, 28, 21, 12))
-    warn_c2 = _make_warning(vc, wc2, "HIGH", "ESCALATE_COMMUNITY", ["高风险接近"], _utc(2026, 7, 28, 21, 15))
+    warn_c2 = _make_warning(
+        vc, wc2, "HIGH", "ESCALATE_COMMUNITY", ["高风险接近"], _utc(2026, 7, 28, 21, 15)
+    )
     act_c1 = _make_action("SEND_FAMILY_MESSAGE", wc2, ac1)
 
     return [
@@ -307,13 +323,12 @@ def test_replay_with_duplicated_events_in_same_batch():
     builder = DefaultEpisodeBuilder()
 
     clean = builder.project_episode(va, warnings=list(warnings), actions=list(actions))
-    duped = builder.project_episode(
-        va, warnings=list(warnings) * 2, actions=list(actions) * 2
-    )
+    duped = builder.project_episode(va, warnings=list(warnings) * 2, actions=list(actions) * 2)
 
     assert records_equal(clean, duped), "重复投递不应改变投影结果"
-    assert len(duped.source_event_ids) == len(set(duped.source_event_ids)), \
+    assert len(duped.source_event_ids) == len(set(duped.source_event_ids)), (
         "source_event_ids 不得含重复 id（I4 可追溯性）"
+    )
     assert len(duped.actions) == len(clean.actions)
 
     # 端到端：先收干净批次、再收重复批次，store 不得抛 I2 违规
@@ -357,4 +372,3 @@ def test_replay_v1_v2_backend_equivalence():
     当前 v2 未实现，跳过（待 Phase 5 迁移后启用）。`@pytest.mark.skip` 装饰器使
     `pytest --collect-only` 能直接看到 skip 状态（比函数内 import+skip 更符合惯例）。
     """
-    pass

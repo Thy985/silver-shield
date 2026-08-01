@@ -8,6 +8,7 @@
 >
 > 完整字段说明见 docs/07_event_schema.md。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

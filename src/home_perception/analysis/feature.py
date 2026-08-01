@@ -7,21 +7,22 @@
 Feature 层**不预设任何阈值**，所有"是/否"、"长/短"、"高/低"等判断**严禁**出现在 Feature
 （留在 Rule Engine 用业务阈值算）。
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Union
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 
 def _utc_now() -> datetime:
     """时区感知的 UTC 当前时间。"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-def _coerce_uuid(value: Union[UUID, str]) -> UUID:
+def _coerce_uuid(value: UUID | str) -> UUID:
     if isinstance(value, UUID):
         return value
     if isinstance(value, str):
@@ -33,14 +34,14 @@ def _require_utc(dt: datetime, field_name: str) -> None:
     """校验 datetime 是 timezone-aware（ADR-0007 / ADR-0008 一致边界）。"""
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         raise ValueError(
-            f"{field_name} 必须是 timezone-aware datetime（建议 UTC），"
-            f"收到 naive datetime: {dt!r}"
+            f"{field_name} 必须是 timezone-aware datetime（建议 UTC），收到 naive datetime: {dt!r}"
         )
 
 
 # ============================================================================
 # Feature 基类
 # ============================================================================
+
 
 @dataclass
 class Feature:
@@ -67,7 +68,7 @@ class Feature:
         self.visitor_id = _coerce_uuid(self.visitor_id)
         _require_utc(self.computed_at, "computed_at")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe dict（时间已转 ISO 字符串）。"""
         return {
             "feature_type": self.__class__.__name__,
@@ -81,6 +82,7 @@ class Feature:
 # ============================================================================
 # 4 个具体 Feature
 # ============================================================================
+
 
 @dataclass
 class DurationFeature(Feature):
@@ -99,7 +101,7 @@ class DurationFeature(Feature):
         if self.duration_seconds < 0:
             raise ValueError(f"duration_seconds 必须 >= 0，收到 {self.duration_seconds}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d["duration_seconds"] = round(self.duration_seconds, 3)
         return d
@@ -126,7 +128,7 @@ class VisitFrequencyFeature(Feature):
         if self.window_seconds <= 0:
             raise ValueError(f"window_seconds 必须 > 0，收到 {self.window_seconds}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d["visits_in_window"] = self.visits_in_window
         d["window_seconds"] = round(self.window_seconds, 1)
@@ -163,7 +165,7 @@ class TimeFeature(Feature):
             )
 
     @classmethod
-    def from_datetime(cls, dt: datetime, **kwargs) -> "TimeFeature":
+    def from_datetime(cls, dt: datetime, **kwargs) -> TimeFeature:
         """从 timezone-aware datetime 派生 hour_of_day / day_of_week / is_weekend。"""
         if dt.tzinfo is None:
             raise ValueError("dt 必须是 timezone-aware")
@@ -174,7 +176,7 @@ class TimeFeature(Feature):
             **kwargs,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d["hour_of_day"] = self.hour_of_day
         d["day_of_week"] = self.day_of_week
@@ -205,7 +207,7 @@ class TrajectoryFeature(Feature):
         if self.segment_count < 1:
             raise ValueError(f"segment_count 必须 >= 1，收到 {self.segment_count}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d["bbox_center_displacement"] = round(self.bbox_center_displacement, 2)
         d["segment_count"] = self.segment_count
@@ -215,6 +217,7 @@ class TrajectoryFeature(Feature):
 # ============================================================================
 # RiskFeature 聚合
 # ============================================================================
+
 
 @dataclass
 class RiskFeature:
@@ -233,16 +236,16 @@ class RiskFeature:
     event_id: str
     source_video: str
     computed_at: datetime
-    duration: Optional[DurationFeature] = None
-    frequency: Optional[VisitFrequencyFeature] = None
-    time: Optional[TimeFeature] = None
-    trajectory: Optional[TrajectoryFeature] = None
+    duration: DurationFeature | None = None
+    frequency: VisitFrequencyFeature | None = None
+    time: TimeFeature | None = None
+    trajectory: TrajectoryFeature | None = None
 
     def __post_init__(self) -> None:
         self.visitor_id = _coerce_uuid(self.visitor_id)
         _require_utc(self.computed_at, "computed_at")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典；空 Feature 序列化为 null。"""
         d = {
             "visitor_id": str(self.visitor_id),
@@ -261,9 +264,11 @@ class RiskFeature:
 
     def has_all_features(self) -> bool:
         """是否 4 个 Feature 都计算了（用于测试 / 调试）。"""
-        return all([
-            self.duration is not None,
-            self.frequency is not None,
-            self.time is not None,
-            self.trajectory is not None,
-        ])
+        return all(
+            [
+                self.duration is not None,
+                self.frequency is not None,
+                self.time is not None,
+                self.trajectory is not None,
+            ]
+        )

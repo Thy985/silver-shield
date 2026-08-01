@@ -12,10 +12,11 @@
 
 本模块不改动 ``MemoryPolicy`` / ``EpisodicRecord`` / ``VisitorEvent`` 任何签名。
 """
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..common.timeutil import require_utc
 from .records import EpisodicRecord, VisitorPresenceStatus
@@ -25,7 +26,7 @@ from .store import MemoryStore
 _RISK_ORDER = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, None: 0}
 
 
-def _risk_rank(level: Optional[str]) -> int:
+def _risk_rank(level: str | None) -> int:
     return _RISK_ORDER.get(level, 0)
 
 
@@ -43,8 +44,8 @@ class MemoryQuery:
         visitor_instance_id: str,
         window_start: datetime,
         window_end: datetime,
-        as_of: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+        as_of: datetime | None = None,
+    ) -> dict[str, Any]:
         """组合某访客在某时间窗内的「为什么报警」上下文。
 
         参数
@@ -84,7 +85,8 @@ class MemoryQuery:
         # 窗口过滤按"与窗口重叠"判定（enter <= window_end 且 leave >= window_start），
         # 避免边界期事件（窗口前进入、窗口内停留/离开）被漏掉（review #2）。
         in_window = [
-            ep for ep in all_for_visitor
+            ep
+            for ep in all_for_visitor
             if ep.enter_time <= window_end and ep.leave_time >= window_start
         ]
         in_window.sort(key=lambda e: (e.enter_time, e.record_id))
@@ -121,7 +123,7 @@ class MemoryQuery:
 
     @staticmethod
     def _current_status(
-        in_window: List[EpisodicRecord],
+        in_window: list[EpisodicRecord],
         as_of: datetime,
     ) -> VisitorPresenceStatus:
         # 视角 = 窗口内 episode（与 reason/handling/history 一致，review #2）。
@@ -130,10 +132,7 @@ class MemoryQuery:
         # （review #1）。实时在场见 ShortTermRecord.phase（out of scope）。
         if not in_window:
             return VisitorPresenceStatus.NO_RECORD
-        in_progress = [
-            ep for ep in in_window
-            if ep.enter_time <= as_of <= ep.leave_time
-        ]
+        in_progress = [ep for ep in in_window if ep.enter_time <= as_of <= ep.leave_time]
         if in_progress:
             return VisitorPresenceStatus.IN_PROGRESS
         return VisitorPresenceStatus.CLEARED
@@ -141,7 +140,7 @@ class MemoryQuery:
 
 def _compose_reason(ep: EpisodicRecord) -> str:
     """组合"为什么"说明——全部来自 episode 真实字段，不硬编码文案。"""
-    parts: List[str] = []
+    parts: list[str] = []
     if ep.enter_time is not None:
         parts.append(f"{ep.enter_time:%H:%M} 访客进入")
     if ep.duration_seconds:
@@ -157,7 +156,7 @@ def _compose_reason(ep: EpisodicRecord) -> str:
     return "；".join(parts)
 
 
-def _compose_evidence(ep: EpisodicRecord) -> List[str]:
+def _compose_evidence(ep: EpisodicRecord) -> list[str]:
     """证据链：优先用 episode 已沉淀的 reason_summary；为空时用 summary 兜底。"""
     if ep.reason_summary:
         return list(ep.reason_summary)
@@ -171,15 +170,13 @@ def _compose_handling(ep: EpisodicRecord) -> str:
     """
     action = ep.recommended_action or "无"
     if ep.actions:
-        acted = "; ".join(
-            f"{a.command_type}@{a.command_id}({a.status})" for a in ep.actions
-        )
+        acted = "; ".join(f"{a.command_type}@{a.command_id}({a.status})" for a in ep.actions)
         return f"{action}；动作: {acted}"
     return action
 
 
 def _history_text(
-    episodes: List[EpisodicRecord],
+    episodes: list[EpisodicRecord],
     window_start: datetime,
     window_end: datetime,
 ) -> str:

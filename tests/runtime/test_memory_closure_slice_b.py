@@ -18,6 +18,7 @@ YOLO+ByteTrack 抖动），仅保真检测缓存 schema；分布特性由 Produc
 共享辅助件在 ``_helpers``（ManualClock/TH_HIGH/memory_config/build_full_pipeline/drive），
 detector 专属件在 ``_closed_loop_helpers``。
 """
+
 from __future__ import annotations
 
 import json
@@ -26,12 +27,13 @@ from pathlib import Path
 
 from _closed_loop_helpers import CachedDetectionDetector, load_cached_detections
 from _helpers import (
-    ManualClock,
     TH_HIGH,
+    ManualClock,
     build_full_pipeline,
     drive,
     memory_config,
 )
+
 from home_perception.analysis.realtime_risk_evaluator import RiskPhase
 from home_perception.analysis.risk_signal import SignalTransition
 from home_perception.memory import DefaultEpisodeBuilder, InMemoryStore
@@ -68,15 +70,19 @@ class TestContractE2E:
 
         store, builder = InMemoryStore(), DefaultEpisodeBuilder()
         p = build_full_pipeline(
-            CachedDetectionDetector(frames), clock, thresholds=TH_HIGH(),
-            memory_store=store, episode_builder=builder, episodic_shadow=True,
+            CachedDetectionDetector(frames),
+            clock,
+            thresholds=TH_HIGH(),
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=True,
         )
         results = drive(p, clock, frames, step)
 
         # 真实风险链路：生命周期中确实产过 RAISED
-        assert any(s.transition == SignalTransition.RAISED
-                   for r in results for s in r.risk_signals), \
-            "应经真实 risk 链路产 RAISED 信号"
+        assert any(
+            s.transition == SignalTransition.RAISED for r in results for s in r.risk_signals
+        ), "应经真实 risk 链路产 RAISED 信号"
 
         # 离场后落一条 episode
         assert p.metrics.episodes_recorded == 1, "一次访客离场应落一条 episode"
@@ -88,28 +94,29 @@ class TestContractE2E:
         rec = recs[0]
 
         # 可溯源：episode 的 source_event_ids 引用真实 VisitorEvent（及 warning/action）
-        assert rec.source_event_ids[0] == ve.event_id, \
-            "episode 应可追溯到触发它的 VisitorEvent"
-        assert len(rec.source_event_ids) >= 2, \
-            "source_event_ids 应覆盖 visitor + warning/action"
+        assert rec.source_event_ids[0] == ve.event_id, "episode 应可追溯到触发它的 VisitorEvent"
+        assert len(rec.source_event_ids) >= 2, "source_event_ids 应覆盖 visitor + warning/action"
 
         # 语义验收：时长≈15min（±2min，容忍一帧边界），风险 HIGH
-        assert 840 <= rec.duration_seconds <= 960, \
-            f"duration 应≈15min，收到 {rec.duration_seconds}"
+        assert 840 <= rec.duration_seconds <= 960, f"duration 应≈15min，收到 {rec.duration_seconds}"
         assert rec.risk_level == "HIGH"
         assert rec.recommended_action == "ESCALATE_COMMUNITY"
-        assert rec.reason_summary and rec.actions and rec.summary, \
-            "episode 应带完整可消费字段"
+        assert rec.reason_summary and rec.actions and rec.summary, "episode 应带完整可消费字段"
 
         # 跨切片收口：Memory 能答「为什么报警」（Product Closure，Slice C 价值）
         ctx = MemoryQuery(store).compose_context(
-            str(ve.visitor_id), rec.enter_time, rec.leave_time, as_of=rec.leave_time,
+            str(ve.visitor_id),
+            rec.enter_time,
+            rec.leave_time,
+            as_of=rec.leave_time,
         )
         assert ctx["current_status"] in (
-            VisitorPresenceStatus.IN_PROGRESS, VisitorPresenceStatus.CLEARED,
+            VisitorPresenceStatus.IN_PROGRESS,
+            VisitorPresenceStatus.CLEARED,
         )
-        assert ctx["reason"] and ctx["evidence"] and ctx["handling"], \
+        assert ctx["reason"] and ctx["evidence"] and ctx["handling"], (
             "compose_context 应产出可消费的 why/evidence/handling"
+        )
 
 
 # ===========================================================================
@@ -135,8 +142,12 @@ class TestLifecycleClosure:
 
         store, builder = InMemoryStore(), DefaultEpisodeBuilder()
         p = build_full_pipeline(
-            CachedDetectionDetector(frames), clock, thresholds=TH_HIGH(),
-            memory_store=store, episode_builder=builder, episodic_shadow=True,
+            CachedDetectionDetector(frames),
+            clock,
+            thresholds=TH_HIGH(),
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=True,
         )
         drive(p, clock, frames, step)
 
@@ -170,14 +181,18 @@ class TestFailureIsolation:
                 raise RuntimeError("memory store down")
 
         p = build_full_pipeline(
-            CachedDetectionDetector(frames), clock, thresholds=TH_HIGH(),
-            memory_store=InMemoryStore(), episode_builder=BoomBuilder(),
+            CachedDetectionDetector(frames),
+            clock,
+            thresholds=TH_HIGH(),
+            memory_store=InMemoryStore(),
+            episode_builder=BoomBuilder(),
             episodic_shadow=True,
         )
         results = drive(p, clock, frames, step)
 
-        assert any(s.transition == SignalTransition.RAISED
-                   for r in results for s in r.risk_signals), "风险信号仍应产生"
+        assert any(
+            s.transition == SignalTransition.RAISED for r in results for s in r.risk_signals
+        ), "风险信号仍应产生"
         assert sum(len(r.warnings) for r in results) > 0, "Warning 仍应产生"
         assert p.metrics.episodes_recorded == 0
         assert p.metrics.errors == 1, "仅 Memory 投影失败应计 1 次 error，不崩主链路"
@@ -194,8 +209,11 @@ class TestFailureIsolation:
                 raise InvariantViolationError("simulated conflict")
 
         p = build_full_pipeline(
-            CachedDetectionDetector(frames), clock, thresholds=TH_HIGH(),
-            memory_store=StrictStore(), episode_builder=DefaultEpisodeBuilder(),
+            CachedDetectionDetector(frames),
+            clock,
+            thresholds=TH_HIGH(),
+            memory_store=StrictStore(),
+            episode_builder=DefaultEpisodeBuilder(),
             episodic_shadow=True,
         )
         results = drive(p, clock, frames, step)
@@ -227,8 +245,11 @@ class TestRestartRecovery:
         present_frames = data["frames"][:5]
         clock1 = ManualClock(base=base)
         p1 = build_full_pipeline(
-            CachedDetectionDetector(present_frames), clock1, thresholds=th,
-            memory_config=memory_config(snap_path), episodic_shadow=False,
+            CachedDetectionDetector(present_frames),
+            clock1,
+            thresholds=th,
+            memory_config=memory_config(snap_path),
+            episodic_shadow=False,
         )
         drive(p1, clock1, present_frames, step)
         assert p1._realtime_evaluator.active_risk_count == 1
@@ -247,8 +268,11 @@ class TestRestartRecovery:
         # --- Phase 2：重启（新时钟、同快照路径；时钟仅略过 Phase1，快照仍 FRESH）---
         clock2 = ManualClock(base=base + timedelta(minutes=2, seconds=45))
         p2 = build_full_pipeline(
-            CachedDetectionDetector([{"detections": []}]), clock2, thresholds=th,
-            memory_config=memory_config(snap_path), episodic_shadow=False,
+            CachedDetectionDetector([{"detections": []}]),
+            clock2,
+            thresholds=th,
+            memory_config=memory_config(snap_path),
+            episodic_shadow=False,
         )
 
         # 恢复验证（recover 在 __init__ 完成）

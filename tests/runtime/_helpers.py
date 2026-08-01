@@ -11,10 +11,10 @@
 > 被加入 ``sys.path``），故 ``from _helpers import ...`` 可用。若日后切到 ``importlib`` 模式
 > 需改 rootdir / conftest 暴露。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from home_perception.action import (
     ActionDispatcher,
@@ -40,8 +40,8 @@ from home_perception.runtime import PerceptionPipeline
 class ManualClock:
     """可控时钟：now() 返回当前时间，advance() 推进。"""
 
-    def __init__(self, base: Optional[datetime] = None):
-        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=timezone.utc)
+    def __init__(self, base: datetime | None = None):
+        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC)
 
     def now(self) -> datetime:
         return self._t
@@ -68,16 +68,16 @@ def TH_HIGH() -> ThresholdConfig:
 
 
 def memory_config(path, **over) -> MemoryConfig:
-    base = dict(
-        enabled=True,
-        snapshot_path=str(path),
-        snapshot_interval_seconds=1.0,
-        snapshot_fresh_threshold_seconds=30.0,
-        snapshot_ttl_seconds=300.0,
-        recent_behavior_retention_seconds=3600.0,
-        eviction_interval_frames=60,
-        cold_start_stale_confidence=0.5,
-    )
+    base = {
+        "enabled": True,
+        "snapshot_path": str(path),
+        "snapshot_interval_seconds": 1.0,
+        "snapshot_fresh_threshold_seconds": 30.0,
+        "snapshot_ttl_seconds": 300.0,
+        "recent_behavior_retention_seconds": 3600.0,
+        "eviction_interval_frames": 60,
+        "cold_start_stale_confidence": 0.5,
+    }
     base.update(over)
     return MemoryConfig(**base)
 
@@ -86,11 +86,11 @@ def build_full_pipeline(
     detector,
     clock: ManualClock,
     *,
-    thresholds: Optional[ThresholdConfig] = None,
-    memory_store: Optional[InMemoryStore] = None,
-    episode_builder: Optional[DefaultEpisodeBuilder] = None,
+    thresholds: ThresholdConfig | None = None,
+    memory_store: InMemoryStore | None = None,
+    episode_builder: DefaultEpisodeBuilder | None = None,
     episodic_shadow: bool = False,
-    memory_config: Optional[MemoryConfig] = None,
+    memory_config: MemoryConfig | None = None,
     decision_enabled: bool = False,
     eval_interval_frames: int = 1,
     realtime_enabled: bool = True,
@@ -104,29 +104,45 @@ def build_full_pipeline(
     event_builder = VisitorEventBuilder(tracker, source_video="demo/test", now_provider=clock)
     feat = FeatureExtractor(frequency_window_s=1800.0)
     rule_engine = RuleEngine(
-        device_id="demo/test", location="入户门",
-        thresholds=th, now_provider=clock,
+        device_id="demo/test",
+        location="入户门",
+        thresholds=th,
+        now_provider=clock,
     )
     decision = DecisionEngine(
-        elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock,
+        elder_id="elder_001",
+        policy=RuleBasedDecisionPolicy(),
+        now_provider=clock,
     )
     dispatcher = ActionDispatcher(DispatcherConfig())
     executor = ActionExecutor(
-        dispatcher=dispatcher, publisher=MockPublisher(),
-        notifier=MockNotifier(), max_retries=3,
+        dispatcher=dispatcher,
+        publisher=MockPublisher(),
+        notifier=MockNotifier(),
+        max_retries=3,
     )
     behavior_builder = BehaviorBuilder(event_builder=event_builder)
     recent_store = RecentBehaviorStore()
     evaluator = RealTimeRiskEvaluator(thresholds=th, now_provider=clock)
     return PerceptionPipeline(
-        detector=detector, tracker=tracker, event_builder=event_builder,
-        feature_extractor=feat, rule_engine=rule_engine, decision_engine=decision,
-        executor=executor, now_provider=clock,
-        behavior_builder=behavior_builder, recent_behavior_store=recent_store,
-        realtime_evaluator=evaluator, realtime_enabled=realtime_enabled,
-        eval_interval_frames=eval_interval_frames, decision_enabled=decision_enabled,
-        memory_store=memory_store, episode_builder=episode_builder,
-        episodic_shadow=episodic_shadow, memory_config=memory_config,
+        detector=detector,
+        tracker=tracker,
+        event_builder=event_builder,
+        feature_extractor=feat,
+        rule_engine=rule_engine,
+        decision_engine=decision,
+        executor=executor,
+        now_provider=clock,
+        behavior_builder=behavior_builder,
+        recent_behavior_store=recent_store,
+        realtime_evaluator=evaluator,
+        realtime_enabled=realtime_enabled,
+        eval_interval_frames=eval_interval_frames,
+        decision_enabled=decision_enabled,
+        memory_store=memory_store,
+        episode_builder=episode_builder,
+        episodic_shadow=episodic_shadow,
+        memory_config=memory_config,
     )
 
 

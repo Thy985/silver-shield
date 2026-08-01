@@ -3,6 +3,7 @@
 - src：便于导入 home_perception 包
 - 仓库根：便于导入 benchmark 包（P0-4 性能基准）
 """
+
 import os
 import sys
 

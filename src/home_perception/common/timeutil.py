@@ -1,8 +1,9 @@
 """时间工具。"""
+
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def now_ts() -> float:
@@ -11,7 +12,7 @@ def now_ts() -> float:
 
 def now_dt() -> datetime:
     """当前 UTC 时间（时区感知），用于 VisitorTrack 等需要人类可读时间的领域对象。"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def require_utc(dt: datetime, field_name: str) -> None:

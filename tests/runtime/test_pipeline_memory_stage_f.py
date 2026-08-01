@@ -12,10 +12,10 @@ torch-free，进 CI 每 PR 合约子集。
 - **风险捕获**：有 Warning 时落库的 episode 带 risk_level + actions；无 Warning 时 risk_level 为 None。
 - **from_settings 装配**：memory 段开关正确透传 store/builder/shadow 标志。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import UTC, datetime, timedelta
 
 from home_perception.action import (
     ActionDispatcher,
@@ -35,16 +35,16 @@ from home_perception.detection.tracker import VisitorTracker
 from home_perception.memory import DefaultEpisodeBuilder, InMemoryStore
 from home_perception.runtime import FrameResult, PerceptionPipeline
 
-
 # ============================================================================
 # 测试辅助（模式复用自 test_pipeline_realtime_bypass.py，保持 Stage F 自包含）
 # ============================================================================
 
+
 class ManualClock:
     """可控时钟：now() 返回当前时间，advance() 推进。"""
 
-    def __init__(self, base: Optional[datetime] = None):
-        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=timezone.utc)
+    def __init__(self, base: datetime | None = None):
+        self._t = base or datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC)
 
     def now(self) -> datetime:
         return self._t
@@ -59,7 +59,7 @@ class ManualClock:
 class StubDetector:
     """按 plan 返回 Detection 列表；每次 detect 推进时钟 1s。"""
 
-    def __init__(self, plan: List[List[Detection]], clock: Optional[ManualClock] = None):
+    def __init__(self, plan: list[list[Detection]], clock: ManualClock | None = None):
         self.plan = plan
         self.clock = clock
         self.i = 0
@@ -71,25 +71,35 @@ class StubDetector:
         dets = self.plan[idx]
         self.i += 1
         return DetectionResult(
-            detections=dets, timestamp=0.0, inference_ms=0.0,
-            source_size=(1, 1), inference_size=(1, 1), model="stub",
+            detections=dets,
+            timestamp=0.0,
+            inference_ms=0.0,
+            source_size=(1, 1),
+            inference_size=(1, 1),
+            model="stub",
         )
 
 
-def _person(track_id: int = 1) -> List[Detection]:
-    return [Detection(
-        class_id=0, class_name="person", confidence=0.9,
-        bbox=[0, 0, 10, 10], timestamp=0.0, track_id=track_id,
-    )]
+def _person(track_id: int = 1) -> list[Detection]:
+    return [
+        Detection(
+            class_id=0,
+            class_name="person",
+            confidence=0.9,
+            bbox=[0, 0, 10, 10],
+            timestamp=0.0,
+            track_id=track_id,
+        )
+    ]
 
 
 def _build_pipeline(
     detector,
     clock: ManualClock,
     *,
-    thresholds: Optional[ThresholdConfig] = None,
-    memory_store: Optional[InMemoryStore] = None,
-    episode_builder: Optional[DefaultEpisodeBuilder] = None,
+    thresholds: ThresholdConfig | None = None,
+    memory_store: InMemoryStore | None = None,
+    episode_builder: DefaultEpisodeBuilder | None = None,
     episodic_shadow: bool = False,
 ) -> PerceptionPipeline:
     """构造 PerceptionPipeline，可选挂入 Stage F Episodic Memory 影子写入组件。"""
@@ -98,28 +108,39 @@ def _build_pipeline(
     th = thresholds or ThresholdConfig()
     feat = FeatureExtractor(frequency_window_s=1800.0)
     rule_engine = RuleEngine(
-        device_id="demo/test", location="入户门",
-        thresholds=th, now_provider=clock,
+        device_id="demo/test",
+        location="入户门",
+        thresholds=th,
+        now_provider=clock,
     )
     decision = DecisionEngine(
-        elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock,
+        elder_id="elder_001",
+        policy=RuleBasedDecisionPolicy(),
+        now_provider=clock,
     )
     dispatcher = ActionDispatcher(DispatcherConfig())
     executor = ActionExecutor(
-        dispatcher=dispatcher, publisher=MockPublisher(),
-        notifier=MockNotifier(), max_retries=3,
+        dispatcher=dispatcher,
+        publisher=MockPublisher(),
+        notifier=MockNotifier(),
+        max_retries=3,
     )
     return PerceptionPipeline(
-        detector=detector, tracker=tracker, event_builder=event_builder,
-        feature_extractor=feat, rule_engine=rule_engine, decision_engine=decision,
-        executor=executor, now_provider=clock,
+        detector=detector,
+        tracker=tracker,
+        event_builder=event_builder,
+        feature_extractor=feat,
+        rule_engine=rule_engine,
+        decision_engine=decision,
+        executor=executor,
+        now_provider=clock,
         memory_store=memory_store,
         episode_builder=episode_builder,
         episodic_shadow=episodic_shadow,
     )
 
 
-def _run_frames(p: PerceptionPipeline, n: int) -> List[FrameResult]:
+def _run_frames(p: PerceptionPipeline, n: int) -> list[FrameResult]:
     """跑 n 帧 None，返回每帧 FrameResult。"""
     return [p.process_frame(None, frame_index=i) for i in range(n)]
 
@@ -127,12 +148,16 @@ def _run_frames(p: PerceptionPipeline, n: int) -> List[FrameResult]:
 def _history_fields(r: FrameResult) -> tuple:
     """提取历史五字段（不含 behavior_states/risk_signals）用于逐字段对比。"""
     return (
-        r.frame_index, r.n_detections, r.n_visitor_events,
-        len(r.perception_events), len(r.warnings), len(r.commands),
+        r.frame_index,
+        r.n_detections,
+        r.n_visitor_events,
+        len(r.perception_events),
+        len(r.warnings),
+        len(r.commands),
     )
 
 
-def _visit_plan() -> List[List[Detection]]:
+def _visit_plan() -> list[list[Detection]]:
     """2 帧在场 + 6 帧离场 → 触发 1 次访客离场（absence_gap_s=5.0）。"""
     return [_person(1), _person(1)] + [[] for _ in range(6)]
 
@@ -145,6 +170,7 @@ def _make_shadow() -> tuple:
 # ============================================================================
 # 1. MemoryConfig 配置校验
 # ============================================================================
+
 
 class TestMemoryConfig:
     def test_episodic_shadow_default_false(self):
@@ -164,12 +190,14 @@ class TestMemoryConfig:
 # 2. flag 关闭 golden 回归（memory off）
 # ============================================================================
 
+
 class TestFlagOffGolden:
     def test_no_store_or_builder_constructed(self):
         """memory 关闭：from_settings 不构造 store/builder，影子标志 False。"""
         s = Settings()
         s.memory.enabled = False
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._memory_store is None
@@ -196,12 +224,14 @@ class TestFlagOffGolden:
 # 3. memory 开 + 影子关：仅 Snapshot Recovery，不落 Episode
 # ============================================================================
 
+
 class TestMemoryOnShadowOff:
     def test_no_episodes_when_shadow_off(self):
         """memory.enabled=true 但 episodic_shadow=false：不落 Episode。"""
         clock = ManualClock()
         p = _build_pipeline(
-            StubDetector(_visit_plan(), clock), clock,
+            StubDetector(_visit_plan(), clock),
+            clock,
             memory_store=InMemoryStore(),  # 即便传入 store，影子关也不写
             episode_builder=DefaultEpisodeBuilder(),
             episodic_shadow=False,
@@ -216,14 +246,18 @@ class TestMemoryOnShadowOff:
 # 4. memory 开 + 影子开：落 Episode 入 store
 # ============================================================================
 
+
 class TestStageFShadowRecordsEpisodes:
     def test_one_visit_records_one_episode(self):
         """一次访客离场 → 落一条 EpisodicRecord，episodes_recorded 与离场数一致。"""
         clock = ManualClock()
         store, builder, shadow = _make_shadow()
         p = _build_pipeline(
-            StubDetector(_visit_plan(), clock), clock,
-            memory_store=store, episode_builder=builder, episodic_shadow=shadow,
+            StubDetector(_visit_plan(), clock),
+            clock,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=shadow,
         )
         results = _run_frames(p, len(_visit_plan()))
         n_events = sum(r.n_visitor_events for r in results)
@@ -240,8 +274,11 @@ class TestStageFShadowRecordsEpisodes:
         clock = ManualClock()
         store, builder, shadow = _make_shadow()
         p = _build_pipeline(
-            StubDetector(_visit_plan(), clock), clock,
-            memory_store=store, episode_builder=builder, episodic_shadow=shadow,
+            StubDetector(_visit_plan(), clock),
+            clock,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=shadow,
         )
         _run_frames(p, len(_visit_plan()))
         rec = p._memory_store.get_active_episodic()[0]
@@ -254,8 +291,11 @@ class TestStageFShadowRecordsEpisodes:
         clock = ManualClock()
         store, builder, shadow = _make_shadow()
         p = _build_pipeline(
-            StubDetector(_visit_plan(), clock), clock,
-            memory_store=store, episode_builder=builder, episodic_shadow=shadow,
+            StubDetector(_visit_plan(), clock),
+            clock,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=shadow,
         )
         _run_frames(p, len(_visit_plan()))
         rec = p._memory_store.get_active_episodic()[0]
@@ -267,6 +307,7 @@ class TestStageFShadowRecordsEpisodes:
 # 5. 影子隔离：开启影子不改变历史行为（Shadow Mode 不接决策）
 # ============================================================================
 
+
 class TestStageFShadowIsolation:
     def test_history_fields_unchanged_vs_off(self):
         """影子开 vs 关：同一帧序列下历史五字段逐字段一致（影子不污染主线）。"""
@@ -274,15 +315,20 @@ class TestStageFShadowIsolation:
 
         clock_off = ManualClock()
         p_off = _build_pipeline(
-            StubDetector(plan, clock_off), clock_off, episodic_shadow=False,
+            StubDetector(plan, clock_off),
+            clock_off,
+            episodic_shadow=False,
         )
         results_off = _run_frames(p_off, 5)
 
         clock_on = ManualClock()
         store, builder, shadow = _make_shadow()
         p_on = _build_pipeline(
-            StubDetector(plan, clock_on), clock_on,
-            memory_store=store, episode_builder=builder, episodic_shadow=shadow,
+            StubDetector(plan, clock_on),
+            clock_on,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=shadow,
         )
         results_on = _run_frames(p_on, 5)
 
@@ -299,15 +345,22 @@ class TestStageFShadowIsolation:
 
         clock_off = ManualClock()
         p_off = _build_pipeline(
-            StubDetector(plan, clock_off), clock_off, thresholds=th, episodic_shadow=False,
+            StubDetector(plan, clock_off),
+            clock_off,
+            thresholds=th,
+            episodic_shadow=False,
         )
         results_off = _run_frames(p_off, len(plan))
 
         clock_on = ManualClock()
         store, builder, shadow = _make_shadow()
         p_on = _build_pipeline(
-            StubDetector(plan, clock_on), clock_on, thresholds=th,
-            memory_store=store, episode_builder=builder, episodic_shadow=shadow,
+            StubDetector(plan, clock_on),
+            clock_on,
+            thresholds=th,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=shadow,
         )
         results_on = _run_frames(p_on, len(plan))
 
@@ -324,6 +377,7 @@ class TestStageFShadowIsolation:
 # 6. 风险捕获：有 Warning 时落库 episode 带 risk_level + actions
 # ============================================================================
 
+
 class TestStageFCapturesRisk:
     def test_episode_captures_risk_and_actions(self):
         """小阈值触发 Warning → 落库 episode 带 risk_level 且 actions 非空。"""
@@ -334,8 +388,12 @@ class TestStageFCapturesRisk:
         clock = ManualClock()
         store, builder, shadow = _make_shadow()
         p = _build_pipeline(
-            StubDetector(plan, clock), clock, thresholds=th,
-            memory_store=store, episode_builder=builder, episodic_shadow=shadow,
+            StubDetector(plan, clock),
+            clock,
+            thresholds=th,
+            memory_store=store,
+            episode_builder=builder,
+            episodic_shadow=shadow,
         )
         results = _run_frames(p, len(_visit_plan()))
         total_warnings = sum(len(r.warnings) for r in results)
@@ -351,6 +409,7 @@ class TestStageFCapturesRisk:
 # 6.5 回归：WarningEvent.created_at 必须取 ctx.now（注入时钟），非墙钟
 # ============================================================================
 
+
 class TestWarningCreatedAtUsesContextNow:
     """回归（Stage F 暴露的根因）：WarningEvent.created_at 必须取 ctx.now，否则 Demo/测试
     场景下 Warning 落在墙钟时间线，与 VisitorEvent 模拟时间线错位，ADR-0024 Episode
@@ -358,20 +417,24 @@ class TestWarningCreatedAtUsesContextNow:
     """
 
     def test_warning_created_at_uses_injected_now(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
         from uuid import uuid4
 
         from home_perception.analysis.perception import PerceptionEvent
 
-        fixed = datetime(2026, 7, 19, 23, 30, 0, tzinfo=timezone.utc)
+        fixed = datetime(2026, 7, 19, 23, 30, 0, tzinfo=UTC)
         engine = DecisionEngine(
             elder_id="elder_001",
             policy=RuleBasedDecisionPolicy(),
             now_provider=lambda: fixed,
         )
         pe = PerceptionEvent(
-            device_id="demo/test", event_type="abnormal_dwell", score=0.5,
-            visitor_id=uuid4(), source_video="demo/test", timestamp=1784455800.0,
+            device_id="demo/test",
+            event_type="abnormal_dwell",
+            score=0.5,
+            visitor_id=uuid4(),
+            source_video="demo/test",
+            timestamp=1784455800.0,
             meta={"rule": "LongDurationRule"},
         )
         w = engine.evaluate([pe])
@@ -384,6 +447,7 @@ class TestWarningCreatedAtUsesContextNow:
 # 7. from_settings 装配：memory 段开关透传
 # ============================================================================
 
+
 class TestFromSettingsAssembly:
     def test_memory_off_no_components(self):
         """memory 关闭：from_settings 不构造 store/builder，影子标志 False。"""
@@ -391,6 +455,7 @@ class TestFromSettingsAssembly:
         s.memory.enabled = False
         s.memory.episodic_shadow = False
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._memory_store is None
@@ -403,6 +468,7 @@ class TestFromSettingsAssembly:
         s.memory.enabled = True
         s.memory.episodic_shadow = True
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._memory_store is not None
@@ -417,6 +483,7 @@ class TestFromSettingsAssembly:
         s.memory.enabled = True
         s.memory.episodic_shadow = False
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._memory_store is None
@@ -429,6 +496,7 @@ class TestFromSettingsAssembly:
         s.memory.enabled = False
         s.memory.episodic_shadow = True
         from unittest.mock import MagicMock
+
         fake_det = MagicMock()
         p = PerceptionPipeline.from_settings(s, detector=fake_det)
         assert p._memory_store is None

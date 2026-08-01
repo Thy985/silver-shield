@@ -6,27 +6,27 @@
 
 若运行环境无 httpx（TestClient 依赖），整文件自动跳过，不阻断契约测试套件收集。
 """
+
 from __future__ import annotations
 
 import io
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("httpx")  # 无 TestClient 依赖则跳过
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from silver_demo.config import DemoSettings  # noqa: E402
-from silver_demo.gateway import DemoGateway, create_app  # noqa: E402
-from silver_demo.scenarios import ScenarioConfig  # noqa: E402
-
+from silver_demo.config import DemoSettings
+from silver_demo.gateway import DemoGateway, create_app
+from silver_demo.scenarios import ScenarioConfig
 
 # ----------------------------------------------------------------------
 # 单元测试：_validate_frame_source（评审 #2 — caviar_jpg / video_file 帧源守护）
@@ -49,8 +49,10 @@ def test_validate_frame_source_rejects_empty_caviar():
     gw = _bare_gateway()
     gw.n_frames = 0
     scn = ScenarioConfig(
-        scenario_id="s", source="s", source_type="caviar_jpg",
-        start_time=datetime.now(timezone.utc),
+        scenario_id="s",
+        source="s",
+        source_type="caviar_jpg",
+        start_time=datetime.now(UTC),
     )
     with pytest.raises(RuntimeError):
         gw._validate_frame_source(scn)
@@ -60,8 +62,11 @@ def test_validate_frame_source_rejects_missing_video():
     gw = _bare_gateway()
     gw.n_frames = 5  # 帧数正常，但文件不存在
     scn = ScenarioConfig(
-        scenario_id="s", source="s", source_type="video_file",
-        media_path="/no/such/file.mp4", start_time=datetime.now(timezone.utc),
+        scenario_id="s",
+        source="s",
+        source_type="video_file",
+        media_path="/no/such/file.mp4",
+        start_time=datetime.now(UTC),
     )
     with pytest.raises(RuntimeError):
         gw._validate_frame_source(scn)
@@ -71,9 +76,11 @@ def test_validate_frame_source_rejects_zero_frame_video():
     gw = _bare_gateway()
     gw.n_frames = 0  # 帧数为 0（编码不支持 / 时长为 0）
     scn = ScenarioConfig(
-        scenario_id="s", source="s", source_type="video_file",
+        scenario_id="s",
+        source="s",
+        source_type="video_file",
         media_path="data/demo/CCTV_Surveillance_Final.mp4",
-        start_time=datetime.now(timezone.utc),
+        start_time=datetime.now(UTC),
     )
     with pytest.raises(RuntimeError):
         gw._validate_frame_source(scn)
@@ -87,6 +94,7 @@ def test_validate_frame_source_rejects_zero_frame_video():
 @pytest.fixture
 def client(monkeypatch):
     """隔离 YOLO：assemble/run_loop 置桩，switch_source 仅置桩 n_frames=100。"""
+
     def _noop_assemble(self):
         self.n_frames = 100  # 桩：模拟源有 100 帧
 

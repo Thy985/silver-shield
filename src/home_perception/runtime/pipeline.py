@@ -27,12 +27,13 @@ ActionExecutor (P0-9)      → ActionCommand（MQTT / 通知 / 社区，MVP Mock
 - 行动层 MVP 用 `MockPublisher` / `MockNotifier`（Owner 决策：保持 Mock）；
 - 每层**不**做最终判定（黑名单字段由各自领域对象 __post_init__ 守）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 from ..action.dispatcher import ActionDispatcher
@@ -47,8 +48,8 @@ from ..analysis.event import VisitorEvent
 from ..analysis.event_builder import VisitorEventBuilder
 from ..analysis.feature_extractor import FeatureExtractor
 from ..analysis.perception import PerceptionEvent
-from ..analysis.recent_behavior_store import RecentBehaviorStore
 from ..analysis.realtime_risk_evaluator import RealTimeRiskEvaluator
+from ..analysis.recent_behavior_store import RecentBehaviorStore
 from ..analysis.risk_signal import RiskSignal, SignalTransition
 from ..analysis.rule_engine import RuleEngine
 from ..analysis.signal_adapter import risk_signal_to_perception
@@ -57,13 +58,13 @@ from ..common.logging import get_logger
 from ..core.config import MemoryConfig, Settings
 from ..detection.detector import Detection, DetectionResult, YOLODetector
 from ..detection.tracker import VisitorTracker
-from ..memory.cold_start import ColdStartCoordinator
-from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
 from ..memory import (
     DefaultEpisodeBuilder,
     InMemoryStore,
     MemoryStore,
 )
+from ..memory.cold_start import ColdStartCoordinator
+from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
 from .config import build_dispatcher_config, build_threshold_config
 from .memory_hook import MemoryHook
 from .observability import PipelineMetrics
@@ -89,7 +90,7 @@ class TickableNowProvider(NowProvider, Protocol):
     传入不可推进的 now_provider（如墙钟 / bound method）时 run() 静默跳过推进，不报错。
     """
 
-    def tick(self, dt: Optional[float] = None) -> None: ...
+    def tick(self, dt: float | None = None) -> None: ...
 
 
 class DemoClock:
@@ -103,11 +104,11 @@ class DemoClock:
     仅作 Demo 时序源，不影响任何风险判定逻辑（组件仍只读 now_provider 返回的时间）。
     """
 
-    def __init__(self, start: Optional[datetime] = None, interval_s: float = 0.5):
+    def __init__(self, start: datetime | None = None, interval_s: float = 0.5):
         if start is None:
             # 未显式传入起点 → 静默回退墙钟会破坏 Demo 确定性；告警以便发现配置问题（审查 #5）
             log.warning("demo_clock.start_unset_fallback_wallclock")
-        self._t = start or datetime.now(timezone.utc)
+        self._t = start or datetime.now(UTC)
         self.interval_s = interval_s
 
     def now(self) -> datetime:
@@ -117,7 +118,7 @@ class DemoClock:
         """使 DemoClock 可作为 `now_provider()` 直接调用（与组件约定一致）。"""
         return self.now()
 
-    def tick(self, dt: Optional[float] = None) -> None:
+    def tick(self, dt: float | None = None) -> None:
         self._t = self._t + timedelta(seconds=dt if dt is not None else self.interval_s)
 
 
@@ -128,18 +129,18 @@ class FrameResult:
     frame_index: int
     n_detections: int = 0
     n_visitor_events: int = 0
-    perception_events: List[PerceptionEvent] = field(default_factory=list)
-    warnings: List[WarningEvent] = field(default_factory=list)
-    commands: List[Any] = field(default_factory=list)
+    perception_events: list[PerceptionEvent] = field(default_factory=list)
+    warnings: list[WarningEvent] = field(default_factory=list)
+    commands: list[Any] = field(default_factory=list)
     # —— Stage B 新增（默认空列表 = 向后兼容，flag 关闭时与基线逐字段一致）——
     # behavior_states 即实时观察（Observation）：每帧在场访客的纯实时快照，
     # 供 Demo Dashboard / 调试层展示"此刻门口正在发生什么"。Stage B 不产信号。
-    behavior_states: List[BehaviorState] = field(default_factory=list)
+    behavior_states: list[BehaviorState] = field(default_factory=list)
     # —— Stage C 新增（默认空列表 = 向后兼容，flag 关闭时与基线逐字段一致）——
     # risk_signals 即实时风险跃迁（RAISED/CLEARED）：Shadow Mode 只进 FrameResult 供
     # Dashboard 展示"进行中风险"（RAISED 亮卡 / CLEARED 熄卡），**不接决策、不产 Warning**。
     # 接决策是 Stage D 的职责（经 signal_adapter 翻译为 PerceptionEvent 汇入 DecisionEngine）。
-    risk_signals: List[RiskSignal] = field(default_factory=list)
+    risk_signals: list[RiskSignal] = field(default_factory=list)
 
 
 @dataclass
@@ -152,11 +153,11 @@ class RunSummary:
     n_detections: int = 0
     n_visitor_events: int = 0
     n_perception: int = 0
-    perception_by_type: Dict[str, int] = field(default_factory=dict)
+    perception_by_type: dict[str, int] = field(default_factory=dict)
     n_warnings: int = 0
-    warnings_by_level: Dict[str, int] = field(default_factory=dict)
+    warnings_by_level: dict[str, int] = field(default_factory=dict)
     n_commands: int = 0
-    commands_by_type: Dict[str, int] = field(default_factory=dict)
+    commands_by_type: dict[str, int] = field(default_factory=dict)
     episodes_recorded: int = 0  # ADR-0024 Slice 5 · Stage F 影子写入落库计数
     publish_count: int = 0
     notify_family: int = 0
@@ -164,7 +165,7 @@ class RunSummary:
     errors: int = 0
     duration_s: float = 0.0
 
-    def to_log(self) -> Dict[str, Any]:
+    def to_log(self) -> dict[str, Any]:
         """structlog-safe 字典。"""
         return {
             "scenario": self.scenario,
@@ -214,14 +215,14 @@ class PerceptionPipeline:
         rule_engine: RuleEngine,
         decision_engine: DecisionEngine,
         executor: ActionExecutor,
-        metrics: Optional[PipelineMetrics] = None,
-        now_provider: Optional[NowProvider] = None,
+        metrics: PipelineMetrics | None = None,
+        now_provider: NowProvider | None = None,
         frame_interval_s: float = 0.0,
         # —— Stage B 实时旁路组件（可选；flag 关闭时全 None，零运行时开销）——
-        behavior_builder: Optional[BehaviorBuilder] = None,
-        recent_behavior_store: Optional[RecentBehaviorStore] = None,
+        behavior_builder: BehaviorBuilder | None = None,
+        recent_behavior_store: RecentBehaviorStore | None = None,
         # —— Stage C 实时评估器（可选；flag 关闭时 None，Shadow Mode 不接决策）——
-        realtime_evaluator: Optional[RealTimeRiskEvaluator] = None,
+        realtime_evaluator: RealTimeRiskEvaluator | None = None,
         realtime_enabled: bool = False,
         eval_interval_frames: int = 1,
         # —— Stage D 决策接入开关（可选；默认 false，Shadow Mode 不产 Warning）——
@@ -229,11 +230,11 @@ class PerceptionPipeline:
         # —— ADR-0024 Slice 3：Snapshot Recovery（Stage C + Stage E，解 TD-0027）——
         # 可选；memory_config=None 或 enabled=False 时不触发，行为与基线逐字段一致。
         # 开启时需要 realtime 旁路组件（evaluator/store）已存在，否则降级为纯冷启动无效。
-        memory_config: Optional[MemoryConfig] = None,
+        memory_config: MemoryConfig | None = None,
         # —— ADR-0024 Slice 5：Episodic Memory Store + Stage F 影子写入（可选；
         #    默认全 None/false，零运行时开销；仅 memory.enabled + episodic_shadow 时激活）——
-        memory_store: Optional[MemoryStore] = None,
-        episode_builder: Optional[DefaultEpisodeBuilder] = None,
+        memory_store: MemoryStore | None = None,
+        episode_builder: DefaultEpisodeBuilder | None = None,
         episodic_shadow: bool = False,
     ):
         self.detector = detector
@@ -273,9 +274,9 @@ class PerceptionPipeline:
         # memory_config 由 Settings.memory 注入。effective 激活需 enabled 且 realtime
         # 旁路组件已就位（from_settings 在 memory 开启时会连带开启 realtime 装配）。
         self._memory_config = memory_config
-        self._snapshot_store: Optional[SnapshotStore] = None
-        self._cold_start_coordinator: Optional[ColdStartCoordinator] = None
-        self._last_snapshot_at: Optional[datetime] = None
+        self._snapshot_store: SnapshotStore | None = None
+        self._cold_start_coordinator: ColdStartCoordinator | None = None
+        self._last_snapshot_at: datetime | None = None
         if memory_config is not None and memory_config.enabled:
             if self._realtime_evaluator is not None and self._recent_behavior_store is not None:
                 self._snapshot_store = SnapshotStore(Path(memory_config.snapshot_path))
@@ -300,9 +301,7 @@ class PerceptionPipeline:
         self._memory_store = memory_store
         self._episode_builder = episode_builder
         self._episodic_shadow = bool(episodic_shadow)
-        if self._episodic_shadow and (
-            self._memory_store is None or self._episode_builder is None
-        ):
+        if self._episodic_shadow and (self._memory_store is None or self._episode_builder is None):
             log.warning(
                 "pipeline.episodic_shadow_without_store",
                 note="episodic_shadow=true 但 store/episode_builder 缺失，影子写入静默跳过",
@@ -328,13 +327,13 @@ class PerceptionPipeline:
     def from_settings(
         cls,
         settings: Settings,
-        detector: Optional[YOLODetector] = None,
+        detector: YOLODetector | None = None,
         device_id: str = "home_entry_01",
         location: str = "入户门",
         elder_id: str = "elder_001",
-        now_provider: Optional[NowProvider] = None,
+        now_provider: NowProvider | None = None,
         frame_interval_s: float = 0.0,
-    ) -> "PerceptionPipeline":
+    ) -> PerceptionPipeline:
         """从 `Settings` 构造完整流水线（各组件按 YAML 配置装配）。
 
         `detector` 可复用同一 `YOLODetector` 实例跨场景（保证 track_id 跨帧一致，
@@ -354,7 +353,9 @@ class PerceptionPipeline:
             absence_gap_s=settings.detection.tracking.absence_gap_s,
             now_provider=now_provider,
         )
-        event_builder = VisitorEventBuilder(tracker, source_video=device_id, now_provider=now_provider)
+        event_builder = VisitorEventBuilder(
+            tracker, source_video=device_id, now_provider=now_provider
+        )
         feature_extractor = FeatureExtractor(frequency_window_s=settings.rule.frequency_window_s)
         rule_engine = RuleEngine(
             device_id=device_id,
@@ -387,9 +388,9 @@ class PerceptionPipeline:
         realtime_enabled = settings.realtime_risk.enabled or settings.memory.enabled
         eval_interval = settings.realtime_risk.eval_interval_frames
         decision_enabled = settings.realtime_risk.decision_enabled
-        behavior_builder: Optional[BehaviorBuilder] = None
-        recent_behavior_store: Optional[RecentBehaviorStore] = None
-        realtime_evaluator: Optional[RealTimeRiskEvaluator] = None
+        behavior_builder: BehaviorBuilder | None = None
+        recent_behavior_store: RecentBehaviorStore | None = None
+        realtime_evaluator: RealTimeRiskEvaluator | None = None
         if realtime_enabled:
             thresholds = build_threshold_config(settings.rule)
             behavior_builder = BehaviorBuilder(event_builder=event_builder)
@@ -408,8 +409,8 @@ class PerceptionPipeline:
         # episodic_shadow 为 Stage F 独立子开关（默认 off）：仅当二者同时为真才构造
         # InMemoryStore + DefaultEpisodeBuilder 并开启影子写入。Shadow Mode 只记录
         # EpisodicRecord，不接决策、不产 Warning。
-        memory_store: Optional[MemoryStore] = None
-        episode_builder: Optional[DefaultEpisodeBuilder] = None
+        memory_store: MemoryStore | None = None
+        episode_builder: DefaultEpisodeBuilder | None = None
         episodic_shadow = False
         if settings.memory.enabled:
             if settings.memory.episodic_shadow:
@@ -466,7 +467,7 @@ class PerceptionPipeline:
         """当前时刻：优先 now_provider（Demo 模拟时钟），否则墙钟 UTC。"""
         if self._clock is not None:
             return self._clock()
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def _save_snapshot(self, now: datetime) -> None:
         """把当前实时状态写入 JSON snapshot（原子写，解 TD-0027 重启恢复）。"""
@@ -503,7 +504,7 @@ class PerceptionPipeline:
     # process_frame 中每个 VisitorEvent 经 ``self._memory_hook.record`` 投影落库。
     # ------------------------------------------------------------------
 
-    def process_frame(self, frame: "object", frame_index: int = 0) -> FrameResult:
+    def process_frame(self, frame: object, frame_index: int = 0) -> FrameResult:
         """处理单帧：detector → tracker → builder → feature → rule → decision → action。
 
         任何阶段的异常（除 KeyboardInterrupt）都被捕获并计入 metrics.errors，
@@ -518,13 +519,13 @@ class PerceptionPipeline:
             log.exception("pipeline.detect_failed", frame_index=frame_index)
             return FrameResult(frame_index=frame_index, n_detections=0, n_visitor_events=0)
 
-        dets: List[Detection] = result.detections
+        dets: list[Detection] = result.detections
         self.metrics.detections_total += len(dets)
 
-        events: List[VisitorEvent] = self.event_builder.update(dets)
-        perception_events: List[PerceptionEvent] = []
-        warnings: List[WarningEvent] = []
-        commands: List[Any] = []
+        events: list[VisitorEvent] = self.event_builder.update(dets)
+        perception_events: list[PerceptionEvent] = []
+        warnings: list[WarningEvent] = []
+        commands: list[Any] = []
 
         for ev in events:
             self.metrics.visitor_events += 1
@@ -544,12 +545,12 @@ class PerceptionPipeline:
         # Stage C：RealTimeRiskEvaluator 状态机 → risk_signals（Shadow Mode：只进 FrameResult，
         #          不接 DecisionPolicy、不产 Warning；接决策是 Stage D 的职责）
         # 工程方案 §3.1 步骤 4 + §5.3 跳帧对称：RAISED/CLEARED 仅在评估帧发生，延迟对称
-        behavior_states: List[BehaviorState] = []
-        risk_signals: List[RiskSignal] = []
+        behavior_states: list[BehaviorState] = []
+        risk_signals: list[RiskSignal] = []
         if self._realtime_enabled and self._behavior_builder is not None:
             is_eval_frame = (frame_index % self._eval_interval_frames) == 0
             if is_eval_frame:
-                now = self._clock() if self._clock is not None else datetime.now(timezone.utc)
+                now = self._clock() if self._clock is not None else datetime.now(UTC)
                 active_tracks = self.tracker.active()
                 behavior_states = self._behavior_builder.build(active_tracks, now)
 
@@ -557,10 +558,7 @@ class PerceptionPipeline:
                 # 工程方案 §3.3：State 与 History 在此组合，评估器只读不写
                 # 注意：即使 behavior_states 为空（主体全部离场），也要调用 evaluate([])
                 # 让评估器走 missing_ids 路径补发 CLEARED（离场兜底，工程方案 §4.2 规则 2）
-                if (
-                    self._recent_behavior_store is not None
-                    and self._realtime_evaluator is not None
-                ):
+                if self._recent_behavior_store is not None and self._realtime_evaluator is not None:
                     window_s = self.feature_extractor.frequency_window_s
                     # 建立 track_id → enter_time 映射（active_tracks 与 behavior_states 同序）
                     enter_time_map = {
@@ -568,7 +566,7 @@ class PerceptionPipeline:
                         for vt in active_tracks
                         if vt.enter_time is not None
                     }
-                    ctxs: List[RealtimeContext] = []
+                    ctxs: list[RealtimeContext] = []
                     for state in behavior_states:
                         enter_time = enter_time_map.get(state.track_id)
                         if enter_time is None:
@@ -577,10 +575,12 @@ class PerceptionPipeline:
                         recent = self._recent_behavior_store.update(
                             state.visitor_instance_id, enter_time, now, window_s
                         )
-                        ctxs.append(RealtimeContext(
-                            current_state=state,
-                            recent_behavior=dict(recent),  # 解 MappingProxyType 为普通 dict
-                        ))
+                        ctxs.append(
+                            RealtimeContext(
+                                current_state=state,
+                                recent_behavior=dict(recent),  # 解 MappingProxyType 为普通 dict
+                            )
+                        )
                     # 评估器消费 ctxs 产出 signals（RAISED + CLEARED）
                     # ctxs 为空时评估器走 missing_ids 路径补发 CLEARED（离场兜底）
                     risk_signals = self._realtime_evaluator.evaluate(ctxs, now)
@@ -590,9 +590,7 @@ class PerceptionPipeline:
                     # DecisionEngine 产 WarningEvent；CLEARED 不进决策（仅随 FrameResult
                     # 供展示层熄灭风险卡）。工程方案 §3.1 步骤 4 + §6 单一决策中心。
                     if self._decision_enabled and risk_signals:
-                        rt_percs, rt_warnings, rt_cmds = self._act_on_signals(
-                            risk_signals, now
-                        )
+                        rt_percs, rt_warnings, rt_cmds = self._act_on_signals(risk_signals, now)
                         perception_events.extend(rt_percs)
                         warnings.extend(rt_warnings)
                         commands.extend(rt_cmds)
@@ -614,7 +612,7 @@ class PerceptionPipeline:
 
     def _act_on_event(
         self, ev: VisitorEvent
-    ) -> Tuple[List[PerceptionEvent], List[WarningEvent], List[Any]]:
+    ) -> tuple[list[PerceptionEvent], list[WarningEvent], list[Any]]:
         """处理单个 VisitorEvent 的下游链路（feature → rule → decision → action）。
 
         从 process_frame 抽取，避免 4 层嵌套；返回本事件产出的感知事件 / 告警 / 行动指令。
@@ -626,8 +624,8 @@ class PerceptionPipeline:
             return [], [], []
         for p in percs:
             self.metrics.record_perception(p.event_type)
-        warnings: List[WarningEvent] = []
-        commands: List[Any] = []
+        warnings: list[WarningEvent] = []
+        commands: list[Any] = []
         w = self.decision_engine.evaluate(percs)
         if w is not None:
             self.metrics.record_warning(w.risk_level)
@@ -639,8 +637,8 @@ class PerceptionPipeline:
         return percs, warnings, commands
 
     def _act_on_signals(
-        self, signals: List[RiskSignal], now: datetime
-    ) -> Tuple[List[PerceptionEvent], List[WarningEvent], List[Any]]:
+        self, signals: list[RiskSignal], now: datetime
+    ) -> tuple[list[PerceptionEvent], list[WarningEvent], list[Any]]:
         """Stage D：处理实时信号的下游链路（adapter → decision → action）。
 
         与 ``_act_on_event`` 平行（不重构既有逐事件循环，0 行为变化）：
@@ -661,7 +659,7 @@ class PerceptionPipeline:
         返回：(perception_events, warnings, commands)，调用方安全 extend。
         """
         # 1) 翻译：RAISED → PerceptionEvent；CLEARED → None（跳过）
-        rt_percs: List[PerceptionEvent] = []
+        rt_percs: list[PerceptionEvent] = []
         for sig in signals:
             if sig.transition is not SignalTransition.RAISED:
                 continue  # CLEARED 不进决策
@@ -679,8 +677,8 @@ class PerceptionPipeline:
             self.metrics.record_perception(p.event_type)
 
         # 2) 决策：复用同一 DecisionEngine（单一决策中心）
-        warnings: List[WarningEvent] = []
-        commands: List[Any] = []
+        warnings: list[WarningEvent] = []
+        commands: list[Any] = []
         w = self.decision_engine.evaluate(rt_percs)
         if w is not None:
             self.metrics.record_warning(w.risk_level)
@@ -691,7 +689,7 @@ class PerceptionPipeline:
                 self.metrics.record_command(c.command_type)
         return rt_percs, warnings, commands
 
-    def run(self, frames: List["object"], scenario: str = "unknown") -> RunSummary:
+    def run(self, frames: list[object], scenario: str = "unknown") -> RunSummary:
         """处理一整个帧序列（单场景 / 单视频源），返回汇总。
 
         支持优雅中断：捕获 KeyboardInterrupt，停止处理并仍返回已处理部分的汇总。

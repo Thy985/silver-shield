@@ -4,21 +4,22 @@
 需要 ultralytics + torch 的用例在缺失依赖时自动跳过（pytest.importorskip），
 保证 CI / 无 GPU 环境也能跑通契约测试。
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
+from home_perception.core.config import ImgszProfile
 from home_perception.detection.detector import (
     ALLOWED_CLASSES,
     Detection,
     DetectionResult,
     YOLODetector,
 )
-from home_perception.core.config import ImgszProfile
-
 
 # ---------------- 不依赖 torch 的契约测试 ----------------
+
 
 def test_detection_schema_fields():
     d = Detection(
@@ -37,12 +38,18 @@ def test_detection_schema_fields():
 
 def test_detection_result_schema():
     det = Detection(
-        class_id=0, class_name="person", confidence=0.9,
-        bbox=[0.0, 0.0, 1.0, 1.0], timestamp=1.0,
+        class_id=0,
+        class_name="person",
+        confidence=0.9,
+        bbox=[0.0, 0.0, 1.0, 1.0],
+        timestamp=1.0,
     )
     r = DetectionResult(
-        detections=[det], timestamp=1.0, inference_ms=12.3,
-        source_size=(1080, 1920), inference_size=(640, 640),
+        detections=[det],
+        timestamp=1.0,
+        inference_ms=12.3,
+        source_size=(1080, 1920),
+        inference_size=(640, 640),
         model="yolo11n.pt",
     )
     assert r.detections[0].class_name == "person"
@@ -54,16 +61,16 @@ def test_detection_result_schema():
 def test_allowed_classes_only_first_stage():
     # 边界约束：仅第一阶段 4 类，禁止扩展（避免检测器膨胀）
     assert set(ALLOWED_CLASSES.keys()) == {0, 24, 26, 67}
-    assert set(ALLOWED_CLASSES.values()) == {
-        "person", "backpack", "handbag", "cell phone"
-    }
+    assert set(ALLOWED_CLASSES.values()) == {"person", "backpack", "handbag", "cell phone"}
 
 
 def test_constructor_does_not_require_torch():
     # 构造不应触发 ultralytics / torch 导入（无 GPU 环境可构造与单测）
     det = YOLODetector(
-        model="yolo11n.pt", conf_threshold=0.5,
-        classes=[0, 24, 26, 67], imgsz=640,
+        model="yolo11n.pt",
+        conf_threshold=0.5,
+        classes=[0, 24, 26, 67],
+        imgsz=640,
     )
     assert det.is_loaded is False
     assert det.model_path == "yolo11n.pt"
@@ -107,8 +114,11 @@ ultralytics = pytest.importorskip("ultralytics")
 @pytest.fixture(scope="module")
 def detector() -> YOLODetector:
     d = YOLODetector(
-        model="yolo11n.pt", conf_threshold=0.45,
-        classes=[0, 24, 26, 67], imgsz=640, device="cpu",
+        model="yolo11n.pt",
+        conf_threshold=0.45,
+        classes=[0, 24, 26, 67],
+        imgsz=640,
+        device="cpu",
     )
     d.load()
     return d

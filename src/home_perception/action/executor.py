@@ -20,20 +20,20 @@
 - **不**做内容生成（→ ActionDispatcher 已构造 payload）
 - **不**持久化（进程重启幂等丢失可接受，v2 接 Redis）
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 from uuid import UUID
 
+from ..analysis.warning import WarningEvent
 from ..common.logging import get_logger
 from ..common.timeutil import now_dt
-from ..analysis.warning import WarningEvent
 from .command import ActionCommand, assert_transition_warning
 from .dispatcher import ActionDispatcher
 from .notifier import NotificationAdapter
 from .publisher import MQTTPublisher
-
 
 log = get_logger(__name__)
 
@@ -41,6 +41,7 @@ log = get_logger(__name__)
 # ============================================================================
 # ActionExecutor
 # ============================================================================
+
 
 @dataclass
 class ActionExecutor:
@@ -68,11 +69,11 @@ class ActionExecutor:
     notifier: NotificationAdapter
     max_retries: int = 3
     # 内部状态（in-memory 幂等）
-    _dispatched: Set[UUID] = field(default_factory=set)
-    _commands_by_warning: Dict[UUID, List[UUID]] = field(default_factory=dict)
-    _command_index: Dict[UUID, ActionCommand] = field(default_factory=dict)
+    _dispatched: set[UUID] = field(default_factory=set)
+    _commands_by_warning: dict[UUID, list[UUID]] = field(default_factory=dict)
+    _command_index: dict[UUID, ActionCommand] = field(default_factory=dict)
     # 持有 warning 引用（用于 retry_pending 反查；MVP 进程内可接受）
-    _warnings_by_id: Dict[UUID, WarningEvent] = field(default_factory=dict)
+    _warnings_by_id: dict[UUID, WarningEvent] = field(default_factory=dict)
     # 可选时间源（测试用）
     _now_provider: Any = field(default=None)
 
@@ -86,7 +87,7 @@ class ActionExecutor:
     # 公开 API
     # ------------------------------------------------------------------
 
-    def execute(self, warning: WarningEvent) -> List[ActionCommand]:
+    def execute(self, warning: WarningEvent) -> list[ActionCommand]:
         """处理一个 WarningEvent：幂等 → 路由 → 执行 → 状态翻转。
 
         返回所有相关 ActionCommand（含失败的）。幂等命中时返回已记录的 commands。
@@ -110,7 +111,7 @@ class ActionExecutor:
         self._warnings_by_id[warning.warning_id] = warning
 
         # 4) 执行每个 command
-        executed: List[ActionCommand] = []
+        executed: list[ActionCommand] = []
         all_done = True
         for cmd in commands:
             success = self._execute_command(cmd, warning)
@@ -146,7 +147,7 @@ class ActionExecutor:
         )
         return executed
 
-    def retry_pending(self) -> List[ActionCommand]:
+    def retry_pending(self) -> list[ActionCommand]:
         """重试所有 FAILED 状态的 commands。
 
         max_retries 语义：最多重试 max_retries 次（不含初始 execute）。
@@ -158,7 +159,7 @@ class ActionExecutor:
         - 重试失败且 attempts 达到 1+max_retries → command GIVEN_UP + warning REJECTED
         - 已 GIVEN_UP / DONE 的 command 跳过
         """
-        retried: List[ActionCommand] = []
+        retried: list[ActionCommand] = []
 
         for cmd in list(self._command_index.values()):
             if cmd.status != "FAILED":
@@ -188,8 +189,7 @@ class ActionExecutor:
             elif success:
                 # 本次重试成功 → 检查同 warning 的所有 command 是否都 DONE
                 all_done = all(
-                    c.status == "DONE"
-                    for c in self._get_commands_for_warning(cmd.warning_id)
+                    c.status == "DONE" for c in self._get_commands_for_warning(cmd.warning_id)
                 )
                 if all_done and warning.status == "PENDING":
                     try:
@@ -224,6 +224,7 @@ class ActionExecutor:
 
             if cmd.command_type == "SEND_FAMILY_MESSAGE":
                 from .notifier import FamilyContact
+
                 contact_data = cmd.payload.get("contact", {})
                 contact = FamilyContact(
                     elder_id=contact_data.get("elder_id", warning.elder_id),
@@ -245,7 +246,7 @@ class ActionExecutor:
             cmd.status = "FAILED"
             cmd.updated_at = self._now_provider()
             return False
-        except Exception as e:  # Publisher/Notifier 理论上不抛，但做最后兜底
+        except Exception as e:  # noqa: BLE001  # Publisher/Notifier 理论上不抛，但做最后兜底
             cmd.error = f"{type(e).__name__}: {e}"
             cmd.status = "FAILED"
             cmd.updated_at = self._now_provider()
@@ -276,11 +277,11 @@ class ActionExecutor:
             )
             raise
 
-    def _get_commands_for_warning(self, warning_id: UUID) -> List[ActionCommand]:
+    def _get_commands_for_warning(self, warning_id: UUID) -> list[ActionCommand]:
         cmd_ids = self._commands_by_warning.get(warning_id, [])
         return [self._command_index[cid] for cid in cmd_ids if cid in self._command_index]
 
-    def _find_warning_for_command(self, cmd: ActionCommand) -> Optional[WarningEvent]:
+    def _find_warning_for_command(self, cmd: ActionCommand) -> WarningEvent | None:
         """从 _warnings_by_id 反查关联 warning。"""
         return self._warnings_by_id.get(cmd.warning_id)
 

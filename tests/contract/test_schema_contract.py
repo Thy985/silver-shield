@@ -6,6 +6,7 @@
 - 收敛 PerceptionEvent 双定义后，本文件断言的"权威定义"不变；
 - 删除 legacy ``analysis/rules.py`` + ``core/pipeline.py`` 后，drift 检测测试须同步更新。
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -14,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from home_perception.action.command import COMMAND_STATUSES, COMMAND_TYPES, ActionCommand
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.perception import EVENT_TYPES, PerceptionEvent
 from home_perception.analysis.warning import (
@@ -22,7 +24,6 @@ from home_perception.analysis.warning import (
     WARNING_STATUSES,
     WarningEvent,
 )
-from home_perception.action.command import COMMAND_STATUSES, COMMAND_TYPES, ActionCommand
 
 # 模块边界铁律（ADR-0001/0007/0010/0011）：任何消息对象不得携带"最终判定"字段
 FORBIDDEN_FIELDS = frozenset(
@@ -171,8 +172,8 @@ def test_perception_event_single_authority():
     - core/event.py 不再定义 PerceptionEvent（无重复领域对象）
     - output/publisher、output/schemas、evidence/clip_collector 均引用权威版
     """
-    from home_perception.core import event as core_event
     from home_perception.analysis import perception as ap_mod
+    from home_perception.core import event as core_event
 
     assert not hasattr(core_event, "PerceptionEvent"), (
         "core/event.py 不应再定义 PerceptionEvent；收敛到 analysis/perception.py"

@@ -5,6 +5,7 @@
 
 纯静态锚点检查（与 test_dashboard_state_layer.py 同一手法），不触发 torch / 不装配 pipeline。
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -9,6 +9,7 @@
 
 配置攻击防护直接在 pydantic 模型层落地（core/config.py），保持 Mock / 真实实现共用同一校验。
 """
+
 from __future__ import annotations
 
 import pytest

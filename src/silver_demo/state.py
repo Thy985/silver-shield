@@ -10,12 +10,12 @@
 - 状态翻转只发生在本 Store 内。
 - 按 ``warning_id`` 幂等映射（同一 warning 多次上行只记一条）。
 """
+
 from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # 合法状态（与 ADR-0015 §2.5 一致）
 VALID_STATUSES = ("pending", "family_handled", "community_done")
@@ -24,7 +24,7 @@ VALID_STATUSES = ("pending", "family_handled", "community_done")
 VALID_OPERATORS = ("family", "community")
 
 # 状态翻转规则（单向流转，不可逆）
-TRANSITIONS: Dict[str, frozenset] = {
+TRANSITIONS: dict[str, frozenset] = {
     "pending": frozenset({"family_handled"}),
     "family_handled": frozenset({"community_done"}),
     "community_done": frozenset(),  # 终态
@@ -39,10 +39,12 @@ class DemoStateStore:
     """
 
     def __init__(self) -> None:
-        self._state: Dict[str, Dict[str, Any]] = {}
+        self._state: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
 
-    async def upsert(self, warning_id: str, status: str = "pending", operator: str = "") -> Dict[str, Any]:
+    async def upsert(
+        self, warning_id: str, status: str = "pending", operator: str = ""
+    ) -> dict[str, Any]:
         """按 warning_id 幂等插入或更新状态。
 
         - 首次见到的 warning_id → 初始化为 pending。
@@ -61,7 +63,9 @@ class DemoStateStore:
                 # 首次：尊重请求的状态（演示交互「单次点击即确认」需要）。
                 # 合法非 pending 状态（family_handled / community_done）直接作为初值，
                 # 否则回退 pending。后续翻转仍受 TRANSITIONS 单向约束。
-                init_status = status if status in VALID_STATUSES and status != "pending" else "pending"
+                init_status = (
+                    status if status in VALID_STATUSES and status != "pending" else "pending"
+                )
                 entry = {"warning_id": warning_id, "status": init_status, "operator": operator}
                 self._state[warning_id] = entry
                 return dict(entry)
@@ -81,13 +85,13 @@ class DemoStateStore:
             entry["operator"] = operator or entry["operator"]
             return dict(entry)
 
-    async def get(self, warning_id: str) -> Optional[Dict[str, Any]]:
+    async def get(self, warning_id: str) -> dict[str, Any] | None:
         """读取单条状态；不存在返回 None。"""
         async with self._lock:
             entry = self._state.get(warning_id)
             return dict(entry) if entry else None
 
-    async def snapshot(self) -> Dict[str, Dict[str, Any]]:
+    async def snapshot(self) -> dict[str, dict[str, Any]]:
         """返回全量状态快照（供 Dashboard 行动闭环区展示）。"""
         async with self._lock:
             return {wid: dict(e) for wid, e in self._state.items()}
@@ -103,14 +107,14 @@ class DemoStateStore:
 # ======================================================================
 
 # 行为里程碑样式（与 dashboard BEHAV 保持一致；服务端派生，避免双份逻辑）
-_BEHAV: Dict[str, Dict[str, str]] = {
+_BEHAV: dict[str, dict[str, str]] = {
     "visit_normal": {"icon": "🌙", "label": "异常时段到访", "color": "#0891b2"},
     "visit_pending_verify": {"icon": "🔍", "label": "待核实到访", "color": "#0ea5e9"},
     "abnormal_dwell": {"icon": "⏱", "label": "停留超过阈值", "color": "#d97706"},
     "repeat_visit": {"icon": "🔁", "label": "再次出现", "color": "#7c3aed"},
     "high_risk_approach": {"icon": "⚠", "label": "高风险逼近", "color": "#dc2626"},
 }
-_RISK_RANK: Dict[str, int] = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+_RISK_RANK: dict[str, int] = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
 _WARNING_MAX = 30
 _BEHAVIOR_MAX = 120
 
@@ -130,13 +134,13 @@ class DemoAggregateState:
 
     def __init__(self) -> None:
         # 累积状态（镜像客户端既有去重规则）
-        self.warnings: Dict[str, Dict[str, Any]] = {}
-        self.behaviors: List[Dict[str, Any]] = []
-        self._behavior_seen: Dict[str, bool] = {}
+        self.warnings: dict[str, dict[str, Any]] = {}
+        self.behaviors: list[dict[str, Any]] = []
+        self._behavior_seen: dict[str, bool] = {}
         # warning_id -> {"family": {cid: cmd}, "community": {...}, "log_only": {...}}
-        self.commands: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
-        self._visitor_seq: Dict[str, str] = {}
-        self._visitor_first: Dict[str, bool] = {}
+        self.commands: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+        self._visitor_seq: dict[str, str] = {}
+        self._visitor_first: dict[str, bool] = {}
         self._visitor_n = 0
         self._behavior_n = 0
 
@@ -145,7 +149,7 @@ class DemoAggregateState:
         self.frame_index: int = 0
         self.loop_count: int = 0
         self.started_at: float = 0.0
-        self.last_warning: Optional[Dict[str, Any]] = None
+        self.last_warning: dict[str, Any] | None = None
         self.scenario: str = ""
         self.source: str = ""
         self.source_type: str = ""
@@ -156,10 +160,10 @@ class DemoAggregateState:
     # ------------------------------------------------------------------
     def ingest(
         self,
-        active_warnings: List[Dict[str, Any]],
-        perception_events: List[Dict[str, Any]],
-        all_warnings: List[Dict[str, Any]],
-        routed: Dict[str, List[Dict[str, Any]]],
+        active_warnings: list[dict[str, Any]],
+        perception_events: list[dict[str, Any]],
+        all_warnings: list[dict[str, Any]],
+        routed: dict[str, list[dict[str, Any]]],
         frame_index: int,
         loop_count: int,
     ) -> None:
@@ -179,7 +183,7 @@ class DemoAggregateState:
         self._ingest_behavior(perception_events, active_warnings)
         self._recompute_last_warning()
 
-    def _ingest_warnings(self, active_warnings: List[Dict[str, Any]]) -> None:
+    def _ingest_warnings(self, active_warnings: list[dict[str, Any]]) -> None:
         for w in active_warnings:
             if not isinstance(w, dict) or not w.get("warning_id"):
                 continue
@@ -200,7 +204,7 @@ class DemoAggregateState:
         for wid in ids[: len(self.warnings) - _WARNING_MAX]:
             del self.warnings[wid]
 
-    def _merge_commands(self, routed: Dict[str, List[Dict[str, Any]]]) -> None:
+    def _merge_commands(self, routed: dict[str, list[dict[str, Any]]]) -> None:
         for ctype in ("family", "community", "log_only"):
             arr = (routed or {}).get(ctype) or []
             for c in arr:
@@ -209,9 +213,7 @@ class DemoAggregateState:
                 wid = c.get("warning_id")
                 if not wid:
                     continue
-                self.commands.setdefault(
-                    wid, {"family": {}, "community": {}, "log_only": {}}
-                )
+                self.commands.setdefault(wid, {"family": {}, "community": {}, "log_only": {}})
                 bucket = self.commands[wid][ctype]
                 cid = c.get("command_id")
                 if cid is None:
@@ -230,7 +232,7 @@ class DemoAggregateState:
             self._visitor_seq[vid] = "访客#" + str(self._visitor_n)
         return self._visitor_seq[vid]
 
-    def _add_behavior(self, ev: Dict[str, Any]) -> None:
+    def _add_behavior(self, ev: dict[str, Any]) -> None:
         key = ev.get("key")
         if not key or key in self._behavior_seen:
             return
@@ -246,8 +248,8 @@ class DemoAggregateState:
 
     def _ingest_behavior(
         self,
-        perception_events: List[Dict[str, Any]],
-        active_warnings: List[Dict[str, Any]],
+        perception_events: list[dict[str, Any]],
+        active_warnings: list[dict[str, Any]],
     ) -> None:
         for pe in perception_events or []:
             if not isinstance(pe, dict):
@@ -256,26 +258,40 @@ class DemoAggregateState:
             who = self._friendly_visitor(vid)
             if vid and vid not in self._visitor_first:
                 self._visitor_first[vid] = True
-                self._add_behavior({
-                    "key": "enter|" + vid,
-                    "time": pe.get("created_at"),
-                    "icon": "👤", "label": "首次出现", "color": "#0891b2",
-                    "who": who, "detail": "进入" + (pe.get("location") or "门口") + "画面",
-                })
+                self._add_behavior(
+                    {
+                        "key": "enter|" + vid,
+                        "time": pe.get("created_at"),
+                        "icon": "👤",
+                        "label": "首次出现",
+                        "color": "#0891b2",
+                        "who": who,
+                        "detail": "进入" + (pe.get("location") or "门口") + "画面",
+                    }
+                )
             bm = _BEHAV.get(
                 pe.get("event_type"),
                 {"icon": "•", "label": pe.get("event_type") or "事件", "color": "#64748b"},
             )
             repeat = pe.get("repeat_count")
-            self._add_behavior({
-                "key": "pe|" + vid + "|" + str(pe.get("event_type")) + "|" + (str(repeat) if repeat is not None else "0"),
-                "time": pe.get("created_at"),
-                "icon": bm["icon"], "label": bm["label"], "color": bm["color"],
-                "who": who,
-                "score": pe["score"] if isinstance(pe.get("score"), (int, float)) else None,
-                "repeat": repeat,
-                "detail": ("位置 " + pe["location"]) if pe.get("location") else "",
-            })
+            self._add_behavior(
+                {
+                    "key": "pe|"
+                    + vid
+                    + "|"
+                    + str(pe.get("event_type"))
+                    + "|"
+                    + (str(repeat) if repeat is not None else "0"),
+                    "time": pe.get("created_at"),
+                    "icon": bm["icon"],
+                    "label": bm["label"],
+                    "color": bm["color"],
+                    "who": who,
+                    "score": pe["score"] if isinstance(pe.get("score"), (int, float)) else None,
+                    "repeat": repeat,
+                    "detail": ("位置 " + pe["location"]) if pe.get("location") else "",
+                }
+            )
         for w in active_warnings or []:
             if not isinstance(w, dict) or not w.get("warning_id"):
                 continue
@@ -284,12 +300,22 @@ class DemoAggregateState:
                 continue
             rl = w.get("risk_level")
             color = "#dc2626" if rl == "HIGH" else ("#d97706" if rl == "MEDIUM" else "#16a34a")
-            label = "生成风险预警（" + ("高" if rl == "HIGH" else ("中" if rl == "MEDIUM" else "低")) + "）"
-            self._add_behavior({
-                "key": wk, "time": w.get("created_at"),
-                "icon": "⚠", "label": label, "color": color,
-                "who": "", "detail": "、".join(w.get("reason_summary") or []),
-            })
+            label = (
+                "生成风险预警（"
+                + ("高" if rl == "HIGH" else ("中" if rl == "MEDIUM" else "低"))
+                + "）"
+            )
+            self._add_behavior(
+                {
+                    "key": wk,
+                    "time": w.get("created_at"),
+                    "icon": "⚠",
+                    "label": label,
+                    "color": color,
+                    "who": "",
+                    "detail": "、".join(w.get("reason_summary") or []),
+                }
+            )
 
     def _recompute_last_warning(self) -> None:
         if not self.warnings:
@@ -326,12 +352,12 @@ class DemoAggregateState:
         if reset_session:
             self.started_at = time.time()
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         """返回供 WS 首连 ``snapshot`` 的完整聚合状态。
 
         含行为去重键与访客映射，便于客户端**精确恢复**其累积状态（而非重新累积）。
         """
-        commands_out: Dict[str, Any] = {}
+        commands_out: dict[str, Any] = {}
         for wid, groups in self.commands.items():
             commands_out[wid] = {
                 "family": list(groups["family"].values()),
@@ -347,7 +373,7 @@ class DemoAggregateState:
             "visitor_first": list(self._visitor_first.keys()),
         }
 
-    def meta(self) -> Dict[str, Any]:
+    def meta(self) -> dict[str, Any]:
         """轻量运行时元数据（每帧广播 + snapshot 共用，供状态面板 / 晚连恢复）。"""
         return {
             "session_status": self.session_status,

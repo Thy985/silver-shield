@@ -8,12 +8,13 @@
 > - 序列化（payload 已是 dict，Publisher 不变 schema）
 > - 重连（v2 真实 broker 才需要）
 """
+
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
-from datetime import datetime, timezone
+from typing import Any, Protocol
 
 
 class MQTTPublisher(Protocol):
@@ -27,7 +28,7 @@ class MQTTPublisher(Protocol):
     - **不**做重试（重试是 ActionExecutor 责任，Publisher 只管"这一次能否成功"）
     """
 
-    def publish(self, topic: str, payload: Dict[str, Any]) -> bool:
+    def publish(self, topic: str, payload: dict[str, Any]) -> bool:
         """发布一条消息到 topic。
 
         Args:
@@ -57,14 +58,14 @@ class MockPublisher:
         assert pub.publish_count == 1
     """
 
-    def __init__(self, output_path: Optional[str] = None):
+    def __init__(self, output_path: str | None = None):
         """output_path=None 时只内存收集不落盘（纯单测用）。"""
         self.output_path = Path(output_path) if output_path else None
-        self.published: List[Dict[str, Any]] = []
+        self.published: list[dict[str, Any]] = []
         self.fail_next: bool = False
         self._closed = False
 
-    def publish(self, topic: str, payload: Dict[str, Any]) -> bool:
+    def publish(self, topic: str, payload: dict[str, Any]) -> bool:
         """Mock 实现：失败由 fail_next 触发；成功追加到 published + 落盘（若 output_path 设置）。"""
         if self.fail_next:
             self.fail_next = False  # 一次性失败标记
@@ -73,7 +74,7 @@ class MockPublisher:
         record = {
             "topic": topic,
             "payload": payload,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
         }
         self.published.append(record)
 

@@ -17,6 +17,7 @@
 亦严禁 import 冻结包内的帧源实现模块（FrameSource 所在子模块）；``.sources`` 以结构一致的本地抽象自提供帧源。
 ``tests/demo/test_freeze_boundary.py`` 守此边界。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,15 +25,20 @@ import json
 import os
 import time
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+# 类型标注用（运行期不调构造器；仅用于 type hint 让代码可读）
+from home_perception.action.command import ActionCommand  # noqa: F401  # 类型标注
+from home_perception.analysis.warning import WarningEvent  # noqa: F401  # 类型标注
 
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
 from home_perception.core.config import Settings
@@ -50,10 +56,6 @@ from .scenarios import ScenarioConfig, load_scenario
 from .sources import Source
 from .state import DemoAggregateState, DemoStateStore
 from .ws import ConnectionHub, handle_upstream
-
-# 类型标注用（运行期不调构造器；仅用于 type hint 让代码可读）
-from home_perception.action.command import ActionCommand  # noqa: F401  # 类型标注
-from home_perception.analysis.warning import WarningEvent  # noqa: F401  # 类型标注
 
 
 class DemoGateway:
@@ -74,9 +76,9 @@ class DemoGateway:
         self.scenario = scenario
 
         # 冻结对象（装配后填充）
-        self.pipeline: Optional[PerceptionPipeline] = None
-        self.clock: Optional[DemoClock] = None
-        self.source: Optional[Source] = None
+        self.pipeline: PerceptionPipeline | None = None
+        self.clock: DemoClock | None = None
+        self.source: Source | None = None
         self.n_frames: int = -1
 
         # 展示层组件
@@ -86,12 +88,12 @@ class DemoGateway:
 
         # 循环控制
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._frame_index = 0
         self.loop_count = 0  # 循环重放计数（P0-11.3.5 状态面板）
 
     @classmethod
-    def create_for_test(cls) -> "DemoGateway":
+    def create_for_test(cls) -> DemoGateway:
         """测试用工厂：构造未装配的网关实例，跳过 YOLO 加载与场景解析。
 
         避免测试用 ``DemoGateway.__new__`` 绕过 ``__init__`` 后手动补齐一堆属性
@@ -241,11 +243,11 @@ class DemoGateway:
         if self.pipeline is not None:
             try:
                 self.pipeline.close()
-            except Exception as exc:  # 资源释放失败也要记日志，避免静默泄漏（AGENTS.md §2.5）
+            except Exception as exc:  # noqa: BLE001  # 资源释放失败也要记日志，避免静默泄漏（AGENTS.md §2.5）
                 structlog.get_logger(__name__).warning("pipeline.close 失败", exc_info=exc)
             self.pipeline = None
 
-    def _validate_frame_source(self, scenario: "ScenarioConfig") -> None:
+    def _validate_frame_source(self, scenario: ScenarioConfig) -> None:
         """校验帧源可用性（assemble 与 switch_source 共用，避免损坏场景静默空循环）。
 
         - ``caviar_jpg``：n_frames == 0 即 fixture 缺失 / cv2 未装 → 启动即失败
@@ -283,14 +285,16 @@ class DemoGateway:
                 setattr(th, k, v)
             else:
                 structlog.get_logger(__name__).warning(
-                    "scenario.rule_overrides.unknown_key", key=k, scenario=self.scenario.scenario_id,
+                    "scenario.rule_overrides.unknown_key",
+                    key=k,
+                    scenario=self.scenario.scenario_id,
                 )
 
     # ------------------------------------------------------------------
     # 输入源热切换（P0-11.4 视频输入适配层）
     # ------------------------------------------------------------------
 
-    async def switch_source(self, scenario: "ScenarioConfig") -> None:
+    async def switch_source(self, scenario: ScenarioConfig) -> None:
         """热切换输入源（P0-11.4 视频输入适配）：停旧循环 → 重建帧源/时钟 → 清空跨帧状态 → 重开循环。
 
         不重建 pipeline（昂贵的 YOLO 加载只做一次），严格复用已装配的 ``pipeline`` / ``hp_settings``。
@@ -305,7 +309,7 @@ class DemoGateway:
                 await self._task
             except asyncio.CancelledError:
                 pass
-            except Exception as exc:  # 非取消异常（如取消中 pipeline.close 抛错）需记录，避免静默丢失
+            except Exception as exc:  # noqa: BLE001  # 非取消异常（如取消中 pipeline.close 抛错）需记录，避免静默丢失
                 structlog.get_logger(__name__).warning("帧循环任务取消时发生异常", exc_info=exc)
             self._task = None
 
@@ -333,16 +337,17 @@ class DemoGateway:
         self._task = asyncio.create_task(self.run_loop())
 
         # 4. 广播切换事件（前端清空跨帧累积状态）
-        await self.hub.broadcast({
-            "type": "source_switched",
-            "scenario": scenario.scenario_id,
-            "source": scenario.source,
-            "source_type": scenario.source_type,
-            "frames": self.n_frames,
-        })
+        await self.hub.broadcast(
+            {
+                "type": "source_switched",
+                "scenario": scenario.scenario_id,
+                "source": scenario.source,
+                "source_type": scenario.source_type,
+                "frames": self.n_frames,
+            }
+        )
 
-
-    def _rebuild_pipeline(self, scenario: "ScenarioConfig") -> None:
+    def _rebuild_pipeline(self, scenario: ScenarioConfig) -> None:
         """重建流水线状态组件（复用已加载的 YOLO detector，避免重载权重）。
 
         清空跨循环/跨场景累积的追踪（VisitorTracker）/ 时间窗口（FeatureExtractor）/
@@ -365,7 +370,8 @@ class DemoGateway:
     # FastAPI app 工厂
     # ======================================================================
 
-def _resolve_inference_device(hp_settings: "Settings") -> str:
+
+def _resolve_inference_device(hp_settings: Settings) -> str:
     """解析推理设备：环境变量 > CUDA 可用性 > 配置默认值。
 
     - ``SILVER_DEMO_DEVICE`` 非空时直接采用（``cpu`` / ``cuda:0`` / ``cuda:1``…），便于强制覆盖。
@@ -384,13 +390,13 @@ def _resolve_inference_device(hp_settings: "Settings") -> str:
 
         if getattr(torch, "cuda", None) is not None and torch.cuda.is_available():
             return "cuda:0"
-    except Exception:
+    except Exception:  # noqa: BLE001, S110  # torch 不可用 / 无 CUDA：回退到配置或 CPU
         pass
     return getattr(getattr(hp_settings, "detection", None), "device", "cpu") or "cpu"
 
 
 def create_app(
-    demo_settings: Optional[DemoSettings] = None,
+    demo_settings: DemoSettings | None = None,
 ) -> FastAPI:
     """构造 FastAPI app（ADR-0015 §3）。
 
@@ -415,8 +421,7 @@ def create_app(
     if cur != desired:
         try:
             hp_settings.detection.device = desired
-        except Exception:
-            # 冻结 / 不可变配置：复制后再改，保证 detector 继承设备选择
+        except Exception:  # noqa: BLE001  # 冻结 / 不可变配置：复制后再改，保证 detector 继承设备选择
             hp_settings = hp_settings.model_copy(deep=True)
             hp_settings.detection.device = desired
 
@@ -440,7 +445,7 @@ def create_app(
                     await gateway._task
                 except asyncio.CancelledError:
                     pass
-                except Exception as exc:  # 非取消异常需记录，避免静默丢失
+                except Exception as exc:  # noqa: BLE001  # 非取消异常需记录，避免静默丢失
                     structlog.get_logger(__name__).warning("帧循环任务取消时发生异常", exc_info=exc)
             gateway.close()
 
@@ -465,12 +470,12 @@ def create_app(
         return HTMLResponse(
             "<h1>SilverShield Demo Gateway</h1>"
             "<p>P0-11.1 网关已启动。Dashboard HTML 将在 P0-11.2 落地。</p>"
-            "<p>WebSocket 端点：{}</p>".format(demo_settings.ws_path),
+            f"<p>WebSocket 端点：{demo_settings.ws_path}</p>",
             status_code=200,
         )
 
     @app.get("/health")
-    async def health() -> Dict[str, Any]:
+    async def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "scenario": gateway.scenario.scenario_id,
@@ -486,11 +491,14 @@ def create_app(
         """WebSocket 端点：下行 frame view + state；上行 action 写 store。"""
         await gateway.hub.connect(ws)
         # 首连 snapshot：把服务端权威聚合状态推给新连接（晚连也能看到历史）
-        await gateway.hub.send_to(ws, {
-            "type": "snapshot",
-            **gateway.aggregate_state.snapshot(),
-            "meta": gateway.aggregate_state.meta(),
-        })
+        await gateway.hub.send_to(
+            ws,
+            {
+                "type": "snapshot",
+                **gateway.aggregate_state.snapshot(),
+                "meta": gateway.aggregate_state.meta(),
+            },
+        )
         try:
             while True:
                 raw = await ws.receive_text()
@@ -510,7 +518,7 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.post("/demo/upload")
-    async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
+    async def upload_video(file: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008  # FastAPI 依赖注入约定
         """P0-11.4 视频输入适配：接收本地视频 → 落盘 → 热切换 VideoFileFrameSource → 重开帧循环。
 
         视频只是"传感器"：经冻结 Pipeline 产出 身份→轨迹→行为→风险→解释→干预 全链，
@@ -522,7 +530,9 @@ def create_app(
         if ext not in allowed:
             return JSONResponse(
                 status_code=400,
-                content={"error": f"不支持的视频格式 {ext or '(无扩展名)'}，仅允许 {sorted(allowed)}"},
+                content={
+                    "error": f"不支持的视频格式 {ext or '(无扩展名)'}，仅允许 {sorted(allowed)}"
+                },
             )
 
         upload_dir = Path(demo_settings.upload_dir)
@@ -556,7 +566,7 @@ def create_app(
                             },
                         )
                     out.write(chunk)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # 写入失败：清理临时文件并返回 500
             try:
                 dest.unlink()
             except OSError:
@@ -570,7 +580,7 @@ def create_app(
             source=dest.stem,
             source_type="video_file",
             media_path=str(dest),
-            start_time=datetime.now(timezone.utc),
+            start_time=datetime.now(UTC),
             frame_interval_s=base.frame_interval_s,
             fps_target=base.fps_target,
             loop=True,
@@ -578,7 +588,7 @@ def create_app(
         )
         try:
             await gateway.switch_source(new_scenario)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # 接入失败：清理临时文件并返回 422
             try:
                 dest.unlink()
             except OSError:
@@ -594,11 +604,11 @@ def create_app(
         }
 
     @app.post("/demo/scenario")
-    async def switch_scenario(req: Request) -> Dict[str, Any]:
+    async def switch_scenario(req: Request) -> dict[str, Any]:
         """P0-11.4 场景输入：按 scenario_id（或路径）热切换到预置场景（模拟场景 / CAVIAR 工程验证）。"""
         try:
             body = await req.json()
-        except Exception:
+        except Exception:  # noqa: BLE001  # JSON 解析失败：回退到空 body
             body = {}
         scn_id = (body.get("scenario_id") or "").strip()
         if not scn_id:
@@ -609,13 +619,15 @@ def create_app(
         if not candidate.is_relative_to(scenarios_root) or not candidate.is_file():
             return JSONResponse(
                 status_code=404,
-                content={"error": f"场景不存在: {scn_id}（应在 {demo_settings.scenarios_dir}/ 下）"},
+                content={
+                    "error": f"场景不存在: {scn_id}（应在 {demo_settings.scenarios_dir}/ 下）"
+                },
             )
         found = candidate
         try:
             sc = load_scenario(found)
             await gateway.switch_source(sc)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # 场景切换失败：返回 422
             return JSONResponse(status_code=422, content={"error": f"场景切换失败：{exc}"})
         return {
             "status": "ok",
@@ -626,7 +638,7 @@ def create_app(
         }
 
     @app.post("/demo/reset")
-    async def reset_demo() -> Dict[str, Any]:
+    async def reset_demo() -> dict[str, Any]:
         """P0-11.3.5 Reset 生命周期：清空 pipeline / 状态 / 聚合，恢复干净会话。
 
         复用 ``switch_source(同场景)``：停旧循环 → 重建流水线（复用已加载 YOLO detector）
@@ -636,7 +648,7 @@ def create_app(
         """
         try:
             await gateway.switch_source(gateway.scenario)
-        except Exception as exc:  # 重置中 pipeline 重建失败
+        except Exception as exc:  # noqa: BLE001  # 重置中 pipeline 重建失败
             return JSONResponse(status_code=422, content={"error": f"重置失败：{exc}"})
         return {
             "status": "ok",
@@ -651,7 +663,7 @@ def create_app(
 
 
 # 模块级 app（uvicorn silver_demo.gateway:app 直接启动）
-app: Optional[FastAPI] = None
+app: FastAPI | None = None
 
 
 def _ensure_app() -> FastAPI:
