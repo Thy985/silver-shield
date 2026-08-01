@@ -1,0 +1,36 @@
+# cctv_surveillance_suspicious 场景（真实视频验证 · P0-11.3 产品展示层）
+#
+# 真实监控录像：鬼鬼祟祟、反复出现在镜头里（演示者提供的真实素材，
+# 置于 data/demo/CCTV_Surveillance_Final.mp4，gitignore 不入库）。
+#
+# 验证目标（异常/高风险剧本）：
+# - VideoFileFrameSource 解码真实 MP4
+# - 夜间（start_time 23:30 UTC → OddHourRule 自然触发）
+# - 反复出现（同一人多次进出 → 同 visitor_id 访问计数 → repeat_visit）
+# - 异常停留（单帧逗留 > long_duration_seconds）→ abnormal_dwell
+# - 三者同帧命中 → HighRiskApproachRule → HIGH_RISK_APPROACH
+#
+# 与 delivery_courier_normal 形成「异常 vs 正常」对照，统一经冻结架构：
+# Dashboard / Pipeline / WarningEvent 零改动。
+scenario_id: cctv_surveillance_suspicious
+description: |
+  真实监控录像（鬼鬼祟祟反复出现）。夜间异常剧本：验证 VideoFileFrameSource
+  解码真实 MP4 + 完整感知流水线在真实视频上的风险升级能力
+  （重复来访 + 异常时段 + 异常停留 → HIGH_RISK_APPROACH）。
+  视频文件置于 data/demo/CCTV_Surveillance_Final.mp4（gitignore，不入库；由演示者提供）。
+
+source: cctv_surveillance
+source_type: video_file
+media_path: data/demo/CCTV_Surveillance_Final.mp4
+start_time: "2026-07-19T23:30:00+00:00"   # 夜间，OddHourRule 自然触发
+frame_interval_s: 0.5
+fps_target: 8
+loop: true                               # 可视化演示：循环重放，Dashboard 持续有内容
+
+# P0-11.5a：场景级规则阈值覆盖。CCTV 夜间真实录像中同一人反复进出（track_id 复用），
+# 但默认 repeat_visit_count=3 需 3 次进出才触发 RepeatVisitRule，本段录像仅约 2 次 →
+# HighRiskApproachRule 三规则同帧不全中 → 无 HIGH。降到 2 即可稳定产出
+# 「长停留 + 重复 + 异常时段」同帧命中 → HIGH_RISK_APPROACH（家属通知 + 社区升级）。
+# 仅作用于本场景，不动全局默认与其他场景。
+rule_overrides:
+  repeat_visit_count: 2

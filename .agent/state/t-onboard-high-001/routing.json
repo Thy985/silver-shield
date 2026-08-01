@@ -1,0 +1,22 @@
+{
+  "flow_name": "Full-Governance",
+  "gates": {
+    "G_ci": "required",
+    "G_stop": "required",
+    "G_risk": "required",
+    "G_permission": "required",
+    "G_hitl": "required",
+    "G_understanding": "required"
+  },
+  "roles": [
+    "Architect",
+    "Developer",
+    "Reviewer",
+    "QA"
+  ],
+  "risk_signals": [
+    "blast_radius_score=high",
+    "production_repo=yes",
+    "adr_count=25"
+  ]
+}

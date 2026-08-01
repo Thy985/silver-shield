@@ -1,0 +1,31 @@
+# Soak Test 场景配置（ADR-0021 Stage E）
+# 对应 docs/DESIGN-realtime-riskstream-engineering-plan.md §9.2.4
+#
+# S4 多主体并发：验证多主体配对不错配
+# 视频源：CAVIAR Meet_WalkTogether1（两人同行场景）
+# 期望：paired_signal_id 全部正确配对，无错配
+#
+# 关键验证点：A 离场触发 CLEARED 时不能误清 B 的状态
+
+scenario_name: "S4_multi_subject"
+description: "多主体并发测试（CAVIAR 双人同行，验证 paired_signal_id 配对正确性）"
+
+video:
+  source: "tests/fixtures/caviar_raw/Meet_WalkTogether1.mpg"
+  loop_count: 15
+
+clock:
+  interval_s: 5.0
+
+realtime:
+  enabled: true
+  decision_enabled: true  # 接决策，验证多主体 Warning 不串
+  eval_interval_frames: 1
+
+expected:
+  # 多主体场景：peak 应 >= 2（至少两人同时在场）
+  active_tracks_peak_min: 2
+  active_tracks_end: 0
+  # 配对正确性：每个 CLEARED.paired_signal_id 必须等于对应 RAISED.signal_id
+  paired_mismatched: 0
+  unpaired_raised: 0

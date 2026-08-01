@@ -1,0 +1,21 @@
+{
+  "flow_name": "Standard",
+  "gates": {
+    "G_ci": "required",
+    "G_stop": "required",
+    "G_risk": "required",
+    "G_permission": "optional",
+    "G_hitl": "optional",
+    "G_understanding": "required"
+  },
+  "roles": [
+    "TechLead",
+    "Developer",
+    "Reviewer"
+  ],
+  "risk_signals": [
+    "blast_radius_score=medium",
+    "production_repo=yes",
+    "adr_count=25"
+  ]
+}

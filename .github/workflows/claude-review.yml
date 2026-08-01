@@ -1,0 +1,108 @@
+name: Claude Review
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  # 只读收敛：去掉 contents: write，避免 workflow 以 github-actions 机器人身份
+  # 向受保护分支推送/绕过 PR 要求，从而触发分支保护的 allowed_bots 报错。
+  # contents: read 足以让 actions/checkout 克隆仓库；pull-requests: write 用于发 PR 评审评论；
+  # id-token: write 供 claude-code-action 安全换取令牌（不具推送能力，不会触发 allowed_bots）。
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  auto-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Analyze PR size
+        id: analyze
+        shell: bash --noprofile --norc {0}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          DIFF=$(git diff --shortstat origin/$BASE_REF...HEAD 2>/dev/null || true)
+          eval $(echo "$DIFF" | awk '{
+            for(i=1;i<=NF;i++) {
+              if($i ~ /file/) print "FILES=" $(i-1)
+              if($i ~ /insert/) print "ADDED=" $(i-1)
+              if($i ~ /delet/) print "DELETED=" $(i-1)
+            }
+          }')
+          ADDED=${ADDED:-0}; DELETED=${DELETED:-0}; FILES=${FILES:-0}
+          TOTAL=$((ADDED + DELETED))
+
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "added=$ADDED" >> "$GITHUB_OUTPUT"
+          echo "deleted=$DELETED" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+
+          CHANGED=$(git diff --name-only origin/$BASE_REF...HEAD 2>/dev/null || true)
+
+          HAS_INFRA="false"
+          echo "$CHANGED" | grep -qE '(schema|migration|docker|k8s|deploy|\.github/workflows)' && HAS_INFRA="true" || true
+          echo "has_infra=$HAS_INFRA" >> "$GITHUB_OUTPUT"
+
+          NEW_DIRS=$(git diff --diff-filter=A --name-only origin/$BASE_REF...HEAD 2>/dev/null | xargs -I{} dirname {} 2>/dev/null | sort -u | grep -v '^\.$' | wc -l)
+          echo "new_dirs=${NEW_DIRS:-0}" >> "$GITHUB_OUTPUT"
+
+          HAS_TESTS="false"
+          echo "$CHANGED" | grep -qE '(test|spec|__tests__)' && HAS_TESTS="true" || true
+          echo "has_tests=$HAS_TESTS" >> "$GITHUB_OUTPUT"
+
+          if [ "$TOTAL" -le 30 ] && [ "$FILES" -le 3 ]; then
+            echo "level=0" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 0" >> "$GITHUB_OUTPUT"
+            echo "max_turns=10" >> "$GITHUB_OUTPUT"
+          elif [ "$TOTAL" -le 300 ] && [ "$FILES" -le 15 ]; then
+            echo "level=1" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 1" >> "$GITHUB_OUTPUT"
+            echo "max_turns=20" >> "$GITHUB_OUTPUT"
+          elif [ "$TOTAL" -le 1000 ] && [ "$FILES" -le 30 ]; then
+            echo "level=2" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 2" >> "$GITHUB_OUTPUT"
+            echo "max_turns=30" >> "$GITHUB_OUTPUT"
+          else
+            echo "level=3" >> "$GITHUB_OUTPUT"
+            echo "level_name=Level 3" >> "$GITHUB_OUTPUT"
+            echo "max_turns=40" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
+        with:
+          anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          track_progress: true
+          prompt: |
+            你是一个代码审查助手。请严格按以下步骤执行，不要跳过任何步骤。
+
+            第一步：运行 `gh pr diff ${{ github.event.pull_request.number }}` 查看代码变更。
+            第二步：逐个阅读变更的文件，理解代码逻辑。
+            第三步：按以下维度审查并输出结果。
+
+            审查级别：${{ steps.analyze.outputs.level_name }}
+            变更规模：${{ steps.analyze.outputs.added }} 行新增，${{ steps.analyze.outputs.deleted }} 行删除，${{ steps.analyze.outputs.files }} 个文件
+
+            审查维度：
+            1. 代码质量：是否清晰、无重复、易维护
+            2. 潜在 Bug：是否有逻辑错误、边界问题、空指针
+            3. 安全风险：是否有注入、泄露、权限问题
+            4. 测试覆盖：关键路径是否有测试
+            5. 接口兼容：是否破坏已有接口
+
+            输出格式（用中文）：
+            ## 审查结果
+            [逐项列出发现的问题，每个问题包含文件名、行号、问题描述、修改建议]
+            ## 最终结论
+            ✅ 可以合并 / ⚠️ 建议修改后合并 / ❌ 需要重大修改
+          allowed_bots: '*'
+          claude_args: |
+            --model deepseek-v4-flash
+            --max-turns ${{ steps.analyze.outputs.max_turns }}

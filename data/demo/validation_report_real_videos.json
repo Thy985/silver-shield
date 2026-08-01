@@ -1,0 +1,149 @@
+[
+  {
+    "scenario": "cctv_surveillance_suspicious",
+    "media": "data/demo/CCTV_Surveillance_Final.mp4",
+    "start_time": "2026-07-19 23:30:00+00:00",
+    "frames_processed": 484,
+    "frames_with_detections": 264,
+    "frames_with_active_warning": 5,
+    "total_detections": 265,
+    "unique_track_ids": [],
+    "unique_visitors": 0,
+    "unique_warnings": 5,
+    "warn_by_level": {
+      "LOW": 5
+    },
+    "warn_by_type": {
+      "异常停留 / 异常时段访问": 5
+    },
+    "max_risk_level": "LOW",
+    "elapsed_s": 47.66,
+    "throughput_fps": 10.2,
+    "sample_warnings": [
+      {
+        "frame_index": 195,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留",
+          "异常时段访问"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 332,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留",
+          "异常时段访问"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 351,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留",
+          "异常时段访问"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 413,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留",
+          "异常时段访问"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 472,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留",
+          "异常时段访问"
+        ],
+        "status": "CONFIRMED"
+      }
+    ]
+  },
+  {
+    "scenario": "delivery_courier_normal",
+    "media": "data/demo/Delivery_Courier_Final.mp4",
+    "start_time": "2026-07-19 14:00:00+00:00",
+    "frames_processed": 323,
+    "frames_with_detections": 178,
+    "frames_with_active_warning": 7,
+    "total_detections": 192,
+    "unique_track_ids": [],
+    "unique_visitors": 0,
+    "unique_warnings": 7,
+    "warn_by_level": {
+      "LOW": 7
+    },
+    "warn_by_type": {
+      "异常停留": 7
+    },
+    "max_risk_level": "LOW",
+    "elapsed_s": 28.3,
+    "throughput_fps": 11.4,
+    "sample_warnings": [
+      {
+        "frame_index": 90,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 105,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 141,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 171,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 211,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 251,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留"
+        ],
+        "status": "CONFIRMED"
+      },
+      {
+        "frame_index": 271,
+        "risk_level": "LOW",
+        "reason": [
+          "异常停留"
+        ],
+        "status": "CONFIRMED"
+      }
+    ]
+  }
+]

@@ -1,0 +1,33 @@
+# real_doorway 场景配置（P0-11.3 · 真实视频输入适配 · ADR-0015 §2.6）
+#
+# 产品展示层输入：真实门口监控 MP4，替换 CAVIAR fixture。
+# 验证冻结架构允许外部输入替换——Dashboard / Pipeline / WarningEvent 零改动。
+#
+# 视频文件由演示者提供，置于 data/demo/real_doorway.mp4（gitignore，不入库）：
+#   - 可重复、可剪辑、可控风险触发、不依赖网络
+#   - 建议剪辑为：白天/夜间门口有人经过 → 停留/重复出现 的可控片段，便于复现风险闭环
+#   - 属"真实场景素材"而非"真实部署"：仍非 7×24 实时摄像头直连（那属 P0-12）
+#
+# 字段说明：
+#   - source_type: video_file（触发 silver_demo.sources.VideoFileFrameSource）
+#   - media_path: MP4 路径（相对仓库根或绝对）
+#   - source: 作 device_id 标识用（不影响处理）
+#   - start_time: DemoClock 起点（夜间让 OddHourRule 自然触发）
+#   - frame_interval_s / fps_target / loop: 同 night_visit
+
+scenario_id: real_doorway
+description: |
+  真实门口监控视频（MP4）作为银龄盾产品展示层输入（P0-11.3）。
+  替换 CAVIAR fixture，验证冻结架构允许外部真实输入无缝接入：
+  Dashboard 不改、Pipeline 不改、WarningEvent 不改。
+  视频文件置于 data/demo/real_doorway.mp4（gitignore，不入库；由演示者提供），
+  建议剪辑为门口有人经过 → 停留/重复出现 的可控片段。
+  统一输出 WarningEvent → HIGH_RISK_APPROACH，与 CAVIAR 工程剧本收敛到同一风险闭环。
+
+source: real_doorway
+source_type: video_file
+media_path: data/demo/real_doorway.mp4
+start_time: "2026-07-19T23:30:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true

@@ -1,0 +1,99 @@
+[
+  {
+    "actions": [
+      {
+        "command_id": "aaaaaaaa-3333-0000-0000-000000000000",
+        "command_type": "SEND_FAMILY_MESSAGE",
+        "error": null,
+        "status": "DONE"
+      },
+      {
+        "command_id": "aaaaaaaa-4444-0000-0000-000000000000",
+        "command_type": "CREATE_COMMUNITY_TASK",
+        "error": null,
+        "status": "DONE"
+      }
+    ],
+    "corrections": [],
+    "created_at": "1970-01-01T00:00:00+00:00",
+    "duration_seconds": 180.0,
+    "enter_time": "2026-07-28T18:32:00+00:00",
+    "evidence_refs": [],
+    "leave_time": "2026-07-28T18:45:00+00:00",
+    "memory_status": "active",
+    "model_version": "ep-builder-v1",
+    "person_identity_id": null,
+    "reason_summary": [
+      "异常停留"
+    ],
+    "recommended_action": "NOTIFY_FAMILY",
+    "record_id": "ep-ev-visit-a",
+    "risk_level": "HIGH",
+    "schema_version": 1,
+    "source_event_ids": [
+      "ev-visit-a",
+      "aaaaaaaa-2222-0000-0000-000000000000",
+      "aaaaaaaa-3333-0000-0000-000000000000",
+      "aaaaaaaa-4444-0000-0000-000000000000"
+    ],
+    "summary": "02:32-02:45 访问（停留 3 分钟），风险等级 HIGH（异常停留），已通知家属 + 升级社区。",
+    "visitor_instance_id": "aaaaaaaa-1111-0000-0000-000000000000"
+  },
+  {
+    "actions": [],
+    "corrections": [],
+    "created_at": "1970-01-01T00:00:00+00:00",
+    "duration_seconds": 180.0,
+    "enter_time": "2026-07-28T19:02:00+00:00",
+    "evidence_refs": [],
+    "leave_time": "2026-07-28T19:05:00+00:00",
+    "memory_status": "active",
+    "model_version": "ep-builder-v1",
+    "person_identity_id": null,
+    "reason_summary": [],
+    "recommended_action": null,
+    "record_id": "ep-ev-visit-b",
+    "risk_level": null,
+    "schema_version": 1,
+    "source_event_ids": [
+      "ev-visit-b"
+    ],
+    "summary": "03:02-03:05 访问（停留 3 分钟），未触发风险。",
+    "visitor_instance_id": "bbbbbbbb-1111-0000-0000-000000000000"
+  },
+  {
+    "actions": [
+      {
+        "command_id": "cccccccc-4444-0000-0000-000000000000",
+        "command_type": "SEND_FAMILY_MESSAGE",
+        "error": null,
+        "status": "DONE"
+      }
+    ],
+    "corrections": [],
+    "created_at": "1970-01-01T00:00:00+00:00",
+    "duration_seconds": 180.0,
+    "enter_time": "2026-07-28T21:10:00+00:00",
+    "evidence_refs": [],
+    "leave_time": "2026-07-28T21:25:00+00:00",
+    "memory_status": "active",
+    "model_version": "ep-builder-v1",
+    "person_identity_id": null,
+    "reason_summary": [
+      "重复来访",
+      "高风险接近"
+    ],
+    "recommended_action": "ESCALATE_COMMUNITY",
+    "record_id": "ep-ev-visit-c",
+    "risk_level": "HIGH",
+    "schema_version": 1,
+    "source_event_ids": [
+      "ev-visit-c",
+      "cccccccc-2222-0000-0000-000000000000",
+      "cccccccc-3333-0000-0000-000000000000",
+      "cccccccc-4444-0000-0000-000000000000"
+    ],
+    "summary": "05:10-05:25 访问（停留 3 分钟），风险等级 HIGH（重复来访 / 高风险接近），已通知家属。",
+    "visitor_instance_id": "cccccccc-1111-0000-0000-000000000000"
+  }
+]

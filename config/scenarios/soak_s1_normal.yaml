@@ -1,0 +1,31 @@
+# Soak Test 场景配置（ADR-0021 Stage E）
+# 对应 docs/DESIGN-realtime-riskstream-engineering-plan.md §9.2.4
+#
+# S1 正常访问：验证基线生命周期 NONE→ACTIVE→LEFT→DELETE 无泄漏
+# 视频源：CAVIAR OneStopEnter1cor（短停留，~25s）
+# 期望：raised_count=0, active_tracks_end=0
+#
+# 注意：soak test 用 DemoClock 加速，interval_s=5.0 → 10x 加速
+# 视频循环时 tracker 会分配新 track_id + visitor_instance_id，
+# 因此 S1 只测 track 生命周期循环，不测跨次身份识别（属 ADR-0023）
+
+scenario_name: "S1_normal_baseline"
+description: "正常访问生命周期基线（CAVIAR 短停留循环）"
+
+video:
+  source: "tests/fixtures/caviar_raw/OneStopEnter1cor.mpg"
+  loop_count: 20  # 循环 20 次（每次 ~25s 模拟时间 → 总计 ~500s 模拟时间）
+
+clock:
+  interval_s: 5.0  # 每帧推进 5 秒模拟时间（10x 加速）
+
+realtime:
+  enabled: true
+  decision_enabled: false  # S1 不接决策，只验证状态机
+  eval_interval_frames: 1
+
+expected:
+  raised_count: 0  # 短停留不触发 dwell 阈值
+  unpaired_raised: 0
+  active_tracks_end: 0
+  memory_trend: "stable"

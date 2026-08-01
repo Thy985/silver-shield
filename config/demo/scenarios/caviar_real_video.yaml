@@ -1,0 +1,24 @@
+# P0-11.3 真实视频验证场景 —— 首个真实素材
+#
+# 直接消费仓库内已有的真实 CAVIAR 监控录像（OneLeaveShopReenter1cor.mpg），
+# 验证 VideoFileFrameSource + 完整感知流水线（检测/跟踪/规则）在「真实录像」上的能力，
+# 而非仅用抽帧 jpg 做工程验证。
+#
+# 说明：
+# - 该 .mpg 为 gitignore 的本地 fixture（tests/fixtures/caviar_raw/），不入库；
+#   CAVIAR 本身就是真实摄像头录像（爱丁堡某商铺门口），属真实场景素材。
+# - source=one_leave_reenter 同时作为 pipeline 的 device_id（与 jpg fixture 一致），
+#   复用同一套规则/阈值配置，便于与 jpg 工程验证对照。
+# - 路径相对仓库根（运行网关/脚本时 cwd=仓库根）。
+scenario_id: caviar_real_video
+source: one_leave_reenter
+source_type: video_file
+media_path: tests/fixtures/caviar_raw/OneLeaveShopReenter1cor.mpg
+start_time: "2026-07-19T23:30:00+00:00"   # 与 default.yaml demo_clock_start 一致，使 OddHourRule 自然触发
+frame_interval_s: 0.5
+fps_target: 8
+loop: false                              # 验证：整段跑一遍即可
+description: >
+  真实 CAVIAR 监控录像（OneLeaveShopReenter1cor.mpg）作为 P0-11.3 第一个真实视频素材，
+  验证 VideoFileFrameSource 解码真实录像 + 完整感知流水线（YOLO11n 检测 / bytetrack 跟踪 /
+  LongDuration+RepeatVisit+OddHour 规则）在真实录像上的端到端能力。

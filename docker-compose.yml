@@ -1,0 +1,19 @@
+services:
+  # 本地开发用 MQTT Broker，供模块上报事件、中心消费
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  home-perception:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    depends_on:
+      - mqtt
+    restart: unless-stopped

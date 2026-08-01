@@ -1,0 +1,70 @@
+{
+  "scenario": "caviar_real_video",
+  "media": "tests/fixtures/caviar_raw/OneLeaveShopReenter1cor.mpg",
+  "frames_processed": 390,
+  "frames_with_detections": 357,
+  "frames_with_active_warning": 5,
+  "total_detections": 663,
+  "unique_warnings": 5,
+  "warn_by_level": {
+    "LOW": 5
+  },
+  "warn_by_type": {
+    "异常时段访问": 1,
+    "异常停留 / 异常时段访问": 4
+  },
+  "max_risk_level": "LOW",
+  "elapsed_s": 63.75,
+  "throughput_fps": 6.1,
+  "sample_warnings": [
+    {
+      "frame_index": 11,
+      "risk_level": "LOW",
+      "rule_name": "异常时段访问",
+      "reason": [
+        "异常时段访问"
+      ],
+      "status": "CONFIRMED"
+    },
+    {
+      "frame_index": 92,
+      "risk_level": "LOW",
+      "rule_name": "异常停留 / 异常时段访问",
+      "reason": [
+        "异常停留",
+        "异常时段访问"
+      ],
+      "status": "CONFIRMED"
+    },
+    {
+      "frame_index": 237,
+      "risk_level": "LOW",
+      "rule_name": "异常停留 / 异常时段访问",
+      "reason": [
+        "异常停留",
+        "异常时段访问"
+      ],
+      "status": "CONFIRMED"
+    },
+    {
+      "frame_index": 249,
+      "risk_level": "LOW",
+      "rule_name": "异常停留 / 异常时段访问",
+      "reason": [
+        "异常停留",
+        "异常时段访问"
+      ],
+      "status": "CONFIRMED"
+    },
+    {
+      "frame_index": 353,
+      "risk_level": "LOW",
+      "rule_name": "异常停留 / 异常时段访问",
+      "reason": [
+        "异常停留",
+        "异常时段访问"
+      ],
+      "status": "CONFIRMED"
+    }
+  ]
+}

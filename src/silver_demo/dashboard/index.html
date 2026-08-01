@@ -1,0 +1,1296 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>银龄盾 · 三端风险闭环观察窗 (P0-11.4)</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #6b7280;
+      --line: #e3e8ef;
+      --brand: #2563eb;
+      --brand-soft: #e8f0fe;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --danger: #dc2626;
+      --radius: 12px;
+      --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .app { max-width: 1280px; margin: 0 auto; padding: 16px; }
+
+    /* ---------- Header ---------- */
+    header.topbar {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 12px 16px; box-shadow: var(--shadow); margin-bottom: 16px;
+    }
+    header.topbar h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: .3px; }
+    header.topbar .sub { color: var(--muted); font-size: 12px; }
+    .spacer { flex: 1 1 auto; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line);
+      background: #f8fafc;
+    }
+    .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .pill.online .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(22,163,74,.18); }
+    .pill.offline .dot { background: var(--danger); }
+    .badge-auth {
+      font-size: 11px; color: #92400e; background: #fef3c7; border: 1px solid #fde68a;
+      padding: 3px 9px; border-radius: 999px; font-weight: 600;
+    }
+
+    /* ---------- Grid ---------- */
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+    .region { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0; }
+    .region > h2 {
+      margin: 0; padding: 12px 16px; font-size: 14px; font-weight: 700;
+      border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px;
+    }
+    .region > h2 .tag { font-size: 11px; font-weight: 600; color: var(--brand); background: var(--brand-soft); padding: 2px 8px; border-radius: 999px; }
+    .region .body { padding: 14px 16px; overflow: auto; }
+    .video { grid-column: span 7; grid-row: 1; }
+    .timeline { grid-column: span 5; grid-row: 1 / span 2; }
+    .risk { grid-column: span 7; grid-row: 2; }
+    .closure { grid-column: span 12; grid-row: 3; }
+    .arch { grid-column: span 12; grid-row: 4; }
+    @media (max-width: 900px) {
+      .video, .timeline, .risk, .closure, .arch { grid-column: span 12; grid-row: auto; }
+    }
+
+    /* ---------- Region 1: Video ---------- */
+    .video .body { padding: 0; }
+    .stage { position: relative; background: #0b1220; border-radius: 0 0 var(--radius) var(--radius); aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .stage img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .stage .placeholder { color: #64748b; font-size: 13px; }
+    .stage .overlay { position: absolute; left: 10px; top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .ov-chip { background: rgba(15,23,42,.72); color: #e2e8f0; font-size: 11px; padding: 3px 8px; border-radius: 6px; backdrop-filter: blur(2px); }
+    .ov-chip b { color: #fff; }
+    .live { position: absolute; right: 10px; top: 10px; display: inline-flex; align-items: center; gap: 6px; background: rgba(15,23,42,.72); color: #fca5a5; font-size: 11px; padding: 3px 8px; border-radius: 6px; }
+    .live .ldot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; animation: pulse 1.4s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
+    /* ---------- Region 2: Timeline ---------- */
+    .timeline .body { max-height: 560px; }
+    .tl-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    .tl-item:last-child { border-bottom: 0; }
+    .tl-time { font-size: 11px; color: var(--muted); width: 64px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+    .tl-main { flex: 1 1 auto; min-width: 0; }
+    .tl-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ev-chip { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
+    .score { font-size: 11px; color: var(--muted); }
+    .tl-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .tl-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 0; }
+    .tl-empty.observing { color: #dc2626; font-weight: 600; animation: obs-pulse 1.4s ease-in-out infinite; }
+    @keyframes obs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+    /* ---------- Region 3: Risk cards ---------- */
+    .risk .body { max-height: 560px; }
+    .risk-card { border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #fcfdff; }
+    .risk-card:last-child { margin-bottom: 0; }
+    .rc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .rc-id { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .bar { flex: 1 1 auto; height: 6px; background: #eef2f7; border-radius: 999px; overflow: hidden; max-width: 140px; }
+    .bar > i { display: block; height: 100%; border-radius: 999px; }
+    .rlevel { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
+
+    /* ---------- Region 4: Closure ---------- */
+    .closure .body { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+    @media (max-width: 760px) { .closure .body { grid-template-columns: 1fr; } }
+    .closure-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-content: start; }
+    .cl-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fcfdff; }
+    .cl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .cl-wid { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .cl-rl { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; color: #fff; }
+    .stepper { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
+    .step { flex: 1 1 0; text-align: center; font-size: 11px; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--line); background: #f8fafc; color: var(--muted); font-weight: 600; }
+    .step.done { background: #ecfdf5; border-color: #a7f3d0; color: var(--ok); }
+    .step.cur { background: var(--brand-soft); border-color: #bfdbfe; color: var(--brand); }
+    .step .arrow { color: var(--line); }
+    .cl-actions { display: flex; gap: 8px; }
+    .btn { flex: 1 1 0; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 8px; padding: 8px 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: .15s; }
+    .btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+    .btn.family:not(:disabled) { background: #eff6ff; }
+    .btn.community:not(:disabled) { background: #ecfdf5; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .cl-status { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; }
+    .sys-status { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 6px; color: #64748b; background: #f1f5f9; margin-left: 4px; }
+
+    .route-panel { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafbff; align-self: start; }
+    .route-panel h3 { margin: 0 0 10px; font-size: 13px; }
+    .route-grp { margin-bottom: 12px; }
+    .route-grp:last-child { margin-bottom: 0; }
+    .route-grp .gh { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+    .route-grp .cnt { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .route-list { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+    .route-list code { font-size: 11px; }
+
+    /* ---------- Region 3 deepen: 风险解释卡片 ---------- */
+    .rc-section { margin-top: 10px; }
+    .rc-label { font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 5px; letter-spacing: .3px; }
+    .rc-reason { margin: 0; padding-left: 18px; }
+    .rc-reason li { margin: 2px 0; font-size: 12.5px; }
+    .rc-triggers { display: flex; flex-wrap: wrap; gap: 6px; }
+    .trig-chip { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; border: 1px solid; }
+    .trig-chip b { font-weight: 800; margin-left: 3px; }
+    .rc-time { font-size: 11px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .rc-foot2 { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+    .meter { flex: 1 1 160px; min-width: 140px; }
+    .meter-label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+    .meter-label b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .rc-rec { font-size: 12px; }
+    .rc-meta { margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .rc-meta code { font-size: 11px; background: #f1f5f9; padding: 1px 5px; border-radius: 5px; }
+    .rc-ev { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .ev-chip2 { font-size: 10.5px; color: #475569; background: #f1f5f9; border: 1px solid var(--line); padding: 1px 7px; border-radius: 6px; }
+    .rc-link { margin-top: 10px; font-size: 11px; color: var(--brand); font-weight: 600; }
+
+    /* ---------- Region 4 deepen: 三端任务卡联动 ---------- */
+    .cl-reasons { font-size: 12px; color: var(--ink); margin: 6px 0; font-weight: 600; }
+    .cl-rec2 { font-size: 11.5px; color: var(--muted); margin-left: auto; }
+    .tasks { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
+    .task { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: #fff; }
+    .task.family { border-left: 3px solid var(--brand); }
+    .task.community { border-left: 3px solid var(--ok); }
+    .task.log { border-left: 3px solid #94a3b8; background: #fafafa; }
+    .task-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
+    .task-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .task-dot.f { background: var(--brand); }
+    .task-dot.c { background: var(--ok); }
+    .task-dot.l { background: #94a3b8; }
+    .task-status { margin-left: auto; font-size: 10.5px; font-weight: 700; color: #475569; background: #f1f5f9; padding: 1px 7px; border-radius: 6px; }
+    .task-body { font-size: 12px; color: var(--ink); margin-top: 5px; line-height: 1.45; }
+    .task-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+    .task-empty { font-size: 11.5px; color: var(--muted); margin-top: 4px; font-style: italic; }
+
+    /* ---------- Route panel deepen: 实际 payload 预览 ---------- */
+    .route-item { padding: 5px 0; border-bottom: 1px dashed var(--line); }
+    .route-item:last-child { border-bottom: 0; }
+    .route-cmd { font-size: 11.5px; font-weight: 700; }
+    .route-hint { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+
+    /* ---------- Region 5: Architecture ---------- */
+    .arch .body { padding: 8px; }
+    .arch svg { width: 100%; height: auto; display: block; }
+    .arch .note { font-size: 11.5px; color: var(--muted); padding: 8px 8px 0; }
+
+    /* ---------- Disclaimer footer ---------- */
+    .disclaimer { margin-top: 16px; font-size: 11.5px; color: var(--muted); background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 14px; }
+    .disclaimer b { color: #92400e; }
+
+    /* ---------- P0-11.4 场景输入 / 视频源接入 ---------- */
+    .source-panel { margin-bottom: 16px; }
+    .source-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch; }
+    .src-controls { flex: 1 1 420px; min-width: 300px; }
+    .mode-tabs { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+    .mode-tabs label { font-size: 13px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+    .src-sub { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .src-sub[hidden] { display: none; }
+    .src-btn {
+      border: 1px solid var(--line); background: #fff; color: var(--ink);
+      border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: .15s;
+    }
+    .src-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+    .src-btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .src-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+    .src-btn:disabled { opacity: .5; cursor: not-allowed; }
+    #video-file { font-size: 12px; max-width: 240px; }
+    .src-status { font-size: 12px; color: var(--muted); }
+    .src-hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+
+    /* AI 状态卡（工程成熟度，非准确率） */
+    .ai-status { flex: 1 1 280px; min-width: 260px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fafbff; }
+    .ai-status h4 { margin: 0 0 8px; font-size: 12.5px; }
+    .ai-row { display: flex; align-items: center; gap: 7px; font-size: 12px; margin: 4px 0; color: var(--ink); }
+    .ai-row .ck { width: 16px; text-align: center; color: var(--ok); font-weight: 700; }
+    .ai-model { margin-top: 8px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+    .ai-model code { font-size: 11px; background: #f1f5f9; padding: 1px 5px; border-radius: 5px; }
+
+    /* ---------- P0-11.3.5 Demo 运行状态面板 ---------- */
+    .demostat .body { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; }
+    .s-item { display: flex; flex-direction: column; min-width: 72px; }
+    .s-k { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .3px; }
+    .s-v { font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--ink); margin-top: 2px; }
+    .s-v.run { color: var(--ok); }
+
+    /* ---------- Toasts ---------- */
+    #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+    .toast { background: #111827; color: #fff; font-size: 12.5px; padding: 9px 14px; border-radius: 8px; box-shadow: var(--shadow); opacity: 0; transform: translateY(6px); transition: .2s; }
+    .toast.show { opacity: 1; transform: none; }
+    .toast.err { background: #7f1d1d; }
+
+    /* ---------- P0-11.4 阶段叙事 Tabs ---------- */
+    .tabs { display: flex; gap: 6px; padding: 0 16px; margin: 12px 0 4px; border-bottom: 1px solid var(--line); }
+    .tab { background: transparent; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; padding: 8px 16px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; transition: .15s; }
+    .tab:hover { background: var(--panel); color: var(--text); }
+    .tab.active { background: var(--panel); color: var(--brand); border-color: var(--brand); border-bottom: 1px solid var(--panel); margin-bottom: -1px; }
+    .view[hidden] { display: none; }
+    /* Tab ②/③ 视图作为 .grid 唯一可见子项时，需占满 12 列（其他区域已 [hidden] 脱出 Grid） */
+    .view-family, .view-community { grid-column: span 12; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>银龄盾 · 三端风险闭环观察窗</h1>
+        <div class="sub" id="scenario-sub">P0-11 MVP Demo · 加载中…</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="badge-auth">Demo 数据真实性声明</span>
+      <span class="pill offline" id="ws-pill"><span class="dot"></span><span id="ws-text">未连接</span></span>
+    </header>
+
+    <!-- P0-11.4 阶段叙事 Tabs（强制评委左→右走剧情：发现→确认→处置） -->
+    <nav class="tabs" id="role-tabs">
+      <button class="tab active" data-idx="0">① 风险发现</button>
+      <button class="tab" data-idx="1">② 家属确认</button>
+      <button class="tab" data-idx="2">③ 社区处置</button>
+    </nav>
+
+    <!-- P0-11.4 场景输入 / 视频源接入 -->
+    <section class="region source-panel">
+      <h2>⚙ 场景输入 / 视频源接入 <span class="tag">入口适配验证</span></h2>
+      <div class="body source-body">
+        <div class="src-controls">
+          <div class="mode-tabs">
+            <label><input type="radio" name="srcmode" value="sim" checked /> 模拟场景</label>
+            <label><input type="radio" name="srcmode" value="local" /> 本地视频测试</label>
+            <label><input type="radio" name="srcmode" value="cam" disabled /> 摄像头接入 (Coming Soon)</label>
+          </div>
+          <div class="src-sub" id="sim-panel">
+            <button class="src-btn" data-scn="cctv_surveillance_suspicious">CCTV 夜间异常</button>
+            <button class="src-btn" data-scn="delivery_courier_normal">Delivery 白天正常</button>
+            <button class="src-btn" data-scn="night_visit">CAVIAR 工程验证</button>
+          </div>
+          <div class="src-sub" id="local-panel" hidden>
+            <input type="file" id="video-file" accept="video/mp4,video/*,.mp4,.mpg,.mov,.avi" />
+            <button class="src-btn primary" id="btn-analyze">开始分析</button>
+            <span class="src-status" id="upload-status"></span>
+          </div>
+          <div class="src-sub" id="cam-panel" hidden>
+            <span class="src-hint">RTSP / EZVIZ 摄像头接入将在 P1 多模态感知层提供（视频 + 语音 + 门铃 + 通信）。</span>
+          </div>
+          <div class="src-hint">视频只是<b>传感器</b>：经冻结架构持续观察，建立「访客连续身份 → 访问轨迹 → 时间行为模式 → 风险累积 → 解释 → 干预」全链，而非调用视觉大模型判断「是否诈骗」。</div>
+        </div>
+        <aside class="ai-status">
+          <h4>AI 状态 · 工程闭环验证</h4>
+          <div class="ai-row"><span class="ck">✓</span> 人体检测（YOLO）</div>
+          <div class="ai-row"><span class="ck">✓</span> 轨迹跟踪（ReID 连续身份）</div>
+          <div class="ai-row"><span class="ck">✓</span> 行为建模（停留 / 再现 / 升级）</div>
+          <div class="ai-row"><span class="ck">✓</span> 风险解释（规则命中强度）</div>
+          <div class="ai-model">模型版本：<code>Demo-YOLO11n</code> · 当前为<b>端到端链路验证</b>，模型采用基础检测器，后续经真实居家数据持续优化。</div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- P0-11.3.5 Demo 运行状态面板（证明「运行时系统」而非播放网页） -->
+    <section class="region demostat">
+      <h2>🖥 Demo 运行状态 <span class="tag">运行时系统</span></h2>
+      <div class="body">
+        <div class="s-item"><span class="s-k">Source</span><span class="s-v" id="st-source">–</span></div>
+        <div class="s-item"><span class="s-k">Frame</span><span class="s-v" id="st-frame">–</span></div>
+        <div class="s-item"><span class="s-k">Loop</span><span class="s-v" id="st-loop">–</span></div>
+        <div class="s-item"><span class="s-k">Pipeline</span><span class="s-v run" id="st-pipe">–</span></div>
+        <div class="s-item"><span class="s-k">Last Warning</span><span class="s-v" id="st-last">–</span></div>
+        <div class="s-item"><span class="s-k">Session</span><span class="s-v" id="st-session">00:00</span></div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <!-- Region 1: Live Video -->
+      <section class="region video">
+        <h2>① 实时视频 <span class="tag">Home 端入口画面</span></h2>
+        <div class="body">
+          <div class="stage">
+            <div class="placeholder" id="video-ph">等待第一帧…</div>
+            <img id="video-img" alt="live frame" style="display:none" />
+            <div class="overlay">
+              <span class="ov-chip">帧 <b id="ov-frame">–</b></span>
+              <span class="ov-chip">模拟时间 <b id="ov-time">–</b></span>
+              <span class="ov-chip">检测 <b id="ov-det">0</b></span>
+              <span class="ov-chip">访客事件 <b id="ov-ve">0</b></span>
+            </div>
+            <div class="live" id="live-badge" style="display:none"><span class="ldot"></span> LIVE</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Region 2: AI 行为时间线 -->
+      <section class="region timeline">
+        <h2>② AI 行为时间线 <span class="tag">访客行为演化</span></h2>
+        <div class="body" id="timeline-body">
+          <div class="tl-empty">等待访客行为…</div>
+        </div>
+      </section>
+
+      <!-- Region 3: Risk cards -->
+      <section class="region risk">
+        <h2>③ 风险解释卡片 <span class="tag">人话原因 · 触发规则</span></h2>
+        <div class="body" id="risk-body">
+          <div class="tl-empty">当前无活跃风险</div>
+        </div>
+      </section>
+
+      <!-- Region 4: Action closure -->
+      <section class="region closure">
+        <h2>④ 行动闭环 <span class="tag">家属 / 社区 任务卡联动</span></h2>
+        <div class="body">
+          <div class="closure-cards" id="closure-cards">
+            <div class="tl-empty">暂无待闭环风险</div>
+          </div>
+          <aside class="route-panel">
+            <h3>三端命令路由</h3>
+            <div class="route-grp">
+              <div class="gh"><span style="color:var(--brand)">●</span> 家属端 <span class="cnt" id="rc-family">0</span></div>
+              <div class="route-list" id="rc-family-list"><span class="muted">—</span></div>
+            </div>
+            <div class="route-grp">
+              <div class="gh"><span style="color:var(--ok)">●</span> 社区端 <span class="cnt" id="rc-community">0</span></div>
+              <div class="route-list" id="rc-community-list"><span class="muted">—</span></div>
+            </div>
+            <div class="route-grp">
+              <div class="gh"><span style="color:var(--muted)">●</span> 仅记录 <span class="cnt" id="rc-log">0</span></div>
+              <div class="route-list" id="rc-log-list"><span class="muted">—</span></div>
+            </div>
+            <div class="route-list" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+              跨帧累积三端命令（含实际 payload 预览），由 <code>bridge.route_commands</code> 按 <code>command_type</code> 分发（ADR-0015 §2.2）。
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- Region 5: Architecture -->
+      <section class="region arch">
+        <h2>⑤ 架构图 <span class="tag">冻结消费边界</span></h2>
+        <div class="body">
+          <svg viewBox="0 0 960 250" role="img" aria-label="系统架构图">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,3 L0,6 Z" fill="#475569"></path>
+              </marker>
+            </defs>
+            <!-- boundaries -->
+            <rect x="14" y="20" width="280" height="210" rx="10" fill="#f1f5f9" stroke="#cbd5e1" stroke-dasharray="4 3"></rect>
+            <text x="154" y="14" text-anchor="middle" font-size="11" fill="#64748b">冻结内核 (home_perception)</text>
+
+            <rect x="346" y="20" width="268" height="210" rx="10" fill="#eff6ff" stroke="#bfdbfe"></rect>
+            <text x="480" y="14" text-anchor="middle" font-size="11" fill="#1d4ed8">Demo Gateway (silver_demo)</text>
+
+            <rect x="660" y="20" width="286" height="210" rx="10" fill="#ecfdf5" stroke="#a7f3d0"></rect>
+            <text x="803" y="14" text-anchor="middle" font-size="11" fill="#047857">三端观察窗口 (Dashboard)</text>
+
+            <!-- Home box -->
+            <rect x="34" y="44" width="240" height="74" rx="8" fill="#fff" stroke="#cbd5e1"></rect>
+            <text x="154" y="66" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">Home 端输入</text>
+            <text x="154" y="84" text-anchor="middle" font-size="10.5" fill="#475569">CAVIAR fixture (jpg 帧)</text>
+            <text x="154" y="101" text-anchor="middle" font-size="10.5" fill="#475569">read_caviar_frames（白名单）</text>
+
+            <rect x="34" y="138" width="240" height="80" rx="8" fill="#fff" stroke="#cbd5e1"></rect>
+            <text x="154" y="160" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">PerceptionPipeline</text>
+            <text x="154" y="178" text-anchor="middle" font-size="10.5" fill="#475569">process_frame →</text>
+            <text x="154" y="195" text-anchor="middle" font-size="10.5" fill="#475569">WarningEvent / ActionCommand</text>
+            <text x="154" y="211" text-anchor="middle" font-size="9.5" fill="#94a3b8">（to_dict 只读消费）</text>
+
+            <!-- Gateway box -->
+            <rect x="366" y="70" width="228" height="110" rx="8" fill="#fff" stroke="#bfdbfe"></rect>
+            <text x="480" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">网关核心</text>
+            <text x="480" y="110" text-anchor="middle" font-size="10.5" fill="#475569">DemoClock + load_detector</text>
+            <text x="480" y="127" text-anchor="middle" font-size="10.5" fill="#475569">bridge: base64 + to_dict</text>
+            <text x="480" y="144" text-anchor="middle" font-size="10.5" fill="#475569">collect_active_warnings</text>
+            <text x="480" y="161" text-anchor="middle" font-size="10.5" fill="#475569">route_commands</text>
+
+            <!-- Dashboard box -->
+            <rect x="680" y="50" width="246" height="160" rx="8" fill="#fff" stroke="#a7f3d0"></rect>
+            <text x="803" y="70" text-anchor="middle" font-size="11.5" font-weight="700" fill="#047857">5 区域</text>
+            <text x="803" y="90" text-anchor="middle" font-size="10.5" fill="#475569">① 实时视频</text>
+            <text x="803" y="107" text-anchor="middle" font-size="10.5" fill="#475569">② AI 时间线</text>
+            <text x="803" y="124" text-anchor="middle" font-size="10.5" fill="#475569">③ 风险解释卡片</text>
+            <text x="803" y="141" text-anchor="middle" font-size="10.5" fill="#475569">④ 行动闭环</text>
+            <text x="803" y="158" text-anchor="middle" font-size="10.5" fill="#475569">⑤ 架构图</text>
+            <text x="803" y="187" text-anchor="middle" font-size="9.5" fill="#94a3b8">WebSocket (base64 JPEG + view-model)</text>
+
+            <!-- arrows -->
+            <line x1="294" y1="120" x2="362" y2="120" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"></line>
+            <line x1="614" y1="120" x2="658" y2="120" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"></line>
+
+            <!-- boundary label -->
+            <text x="328" y="235" text-anchor="middle" font-size="9.5" fill="#94a3b8">冻结消费边界 (§2.1)</text>
+          </svg>
+          <div class="note">
+            Demo 仅消费白名单：<code>core.config.Settings</code> · <code>runtime.pipeline.{PerceptionPipeline, DemoClock, FrameResult}</code> ·
+            <code>runtime.config.read_caviar_frames</code> · <code>analysis.warning.WarningEvent</code> · <code>action.command.ActionCommand</code>（仅 to_dict 只读）。
+            不穿透 decision_engine / action.executor / dispatcher 等 7 层内部。
+          </div>
+        </div>
+      </section>
+
+      <!-- P0-11.4 Tab ② 家属确认（focused view · hidden by default · 切 Tab 不重订 WS） -->
+      <section class="region view-family" id="view-family" hidden>
+        <h2>② 家属确认 <span class="tag">单按钮 · 防同效穿帮</span></h2>
+        <div class="body">
+          <div class="route-grp">
+            <div class="gh"><span style="color:var(--brand)">●</span> 待家属处理 <span class="cnt" id="tab-family-cnt">0</span></div>
+            <div class="route-list" id="tab-family-list"><span class="muted">—</span></div>
+          </div>
+          <div style="margin-top:12px;color:var(--muted);font-size:12px">
+            点击「已确认」→ store 状态 <code>family_handled</code> → ① 风险卡片联动。
+          </div>
+        </div>
+      </section>
+
+      <!-- P0-11.4 Tab ③ 社区处置（focused view · hidden by default） -->
+      <section class="region view-community" id="view-community" hidden>
+        <h2>③ 社区处置 <span class="tag">单按钮 · 完成核验</span></h2>
+        <div class="body">
+          <div class="route-grp">
+            <div class="gh"><span style="color:var(--ok)">●</span> 待社区处置 <span class="cnt" id="tab-community-cnt">0</span></div>
+            <div class="route-list" id="tab-community-list"><span class="muted">—</span></div>
+          </div>
+          <div style="margin-top:12px;color:var(--muted);font-size:12px">
+            点击「完成核验」→ store 状态 <code>community_done</code> → 闭环标记。
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="disclaimer">
+      <b>数据真实性声明（ADR-0015 §2.8）：</b>本 Demo 使用 CAVIAR 公开 fixture 作为<b>确定性输入</b>，用于验证系统闭环与架构消费契约，
+      不代表真实部署环境的性能指标，亦不用于证明模型泛化能力。风险等级（LOW/MEDIUM/HIGH）为<b>规则命中强度</b>，非诈骗概率判定。
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    // ---------- labels & colors ----------
+    var RISK = {
+      LOW:    { t: "低", c: "#16a34a" },
+      MEDIUM: { t: "中", c: "#d97706" },
+      HIGH:   { t: "高", c: "#dc2626" }
+    };
+    var RISK_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+    // 区域② 行为里程碑：event_type → 图标/人话标签/颜色（体现 Tracking/Event 演化价值）
+    var BEHAV = {
+      visit_normal:         { icon: "🌙", label: "异常时段到访", color: "#0891b2" },
+      visit_pending_verify: { icon: "🔍", label: "待核实到访",   color: "#0ea5e9" },
+      abnormal_dwell:       { icon: "⏱", label: "停留超过阈值", color: "#d97706" },
+      repeat_visit:         { icon: "🔁", label: "再次出现",     color: "#7c3aed" },
+      high_risk_approach:   { icon: "⚠", label: "高风险逼近",   color: "#dc2626" }
+    };
+    var EVT = {
+      visit_normal: "正常到访",
+      visit_pending_verify: "待核到访",
+      abnormal_dwell: "异常逗留",
+      repeat_visit: "重复到访",
+      high_risk_approach: "高风险逼近"
+    };
+    var EVT_COLOR = {
+      visit_normal: "#16a34a",
+      visit_pending_verify: "#0ea5e9",
+      abnormal_dwell: "#d97706",
+      repeat_visit: "#7c3aed",
+      high_risk_approach: "#dc2626"
+    };
+    var ACT = {
+      MONITOR: "仅监测",
+      NOTIFY_FAMILY: "通知家属核实",
+      ESCALATE_COMMUNITY: "升级社区处置"
+    };
+    // 触发规则标签（贴近 reason_summary，给人话解释；与 EVT_COLOR 区分使用）
+    var TRIG = {
+      high_risk_approach: "高风险逼近",
+      abnormal_dwell: "异常停留",
+      repeat_visit: "重复访问",
+      visit_pending_verify: "未在白名单",
+      visit_normal: "异常时段访问"
+    };
+    var TRIG_COLOR = {
+      high_risk_approach: "#dc2626",
+      abnormal_dwell: "#d97706",
+      repeat_visit: "#7c3aed",
+      visit_pending_verify: "#0ea5e9",
+      visit_normal: "#0891b2"
+    };
+    // ActionCommand 执行层状态 → 中文（系统侧是否发出，区别于人工确认状态）
+    var CMD_STATUS = {
+      PENDING: "待执行", DONE: "已执行", FAILED: "执行失败", RETRYING: "重试中", GIVEN_UP: "已放弃"
+    };
+    var CLOSURE = {
+      pending:        { t: "待处理", c: "#64748b" },
+      family_handled: { t: "家属已处理", c: "#2563eb" },
+      community_done: { t: "社区已闭环", c: "#16a34a" }
+    };
+    // WarningEvent.status = 系统侧指令下发状态（CREATED→PENDING→CONFIRMED→RESOLVED/REJECTED），
+    // 与「人工闭环状态」(state.stateMap: pending/family_handled/community_done) 是两回事。
+    // 风险卡主状态改用人工闭环状态（见 CLOSURE），此处仅作次要、明确标注「系统·」的辅助标签，
+    // 避免「已确认」被误读为家属/社区人工确认。
+    var SYS_STATUS = {
+      CREATED: "系统·待下发", PENDING: "系统·待下发", CONFIRMED: "系统·已送达",
+      RESOLVED: "系统·已闭环", REJECTED: "系统·已拒绝"
+    };
+
+    // ---------- state（P0-11.3 Dashboard 状态层：从"事实生产"聚合出"用户认知"）----------
+    var state = {
+      frame: null,
+      stateMap: {},            // warning_id -> {status, operator}（闭环人工状态）
+      // ── Warning 保活（修复区域③④"闪现即消失"）──
+      // 网关每帧只广播"当前帧"的 active_warnings（98%+ 为空），逐帧覆盖会让风险卡闪现。
+      // warningMap 按 warning_id 跨帧 upsert 保活，status 终态时移除，超上限按 created_at 修剪。
+      warningMap: {},          // warning_id -> warning dict（最新快照，跨帧保活）
+      warningMax: 30,
+      routed: { family: [], community: [], log_only: [] },
+      commandMap: {},          // warning_id -> {family, community, log_only: Map(command_id->command)}（跨帧累积，O(1) 去重，供区域④联动）
+      // ── AI 行为时间线（区域②：把稀疏 perception_events/warnings 累积成行为演化叙事）──
+      behaviorEvents: [],      // 行为里程碑（最新在上，跨帧去重累积）
+      behaviorSeen: {},        // 去重键集合
+      behaviorMax: 120,
+      behaviorN: 0,
+      visitorSeq: {},          // visitor_id(UUID) -> "访客#N" 友好名
+      visitorSeqN: 0,
+      visitorFirst: {},        // visitor_id -> 是否已记"首次出现"
+      meta: {}                 // P0-11.3.5 运行时元数据（session_status/loop/frame/last_warning/started_at 等）
+    };
+
+    // ---------- helpers ----------
+    function $(id) { return document.getElementById(id); }
+    function esc(s) {
+      if (s === null || s === undefined) return "";
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function shortId(id) { return id ? String(id).slice(0, 8) : "—"; }
+    function riskOf(level) { return RISK[level] || { t: level || "?", c: "#64748b" }; }
+
+    function toast(msg, isErr) {
+      var box = $("toasts");
+      var el = document.createElement("div");
+      el.className = "toast" + (isErr ? " err" : "");
+      el.textContent = msg;
+      box.appendChild(el);
+      requestAnimationFrame(function () { el.classList.add("show"); });
+      setTimeout(function () {
+        el.classList.remove("show");
+        setTimeout(function () { el.remove(); }, 250);
+      }, 2600);
+    }
+
+    // ---------- P0-11.4 联动辅助 ----------
+    // 三端命令按 warning_id 跨帧累积（同一 warning 的 家属/社区 任务卡借此与风险卡片联动）
+    function mergeCommands(routed) {
+      var types = ["family", "community", "log_only"];
+      for (var i = 0; i < types.length; i++) {
+        var arr = (routed && routed[types[i]]) || [];
+        for (var j = 0; j < arr.length; j++) {
+          var c = arr[j];
+          var wid = c.warning_id;
+          if (!wid) continue;
+          if (!state.commandMap[wid]) state.commandMap[wid] = { family: new Map(), community: new Map(), log_only: new Map() };
+          var map = state.commandMap[wid][types[i]];
+          var cid = c.command_id;
+          if (cid === null || cid === undefined) cid = "__null__";  // 缺 id 的命令按同一键去重（与原数组语义一致）
+          if (!map.has(cid)) {                          // O(1) 去重，避免大帧线性扫描抖动
+            map.set(cid, c);
+            if (map.size > 24) { var old = map.keys().next().value; map.delete(old); }
+          }
+        }
+      }
+    }
+    function lookupCommands(wid) {
+      var m = state.commandMap[wid];
+      if (!m) return { family: [], community: [], log_only: [] };
+      return {
+        family: Array.from(m.family.values()),
+        community: Array.from(m.community.values()),
+        log_only: Array.from(m.log_only.values())
+      };
+    }
+    function allRouted() {
+      var fam = [], com = [], log = [];
+      for (var wid in state.commandMap) {
+        var m = state.commandMap[wid];
+        fam = fam.concat(Array.from(m.family.values()));
+        com = com.concat(Array.from(m.community.values()));
+        log = log.concat(Array.from(m.log_only.values()));
+      }
+      return { family: fam, community: com, log_only: log };
+    }
+    function cmdStatusLabel(s) { return CMD_STATUS[s] || s || "—"; }
+    function maskPhone(p) {
+      p = String(p === null || p === undefined ? "" : p);
+      if (p.length >= 7) return p.slice(0, 3) + "****" + p.slice(-4);
+      return "***";
+    }
+    function hhmmss(iso) {
+      if (!iso) return "—";
+      var t = String(iso).replace("T", " ");
+      var m = t.match(/(\d{2}:\d{2}:\d{2})/);
+      return m ? m[1] : t.slice(0, 19);
+    }
+    function hintPayload(c) {
+      var p = c.payload || {};
+      var ct = c.command_type;
+      if (ct === "SEND_FAMILY_MESSAGE") {
+        var msg = String(p.message || "");
+        return msg.length > 48 ? msg.slice(0, 48) + "…" : msg;
+      }
+      if (ct === "CREATE_COMMUNITY_TASK") {
+        var rs = (p.reasons || []).join("、");
+        return "工单：" + (rs || "—") + " · 风险 " + (p.risk_level || "?");
+      }
+      if (ct === "LOG_ONLY") {
+        var rr = (p.reason_summary || []).join("、");
+        return "记入：" + (rr || p.risk_level || "—");
+      }
+      return c.command_type || "?";
+    }
+
+    // ---------- WebSocket ----------
+    var ws = null;
+    var wsPath = "/ws";
+    var reconnectTimer = null;
+
+    function wsUrl() {
+      var proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + wsPath;
+    }
+    function setWs(online) {
+      var pill = $("ws-pill");
+      pill.className = "pill " + (online ? "online" : "offline");
+      $("ws-text").textContent = online ? "已连接" : "未连接";
+      $("live-badge").style.display = online ? "inline-flex" : "none";
+    }
+    function connect() {
+      try { ws = new WebSocket(wsUrl()); }
+      catch (e) { scheduleReconnect(); return; }
+      ws.onopen = function () { setWs(true); };
+      ws.onmessage = function (ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        handle(msg);
+      };
+      ws.onclose = function () { setWs(false); scheduleReconnect(); };
+      ws.onerror = function () { setWs(false); };
+    }
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, 2500);
+    }
+
+    function handle(msg) {
+      if (msg.type === "frame") {
+        state.frame = msg.view;
+        if (msg.meta) state.meta = msg.meta;   // P0-11.3.5 运行时元数据
+        // 合并闭环状态快照（每帧都带全量 state）
+        if (msg.state) Object.assign(state.stateMap, msg.state);
+        var activeNow = msg.active_warnings || [];
+        ingestWarnings(activeNow);     // 跨帧保活（修复区域③④闪现）
+        state.routed = msg.routed_commands || { family: [], community: [], log_only: [] };
+        mergeCommands(state.routed);   // 跨帧累积三端命令，供区域④按 warning_id 联动
+        ingestBehavior(msg.view, activeNow);  // 累积访客行为里程碑（区域② 行为演化）
+        renderAll();
+      } else if (msg.type === "snapshot") {
+        applySnapshot(msg);            // P0-11.3.5 晚连恢复历史状态
+      } else if (msg.type === "state_update") {
+        if (msg.state) Object.assign(state.stateMap, msg.state);
+        renderClosure();
+        renderRisks();   // 风险卡主状态同样来自 state.stateMap，点击确认后需即时刷新
+      } else if (msg.type === "source_switched") {
+        resetSession(msg.scenario, msg.source, msg.source_type, msg.frames);
+      } else if (msg.type === "action_ack") {
+        toast("已记录：" + (msg.action || "操作"));
+      } else if (msg.type === "error") {
+        toast("操作失败：" + (msg.error || "未知错误"), true);
+      }
+    }
+
+    // ---------- P0-11.3.5 首连 snapshot 恢复（晚连也能看到历史状态） ----------
+    function mapFromList(arr) {
+      var m = new Map();
+      (arr || []).forEach(function (c) {
+        var cid = (c.command_id != null) ? c.command_id : "__null__";
+        if (!m.has(cid)) m.set(cid, c);
+      });
+      return m;
+    }
+    function applySnapshot(s) {
+      if (!s) return;
+      state.warningMap = {};
+      (s.warnings || []).forEach(function (w) { if (w && w.warning_id) state.warningMap[w.warning_id] = w; });
+      state.commandMap = {};
+      var cm = s.commands || {};
+      for (var wid in cm) {
+        var g = cm[wid];
+        state.commandMap[wid] = {
+          family: mapFromList(g.family),
+          community: mapFromList(g.community),
+          log_only: mapFromList(g.log_only)
+        };
+      }
+      state.behaviorEvents = (s.behaviors || []).slice();
+      state.behaviorSeen = {};
+      (s.behavior_seen || []).forEach(function (k) { state.behaviorSeen[k] = true; });
+      state.visitorSeq = s.visitor_seq || {};
+      state.visitorFirst = {};
+      (s.visitor_first || []).forEach(function (v) { state.visitorFirst[v] = true; });
+      state.visitorSeqN = Object.keys(state.visitorSeq).length;
+      state.behaviorN = state.behaviorEvents.length;
+      if (s.meta) state.meta = s.meta;
+      renderAll();
+      toast("已恢复当前系统状态（" + state.behaviorEvents.length + " 条行为里程碑 / " + Object.keys(state.warningMap).length + " 风险）");
+    }
+
+    // ---------- P0-11.3 状态层：Warning 保活 ----------
+    // 每帧把当前 active_warnings upsert 进 warningMap（按 warning_id 保活），
+    // status 终态（RESOLVED/REJECTED）时移除，超上限按 created_at 修剪。
+    function ingestWarnings(list) {
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
+        if (!w || !w.warning_id) continue;
+        state.warningMap[w.warning_id] = w;   // upsert 最新快照
+      }
+      // 终态移除
+      for (var wid in state.warningMap) {
+        var st = state.warningMap[wid].status;
+        if (st === "RESOLVED" || st === "REJECTED") delete state.warningMap[wid];
+      }
+      pruneWarnings(state.warningMax);
+    }
+    function pruneWarnings(max) {
+      var ids = Object.keys(state.warningMap);
+      if (ids.length <= max) return;
+      ids.sort(function (a, b) {
+        return String(state.warningMap[a].created_at || "").localeCompare(String(state.warningMap[b].created_at || ""));
+      });
+      var remove = ids.length - max;
+      for (var i = 0; i < remove; i++) delete state.warningMap[ids[i]];  // 移除最旧
+    }
+    // 聚合出稳定的活跃风险列表（区域③④ 共用，替代逐帧 activeWarnings）
+    function activeWarningList() {
+      var arr = [];
+      for (var wid in state.warningMap) arr.push(state.warningMap[wid]);
+      arr.sort(function (a, b) {
+        var ra = RISK_RANK[a.risk_level] || 0, rb = RISK_RANK[b.risk_level] || 0;
+        if (rb !== ra) return rb - ra;  // 风险高者在前
+        return String(b.created_at || "").localeCompare(String(a.created_at || ""));  // 新者在前
+      });
+      return arr;
+    }
+
+    // ---------- P0-11.4 视频输入：切换输入源后清空跨帧累积（新视频 = 新会话） ----------
+    function resetSession(scenario, source, sourceType, frames) {
+      state.frame = null;
+      state.stateMap = {};
+      state.warningMap = {};
+      state.routed = { family: [], community: [], log_only: [] };
+      state.commandMap = {};
+      state.behaviorEvents = [];
+      state.behaviorSeen = {};
+      state.behaviorN = 0;
+      state.visitorSeq = {};
+      state.visitorSeqN = 0;
+      state.visitorFirst = {};
+      // 清空视频帧与各区
+      $("video-img").style.display = "none";
+      $("video-ph").style.display = "block";
+      $("video-ph").textContent = "已切换输入源，等待新画面…";
+      renderAll();
+      toast("已切换输入源 → " + (scenario || "?") + (source ? "（" + source + "）" : ""));
+      // 更新顶部场景标签
+      $("scenario-sub").textContent = "P0-11 视频输入适配 · 场景 " + (scenario || "?")
+        + " · 源 " + (source || "?") + " · 类型 " + (sourceType || "?") + " · 帧数 " + (frames || 0);
+    }
+
+    // ---------- P0-11.3 状态层：AI 行为时间线 ----------
+    function friendlyVisitor(vid) {
+      if (!vid) return "访客";
+      if (!state.visitorSeq[vid]) {
+        state.visitorSeqN += 1;
+        state.visitorSeq[vid] = "访客#" + state.visitorSeqN;
+      }
+      return state.visitorSeq[vid];
+    }
+    function addBehavior(ev) {
+      if (!ev || !ev.key || state.behaviorSeen[ev.key]) return;
+      state.behaviorSeen[ev.key] = true;
+      ev.seq = (state.behaviorN += 1);
+      state.behaviorEvents.unshift(ev);   // 最新在上
+      if (state.behaviorEvents.length > state.behaviorMax) {
+        state.behaviorEvents.length = state.behaviorMax;
+      }
+    }
+    // 从稀疏的 perception_events + warnings 累积去重出「行为里程碑」，
+    // 展现 Tracking/Event/Feature 的演化价值（visitor 进入→停留→再现→升级）。
+    function ingestBehavior(view, warns) {
+      var pes = (view && view.perception_events) || [];
+      for (var i = 0; i < pes.length; i++) {
+        var pe = pes[i];
+        var vid = pe.visitor_id || "";
+        var who = friendlyVisitor(vid);
+        // 首次出现（该 visitor 第一次进入时间线）
+        if (vid && state.visitorFirst[vid] !== true) {
+          state.visitorFirst[vid] = true;
+          addBehavior({
+            key: "enter|" + vid,
+            time: pe.created_at || null,
+            icon: "👤", label: "首次出现", color: "#0891b2",
+            who: who, detail: "进入" + (pe.location || "门口") + "画面"
+          });
+        }
+        var bm = BEHAV[pe.event_type] || { icon: "•", label: pe.event_type || "事件", color: "#64748b" };
+        addBehavior({
+          key: "pe|" + vid + "|" + pe.event_type + "|" + (pe.repeat_count != null ? pe.repeat_count : 0),
+          time: pe.created_at || null,
+          icon: bm.icon, label: bm.label, color: bm.color,
+          who: who,
+          score: (typeof pe.score === "number") ? pe.score : null,
+          repeat: (pe.repeat_count != null ? pe.repeat_count : null),
+          detail: pe.location ? ("位置 " + pe.location) : ""
+        });
+      }
+      // 风险升级/生成（首次出现某 warning_id 时记一条）
+      warns = warns || [];
+      for (var k = 0; k < warns.length; k++) {
+        var w = warns[k];
+        if (!w || !w.warning_id) continue;
+        var wk = "warn|" + w.warning_id;
+        if (state.behaviorSeen[wk]) continue;
+        var rl = riskOf(w.risk_level);
+        addBehavior({
+          key: wk, time: w.created_at || null,
+          icon: "⚠", label: "生成风险预警（" + rl.t + "）", color: rl.c,
+          who: "", detail: (w.reason_summary || []).join("、")
+        });
+      }
+    }
+
+    function sendAction(wid, operator) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        toast("未连接，无法发送操作", true);
+        return;
+      }
+      var label = operator === "family" ? "家属已认识 / 通知社区" : "社区已接单 / 已处置";
+      ws.send(JSON.stringify({
+        type: "action", warning_id: wid, operator: operator, action: label
+      }));
+    }
+
+    // ---------- renderers ----------
+    function renderAll() {
+      renderVideo();
+      renderTimeline();
+      renderRisks();
+      renderClosure();
+      renderRouting();
+      renderStatus();           // P0-11.3.5 状态面板
+    }
+
+    function renderVideo() {
+      var v = state.frame;
+      if (!v) return;
+      $("ov-frame").textContent = v.frame_index;
+      $("ov-time").textContent = v.demo_time ? v.demo_time.replace("T", " ").slice(0, 19) : "–";
+      $("ov-det").textContent = v.n_detections;
+      $("ov-ve").textContent = v.n_visitor_events;
+      if (v.frame_base64) {
+        $("video-img").src = "data:image/jpeg;base64," + v.frame_base64;
+        $("video-img").style.display = "block";
+        $("video-ph").style.display = "none";
+      }
+    }
+
+    function renderTimeline() {
+      var body = $("timeline-body");
+      var evs = state.behaviorEvents;
+      if (!evs.length) {
+        // 长视频前段：检测器已看见人、但「访问完成 / 异常停留」等里程碑事件尚未触发
+        // （如 CCTV 那人持续逗留 51s 才离开）。显示实时在场指示，消除「空白 = 没在工作」的观感。
+        var fv = state.frame;
+        if (fv && fv.n_detections > 0) {
+          body.innerHTML = '<div class="tl-empty observing">🔴 实时观察中 · 当前 ' + fv.n_detections + ' 人在场</div>';
+        } else {
+          body.innerHTML = '<div class="tl-empty">等待访客行为…</div>';
+        }
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < evs.length; i++) {
+        var e = evs[i];
+        var time = e.time ? hhmmss(e.time) : "—";
+        var extra = [];
+        if (typeof e.score === "number") extra.push("强度 " + e.score.toFixed(2));
+        if (e.repeat != null) extra.push("第 " + e.repeat + " 次");
+        if (e.detail) extra.push(e.detail);
+        html += '<div class="tl-item">'
+          + '<div class="tl-time">' + esc(time) + '</div>'
+          + '<div class="tl-main">'
+          +   '<div class="tl-row">'
+          +     '<span class="ev-chip" style="background:' + e.color + '">' + esc(e.icon + " " + e.label) + '</span>'
+          +     (e.who ? '<span class="score">' + esc(e.who) + '</span>' : '')
+          +   '</div>'
+          +   (extra.length ? '<div class="tl-meta">' + esc(extra.join(" · ")) + '</div>' : '')
+          + '</div></div>';
+      }
+      body.innerHTML = html;
+    }
+
+    function renderRisks() {
+      var body = $("risk-body");
+      var list = activeWarningList();   // 跨帧保活聚合（不再逐帧被覆盖 → 不闪现）
+      if (!list.length) {
+        // 同 renderTimeline：有人在场但风险尚未触发时，给出即时反馈（消除长视频前段空窗观感）
+        var fv = state.frame;
+        if (fv && fv.n_detections > 0) {
+          body.innerHTML = '<div class="tl-empty observing">🔴 实时观察中 · 当前 ' + fv.n_detections + ' 人在场，风险尚未触发</div>';
+        } else {
+          body.innerHTML = '<div class="tl-empty">当前无活跃风险</div>';
+        }
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
+        var rl = riskOf(w.risk_level);
+        var score = (typeof w.perception_score === "number") ? w.perception_score : 0;
+        var reasons = (w.reason_summary || []).map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("");
+        var triggers = (w.trigger_events || []).map(function (t) {
+          var et = t.event_type || "?";
+          var col = TRIG_COLOR[et] || "#64748b";
+          var label = TRIG[et] || et;
+          var sc = (typeof t.score === "number") ? t.score.toFixed(2) : "?";
+          return '<span class="trig-chip" style="background:' + col + '1a;color:' + col + ';border-color:' + col + '55">'
+            + esc(label) + ' <b>' + sc + '</b></span>';
+        }).join("");
+        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
+        // 风险卡主状态 = 人工闭环状态（与 ②③ 共享 state.stateMap），而非 WarningEvent.status（系统下发状态）
+        var closure = state.stateMap[w.warning_id] ? state.stateMap[w.warning_id].status : "pending";
+        if (!CLOSURE[closure]) closure = "pending";
+        var cs = CLOSURE[closure];
+        var sysStat = SYS_STATUS[w.status] || w.status || "";
+        var evChips = "";
+        if (w.evidence && w.evidence.length) {
+          evChips = '<div class="rc-ev">'
+            + w.evidence.map(function (e, idx) { return '<span class="ev-chip2">证据 ' + (idx + 1) + '</span>'; }).join("")
+            + '</div>';
+        }
+        html += '<div class="risk-card" style="border-left-color:' + rl.c + '">'
+          + '<div class="rc-head">'
+          +   '<span class="rlevel" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="rc-id">' + esc(shortId(w.warning_id)) + '</span>'
+          +   '<span class="rc-time">生成 ' + esc(hhmmss(w.created_at)) + '</span>'
+          +   '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
+          +   (sysStat ? '<span class="sys-status" title="系统指令下发状态（非人工确认）">' + esc(sysStat) + '</span>' : '')
+          + '</div>'
+          + '<div class="rc-section"><div class="rc-label">人话原因</div><ul class="rc-reason">' + reasons + '</ul></div>'
+          + (triggers ? '<div class="rc-section"><div class="rc-label">触发规则</div><div class="rc-triggers">' + triggers + '</div></div>' : '')
+          + '<div class="rc-foot2">'
+          +   '<div class="meter"><div class="meter-label">规则命中强度 <b>' + score.toFixed(2) + '</b></div>'
+          +   '<div class="bar"><i style="width:' + (score * 100).toFixed(0) + '%;background:' + rl.c + '"></i></div></div>'
+          +   '<div class="rc-rec">建议：<b>' + esc(rec) + '</b></div>'
+          + '</div>'
+          + (w.elder_id || w.device_id ? '<div class="rc-meta">设备 <code>' + esc(w.device_id || "—") + '</code> · 老人 <code>' + esc(w.elder_id || "—") + '</code></div>' : '')
+          + evChips
+          + '<div class="rc-link">→ 处置见区域④ 行动闭环</div>'
+          + '</div>';
+      }
+      body.innerHTML = html;
+    }
+
+    function renderClosure() {
+      var wrap = $("closure-cards");
+      var list = activeWarningList();   // 跨帧保活聚合（与区域③同源 → 联动稳定）
+      if (!list.length) {
+        wrap.innerHTML = '<div class="tl-empty">暂无待闭环风险</div>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
+        var wid = w.warning_id;
+        var rl = riskOf(w.risk_level);
+        var rec = ACT[w.recommended_action] || w.recommended_action || "—";
+        var cm = lookupCommands(wid);   // 本 warning 的三端命令（跨帧累积）
+
+        var closure = state.stateMap[wid] ? state.stateMap[wid].status : "pending";
+        if (!CLOSURE[closure]) closure = "pending";
+        var cs = CLOSURE[closure];
+        var famDone = (closure === "family_handled" || closure === "community_done");
+        var comDone = (closure === "community_done");
+        var famDisabled = famDone;                        // 家属已处理则不能再点
+        var comDisabled = (closure !== "family_handled"); // 须先家属处理
+
+        // 家属端任务卡
+        var famTask = '<div class="task family"><div class="task-h"><span class="task-dot f"></span>家属端任务'
+          + (cm.family.length ? '<span class="task-status">' + cmdStatusLabel(cm.family[0].status) + '</span>' : '')
+          + '</div>';
+        if (cm.family.length) {
+          var fp = cm.family[0].payload || {};
+          var contact = fp.contact || {};
+          famTask += '<div class="task-body">' + esc(fp.message || "(无消息内容)") + '</div>'
+            + '<div class="task-sub">收件人：' + esc(contact.name || "—")
+            + (contact.relation ? '（' + esc(contact.relation) + '）' : '')
+            + ' · ' + esc(maskPhone(contact.phone)) + '</div>';
+        } else {
+          famTask += '<div class="task-empty">本风险未触发家属通知（建议：' + esc(rec) + '）</div>';
+        }
+        famTask += '</div>';
+
+        // 社区端任务卡
+        var comTask = '<div class="task community"><div class="task-h"><span class="task-dot c"></span>社区端任务'
+          + (cm.community.length ? '<span class="task-status">' + cmdStatusLabel(cm.community[0].status) + '</span>' : '')
+          + '</div>';
+        if (cm.community.length) {
+          var cp = cm.community[0].payload || {};
+          var reasons = (cp.reasons || []).join("、");
+          comTask += '<div class="task-body">工单原因：' + esc(reasons || "—") + '</div>'
+            + '<div class="task-sub">风险 ' + esc(cp.risk_level || "—") + ' · 端点 '
+            + esc(cp.endpoint || "—") + ' · 强度 '
+            + (typeof cp.perception_score === "number" ? cp.perception_score.toFixed(2) : "—") + '</div>';
+        } else {
+          comTask += '<div class="task-empty">本风险未触发社区工单</div>';
+        }
+        comTask += '</div>';
+
+        // 仅记录任务卡（与家属/社区端一致：无命令时也渲染占位卡片）
+        var logTask = '<div class="task log"><div class="task-h"><span class="task-dot l"></span>风险日志</div>';
+        if (cm.log_only.length) {
+          var lp = cm.log_only[0].payload || {};
+          var lrs = (lp.reason_summary || []).join("、");
+          logTask += '<div class="task-body">' + esc(lrs || lp.risk_level || "已记入风险日志")
+            + (lp.risk_level ? ' · 风险 ' + esc(lp.risk_level) : '') + '</div>';
+        } else {
+          logTask += '<div class="task-empty">本风险无日志记录</div>';
+        }
+        logTask += '</div>';
+
+        html += '<div class="cl-card">'
+          + '<div class="cl-top">'
+          +   '<span class="cl-wid">' + esc(shortId(wid)) + '</span>'
+          +   '<span class="cl-rl" style="background:' + rl.c + '">' + esc(rl.t) + '风险</span>'
+          +   '<span class="cl-rec2">建议：' + esc(rec) + '</span>'
+          + '</div>'
+          + '<div class="cl-reasons">' + esc((w.reason_summary || []).join(" · ")) + '</div>'
+          + '<div class="tasks">' + famTask + comTask + logTask + '</div>'
+          + '<div class="stepper">'
+          +   '<div class="step ' + (famDone ? "done" : (closure === "pending" ? "cur" : "")) + '">家属确认</div>'
+          +   '<span class="arrow">→</span>'
+          +   '<div class="step ' + (comDone ? "done" : (closure === "family_handled" ? "cur" : "")) + '">社区闭环</div>'
+          + '</div>'
+          + '<div class="cl-actions">'
+          +   '<button class="btn family" data-wid="' + esc(wid) + '" data-op="family" ' + (famDisabled ? "disabled" : "") + '>家属已认识 / 通知</button>'
+          +   '<button class="btn community" data-wid="' + esc(wid) + '" data-op="community" ' + (comDisabled ? "disabled" : "") + '>社区已接单 / 处置</button>'
+          + '</div>'
+          + '<div style="margin-top:8px;text-align:right">'
+          +   '<span class="cl-status" style="color:' + cs.c + ';background:' + cs.c + '1a">' + esc(cs.t) + '</span>'
+          + '</div>'
+          + '</div>';
+      }
+      wrap.innerHTML = html;
+      // P0-11.4 阶段叙事 Tab 渲染（消费同一 state.routed；切 Tab 不重订 WS）
+      renderTabFamily();
+      renderTabCommunity();
+    }
+
+    function renderRouting() {
+      var r = allRouted();   // 跨帧累积，稳定反映本场 Demo 已下发的三端命令
+      $("rc-family").textContent = (r.family || []).length;
+      $("rc-community").textContent = (r.community || []).length;
+      $("rc-log").textContent = (r.log_only || []).length;
+      function listHtml(arr) {
+        if (!arr || !arr.length) return '<span class="muted">—</span>';
+        return arr.map(function (c) {
+          var wid = c.warning_id ? shortId(c.warning_id) : "?";
+          return '<div class="route-item">'
+            + '<div class="route-cmd">' + esc((c.command_type || "?").replace(/_/g, " ")) + ' <span class="muted">' + esc(wid) + '</span></div>'
+            + '<div class="route-hint">' + esc(hintPayload(c)) + '</div>'
+            + '</div>';
+        }).join("");
+      }
+      $("rc-family-list").innerHTML = listHtml(r.family);
+      $("rc-community-list").innerHTML = listHtml(r.community);
+      $("rc-log-list").innerHTML = listHtml(r.log_only);
+    }
+
+    // ---------- P0-11.3.5 Demo 运行状态面板 ----------
+    function sessionElapsed(startedAt) {
+      if (!startedAt) return "00:00";
+      var s = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
+      var mm = String(Math.floor(s / 60)).padStart(2, "0");
+      var ss = String(s % 60).padStart(2, "0");
+      return mm + ":" + ss;
+    }
+    function renderStatus() {
+      var m = state.meta || {};
+      $("st-source").textContent = m.source || "–";
+      $("st-frame").textContent = (m.frame_index != null ? m.frame_index : "–") + " / " + (m.n_frames || "–");
+      $("st-loop").textContent = (m.loop_count != null ? m.loop_count : "–");
+      var st = m.session_status || "RUNNING";
+      var pipe = $("st-pipe");
+      pipe.textContent = st;
+      pipe.className = "s-v " + (st === "RUNNING" ? "run" : "");
+      var lw = m.last_warning;
+      var lastEl = $("st-last");
+      if (lw && lw.risk_level) {
+        var rl = riskOf(lw.risk_level);
+        lastEl.textContent = rl.t + "风险";
+        lastEl.style.color = rl.c;
+      } else {
+        lastEl.textContent = "无";
+        lastEl.style.color = "";
+      }
+      $("st-session").textContent = sessionElapsed(m.started_at);
+    }
+
+    // ---------- P0-11.4 阶段叙事 Tab（切 Tab 不重订 WS；同一 state 多角色共享） ----------
+    function renderTabFamily() {
+      var r = allRouted();
+      var arr = r.family || [];
+      $("tab-family-cnt").textContent = arr.length;
+      var list = $("tab-family-list");
+      if (!arr.length) { list.innerHTML = '<span class="muted">—</span>'; return; }
+      list.innerHTML = arr.map(function (c) {
+        var wid = c.warning_id ? shortId(c.warning_id) : "?";
+        var msg = (c.payload && c.payload.message) ? c.payload.message : (c.command_type || "?");
+        return '<div class="route-item">'
+          + '<div class="route-cmd">' + esc((c.command_type || "?").replace(/_/g, " "))
+          + ' <span class="muted">' + esc(wid) + '</span></div>'
+          + '<div class="route-hint">' + esc(msg) + '</div>'
+          + '<div class="cl-actions" style="margin-top:6px">'
+          +   '<button class="btn family" data-wid="' + esc(c.warning_id || "") + '" data-op="family">已确认</button>'
+          + '</div></div>';
+      }).join("");
+    }
+    function renderTabCommunity() {
+      var r = allRouted();
+      var arr = r.community || [];
+      $("tab-community-cnt").textContent = arr.length;
+      var list = $("tab-community-list");
+      if (!arr.length) { list.innerHTML = '<span class="muted">—</span>'; return; }
+      list.innerHTML = arr.map(function (c) {
+        var wid = c.warning_id ? shortId(c.warning_id) : "?";
+        var task = (c.payload && c.payload.reasons) ? c.payload.reasons.join("、") : (c.command_type || "?");
+        return '<div class="route-item">'
+          + '<div class="route-cmd">' + esc((c.command_type || "?").replace(/_/g, " "))
+          + ' <span class="muted">' + esc(wid) + '</span></div>'
+          + '<div class="route-hint">' + esc(task) + '</div>'
+          + '<div class="cl-actions" style="margin-top:6px">'
+          +   '<button class="btn community" data-wid="' + esc(c.warning_id || "") + '" data-op="community">完成核验</button>'
+          + '</div></div>';
+      }).join("");
+    }
+    function switchTab(idx) {
+      document.querySelectorAll("#role-tabs .tab").forEach(function (t, i) {
+        t.classList.toggle("active", i === idx);
+      });
+      document.body.dataset.tab = ["discover", "family", "community"][idx];
+      $("view-family").hidden = (idx !== 1);
+      $("view-community").hidden = (idx !== 2);
+      // Tab ②/③：聚焦单一角色视图，隐藏其他内容区（状态面板/header 保持可见）
+      var hideContent = (idx !== 0);
+      document.querySelectorAll(".app .region:not(.view-family):not(.view-community):not(.demostat)")
+        .forEach(function (r) { r.hidden = hideContent; });
+    }
+    document.querySelectorAll("#role-tabs .tab").forEach(function (t, i) {
+      t.addEventListener("click", function () { switchTab(i); });
+    });
+    // 新 Tab 视图的按钮委托（复用 sendAction；与 closure-cards 同协议，不重订 WS）
+    ["tab-family-list", "tab-community-list"].forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      el.addEventListener("click", function (e) {
+        var btn = e.target.closest("[data-op]");
+        if (!btn) return;
+        sendAction(btn.getAttribute("data-wid"), btn.getAttribute("data-op"));
+      });
+    });
+    // 初始：discover
+    document.body.dataset.tab = "discover";
+
+    // event delegation for action buttons
+    $("closure-cards").addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-op]");
+      if (!btn) return;
+      sendAction(btn.getAttribute("data-wid"), btn.getAttribute("data-op"));
+    });
+
+    // scenario label (fetched once)
+    fetch("/health").then(function (r) { return r.json(); }).then(function (h) {
+      $("scenario-sub").textContent = "P0-11 MVP Demo · 场景 " + (h.scenario || "?") + " · 源 " + (h.source || "?") + " · 帧数 " + (h.n_frames || 0);
+    }).catch(function () { /* 网关未起时静默 */ });
+
+    // ---------- P0-11.4 场景输入 / 视频源接入 ----------
+    (function setupSourcePanel() {
+      var tabs = document.querySelectorAll('input[name="srcmode"]');
+      var panels = { sim: $("sim-panel"), local: $("local-panel"), cam: $("cam-panel") };
+      tabs.forEach(function (t) {
+        t.addEventListener("change", function () {
+          var mode = t.value;
+          for (var k in panels) panels[k].hidden = (k !== mode);
+        });
+      });
+
+      // 模拟场景按钮 → POST /demo/scenario
+      document.querySelectorAll("#sim-panel [data-scn]").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var id = b.getAttribute("data-scn");
+          b.disabled = true;
+          fetch("/demo/scenario", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scenario_id: id })
+          }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (res) {
+              if (!res.ok) toast("场景切换失败：" + (res.j.error || "未知"), true);
+              else toast("已切换到场景：" + (res.j.scenario || id));
+            })
+            .catch(function () { toast("场景切换请求失败", true); })
+            .then(function () { b.disabled = false; });
+        });
+      });
+
+      // 本地视频：选择文件 → 开始分析 → POST /demo/upload（multipart）
+      var fileInput = $("video-file");
+      var statusEl = $("upload-status");
+      $("btn-analyze").addEventListener("click", function () {
+        if (!fileInput.files || !fileInput.files.length) {
+          toast("请先选择视频文件", true); return;
+        }
+        var fd = new FormData();
+        fd.append("file", fileInput.files[0]);
+        var btn = $("btn-analyze");
+        btn.disabled = true; statusEl.textContent = "上传并接入中…";
+        fetch("/demo/upload", { method: "POST", body: fd })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (res) {
+            if (!res.ok) { toast("视频接入失败：" + (res.j.error || "未知"), true); statusEl.textContent = ""; }
+            else {
+              statusEl.textContent = "已接入：" + (res.j.filename || "") + " · " + (res.j.frames || 0) + " 帧";
+              toast(res.j.message || "已开始分析");
+            }
+          })
+          .catch(function () { toast("视频接入请求失败", true); statusEl.textContent = ""; })
+          .then(function () { btn.disabled = false; });
+      });
+    })();
+
+    setInterval(renderStatus, 1000);  // P0-11.3.5 会话计时每秒刷新
+    connect();
+  })();
+  </script>
+</body>
+</html>
