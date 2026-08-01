@@ -12,8 +12,8 @@
 > **Slice 4**（#83）：`episode_builder.py` 定义 `DefaultEpisodeBuilder`，实现 `project_episode`（Stage B）。
 > **Slice 5**（#84）：`store.py` 定义 `MemoryStore` / `InMemoryStore`（Episodic 持久化后端，v1 内存 + JSON 序列化）。
 >
-> **实施进度**：Slices 1–5 已全部合入 `main`（PR #77–#85），单元测试全绿。
-> **Stage F**（Slice 5 收尾）：`DefaultEpisodeBuilder` 已包级导出；流水线侧接线见
+> **实施进度**：Slices 1–6 + Stage F + Integration Closure（B/C/A/D）已合入 `main`（内部 Slices 1–6 + Stage F: #77–#88；Closure B#93 / C#91 / A#94 / D#95），单元测试全绿。
+> **Stage F**（Pipeline Shadow Mode 接线，#87）：`DefaultEpisodeBuilder` 已包级导出；流水线侧接线见
 > `runtime/pipeline.py`——`memory.enabled + memory.episodic_shadow` 同时为真时，每次访客离场
 > 经 `project_episode` 投影为 `EpisodicRecord` 写入 `InMemoryStore`（Shadow Mode：只记录、
 > 不接决策、不产 Warning）。默认 `episodic_shadow=false`，与 Snapshot Recovery 相互独立。

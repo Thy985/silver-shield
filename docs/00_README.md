@@ -52,7 +52,17 @@
 | ADR-0021 | [`ADR/0021-realtime-riskstream-concrete-design.md`](ADR/0021-realtime-riskstream-concrete-design.md) | **具体设计（Phase 1）**：Reality→State→Signal→Decision 四层 + `BehaviorState`/`RiskSignal`/`RealTimeRiskEvaluator`/adapter |
 | ADR-0022 | [`ADR/0022-evidence-chain-multimodal-interface.md`](ADR/0022-evidence-chain-multimodal-interface.md) | **具体设计（Phase 2）**：`EvidenceItem`(类型化证据) + `EvidenceAggregator`(只整理不重推) + `WarningEvent.evidence_items` |
 | ADR-0023 | [`ADR/0023-identity-continuity-system.md`](ADR/0023-identity-continuity-system.md) | **具体设计（Phase 4）**：track_id/visitor_instance_id/person_identity_id 三层 + `IdentityResolver`（v1 不冒充真实身份） |
-| ADR-0024 | [`ADR/0024-memory-architecture.md`](ADR/0024-memory-architecture.md) | **具体设计（Phase 4-5）**：三类记忆模型（Short-term / Episodic / Semantic）+ Memory Policy 转换边界 + Episode Builder + 不变量 I1–I4 + Trust Layer + Snapshot 原则；Slices 1–5 已合入 main |
+| ADR-0024 | [`ADR/0024-memory-architecture.md`](ADR/0024-memory-architecture.md) | **具体设计（Phase 4-5）**：三类记忆模型（Short-term / Episodic / Semantic）+ Memory Policy 转换边界 + Episode Builder + 不变量 I1–I4 + Trust Layer + Snapshot 原则；Slices 1–6 + Stage F + Integration Closure（B/C/A/D）已合入 main；详见 `08_roadmap.md` §8.5 |
+
+### Memory 模块文档（Integration Closure 产出）
+
+| 文档 | 文件 | 职责 |
+| --- | --- | --- |
+| Memory 架构说明 | [`MEMORY_ARCHITECTURE.md`](MEMORY_ARCHITECTURE.md) | 模块地图 + runtime 接线图 + 访客生命周期 + 接线契约（门控/输入/输出/失败隔离）+ 领域对象 + Decision–Memory 边界守护 |
+| Memory 运维手册 | [`MEMORY_OPERATION_GUIDE.md`](MEMORY_OPERATION_GUIDE.md) | 开关（memory.enabled / episodic_shadow）/ 冷启动恢复 / 失败隔离语义 / 已知限制 / 边界守护 |
+| Memory 测试报告 | [`MEMORY_TEST_REPORT.md`](MEMORY_TEST_REPORT.md) | 测试矩阵（模块内 + E2E 4 类 + Slice B + Slice C）+ 回放稳定性 + 信息损失评估 + Product Closure 验收样例 |
+| Memory 集成收口设计 | [`DESIGN-memory-integration-closure.md`](DESIGN-memory-integration-closure.md) | System × Memory 外部闭环设计（B→C→A→D）+ `compose_context` V0 边界冻结 + 历史差距表 |
+| 未来 Observation 契约 | [`DESIGN-observation-contract.md`](DESIGN-observation-contract.md) | 模态无关 `Observation` 协议 + Multimodal Evidence Fusion 接入（本阶段不改代码） |
 
 ### 开发手册（跨项目原则沉淀）
 
