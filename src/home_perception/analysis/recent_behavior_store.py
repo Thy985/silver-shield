@@ -21,12 +21,14 @@
 > `snapshot()` 是 Stage C 新增的**持久化导出**方法（返回 `List[RecentBehaviorSnapshot]`）。
 > 两者同名会冲突，故查询方法更名为 `query_window`（签名不变，历史测试同步改名）。
 """
+
 from __future__ import annotations
 
 import types
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping
+from typing import TYPE_CHECKING, Any
 
 from ..common.timeutil import require_utc
 
@@ -42,7 +44,7 @@ class BehaviorHistory:
     - `last_seen_at`：上次见到该 visitor 的时刻（新增；用于离场判定 / 恢复过滤）
     """
 
-    enter_times: List[datetime]
+    enter_times: list[datetime]
     last_seen_at: datetime
 
 
@@ -55,7 +57,7 @@ class RecentBehaviorStore:
 
     def __init__(self) -> None:
         # visitor_instance_id -> BehaviorHistory（含 enter_times + last_seen_at）
-        self._entries: Dict[str, BehaviorHistory] = {}
+        self._entries: dict[str, BehaviorHistory] = {}
 
     def update(
         self,
@@ -129,7 +131,7 @@ class RecentBehaviorStore:
         in_window = [t for t in bucket if t >= cutoff]
         return types.MappingProxyType({"visits_in_window": len(in_window)})
 
-    def snapshot(self) -> List["RecentBehaviorSnapshot"]:
+    def snapshot(self) -> list[RecentBehaviorSnapshot]:
         """导出当前 `_entries` 为可持久化快照（ADR-0024 Slice 3 Stage C）。
 
         返回 `List[RecentBehaviorSnapshot]`，供 `SnapshotStore` 写入 JSON。
@@ -148,7 +150,7 @@ class RecentBehaviorStore:
 
     def restore(
         self,
-        snapshots: List["RecentBehaviorSnapshot"],
+        snapshots: list[RecentBehaviorSnapshot],
         now: datetime,
     ) -> None:
         """从快照恢复 `_entries`（ADR-0024 Slice 3 Stage E）。
@@ -160,7 +162,7 @@ class RecentBehaviorStore:
         require_utc(now, "now")
         self._entries.clear()
         for snap in snapshots:
-            last_seen = snap.last_seen_at if snap.last_seen_at <= now else now
+            last_seen = min(snap.last_seen_at, now)
             self._entries[snap.visitor_instance_id] = BehaviorHistory(
                 enter_times=list(snap.enter_times),
                 last_seen_at=last_seen,

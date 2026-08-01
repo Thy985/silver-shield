@@ -9,11 +9,12 @@
 > - I1 幂等 → 同 signal 重复投递 3 次，产出 record_id 一致
 > - I4 可解释 → source_event_ids 非空
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from home_perception.analysis.behavior_state import BehaviorState, BehaviorPhase
+from home_perception.analysis.behavior_state import BehaviorPhase, BehaviorState
 from home_perception.analysis.risk_signal import (
     RiskSignal,
     SignalCategory,
@@ -24,8 +25,8 @@ from home_perception.analysis.risk_signal import (
 from home_perception.memory import DefaultShortTermPolicy, ShortTermRecord
 
 # 共用时间基线（UTC）
-T0 = datetime(2026, 7, 28, 18, 30, 0, tzinfo=timezone.utc)
-T1 = T0 + timedelta(seconds=60)   # RAISED 时刻
+T0 = datetime(2026, 7, 28, 18, 30, 0, tzinfo=UTC)
+T1 = T0 + timedelta(seconds=60)  # RAISED 时刻
 T2 = T0 + timedelta(seconds=300)  # 周期快照时刻
 T3 = T0 + timedelta(seconds=600)  # CLEARED 时刻
 
@@ -37,6 +38,7 @@ SIGNAL_ID_CLEARED = "00000000-0000-0000-0000-000000000002"
 # ---------------------------------------------------------------------------
 # 工厂
 # ---------------------------------------------------------------------------
+
 
 def _make_state(first_seen=T0, last_seen=T1, dwell=60.0) -> BehaviorState:
     """构造 BehaviorState（phase=ONGOING）。"""
@@ -79,6 +81,7 @@ def _make_signal(
 # 验收 1：RAISED → ShortTermRecord(phase=active_risk)
 # ---------------------------------------------------------------------------
 
+
 class TestRaised:
     def test_raised_produces_active_risk_record(self):
         state = _make_state()
@@ -107,6 +110,7 @@ class TestRaised:
 # ---------------------------------------------------------------------------
 # 验收 2：CLEARED → 更新 record，phase=none
 # ---------------------------------------------------------------------------
+
 
 class TestCleared:
     def test_cleared_with_current_record_inherits_raised_at(self):
@@ -143,13 +147,18 @@ class TestCleared:
         """CLEARED 写入触发，source_event_ids 是 CLEARED 的 signal_id。"""
         state = _make_state()
         signal = _make_signal(
-            SignalTransition.CLEARED, SIGNAL_ID_CLEARED,
+            SignalTransition.CLEARED,
+            SIGNAL_ID_CLEARED,
             paired_signal_id=SIGNAL_ID_RAISED,
         )
         current = ShortTermRecord(
-            record_id=f"st-{VISITOR_ID}", visitor_instance_id=VISITOR_ID,
-            phase="active_risk", first_seen=T0, last_seen_at=T1,
-            source_event_ids=[SIGNAL_ID_RAISED], raised_signal_id=SIGNAL_ID_RAISED,
+            record_id=f"st-{VISITOR_ID}",
+            visitor_instance_id=VISITOR_ID,
+            phase="active_risk",
+            first_seen=T0,
+            last_seen_at=T1,
+            source_event_ids=[SIGNAL_ID_RAISED],
+            raised_signal_id=SIGNAL_ID_RAISED,
             raised_at=T1,
         )
         rec = DefaultShortTermPolicy().transform_short_term(state, signal, current)
@@ -161,6 +170,7 @@ class TestCleared:
 # 验收 3：同一 visitor_instance_id 多次 RAISED → record_id 一致（幂等键稳定）
 # ---------------------------------------------------------------------------
 
+
 class TestIdempotentKey:
     def test_same_visitor_same_record_id_across_transitions(self):
         """同一 visitor 多次跃迁，record_id 恒为 st-{visitor_id}。"""
@@ -171,8 +181,10 @@ class TestIdempotentKey:
 
         state2 = _make_state(last_seen=T3)
         signal2 = _make_signal(
-            SignalTransition.CLEARED, SIGNAL_ID_CLEARED,
-            paired_signal_id=SIGNAL_ID_RAISED, created_at=T3,
+            SignalTransition.CLEARED,
+            SIGNAL_ID_CLEARED,
+            paired_signal_id=SIGNAL_ID_RAISED,
+            created_at=T3,
         )
         rec2 = policy.transform_short_term(state2, signal2, rec1)
 
@@ -182,6 +194,7 @@ class TestIdempotentKey:
 # ---------------------------------------------------------------------------
 # 验收 4：周期快照触发 → 覆写当前 record，不新增
 # ---------------------------------------------------------------------------
+
 
 class TestPeriodicSnapshot:
     def test_snapshot_updates_last_seen_keeps_phase(self):
@@ -193,9 +206,7 @@ class TestPeriodicSnapshot:
         )
         # 周期快照：30s 后，state 推进
         snapshot_state = _make_state(last_seen=T2, dwell=120.0)
-        rec = DefaultShortTermPolicy().transform_short_term(
-            snapshot_state, None, raised
-        )
+        rec = DefaultShortTermPolicy().transform_short_term(snapshot_state, None, raised)
         assert rec is not None
         # record_id 不变（不新增）
         assert rec.record_id == raised.record_id
@@ -212,6 +223,7 @@ class TestPeriodicSnapshot:
 # ---------------------------------------------------------------------------
 # 验收 5：无跃迁时不写
 # ---------------------------------------------------------------------------
+
 
 class TestNoTransitionNoWrite:
     def test_no_transition_no_current_returns_none(self):
@@ -230,6 +242,7 @@ class TestNoTransitionNoWrite:
 # 验收 6：I1 幂等 → 同 signal 重复投递 3 次，产出 record_id 一致
 # ---------------------------------------------------------------------------
 
+
 class TestI1Idempotency:
     def test_same_signal_repeated_produces_same_record(self):
         """同 signal_id 重复 3 次，产出 record_id 一致（I1 幂等性前置）。"""
@@ -243,6 +256,7 @@ class TestI1Idempotency:
         assert rec1.record_id == rec2.record_id == rec3.record_id
         # 内容一致（除 created_at）
         from home_perception.memory.records import records_equal
+
         assert records_equal(rec1, rec2)
         assert records_equal(rec2, rec3)
 
@@ -250,6 +264,7 @@ class TestI1Idempotency:
 # ---------------------------------------------------------------------------
 # 验收 7：I4 可解释 → source_event_ids 非空
 # ---------------------------------------------------------------------------
+
 
 class TestI4Explainability:
     def test_raised_source_event_ids_non_empty(self):
@@ -262,15 +277,20 @@ class TestI4Explainability:
 
     def test_cleared_source_event_ids_non_empty(self):
         current = ShortTermRecord(
-            record_id=f"st-{VISITOR_ID}", visitor_instance_id=VISITOR_ID,
-            phase="active_risk", first_seen=T0, last_seen_at=T1,
-            source_event_ids=[SIGNAL_ID_RAISED], raised_signal_id=SIGNAL_ID_RAISED,
+            record_id=f"st-{VISITOR_ID}",
+            visitor_instance_id=VISITOR_ID,
+            phase="active_risk",
+            first_seen=T0,
+            last_seen_at=T1,
+            source_event_ids=[SIGNAL_ID_RAISED],
+            raised_signal_id=SIGNAL_ID_RAISED,
             raised_at=T1,
         )
         rec = DefaultShortTermPolicy().transform_short_term(
             _make_state(),
-            _make_signal(SignalTransition.CLEARED, SIGNAL_ID_CLEARED,
-                          paired_signal_id=SIGNAL_ID_RAISED),
+            _make_signal(
+                SignalTransition.CLEARED, SIGNAL_ID_CLEARED, paired_signal_id=SIGNAL_ID_RAISED
+            ),
             current,
         )
         assert rec is not None
@@ -281,19 +301,29 @@ class TestI4Explainability:
 # 边界场景
 # ---------------------------------------------------------------------------
 
+
 class TestEdgeCases:
     def test_visitor_id_missing_returns_none(self):
         """visitor_instance_id 缺失 → 返回 None（无法构造幂等键）。"""
         # state 无 visitor_id, transition 无 visitor_id, current_record None
         state = BehaviorState(
-            track_id=1, visitor_instance_id="", phase=BehaviorPhase.ONGOING,
-            first_seen=T0, last_seen=T1, dwell_seconds=60.0, is_odd_hour=True,
+            track_id=1,
+            visitor_instance_id="",
+            phase=BehaviorPhase.ONGOING,
+            first_seen=T0,
+            last_seen=T1,
+            dwell_seconds=60.0,
+            is_odd_hour=True,
         )
         signal = RiskSignal(
-            signal_id=SIGNAL_ID_RAISED, subject_type=SubjectType.VISITOR,
-            subject_id="", category=SignalCategory.BEHAVIORAL,
-            source=SourceModality.VISION, transition=SignalTransition.RAISED,
-            features={}, visitor_instance_id=None,
+            signal_id=SIGNAL_ID_RAISED,
+            subject_type=SubjectType.VISITOR,
+            subject_id="",
+            category=SignalCategory.BEHAVIORAL,
+            source=SourceModality.VISION,
+            transition=SignalTransition.RAISED,
+            features={},
+            visitor_instance_id=None,
         )
         rec = DefaultShortTermPolicy().transform_short_term(state, signal, None)
         assert rec is None
@@ -302,7 +332,8 @@ class TestEdgeCases:
         """CLEARED 但无 current_record → raised_at=None（无法继承）。"""
         state = _make_state()
         signal = _make_signal(
-            SignalTransition.CLEARED, SIGNAL_ID_CLEARED,
+            SignalTransition.CLEARED,
+            SIGNAL_ID_CLEARED,
             paired_signal_id=SIGNAL_ID_RAISED,
         )
         rec = DefaultShortTermPolicy().transform_short_term(state, signal, None)
@@ -320,16 +351,18 @@ class TestEdgeCases:
     def test_cleared_unpaired_uses_current_raised_signal_id(self):
         """CLEARED 无 paired_signal_id → 从 current_record.raised_signal_id 继承。"""
         current = ShortTermRecord(
-            record_id=f"st-{VISITOR_ID}", visitor_instance_id=VISITOR_ID,
-            phase="active_risk", first_seen=T0, last_seen_at=T1,
-            source_event_ids=[SIGNAL_ID_RAISED], raised_signal_id=SIGNAL_ID_RAISED,
+            record_id=f"st-{VISITOR_ID}",
+            visitor_instance_id=VISITOR_ID,
+            phase="active_risk",
+            first_seen=T0,
+            last_seen_at=T1,
+            source_event_ids=[SIGNAL_ID_RAISED],
+            raised_signal_id=SIGNAL_ID_RAISED,
             raised_at=T1,
         )
         # CLEARED 无 paired_signal_id
         signal = _make_signal(SignalTransition.CLEARED, SIGNAL_ID_CLEARED)
-        rec = DefaultShortTermPolicy().transform_short_term(
-            _make_state(), signal, current
-        )
+        rec = DefaultShortTermPolicy().transform_short_term(_make_state(), signal, current)
         assert rec is not None
         assert rec.raised_signal_id == SIGNAL_ID_RAISED  # 从 current 继承
 
@@ -337,6 +370,7 @@ class TestEdgeCases:
 # ---------------------------------------------------------------------------
 # 占位方法验证（v1 不实现，return None）
 # ---------------------------------------------------------------------------
+
 
 class TestPlaceholders:
     def test_project_episode_returns_none(self):
@@ -351,6 +385,7 @@ class TestPlaceholders:
 # ---------------------------------------------------------------------------
 # 纯函数语义验证
 # ---------------------------------------------------------------------------
+
 
 class TestPureFunction:
     def test_does_not_modify_inputs(self):

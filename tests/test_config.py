@@ -1,4 +1,5 @@
 """配置加载契约测试。"""
+
 from home_perception.core.config import ImgszProfile, Settings
 
 

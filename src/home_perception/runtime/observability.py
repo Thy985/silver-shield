@@ -6,10 +6,11 @@
 `PipelineMetrics` 在流水线每帧处理后累加计数，供 Demo 结束时的汇总报告与
 健康检查使用。所有字段可被 structlog 安全序列化（`snapshot()` 返回纯 dict）。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any
 
 from ..common.timeutil import now_ts
 
@@ -33,9 +34,9 @@ class PipelineMetrics:
     commands: int = 0
     episodes_recorded: int = 0  # ADR-0024 Slice 5 · Stage F 影子写入落库计数
     errors: int = 0
-    perception_by_type: Dict[str, int] = field(default_factory=dict)
-    warnings_by_level: Dict[str, int] = field(default_factory=dict)
-    commands_by_type: Dict[str, int] = field(default_factory=dict)
+    perception_by_type: dict[str, int] = field(default_factory=dict)
+    warnings_by_level: dict[str, int] = field(default_factory=dict)
+    commands_by_type: dict[str, int] = field(default_factory=dict)
     started_at: float = 0.0
     ended_at: float = 0.0
 
@@ -68,7 +69,7 @@ class PipelineMetrics:
         """Stage F：一次 EpisodicRecord 成功落 InMemoryStore。"""
         self.episodes_recorded += 1
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         """structlog-safe 纯 dict 快照（无 datetime 对象 / 无 numpy 类型）。"""
         return {
             "frames_processed": self.frames_processed,

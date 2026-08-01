@@ -1,20 +1,23 @@
 """InMemoryStore 测试（ADR-0024 Slice 5 · Episodic Storage）。"""
+
 from __future__ import annotations
 
 import uuid
 from dataclasses import replace
+from datetime import UTC
 
 import pytest
 
 from home_perception.analysis.event import VisitorEvent
 from home_perception.memory.episode_builder import DefaultEpisodeBuilder
-from home_perception.memory.store import InMemoryStore, InvariantViolationError
 from home_perception.memory.records import ShortTermRecord
+from home_perception.memory.store import InMemoryStore, InvariantViolationError
 
 
 def utc(*args):
-    from datetime import datetime, timezone
-    return datetime(*args, tzinfo=timezone.utc)
+    from datetime import datetime
+
+    return datetime(*args, tzinfo=UTC)
 
 
 def make_visitor(vid=None, enter=None, leave=None, dur=180.0):
@@ -91,10 +94,22 @@ def test_short_term_upsert():
     """Short-term 存储：可覆盖。"""
     store = InMemoryStore()
     t = utc(2026, 1, 1)
-    rec1 = ShortTermRecord(record_id="st-v1", visitor_instance_id="v1", phase="none",
-                           first_seen=t, last_seen_at=t, source_event_ids=["s1"])
-    rec2 = ShortTermRecord(record_id="st-v1", visitor_instance_id="v1", phase="none",
-                           first_seen=t, last_seen_at=t, source_event_ids=["s2"])
+    rec1 = ShortTermRecord(
+        record_id="st-v1",
+        visitor_instance_id="v1",
+        phase="none",
+        first_seen=t,
+        last_seen_at=t,
+        source_event_ids=["s1"],
+    )
+    rec2 = ShortTermRecord(
+        record_id="st-v1",
+        visitor_instance_id="v1",
+        phase="none",
+        first_seen=t,
+        last_seen_at=t,
+        source_event_ids=["s2"],
+    )
     assert store.upsert_short_term(rec1) is True
     assert store.upsert_short_term(rec2) is False  # 已存在则覆盖  # 同 record_id 覆盖
     assert store._short_term["st-v1"].source_event_ids == ["s2"]

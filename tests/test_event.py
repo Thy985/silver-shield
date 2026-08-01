@@ -6,12 +6,13 @@
 > - `visitor_id` 是 UUID 而非 ByteTrack `track_id`（track_id 是 Tracker 内部 ID，程序重启/视频切换后可能复用）
 > - 所有时间字段为 UTC（timezone-aware）
 """
+
 from __future__ import annotations
 
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
@@ -22,19 +23,20 @@ from home_perception.detection.detector import Detection, DetectionResult, Detec
 from home_perception.detection.schemas import ACTIVE
 from home_perception.detection.tracker import VisitorTracker
 
-
 # ============================================================================
 # 时区 helper：所有时间字段统一 UTC，避免 naive 漏标
 # ============================================================================
 
+
 def utc(year, month, day, hour=0, minute=0, second=0):
     """构造 timezone-aware UTC datetime。"""
-    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
 
 
 # ============================================================================
 # FakeDetector：复用 P0-5 的契约
 # ============================================================================
+
 
 class FakeDetector(Detector):
     """按预设 (track_ids, ts) 序列产出 DetectionResult。"""
@@ -51,30 +53,41 @@ class FakeDetector(Detector):
         self._i += 1
         dets = [
             Detection(
-                class_id=0, class_name="person", confidence=0.9,
-                bbox=[0.0, 0.0, 10.0, 10.0], timestamp=ts, track_id=tid,
+                class_id=0,
+                class_name="person",
+                confidence=0.9,
+                bbox=[0.0, 0.0, 10.0, 10.0],
+                timestamp=ts,
+                track_id=tid,
             )
             for tid in ids
         ]
         return DetectionResult(
-            detections=dets, timestamp=ts, inference_ms=1.0,
-            source_size=(100, 100), inference_size=(100, 100), model="fake",
+            detections=dets,
+            timestamp=ts,
+            inference_ms=1.0,
+            source_size=(100, 100),
+            inference_size=(100, 100),
+            model="fake",
         )
 
 
 def _fixed_now(seq):
     it = iter(seq)
+
     def _now():
         try:
             return next(it)
         except StopIteration:
             return utc(2000, 1, 1)
+
     return _now
 
 
 # ============================================================================
 # VisitorEvent 领域对象
 # ============================================================================
+
 
 class TestVisitorEventSchema:
     """VisitorEvent 字段、序列化、边界。"""
@@ -83,7 +96,9 @@ class TestVisitorEventSchema:
         t0 = utc(2026, 7, 19, 10, 0, 0)
         t1 = utc(2026, 7, 19, 10, 0, 8)
         e = VisitorEvent(
-            visitor_id=uuid.uuid4(), enter_time=t0, leave_time=t1,
+            visitor_id=uuid.uuid4(),
+            enter_time=t0,
+            leave_time=t1,
             duration_seconds=(t1 - t0).total_seconds(),
             source_video="OneStopEnter1cor",
         )
@@ -105,7 +120,8 @@ class TestVisitorEventSchema:
             visitor_id=uuid.uuid4(),
             enter_time=utc(2026, 7, 19, 10, 0, 0),
             leave_time=utc(2026, 7, 19, 10, 0, 5),
-            duration_seconds=5.0, source_video="cam01",
+            duration_seconds=5.0,
+            source_video="cam01",
         )
         d = e.to_dict()
         for v in d.values():
@@ -123,7 +139,8 @@ class TestVisitorEventSchema:
             visitor_id=uuid.uuid4(),
             enter_time=utc(2026, 7, 19, 10, 0, 0),
             leave_time=utc(2026, 7, 19, 10, 0, 12),
-            duration_seconds=12.0, source_video="CAVIAR/OneStopEnter1cor",
+            duration_seconds=12.0,
+            source_video="CAVIAR/OneStopEnter1cor",
         )
         j = e.to_json()
         parsed = json.loads(j)
@@ -184,7 +201,7 @@ class TestVisitorEventSchema:
         with pytest.raises(ValueError, match="enter_time"):
             VisitorEvent(
                 visitor_id=uuid.uuid4(),
-                enter_time=datetime(2026, 7, 19, 10, 0, 0),  # 无 tzinfo
+                enter_time=datetime(2026, 7, 19, 10, 0, 0),  # noqa: DTZ001 (naive test)
                 leave_time=utc(2026, 7, 19, 10, 0, 5),
                 duration_seconds=5.0,
             )
@@ -193,7 +210,7 @@ class TestVisitorEventSchema:
             VisitorEvent(
                 visitor_id=uuid.uuid4(),
                 enter_time=utc(2026, 7, 19, 10, 0, 0),
-                leave_time=datetime(2026, 7, 19, 10, 0, 5),
+                leave_time=datetime(2026, 7, 19, 10, 0, 5),  # noqa: DTZ001 (naive test)
                 duration_seconds=5.0,
             )
 
@@ -203,24 +220,32 @@ class TestVisitorEventSchema:
             visitor_id=uuid.uuid4(),
             enter_time=utc(2026, 7, 19, 10, 0, 0),
             leave_time=utc(2026, 7, 19, 10, 0, 5),
-            duration_seconds=5.0, source_video="cam01",
+            duration_seconds=5.0,
+            source_video="cam01",
         )
         d = e.to_dict()
         forbidden = {
-            "risk_level", "score", "visit_type", "is_suspicious",
-            "repeat_count", "is_odd_hour", "evidence", "event_type",
-            "warning", "verdict",
+            "risk_level",
+            "score",
+            "visit_type",
+            "is_suspicious",
+            "repeat_count",
+            "is_odd_hour",
+            "evidence",
+            "event_type",
+            "warning",
+            "verdict",
         }
         leaked = forbidden & set(d.keys())
         assert not leaked, (
-            f"VisitorEvent 含业务判断字段 {leaked}（P0-7 边界）。"
-            f"实际字段集: {set(d.keys())}"
+            f"VisitorEvent 含业务判断字段 {leaked}（P0-7 边界）。实际字段集: {set(d.keys())}"
         )
 
 
 # ============================================================================
 # VisitorEventBuilder
 # ============================================================================
+
 
 class TestVisitorEventBuilder:
     """Builder 状态机：track active→left 生成事件；reenter 允许再生成。"""
@@ -234,17 +259,26 @@ class TestVisitorEventBuilder:
             utc(2026, 7, 19, 10, 0, 8),
             utc(2026, 7, 19, 10, 0, 14),
         ]
-        det = FakeDetector([
-            ([1], 0.0), ([1], 1.0), ([1], 2.0),
-            ([],  8.0), ([], 14.0),
-        ])
+        det = FakeDetector(
+            [
+                ([1], 0.0),
+                ([1], 1.0),
+                ([1], 2.0),
+                ([], 8.0),
+                ([], 14.0),
+            ]
+        )
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="OneStopEnter1cor", now_provider=_fixed_now(times),
+            tracker,
+            source_video="OneStopEnter1cor",
+            now_provider=_fixed_now(times),
         )
         new_events = []
         for _ in range(5):
-            new_events.extend(builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections))
+            new_events.extend(
+                builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
+            )
         assert len(new_events) == 1
         e = new_events[0]
         assert isinstance(e.visitor_id, uuid.UUID)
@@ -261,16 +295,25 @@ class TestVisitorEventBuilder:
             utc(2026, 7, 19, 10, 0, 20),
             utc(2026, 7, 19, 10, 0, 30),
         ]
-        det = FakeDetector([
-            ([1], 0.0), ([], 10.0), ([], 20.0), ([], 30.0),
-        ])
+        det = FakeDetector(
+            [
+                ([1], 0.0),
+                ([], 10.0),
+                ([], 20.0),
+                ([], 30.0),
+            ]
+        )
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         all_new = []
         for _ in range(4):
-            all_new.extend(builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections))
+            all_new.extend(
+                builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
+            )
         assert len(all_new) == 1
         assert len(builder.events) == 1
 
@@ -284,17 +327,27 @@ class TestVisitorEventBuilder:
             utc(2026, 7, 19, 10, 0, 4),
             utc(2026, 7, 19, 10, 0, 5),
         ]
-        det = FakeDetector([
-            ([1], 0.0), ([], 1.0), ([], 2.0), ([], 3.0),
-            ([1], 4.0), ([1], 5.0),
-        ])
+        det = FakeDetector(
+            [
+                ([1], 0.0),
+                ([], 1.0),
+                ([], 2.0),
+                ([], 3.0),
+                ([1], 4.0),
+                ([1], 5.0),
+            ]
+        )
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         all_new = []
         for _ in range(6):
-            all_new.extend(builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections))
+            all_new.extend(
+                builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
+            )
         assert all_new == []
         assert builder.events == []
         assert tracker.get(1).status == ACTIVE
@@ -309,17 +362,27 @@ class TestVisitorEventBuilder:
             utc(2026, 7, 19, 10, 0, 25),
             utc(2026, 7, 19, 10, 0, 35),
         ]
-        det = FakeDetector([
-            ([1], 0.0), ([1], 1.0), ([], 10.0),
-            ([1], 20.0), ([1], 25.0), ([], 35.0),
-        ])
+        det = FakeDetector(
+            [
+                ([1], 0.0),
+                ([1], 1.0),
+                ([], 10.0),
+                ([1], 20.0),
+                ([1], 25.0),
+                ([], 35.0),
+            ]
+        )
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         all_new = []
         for _ in range(6):
-            all_new.extend(builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections))
+            all_new.extend(
+                builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
+            )
         assert len(all_new) == 2
         # reenter 复用同 UUID（**关键**：visitor_id 是 UUID 而非 track_id）
         assert all_new[0].visitor_id == all_new[1].visitor_id, (
@@ -345,16 +408,25 @@ class TestVisitorEventBuilder:
             utc(2026, 7, 19, 10, 0, 2),
             utc(2026, 7, 19, 10, 0, 8),
         ]
-        det = FakeDetector([
-            ([1, 2], 0.0), ([1], 1.0), ([1], 2.0), ([], 8.0),
-        ])
+        det = FakeDetector(
+            [
+                ([1, 2], 0.0),
+                ([1], 1.0),
+                ([1], 2.0),
+                ([], 8.0),
+            ]
+        )
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         all_new = []
         for _ in range(4):
-            all_new.extend(builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections))
+            all_new.extend(
+                builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
+            )
         assert len(all_new) == 2
         # 跨 track_id 分配不同 UUID
         assert all_new[0].visitor_id != all_new[1].visitor_id, (
@@ -382,19 +454,30 @@ class TestVisitorEventBuilder:
             utc(2026, 7, 19, 10, 0, 20),
             utc(2026, 7, 19, 10, 0, 30),
         ]
-        det = FakeDetector([
-            ([1], 0.0), ([], 10.0), ([2], 20.0), ([], 30.0),
-        ])
+        det = FakeDetector(
+            [
+                ([1], 0.0),
+                ([], 10.0),
+                ([2], 20.0),
+                ([], 30.0),
+            ]
+        )
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         all_new = []
         for _ in range(2):
-            all_new.extend(builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections))
+            all_new.extend(
+                builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
+            )
         builder.source_video = "cam02"
         for _ in range(2):
-            all_new.extend(builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections))
+            all_new.extend(
+                builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
+            )
         assert len(all_new) == 2
         assert all_new[0].source_video == "cam01"
         assert all_new[1].source_video == "cam02"
@@ -408,7 +491,9 @@ class TestVisitorEventBuilder:
         det = FakeDetector([([1], 0.0), ([], 10.0)])
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         for _ in range(2):
             builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
@@ -429,7 +514,9 @@ class TestVisitorEventBuilder:
         det = FakeDetector([([1], 0.0), ([], 10.0), ([1], 60.0), ([], 70.0)])
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         for _ in range(2):
             builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
@@ -458,12 +545,16 @@ class TestVisitorIdUUIDBoundary:
         det = FakeDetector([([1], 0.0), ([1], 1.0)])
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
         v_id = builder.visitor_id_for(1)
         assert v_id is not None
-        assert isinstance(v_id, uuid.UUID), f"visitor_id 必须是 UUID 实例，收到 {type(v_id).__name__}"
+        assert isinstance(v_id, uuid.UUID), (
+            f"visitor_id 必须是 UUID 实例，收到 {type(v_id).__name__}"
+        )
         # 显式断言：不是 int track_id
         assert not isinstance(v_id, int)
 
@@ -473,7 +564,9 @@ class TestVisitorIdUUIDBoundary:
         det = FakeDetector([([0], 0.0)])  # 模拟重启后 track_id=0
         tracker = VisitorTracker(absence_gap_s=5.0, now_provider=_fixed_now(times))
         builder = VisitorEventBuilder(
-            tracker, source_video="cam01", now_provider=_fixed_now(times),
+            tracker,
+            source_video="cam01",
+            now_provider=_fixed_now(times),
         )
         # 第一次会话：track_id=0
         builder.update(det.detect(np.zeros((10, 10, 3), dtype=np.uint8)).detections)
@@ -484,8 +577,7 @@ class TestVisitorIdUUIDBoundary:
         second_uuid = builder.visitor_id_for(0)
         # **关键**：同 track_id=0 在新会话应是不同 UUID
         assert first_uuid != second_uuid, (
-            "ByteTrack 重启后 track_id 可能复用，UUID 必须重分配，"
-            "否则中心侧会去重到错误的人"
+            "ByteTrack 重启后 track_id 可能复用，UUID 必须重分配，否则中心侧会去重到错误的人"
         )
 
 
@@ -507,8 +599,9 @@ def test_caviar_one_stop_enter_generates_visitor_event():
     5. visitor_id 是 UUID（**关键**：不是 ByteTrack track_id）
     """
     pytest.importorskip("ultralytics")
-    import cv2
     from pathlib import Path
+
+    import cv2
 
     p = Path(CAVIAR_ONE_STOP_ENTER)
     if not p.is_dir() or not list(p.glob("frame_*.jpg")):
@@ -525,9 +618,13 @@ def test_caviar_one_stop_enter_generates_visitor_event():
         pytest.skip("CAVIAR frames 解析失败")
 
     det = YOLODetector(
-        model="yolo11n.pt", conf_threshold=0.25,
-        classes=[0], imgsz=416, device="cpu",
-        enable_track=True, tracker="bytetrack",
+        model="yolo11n.pt",
+        conf_threshold=0.25,
+        classes=[0],
+        imgsz=416,
+        device="cpu",
+        enable_track=True,
+        tracker="bytetrack",
     ).load()
     tracker = VisitorTracker(absence_gap_s=5.0)
     builder = VisitorEventBuilder(tracker, source_video="CAVIAR/OneStopEnter1cor")

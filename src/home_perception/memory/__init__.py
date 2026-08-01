@@ -21,19 +21,23 @@
 > **边界铁律**（ADR-0024 §3.2.2）：Memory Policy 只做 ObservationStream → MemoryRecord
 > 的确定性投影，不参与风险判定 / 行动决策 / LLM 推理。
 """
+
 from __future__ import annotations
 
+from .cold_start import ColdStartConfidence, ColdStartCoordinator, RecoveryResult
+from .episode_builder import DefaultEpisodeBuilder
+from .policy import MemoryPolicy
+from .query import MemoryQuery
 from .records import (
     ActionSummary,
-    EvidenceRef,
     EpisodicRecord,
+    EvidenceRef,
     MemoryStatus,
     RecordIdPrefix,
     SemanticAggregate,
     ShortTermRecord,
     VisitorPresenceStatus,
 )
-from .policy import MemoryPolicy
 from .short_term_policy import DefaultShortTermPolicy
 from .snapshot import (
     ActiveTrackSnapshot,
@@ -41,9 +45,6 @@ from .snapshot import (
     RuntimeSnapshot,
     SnapshotStore,
 )
-from .cold_start import ColdStartConfidence, ColdStartCoordinator, RecoveryResult
-from .episode_builder import DefaultEpisodeBuilder
-from .query import MemoryQuery
 
 __all__ = [
     "ActionSummary",
@@ -52,8 +53,8 @@ __all__ = [
     "ColdStartCoordinator",
     "DefaultEpisodeBuilder",
     "DefaultShortTermPolicy",
-    "EvidenceRef",
     "EpisodicRecord",
+    "EvidenceRef",
     "MemoryPolicy",
     "MemoryQuery",
     "MemoryStatus",
@@ -67,4 +68,5 @@ __all__ = [
     "VisitorPresenceStatus",
 ]
 from .store import InMemoryStore, InvariantViolationError, MemoryStore
+
 __all__ += ["InMemoryStore", "InvariantViolationError", "MemoryStore"]

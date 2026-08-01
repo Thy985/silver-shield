@@ -19,12 +19,12 @@
 3. **confidence 单调上升**：STALE(0.5) → 新帧检测到同一 visitor → 评估器置 1.0；不允许下降。
 4. 恢复后 `evict_expired()` 双保险一次，清理残留过期条目。
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional
 
 from ..analysis.realtime_risk_evaluator import RealTimeRiskEvaluator
 from ..analysis.recent_behavior_store import RecentBehaviorStore
@@ -49,7 +49,7 @@ class RecoveryResult:
     reason: str  # snapshot_loaded_fresh / snapshot_loaded_stale / snapshot_missing
     restored_tracks: int
     restored_visitors: int
-    snapshot_age_seconds: Optional[float]
+    snapshot_age_seconds: float | None
 
     def as_log_fields(self) -> dict:
         """展开为 structlog 友好的扁平字段。"""

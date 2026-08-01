@@ -9,18 +9,18 @@
 **不引入** `risk_level` / `visit_type` / `is_suspicious` / `repeat_count` 等业务字段
 —— 那些是 P0-7 Rule Engine 的事，混入会污染领域边界（见 ADR-0007）。
 """
+
 from __future__ import annotations
 
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Union
+from datetime import UTC, datetime
 
 
 def _utc_now() -> datetime:
     """时区感知的 UTC 当前时间（替代 deprecated `datetime.utcnow()`）。"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _new_visitor_id() -> uuid.UUID:
@@ -36,7 +36,7 @@ def _new_visitor_id() -> uuid.UUID:
 
 
 # 接受 UUID 或 str（便利：测试/手工构造可直接传 str；内部统一转 UUID）
-VisitorId = Union[uuid.UUID, str]
+VisitorId = uuid.UUID | str
 
 
 def _coerce_uuid(value: VisitorId) -> uuid.UUID:
@@ -55,8 +55,7 @@ def _require_utc(dt: datetime, field_name: str) -> None:
     """
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         raise ValueError(
-            f"{field_name} 必须是 timezone-aware datetime（建议 UTC），"
-            f"收到 naive datetime: {dt!r}"
+            f"{field_name} 必须是 timezone-aware datetime（建议 UTC），收到 naive datetime: {dt!r}"
         )
 
 
@@ -102,9 +101,7 @@ class VisitorEvent:
         _require_utc(self.created_at, "created_at")
         # 3) duration 非负
         if self.duration_seconds < 0:
-            raise ValueError(
-                f"duration_seconds 必须 >= 0，收到 {self.duration_seconds}"
-            )
+            raise ValueError(f"duration_seconds 必须 >= 0，收到 {self.duration_seconds}")
         # 4) leave >= enter（此时 enter/leave 都是 UTC timezone-aware，可比较）
         if self.leave_time < self.enter_time:
             raise ValueError(

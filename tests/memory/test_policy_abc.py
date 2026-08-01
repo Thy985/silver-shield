@@ -3,6 +3,7 @@
 > 验证 ABC 接口约束：不能直接实例化，子类必须实现全部抽象方法。
 > 不测具体实现逻辑（DefaultEpisodeBuilder 见 Slice 4）。
 """
+
 from __future__ import annotations
 
 import pytest

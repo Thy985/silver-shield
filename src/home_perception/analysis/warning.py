@@ -12,17 +12,18 @@
 - **不**直接调 MQTT / **不**直接通知家属 / **不**直接升级社区 —— 这些是 P0-9 责任
 - 字段增删按 ADR-0005 走 schema_version 评审
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _coerce_uuid(value) -> UUID:
@@ -42,9 +43,9 @@ RISK_LEVELS: tuple = ("LOW", "MEDIUM", "HIGH")
 
 # 建议动作（P0-8 只设 hint，P0-9 行动层执行）
 RECOMMENDED_ACTIONS: tuple = (
-    "MONITOR",              # 仅记录，不通知
-    "NOTIFY_FAMILY",        # 通知家属核实
-    "ESCALATE_COMMUNITY",   # 升级到社区/物业/警方
+    "MONITOR",  # 仅记录，不通知
+    "NOTIFY_FAMILY",  # 通知家属核实
+    "ESCALATE_COMMUNITY",  # 升级到社区/物业/警方
 )
 
 # 警告状态（P0-9 行动层会管理状态翻转）
@@ -57,11 +58,11 @@ RECOMMENDED_ACTIONS: tuple = (
 # 关键边界：这些状态**描述决策生命周期**，**不**描述执行结果
 # （"NOTIFY_FAMILY 已完成"不是状态，是 P0-9 行动层的内部日志）
 WARNING_STATUSES: tuple = (
-    "CREATED",      # 初始态：决策已生成
-    "PENDING",      # 已下发，等待确认
-    "CONFIRMED",    # 下游已确认
-    "RESOLVED",     # 已闭环
-    "REJECTED",     # 已拒绝/撤销
+    "CREATED",  # 初始态：决策已生成
+    "PENDING",  # 已下发，等待确认
+    "CONFIRMED",  # 下游已确认
+    "RESOLVED",  # 已闭环
+    "REJECTED",  # 已拒绝/撤销
 )
 
 
@@ -72,25 +73,28 @@ WARNING_STATUSES: tuple = (
 # WarningEvent 顶层字段 + meta 中**禁止**出现的业务判定 / 犯罪认定字段
 # （注意：trigger_events 元素是 PerceptionEvent 引用，event_type/score/timestamp
 #  是合法的引用元数据，**不**在黑名单内）
-FORBIDDEN_WARNING_FIELDS: frozenset = frozenset({
-    # === 业务判定（决策层严禁做最终判定）===
-    "fraud_result",
-    "fraud_probability",
-    "is_fraud",
-    "is_scammer",
-    "is_criminal",
-    "verdict",
-    "final_decision",
-    "crime_probability",
-    "guilt_score",
-    "arrest_probability",
-    "deception_score",
-})
+FORBIDDEN_WARNING_FIELDS: frozenset = frozenset(
+    {
+        # === 业务判定（决策层严禁做最终判定）===
+        "fraud_result",
+        "fraud_probability",
+        "is_fraud",
+        "is_scammer",
+        "is_criminal",
+        "verdict",
+        "final_decision",
+        "crime_probability",
+        "guilt_score",
+        "arrest_probability",
+        "deception_score",
+    }
+)
 
 
 # ============================================================================
 # WarningEvent
 # ============================================================================
+
 
 @dataclass
 class WarningEvent:
@@ -120,13 +124,13 @@ class WarningEvent:
     device_id: str
     risk_level: str
     recommended_action: str
-    trigger_events: List[Dict[str, Any]]
-    reason_summary: List[str]
+    trigger_events: list[dict[str, Any]]
+    reason_summary: list[str]
     warning_id: UUID = field(default_factory=uuid4)
     status: str = "CREATED"  # 默认 CREATED（决策刚生成，未下发）
     perception_score: float = 0.0
-    evidence: List[Dict[str, Any]] = field(default_factory=list)
-    meta: Dict[str, Any] = field(default_factory=dict)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=_utc_now)
 
     def __post_init__(self) -> None:
@@ -135,18 +139,14 @@ class WarningEvent:
 
         # 2) 枚举严格校验
         if self.risk_level not in RISK_LEVELS:
-            raise ValueError(
-                f"risk_level 必须是 {RISK_LEVELS} 之一，收到 {self.risk_level!r}"
-            )
+            raise ValueError(f"risk_level 必须是 {RISK_LEVELS} 之一，收到 {self.risk_level!r}")
         if self.recommended_action not in RECOMMENDED_ACTIONS:
             raise ValueError(
                 f"recommended_action 必须是 {RECOMMENDED_ACTIONS} 之一，"
                 f"收到 {self.recommended_action!r}"
             )
         if self.status not in WARNING_STATUSES:
-            raise ValueError(
-                f"status 必须是 {WARNING_STATUSES} 之一，收到 {self.status!r}"
-            )
+            raise ValueError(f"status 必须是 {WARNING_STATUSES} 之一，收到 {self.status!r}")
 
         # 3) 必填非空
         if not self.elder_id or not str(self.elder_id).strip():
@@ -160,12 +160,12 @@ class WarningEvent:
 
         # 4) 数值范围
         if not (0.0 <= self.perception_score <= 1.0):
-            raise ValueError(
-                f"perception_score 必须在 [0, 1]，收到 {self.perception_score}"
-            )
+            raise ValueError(f"perception_score 必须在 [0, 1]，收到 {self.perception_score}")
 
         # 5) UTC timezone-aware（防跨设备时间漂移）
-        if self.created_at.tzinfo is None or self.created_at.tzinfo.utcoffset(self.created_at) != timezone.utc.utcoffset(self.created_at):
+        if self.created_at.tzinfo is None or self.created_at.tzinfo.utcoffset(
+            self.created_at
+        ) != UTC.utcoffset(self.created_at):
             raise ValueError(
                 f"created_at 必须是 UTC timezone-aware，收到 {self.created_at!r} "
                 f"(tzinfo={self.created_at.tzinfo})"
@@ -175,22 +175,20 @@ class WarningEvent:
         forbidden_top = FORBIDDEN_WARNING_FIELDS.intersection(self.__dict__.keys())
         if forbidden_top:
             raise ValueError(
-                f"WarningEvent 含禁止的业务判定字段 {forbidden_top}；"
-                f"决策层不做最终判定（ADR-0010）"
+                f"WarningEvent 含禁止的业务判定字段 {forbidden_top}；决策层不做最终判定（ADR-0010）"
             )
         forbidden_in_meta = FORBIDDEN_WARNING_FIELDS.intersection(self.meta.keys())
         if forbidden_in_meta:
             raise ValueError(
-                f"meta 包含禁止的业务判定字段 {forbidden_in_meta}；"
-                f"决策层不做最终判定（ADR-0010）"
+                f"meta 包含禁止的业务判定字段 {forbidden_in_meta}；决策层不做最终判定（ADR-0010）"
             )
 
         # 7) trigger_events 元素必须是 dict（P0-7b PerceptionEvent 引用元数据合法）
         for i, ev in enumerate(self.trigger_events):
             if not isinstance(ev, dict):
-                raise ValueError(f"trigger_events[{i}] 必须是 dict，收到 {type(ev).__name__}")
+                raise ValueError(f"trigger_events[{i}] 必须是 dict，收到 {type(ev).__name__}")  # noqa: TRY004  # 类型校验走 ValueError（保持异常契约）
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典（datetime 已转 ISO 字符串）。"""
         return {
             "warning_id": str(self.warning_id),

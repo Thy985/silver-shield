@@ -14,11 +14,12 @@ YOLO+ByteTrack 输出的抖动与置信度起伏。它保真的是检测缓存�
 设计铁律（与 E2E 一致）：Memory 是旁路（Shadow Mode），绝不接决策、不产 Warning、
 异常不崩主链路。
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from home_perception.detection.detector import Detection, DetectionResult
 
@@ -34,7 +35,7 @@ class CachedDetectionDetector:
     缓存必须包含 ``track_id``（tracker 会丢弃 ``track_id is None`` 的检测）。
     """
 
-    def __init__(self, frames: List[Dict[str, Any]]):
+    def __init__(self, frames: list[dict[str, Any]]):
         self._frames = frames
         self._i = 0
 
@@ -42,26 +43,38 @@ class CachedDetectionDetector:
         # 空缓存：直接返回空（无目标），不抛异常。
         if not self._frames:
             return DetectionResult(
-                detections=[], timestamp=0.0, inference_ms=0.0,
-                source_size=(288, 384), inference_size=(288, 384), model="cached",
+                detections=[],
+                timestamp=0.0,
+                inference_ms=0.0,
+                source_size=(288, 384),
+                inference_size=(288, 384),
+                model="cached",
             )
         # 缓存耗尽：停止重放（返回空检测，相当于目标已离场），避免静默重放离场帧
         # 掩盖上游「多喂了超出 fixture 帧数」的真实 bug。
         if self._i >= len(self._frames):
             return DetectionResult(
-                detections=[], timestamp=0.0, inference_ms=0.0,
-                source_size=(288, 384), inference_size=(288, 384), model="cached",
+                detections=[],
+                timestamp=0.0,
+                inference_ms=0.0,
+                source_size=(288, 384),
+                inference_size=(288, 384),
+                model="cached",
             )
         f = self._frames[self._i]
         dets = [Detection(**d) for d in f.get("detections", [])]
         ts = float(f.get("timestamp", 0.0))
         self._i += 1
         return DetectionResult(
-            detections=dets, timestamp=ts, inference_ms=0.0,
-            source_size=(288, 384), inference_size=(288, 384), model="cached",
+            detections=dets,
+            timestamp=ts,
+            inference_ms=0.0,
+            source_size=(288, 384),
+            inference_size=(288, 384),
+            model="cached",
         )
 
 
-def load_cached_detections(path: Path) -> Dict[str, Any]:
+def load_cached_detections(path: Path) -> dict[str, Any]:
     """加载检测缓存 JSON（schema 见 tests/fixtures/detections/）。"""
     return json.loads(Path(path).read_text())

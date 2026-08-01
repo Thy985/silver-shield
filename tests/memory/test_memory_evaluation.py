@@ -14,21 +14,22 @@
 **v2 迁移注意**：`evidence_refs` 相关断言锁定的是 v1 行为（ADR-0022 未落地），
 ADR-0022 落地后本文件需同步更新，见 `test_information_retention_all_required_fields`。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from home_perception.action.command import ActionCommand
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.warning import WarningEvent
-from home_perception.action.command import ActionCommand
 from home_perception.memory.episode_builder import DefaultEpisodeBuilder
 from home_perception.memory.records import EpisodicRecord, ShortTermRecord
 from home_perception.memory.store import InMemoryStore
 
 
 def _utc(y, m, d, h, mi, s=0):
-    return datetime(y, m, d, h, mi, s, tzinfo=timezone.utc)
+    return datetime(y, m, d, h, mi, s, tzinfo=UTC)
 
 
 def _make_visitor(enter, leave, duration=180.0, event_id="ev-eval", visitor_id=None):
@@ -41,8 +42,9 @@ def _make_visitor(enter, leave, duration=180.0, event_id="ev-eval", visitor_id=N
     )
 
 
-def _make_warning(visitor_id, created_at, risk_level="HIGH", rec_action="NOTIFY_FAMILY",
-                  reasons=("异常停留",)):
+def _make_warning(
+    visitor_id, created_at, risk_level="HIGH", rec_action="NOTIFY_FAMILY", reasons=("异常停留",)
+):
     trigger = {
         "event_id": f"{visitor_id}:abnormal_dwell",
         "event_type": "abnormal_dwell",
@@ -88,9 +90,7 @@ def _simulate_visits(store, n_visitors: int, frames_per_visitor: int) -> int:
     for i in range(n_visitors):
         enter = _utc(2026, 7, 28, 14, 0, 0) + timedelta(minutes=i)
         leave = enter + timedelta(minutes=30)
-        visitor = _make_visitor(
-            enter, leave, duration=1800.0, event_id=f"ev-compress-{i:03d}"
-        )
+        visitor = _make_visitor(enter, leave, duration=1800.0, event_id=f"ev-compress-{i:03d}")
         vid = str(visitor.visitor_id)
 
         # —— 逐帧：短期记忆持续覆写，不新增 ——
@@ -243,7 +243,9 @@ def test_information_retention_all_required_fields():
 def test_information_retention_no_risk_visit_still_complete():
     """无风险访问：risk 字段为 None，但时间/谁/summary/证据仍完整（Agent 可回答）。"""
     builder = DefaultEpisodeBuilder()
-    visitor = _make_visitor(_utc(2026, 7, 28, 19, 0), _utc(2026, 7, 28, 19, 3), event_id="ev-no-risk")
+    visitor = _make_visitor(
+        _utc(2026, 7, 28, 19, 0), _utc(2026, 7, 28, 19, 3), event_id="ev-no-risk"
+    )
 
     rec = builder.project_episode(visitor, warnings=[], actions=[])
     assert rec is not None

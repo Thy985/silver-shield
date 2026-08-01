@@ -13,18 +13,19 @@
 - CLEARED 不产生 Warning（结构上 RiskSignal 无决策/警告字段，非 WarningEvent）
 - 重复 RAISED 不刷屏（每实例默认唯一 signal_id；去重交由评估器，不在类型层）
 """
+
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
 from home_perception.analysis.risk_signal import (
-    RISKSIGNAL_DICT_KEYS,
     FORBIDDEN_RISKSIGNAL_FIELDS,
+    RISKSIGNAL_DICT_KEYS,
     RiskSignal,
     SignalCategory,
     SignalTransition,
@@ -42,7 +43,7 @@ def _make_signal(
     source: SourceModality = SourceModality.VISION,
     paired_signal_id: str | None = None,
     signal_id: str | None = None,
-    features: Dict[str, Any] | None = None,
+    features: dict[str, Any] | None = None,
     created_at: datetime | None = None,
 ) -> RiskSignal:
     return RiskSignal(
@@ -56,13 +57,14 @@ def _make_signal(
         paired_signal_id=paired_signal_id,
         track_id=7,
         visitor_instance_id=subject_id if subject_type is SubjectType.VISITOR else None,
-        created_at=created_at or datetime(2026, 7, 26, 10, 0, 0, tzinfo=timezone.utc),
+        created_at=created_at or datetime(2026, 7, 26, 10, 0, 0, tzinfo=UTC),
     )
 
 
 # ---------------------------------------------------------------------------
 # 字段闭合
 # ---------------------------------------------------------------------------
+
 
 def test_dict_keys_closed_and_whitelist():
     """to_dict 键集合 == RISKSIGNAL_DICT_KEYS，不多不少（字段闭合）。"""
@@ -84,6 +86,7 @@ def test_dict_contains_no_forbidden_fields():
 # ---------------------------------------------------------------------------
 # 配对字段定位
 # ---------------------------------------------------------------------------
+
 
 def test_paired_signal_id_is_top_level_not_in_features():
     """paired_signal_id 是顶级字段，不藏在 features 内。"""
@@ -118,6 +121,7 @@ def test_cleared_carries_raised_signal_id():
 # created_at 类型
 # ---------------------------------------------------------------------------
 
+
 def test_created_at_is_datetime_not_float():
     """created_at 必须是 datetime（UTC-aware），严禁 float unix 戳。"""
     sig = _make_signal()
@@ -138,13 +142,14 @@ def test_created_at_rejects_naive():
             source=SourceModality.VISION,
             transition=SignalTransition.RAISED,
             features={},
-            created_at=datetime(2026, 7, 26, 10, 0, 0),  # naive
+            created_at=datetime(2026, 7, 26, 10, 0, 0),  # noqa: DTZ001 (naive test)
         )
 
 
 # ---------------------------------------------------------------------------
 # 主体泛化
 # ---------------------------------------------------------------------------
+
 
 def test_subject_type_enum_closed():
     """subject_type 枚举闭合为 4 值（VISITOR/PERSON/DEVICE/ENVIRONMENT）。"""
@@ -179,18 +184,11 @@ def test_subject_generalization_non_visitor():
 # 枚举闭合矩阵（5 × 3 × 2 × 4 = 120 组合）
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "category", [e for e in SignalCategory]
-)
-@pytest.mark.parametrize(
-    "source", [e for e in SourceModality]
-)
-@pytest.mark.parametrize(
-    "transition", [e for e in SignalTransition]
-)
-@pytest.mark.parametrize(
-    "subject_type", [e for e in SubjectType]
-)
+
+@pytest.mark.parametrize("category", [e for e in SignalCategory])
+@pytest.mark.parametrize("source", [e for e in SourceModality])
+@pytest.mark.parametrize("transition", [e for e in SignalTransition])
+@pytest.mark.parametrize("subject_type", [e for e in SubjectType])
 def test_enum_closure_matrix(
     category: SignalCategory,
     source: SourceModality,
@@ -224,6 +222,7 @@ def test_enum_value_counts():
 # 与 EvidenceModality 无交叉 import（ADR-0021 §3.3 命名消歧）
 # ---------------------------------------------------------------------------
 
+
 def test_no_evidence_modality_cross_import():
     """risk_signal 模块不得 import / 复用 ADR-0022 的 EvidenceModality（独立限界上下文）。
 
@@ -248,6 +247,7 @@ def test_no_evidence_modality_cross_import():
 # RAISED 必须能 CLEARED（数据级配对契约）
 # ---------------------------------------------------------------------------
 
+
 def test_raised_cleared_pairing_roundtrip():
     """注入 触发→回落 序列，断言 CLEARED.paired_signal_id == RAISED.signal_id。"""
     raised = _make_signal(
@@ -270,6 +270,7 @@ def test_raised_cleared_pairing_roundtrip():
 # CLEARED 不产生 Warning（结构上 RiskSignal 非 WarningEvent）
 # ---------------------------------------------------------------------------
 
+
 def test_risksignal_is_not_warning_event():
     """RiskSignal 不含决策/警告字段，结构上不会直接变成 WarningEvent。"""
     sig = _make_signal()
@@ -287,6 +288,7 @@ def test_risksignal_is_not_warning_event():
 # 重复 RAISED 不刷屏（类型层支持唯一 id；去重归评估器）
 # ---------------------------------------------------------------------------
 
+
 def test_repeated_raised_gets_unique_signal_ids():
     """每个默认构造的 RAISED 拥有唯一 signal_id —— 去重必须由评估器基于状态机完成，
     而非靠类型层碰撞 id（否则会静默丢失不同主体的信号）。"""
@@ -298,6 +300,7 @@ def test_repeated_raised_gets_unique_signal_ids():
 # ---------------------------------------------------------------------------
 # signal_id UUID 格式校验（发现 2）
 # ---------------------------------------------------------------------------
+
 
 def test_signal_id_rejects_non_uuid_string():
     """signal_id 字符串必须是合法 UUID 格式；"not-a-uuid" 应抛 ValueError。"""
@@ -315,6 +318,7 @@ def test_signal_id_accepts_valid_uuid_string():
 def test_signal_id_accepts_uuid_object():
     """UUID 实例自动转 str。"""
     from uuid import uuid4
+
     u = uuid4()
     sig = _make_signal(signal_id=u)
     assert sig.signal_id == str(u)
@@ -323,6 +327,7 @@ def test_signal_id_accepts_uuid_object():
 # ---------------------------------------------------------------------------
 # features 类型断言（发现 3）
 # ---------------------------------------------------------------------------
+
 
 def test_features_rejects_none():
     """features=None 应抛 TypeError（不再静默跳过黑名单检查）。"""
@@ -356,9 +361,11 @@ def test_features_rejects_list():
 # _coerce_enum TypeError 分支（发现 8）
 # ---------------------------------------------------------------------------
 
+
 def test_coerce_enum_rejects_int():
     """_coerce_enum 传入 int（既非枚举也非 str）应抛 TypeError。"""
     from home_perception.analysis.risk_signal import _coerce_enum
+
     with pytest.raises(TypeError):
         _coerce_enum(SignalCategory, 42, "category")
 
@@ -366,6 +373,7 @@ def test_coerce_enum_rejects_int():
 def test_coerce_enum_rejects_none():
     """_coerce_enum 传入 None 应抛 TypeError。"""
     from home_perception.analysis.risk_signal import _coerce_enum
+
     with pytest.raises(TypeError):
         _coerce_enum(SourceModality, None, "source")
 
@@ -373,6 +381,7 @@ def test_coerce_enum_rejects_none():
 def test_coerce_enum_rejects_list():
     """_coerce_enum 传入 list 应抛 TypeError。"""
     from home_perception.analysis.risk_signal import _coerce_enum
+
     with pytest.raises(TypeError):
         _coerce_enum(SubjectType, ["visitor"], "subject_type")
 
@@ -380,6 +389,7 @@ def test_coerce_enum_rejects_list():
 # ---------------------------------------------------------------------------
 # from_dict / from_json 反序列化（发现 7）
 # ---------------------------------------------------------------------------
+
 
 def test_from_dict_roundtrip():
     """to_dict → from_dict → to_dict 应产出相同字典（round-trip 对称）。"""
@@ -408,8 +418,9 @@ def test_from_json_roundtrip():
 
 def test_from_dict_preserves_paired_signal_id():
     """from_dict 保留 paired_signal_id（CLEARED 配对关系不丢失）。"""
-    raised = _make_signal(transition=SignalTransition.RAISED,
-                          signal_id="11111111-1111-1111-1111-111111111111")
+    raised = _make_signal(
+        transition=SignalTransition.RAISED, signal_id="11111111-1111-1111-1111-111111111111"
+    )
     cleared = _make_signal(
         transition=SignalTransition.CLEARED,
         signal_id="22222222-2222-2222-2222-222222222222",
@@ -424,6 +435,7 @@ def test_from_dict_preserves_paired_signal_id():
 # 不污染 EventType（Stage A 边界守卫）
 # ---------------------------------------------------------------------------
 
+
 def test_event_types_unchanged_five_categories():
     """Stage A 引入 RiskSignal 不得污染 §7.2 EventType 5 类枚举。
 
@@ -432,6 +444,7 @@ def test_event_types_unchanged_five_categories():
     abnormal_dwell / repeat_visit / high_risk_approach），不新增"实时"类。
     """
     from home_perception.analysis.perception import EVENT_TYPES
+
     assert set(EVENT_TYPES) == {
         "visit_normal",
         "visit_pending_verify",
@@ -459,9 +472,11 @@ def test_risksignal_has_no_schema_version():
 # JSON 可序列化（Stage A §8.2：to_dict / to_json 均可序列化）
 # ---------------------------------------------------------------------------
 
+
 def test_to_json_serializable():
     """to_json 产出合法 JSON 字符串（含中文 / UUID / datetime ISO）。"""
     import json
+
     sig = _make_signal(
         features={"dwell_seconds": 350.5, "is_odd_hour": True, "中文键": "值"},
     )

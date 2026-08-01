@@ -3,9 +3,10 @@
 验证 ``MemoryQuery.compose_context`` 真能产生**可溯源、可重放**的用户价值 JSON，
 而非"为了好看而硬编码"。全部 torch-free。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -19,14 +20,14 @@ from home_perception.memory.store import InMemoryStore
 
 
 def _utc(y, m, d, h, mi=0, s=0) -> datetime:
-    return datetime(y, m, d, h, mi, s, tzinfo=timezone.utc)
+    return datetime(y, m, d, h, mi, s, tzinfo=UTC)
 
 
 def _make_episode(
     record_id: str = "ep-1",
     visitor_instance_id: str = "v-stranger-001",
-    enter: datetime = _utc(2026, 7, 30, 18, 30),
-    leave: datetime = _utc(2026, 7, 30, 18, 45),
+    enter: datetime = _utc(2026, 7, 30, 18, 30),  # noqa: B008
+    leave: datetime = _utc(2026, 7, 30, 18, 45),  # noqa: B008
     risk_level: str = "HIGH",
     recommended_action: str = "ESCALATE_COMMUNITY",
     actions: tuple = (("NOTIFY_FAMILY", "a-1", "executed"),),
@@ -103,11 +104,11 @@ def test_compose_context_produces_traceable_user_value(store_with_one_episode):
 def test_compose_context_replay_stable(store_with_one_episode):
     store = store_with_one_episode
     q1, q2 = MemoryQuery(store), MemoryQuery(store)
-    kw = dict(
-        visitor_instance_id="v-stranger-001",
-        window_start=_utc(2026, 7, 30, 0, 0),
-        window_end=_utc(2026, 7, 31, 0, 0),
-    )
+    kw = {
+        "visitor_instance_id": "v-stranger-001",
+        "window_start": _utc(2026, 7, 30, 0, 0),
+        "window_end": _utc(2026, 7, 31, 0, 0),
+    }
     assert q1.compose_context(**kw) == q2.compose_context(**kw)
 
 
@@ -165,9 +166,16 @@ def test_current_status_cleared_after_leave(store_with_one_episode):
 def test_primary_episode_picks_highest_risk():
     store = InMemoryStore()
     store.upsert_episodic(
-        _make_episode(record_id="ep-low", risk_level="LOW", enter=_utc(2026, 7, 30, 19, 30), leave=_utc(2026, 7, 30, 19, 45))
+        _make_episode(
+            record_id="ep-low",
+            risk_level="LOW",
+            enter=_utc(2026, 7, 30, 19, 30),
+            leave=_utc(2026, 7, 30, 19, 45),
+        )
     )
-    store.upsert_episodic(_make_episode(record_id="ep-high", risk_level="HIGH", enter=_utc(2026, 7, 30, 18, 30)))
+    store.upsert_episodic(
+        _make_episode(record_id="ep-high", risk_level="HIGH", enter=_utc(2026, 7, 30, 18, 30))
+    )
     ctx = MemoryQuery(store).compose_context(
         "v-stranger-001",
         window_start=_utc(2026, 7, 30, 0, 0),
@@ -224,7 +232,7 @@ def test_compose_context_rejects_naive_datetime(store_with_one_episode):
     with pytest.raises(ValueError):
         query.compose_context(
             "v-stranger-001",
-            window_start=datetime(2026, 7, 30, 0, 0),  # naive
+            window_start=datetime(2026, 7, 30, 0, 0),  # noqa: DTZ001 (naive test)
             window_end=_utc(2026, 7, 31, 0, 0),
         )
 

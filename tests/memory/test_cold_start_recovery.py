@@ -3,9 +3,10 @@
 覆盖 §8.5：FRESH/STALE/DISCARD 三档、缺失/损坏视为冷启动、恢复后 evict、
 只恢复 active visitor（避免 TD-0024 重现）。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from home_perception.analysis.realtime_risk_evaluator import (
@@ -32,20 +33,20 @@ from home_perception.memory.snapshot import (
 
 
 def _utc(sec: int) -> datetime:
-    return datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=sec)
+    return datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=sec)
 
 
 def _config(**overrides) -> MemoryConfig:
-    base = dict(
-        enabled=True,
-        snapshot_path="data/memory/snapshot.json",
-        snapshot_interval_seconds=30.0,
-        snapshot_fresh_threshold_seconds=30.0,
-        snapshot_ttl_seconds=300.0,
-        recent_behavior_retention_seconds=3600.0,
-        eviction_interval_frames=60,
-        cold_start_stale_confidence=0.5,
-    )
+    base = {
+        "enabled": True,
+        "snapshot_path": "data/memory/snapshot.json",
+        "snapshot_interval_seconds": 30.0,
+        "snapshot_fresh_threshold_seconds": 30.0,
+        "snapshot_ttl_seconds": 300.0,
+        "recent_behavior_retention_seconds": 3600.0,
+        "eviction_interval_frames": 60,
+        "cold_start_stale_confidence": 0.5,
+    }
     base.update(overrides)
     return MemoryConfig(**base)
 
@@ -167,7 +168,7 @@ def test_corrupted_snapshot_cold_start(tmp_path: Path):
     """损坏 snapshot（非法 JSON）→ 视为冷启动，不抛异常。"""
     p = tmp_path / "snapshot.json"
     p.write_text("not json{{{", encoding="utf-8")
-    coord, ev, store = _coordinator(p, _config())
+    coord, ev, _store = _coordinator(p, _config())
     res = coord.recover(_utc(1000))
     assert res.recovered is False
     assert res.confidence is ColdStartConfidence.DISCARD
@@ -210,7 +211,7 @@ def test_only_active_visitors_restored(tmp_path: Path):
         ],
     )
     SnapshotStore(tmp_path / "snapshot.json").save(snap)
-    coord, ev, store = _coordinator(
+    coord, _ev, store = _coordinator(
         tmp_path / "snapshot.json", _config(recent_behavior_retention_seconds=3600.0)
     )
     res = coord.recover(now)

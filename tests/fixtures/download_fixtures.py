@@ -21,6 +21,7 @@ Version control:
 - MPG (tests/fixtures/caviar_raw/) and JPG frames (tests/fixtures/doorway/) are
   .gitignore'd. Only this script and README.md are tracked.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -68,7 +69,7 @@ SCENARIOS = [
 
 def download(url, dst):
     if dst.exists() and dst.stat().st_size > 1024:
-        print(f"  [skip] {dst.name} already exists ({dst.stat().st_size//1024}KB)")
+        print(f"  [skip] {dst.name} already exists ({dst.stat().st_size // 1024}KB)")
         return True
     dst.parent.mkdir(parents=True, exist_ok=True)
     print(f"  [get]  {url}")
@@ -80,9 +81,9 @@ def download(url, dst):
             print(f"  [fail] file too small ({len(data)} bytes)")
             return False
         dst.write_bytes(data)
-        print(f"  [ok]   {dst.name} ({len(data)//1024}KB)")
+        print(f"  [ok]   {dst.name} ({len(data) // 1024}KB)")
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # 下载脚本：打印错误后继续下一个
         print(f"  [err]  {type(e).__name__}: {e}")
         return False
 
@@ -94,10 +95,19 @@ def extract_frames(mpg, out_dir, target_fps=2.0, max_frames=50):
     if shutil.which("ffmpeg") is None:
         print(f"  [warn] ffmpeg not found, skip ({out_dir.name})")
         return 0
-    cmd = ["ffmpeg", "-y", "-i", str(mpg), "-vf", f"fps={target_fps}",
-           "-q:v", "2", str(out_dir / "frame_%05d.jpg")]
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(mpg),
+        "-vf",
+        f"fps={target_fps}",
+        "-q:v",
+        "2",
+        str(out_dir / "frame_%05d.jpg"),
+    ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     except subprocess.TimeoutExpired:
         print("  [err]  ffmpeg timeout")
         return 0

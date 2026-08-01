@@ -10,9 +10,8 @@
 4. `DecisionPolicy` 独立于 `Rule`（不复算 Feature / 不重新组合 Rule）
 5. Action 执行（MQTT / 通知 / 升级）延迟到 P0-9
 """
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 from ..common.logging import get_logger
 from ..common.timeutil import now_dt
@@ -20,13 +19,13 @@ from .decision_policy import DecisionContext, DecisionPolicy, RuleBasedDecisionP
 from .perception import PerceptionEvent
 from .warning import WarningEvent
 
-
 log = get_logger(__name__)
 
 
 # ============================================================================
 # DecisionEngine
 # ============================================================================
+
 
 class DecisionEngine:
     """决策层编排器（P0-8 入口）。
@@ -55,7 +54,7 @@ class DecisionEngine:
     def __init__(
         self,
         elder_id: str,
-        policy: Optional[DecisionPolicy] = None,
+        policy: DecisionPolicy | None = None,
         now_provider=None,
     ):
         if not elder_id or not str(elder_id).strip():
@@ -64,7 +63,7 @@ class DecisionEngine:
         self.policy = policy or RuleBasedDecisionPolicy()
         self._now = now_provider or now_dt
 
-    def evaluate(self, perception_events: List[PerceptionEvent]) -> Optional[WarningEvent]:
+    def evaluate(self, perception_events: list[PerceptionEvent]) -> WarningEvent | None:
         """单次决策：消费 PerceptionEvent 列表，输出 WarningEvent 或 None。
 
         返回 None 的典型情况：

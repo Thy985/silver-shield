@@ -3,9 +3,10 @@
 覆盖 §8.5：snapshot 只导出 reconstructable 字段、restore 重建 _active、confidence 标记、
 STALE 恢复后新帧检测到同一 visitor → confidence 升至 1.0（单调上升）。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from home_perception.analysis.behavior_state import BehaviorPhase, BehaviorState
 from home_perception.analysis.realtime_risk_evaluator import (
@@ -17,7 +18,7 @@ from home_perception.memory.snapshot import ActiveTrackSnapshot
 
 
 def _utc(sec: int) -> datetime:
-    return datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=sec)
+    return datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=sec)
 
 
 def _make_evaluator() -> RealTimeRiskEvaluator:
@@ -119,9 +120,13 @@ def test_stale_upgrade_on_new_frame():
 
     # 新帧（不触发 RAISED：dwell=0, visits=0, not odd）重新见到 V1
     ev.evaluate(
-        [__import__("home_perception.analysis.behavior_state", fromlist=["RealtimeContext"]).RealtimeContext(
-            current_state=_behavior_state("V1"), recent_behavior={"visits_in_window": 0}
-        )],
+        [
+            __import__(
+                "home_perception.analysis.behavior_state", fromlist=["RealtimeContext"]
+            ).RealtimeContext(
+                current_state=_behavior_state("V1"), recent_behavior={"visits_in_window": 0}
+            )
+        ],
         now=_utc(110),
     )
     assert ev._active["V1"].confidence == 1.0

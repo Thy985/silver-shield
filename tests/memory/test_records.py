@@ -17,84 +17,83 @@
 - v1 约束：EpisodicRecord.person_identity_id 恒 None
 - 辅助类型：ActionSummary / EvidenceRef 校验
 """
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from home_perception.memory.records import (
     EPISODIC_RECORD_DICT_KEYS,
-    EvidenceRef,
-    ActionSummary,
-    EpisodicRecord,
     MEMORY_STATUS_VALUES,
-    MemoryStatus,
     RECORD_ID_PREFIXES,
-    RecordIdPrefix,
     SEMANTIC_AGGREGATE_DICT_KEYS,
     SHORT_TERM_RECORD_DICT_KEYS,
+    ActionSummary,
+    EpisodicRecord,
+    EvidenceRef,
+    MemoryStatus,
+    RecordIdPrefix,
     SemanticAggregate,
     ShortTermRecord,
     records_equal,
 )
 
-
 # ============================================================================
 # Fixtures
 # ============================================================================
 
-UTC = timezone.utc
 T0 = datetime(2026, 7, 28, 18, 30, 0, tzinfo=UTC)
 T1 = datetime(2026, 7, 28, 18, 35, 0, tzinfo=UTC)
 T2 = datetime(2026, 7, 28, 18, 44, 0, tzinfo=UTC)
 
 
 def _make_short_term(**overrides) -> ShortTermRecord:
-    defaults = dict(
-        record_id="st-visitor-001",
-        visitor_instance_id="visitor-001",
-        phase="active_risk",
-        first_seen=T0,
-        last_seen_at=T1,
-        source_event_ids=["signal-001"],
-        raised_signal_id="signal-001",
-        raised_at=T1,
-    )
+    defaults = {
+        "record_id": "st-visitor-001",
+        "visitor_instance_id": "visitor-001",
+        "phase": "active_risk",
+        "first_seen": T0,
+        "last_seen_at": T1,
+        "source_event_ids": ["signal-001"],
+        "raised_signal_id": "signal-001",
+        "raised_at": T1,
+    }
     defaults.update(overrides)
     return ShortTermRecord(**defaults)
 
 
 def _make_episodic(**overrides) -> EpisodicRecord:
-    defaults = dict(
-        record_id="ep-visitor-event-001",
-        visitor_instance_id="visitor-001",
-        enter_time=T1,
-        leave_time=T2,
-        duration_seconds=540.0,
-        source_event_ids=["visitor-event-001", "warning-001"],
-        summary="18:35-18:44 访问（停留 9 分钟），风险等级 HIGH，已通知家属。",
-        model_version="ep-builder-v1",
-        risk_level="HIGH",
-        recommended_action="NOTIFY_FAMILY",
-        reason_summary=["abnormal_dwell"],
-    )
+    defaults = {
+        "record_id": "ep-visitor-event-001",
+        "visitor_instance_id": "visitor-001",
+        "enter_time": T1,
+        "leave_time": T2,
+        "duration_seconds": 540.0,
+        "source_event_ids": ["visitor-event-001", "warning-001"],
+        "summary": "18:35-18:44 访问（停留 9 分钟），风险等级 HIGH，已通知家属。",
+        "model_version": "ep-builder-v1",
+        "risk_level": "HIGH",
+        "recommended_action": "NOTIFY_FAMILY",
+        "reason_summary": ["abnormal_dwell"],
+    }
     defaults.update(overrides)
     return EpisodicRecord(**defaults)
 
 
 def _make_semantic(**overrides) -> SemanticAggregate:
-    defaults = dict(
-        aggregate_id="sem-env-2026-07",
-        dimension="environment",
-        period_key="2026-07",
-        episode_count=42,
-        statistics={"risk_distribution": {"LOW": 30, "MEDIUM": 8, "HIGH": 4}},
-        confidence=0.85,
-        source_episode_ids=["ep-001", "ep-002", "ep-003"],
-        model_version="env-aggregator-v1",
-    )
+    defaults = {
+        "aggregate_id": "sem-env-2026-07",
+        "dimension": "environment",
+        "period_key": "2026-07",
+        "episode_count": 42,
+        "statistics": {"risk_distribution": {"LOW": 30, "MEDIUM": 8, "HIGH": 4}},
+        "confidence": 0.85,
+        "source_episode_ids": ["ep-001", "ep-002", "ep-003"],
+        "model_version": "env-aggregator-v1",
+    }
     defaults.update(overrides)
     return SemanticAggregate(**defaults)
 
@@ -102,6 +101,7 @@ def _make_semantic(**overrides) -> SemanticAggregate:
 # ============================================================================
 # 枚举闭合
 # ============================================================================
+
 
 class TestMemoryStatusEnum:
     def test_enum_values_closed(self):
@@ -121,6 +121,7 @@ class TestMemoryStatusEnum:
 # ============================================================================
 # ShortTermRecord
 # ============================================================================
+
 
 class TestShortTermRecord:
     def test_construct_minimal(self):
@@ -147,7 +148,7 @@ class TestShortTermRecord:
         # 函数同名造成语义混淆（本测试文件未 import 该函数，但命名应一致避歧义）。
         has_tz = rec.created_at.tzinfo is not None
         assert has_tz
-        assert rec.created_at.utcoffset() == timezone.utc.utcoffset(None)
+        assert rec.created_at.utcoffset() == UTC.utcoffset(None)
 
     def test_record_id_prefix_validation(self):
         """record_id 必须以 st- 开头（I1）。"""
@@ -189,7 +190,7 @@ class TestShortTermRecord:
 
     def test_naive_datetime_rejected(self):
         """naive datetime 拒绝（UTC 校验）。"""
-        naive = datetime(2026, 7, 28, 18, 30, 0)  # 无 tzinfo
+        naive = datetime(2026, 7, 28, 18, 30, 0)  # noqa: DTZ001 (naive test)
         with pytest.raises(ValueError, match="timezone-aware"):
             _make_short_term(first_seen=naive)
 
@@ -233,6 +234,7 @@ class TestShortTermRecord:
 # ============================================================================
 # EpisodicRecord
 # ============================================================================
+
 
 class TestEpisodicRecord:
     def test_construct_minimal(self):
@@ -348,6 +350,7 @@ class TestEpisodicRecord:
 # SemanticAggregate
 # ============================================================================
 
+
 class TestSemanticAggregate:
     def test_construct_minimal(self):
         agg = _make_semantic()
@@ -418,6 +421,7 @@ class TestSemanticAggregate:
 # ActionSummary
 # ============================================================================
 
+
 class TestActionSummary:
     def test_construct(self):
         a = ActionSummary(
@@ -455,6 +459,7 @@ class TestActionSummary:
 # EvidenceRef
 # ============================================================================
 
+
 class TestEvidenceRef:
     def test_construct(self):
         e = EvidenceRef(
@@ -475,7 +480,7 @@ class TestEvidenceRef:
             EvidenceRef(evidence_id="ev", modality="", captured_at=T1)
 
     def test_naive_captured_at_rejected(self):
-        naive = datetime(2026, 7, 28, 18, 30, 0)
+        naive = datetime(2026, 7, 28, 18, 30, 0)  # noqa: DTZ001 (naive test)
         with pytest.raises(ValueError, match="timezone-aware"):
             EvidenceRef(evidence_id="ev", modality="vision", captured_at=naive)
 
@@ -492,6 +497,7 @@ class TestEvidenceRef:
 # ============================================================================
 # records_equal 工具
 # ============================================================================
+
 
 class TestRecordsEqual:
     def test_equal_same_type(self):
@@ -521,6 +527,7 @@ class TestRecordsEqual:
 # ============================================================================
 # JSON 序列化稳定性
 # ============================================================================
+
 
 class TestJsonSerialization:
     def test_short_term_json_sortable(self):

@@ -28,20 +28,20 @@
 - I3 因果：`created_at`（record）>= 源事件时间（由 `now_dt()` 保证）
 - I4 可解释：`source_event_ids` 非空，引用全部源事件 id
 """
+
 from __future__ import annotations
 
 from datetime import timedelta, timezone
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # 避免运行时循环 import；本类仅做属性读取（duck typing），无需运行时导入
+    from ..action.command import ActionCommand
     from ..analysis.event import VisitorEvent
     from ..analysis.warning import WarningEvent
-    from ..action.command import ActionCommand
 
 from .policy import MemoryPolicy
 from .records import ActionSummary, EpisodicRecord
-
 
 # 人类可读 summary 展示时区（与系统展示层一致：Asia/Shanghai / UTC+8）。
 # 注意：这是**派生展示字符串**，不是存储字段；源事件时间仍严格 UTC（event.py 约束）。
@@ -89,10 +89,10 @@ class DefaultEpisodeBuilder(MemoryPolicy):
     # ------------------------------------------------------------------
     def project_episode(
         self,
-        visitor_event: "VisitorEvent",
-        warnings: List["WarningEvent"],
-        actions: List["ActionCommand"],
-    ) -> Optional[EpisodicRecord]:
+        visitor_event: VisitorEvent,
+        warnings: list[WarningEvent],
+        actions: list[ActionCommand],
+    ) -> EpisodicRecord | None:
         """投影一次访客离场为 EpisodicRecord。
 
         触发时机：VisitorEvent 生成（访客离场）。
@@ -139,28 +139,26 @@ class DefaultEpisodeBuilder(MemoryPolicy):
     # ------------------------------------------------------------------
     def transform_short_term(self, state_snapshot, transition, current_record=None):
         """Short-term 投影由 `DefaultShortTermPolicy`（Slice 2）实现；本类不负责。"""
-        return None
+        return
 
     def aggregate_semantic(self, episodes, dimension, period_key):
         """Semantic 聚合由 SemanticAggregator（Stage G/H）实现；本类不负责。"""
-        return None
+        return
 
     # ------------------------------------------------------------------
     # 内部关联逻辑
     # ------------------------------------------------------------------
     def _filter_warnings(
-        self, visitor_event: "VisitorEvent", warnings: List["WarningEvent"]
-    ) -> List["WarningEvent"]:
+        self, visitor_event: VisitorEvent, warnings: list[WarningEvent]
+    ) -> list[WarningEvent]:
         """按 visitor_instance_id + 时间窗筛选关联 WarningEvent。
 
         时间窗：`enter_time <= warning.created_at <= leave_time + 60s`。
         visitor 匹配：WarningEvent.trigger_events[].event_id 前缀 == visitor_id。
         """
         vid = str(visitor_event.visitor_id)
-        window_end = visitor_event.leave_time + timedelta(
-            seconds=self.ACTION_TOLERANCE_SECONDS
-        )
-        result: List["WarningEvent"] = []
+        window_end = visitor_event.leave_time + timedelta(seconds=self.ACTION_TOLERANCE_SECONDS)
+        result: list[WarningEvent] = []
         seen_ids: set[str] = set()
         for w in warnings or []:
             # 时间窗（created_at 为 UTC，与 enter/leave 同基准）
@@ -184,7 +182,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         return result
 
     @staticmethod
-    def _warning_mentions_visitor(warning: "WarningEvent", visitor_id: str) -> bool:
+    def _warning_mentions_visitor(warning: WarningEvent, visitor_id: str) -> bool:
         """WarningEvent 是否关联某 visitor（读 trigger_events 的 event_id 前缀）。
 
         兼容两种 trigger_events 元素形态：
@@ -199,7 +197,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         return False
 
     @staticmethod
-    def _trigger_visitor_id(trigger: dict) -> Optional[str]:
+    def _trigger_visitor_id(trigger: dict) -> str | None:
         """从 trigger_events 元素解析 visitor_id（见 `_warning_mentions_visitor`）。"""
         if trigger.get("visitor_id") is not None:
             return str(trigger["visitor_id"])
@@ -210,8 +208,8 @@ class DefaultEpisodeBuilder(MemoryPolicy):
 
     @staticmethod
     def _filter_actions(
-        related_warnings: List["WarningEvent"], actions: List["ActionCommand"]
-    ) -> List["ActionCommand"]:
+        related_warnings: list[WarningEvent], actions: list[ActionCommand]
+    ) -> list[ActionCommand]:
         """按 warning_id 关联 ActionCommand（按 command_id 去重）。
 
         与 `_filter_warnings` 同理：上游重试可能重复投递同一条 ActionCommand，
@@ -220,7 +218,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         warning_ids = {str(w.warning_id) for w in related_warnings}
         if not warning_ids:
             return []
-        result: List["ActionCommand"] = []
+        result: list[ActionCommand] = []
         seen_ids: set[str] = set()
         for a in actions or []:
             if str(a.warning_id) not in warning_ids:
@@ -241,14 +239,14 @@ class DefaultEpisodeBuilder(MemoryPolicy):
 
     @staticmethod
     def _pick_max_risk(
-        related_warnings: List["WarningEvent"],
-    ) -> (Optional[str], Optional[str]):
+        related_warnings: list[WarningEvent],
+    ) -> (str | None, str | None):
         """取 risk_level 最高的 Warning 的 (risk_level, recommended_action)。
 
         max wins（HIGH > MEDIUM > LOW）；并列取首个出现者。
         无关联 warning 返回 (None, None)。
         """
-        best: Optional["WarningEvent"] = None
+        best: WarningEvent | None = None
         for w in related_warnings:
             rank = _RISK_RANK.get(w.risk_level, 0)
             if best is None or rank > _RISK_RANK.get(best.risk_level, 0):
@@ -258,9 +256,9 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         return best.risk_level, best.recommended_action
 
     @staticmethod
-    def _merge_reasons(related_warnings: List["WarningEvent"]) -> List[str]:
+    def _merge_reasons(related_warnings: list[WarningEvent]) -> list[str]:
         """合并多条 Warning 的 reason_summary，去重保序。"""
-        seen: List[str] = []
+        seen: list[str] = []
         for w in related_warnings:
             for r in w.reason_summary:
                 if r not in seen:
@@ -268,7 +266,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         return seen
 
     @staticmethod
-    def _to_action_summary(cmd: "ActionCommand") -> ActionSummary:
+    def _to_action_summary(cmd: ActionCommand) -> ActionSummary:
         """ActionCommand → ActionSummary（不存 payload，ADR-0024 §3.2.1）。"""
         return ActionSummary(
             command_type=cmd.command_type,
@@ -279,23 +277,23 @@ class DefaultEpisodeBuilder(MemoryPolicy):
 
     @staticmethod
     def _collect_source_ids(
-        visitor_event: "VisitorEvent",
-        related_warnings: List["WarningEvent"],
-        related_actions: List["ActionCommand"],
-    ) -> List[str]:
+        visitor_event: VisitorEvent,
+        related_warnings: list[WarningEvent],
+        related_actions: list[ActionCommand],
+    ) -> list[str]:
         """I4 可解释性：聚合全部源事件 id（visitor + warning + action）。"""
-        ids: List[str] = [visitor_event.event_id]
+        ids: list[str] = [visitor_event.event_id]
         ids += [str(w.warning_id) for w in related_warnings]
         ids += [str(a.command_id) for a in related_actions]
         return ids
 
     def _build_summary(
         self,
-        visitor_event: "VisitorEvent",
-        risk_level: Optional[str],
-        recommended_action: Optional[str],
-        reason_summary: List[str],
-        related_actions: List["ActionCommand"],
+        visitor_event: VisitorEvent,
+        risk_level: str | None,
+        recommended_action: str | None,
+        reason_summary: list[str],
+        related_actions: list[ActionCommand],
     ) -> str:
         """生成 human-interpretable summary（确定性，无 LLM，见 DESIGN §5.2.3）。
 
@@ -322,11 +320,11 @@ class DefaultEpisodeBuilder(MemoryPolicy):
 
     def _build_action_phrase(
         self,
-        related_actions: List["ActionCommand"],
-        recommended_action: Optional[str],
+        related_actions: list[ActionCommand],
+        recommended_action: str | None,
     ) -> str:
         """从实际 ActionCommand（优先）或 recommended_action（回退）生成动作短语。"""
-        phrases: List[str] = []
+        phrases: list[str] = []
         if related_actions:
             seen: set[str] = set()
             for cmd_type in _ACTION_ORDER:

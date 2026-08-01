@@ -5,11 +5,12 @@ frame_interval_s / loop）转成网关可消费的 ``ScenarioConfig``。
 
 边界：本文件只读 YAML + 解析时间字符串，**不**触碰 pipeline / rule / decision。
 """
+
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, field_validator
@@ -47,13 +48,13 @@ class ScenarioConfig(BaseModel):
     scenario_id: str
     source: str
     source_type: str = "caviar_jpg"
-    media_path: Optional[str] = None
+    media_path: str | None = None
     start_time: datetime
     frame_interval_s: float = 0.5
     fps_target: int = 8
     loop: bool = True
     description: str = ""
-    rule_overrides: Optional[Dict[str, Any]] = None
+    rule_overrides: dict[str, Any] | None = None
 
     @field_validator("frame_interval_s")
     @classmethod
@@ -86,7 +87,7 @@ def load_scenario(path: str | Path) -> ScenarioConfig:
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"场景配置不存在: {path!r}")
-    raw: Dict[str, Any] = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    raw: dict[str, Any] = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     if "start_time" in raw and isinstance(raw["start_time"], str):
         # 预解析为 datetime（pydantic 也能接 str，但提前解析可给出更清晰的错误信息）
         raw["start_time"] = _parse_iso(raw["start_time"])

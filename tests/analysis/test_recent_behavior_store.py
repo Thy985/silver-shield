@@ -8,10 +8,11 @@
 - 重启即空（volatile）
 - 只读返回：改动产出的 recent_behavior 不影响 store 下一帧产出（引用隔离）
 """
+
 from __future__ import annotations
 
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -20,12 +21,13 @@ from home_perception.analysis.recent_behavior_store import RecentBehaviorStore
 
 def _utc(sec: int) -> datetime:
     """测试时钟：以 epoch 秒表达，返回 datetime UTC（便于滑窗加减）。"""
-    return datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=sec)
+    return datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=sec)
 
 
 # ---------------------------------------------------------------------------
 # 滑窗：含当前 + 过期清理
 # ---------------------------------------------------------------------------
+
 
 def test_window_includes_current_ongoing_visit():
     """进入瞬间即计入窗口（含当前进行中这次）。"""
@@ -51,7 +53,7 @@ def test_window_expiry_and_dedup():
 def test_multiple_visitors_sliding_window():
     """不同访客各自计数；窗口滑动后各自独立过期。"""
     store = RecentBehaviorStore()
-    store.update("V", _utc(0), now=_utc(0), window_seconds=600)   # V=1
+    store.update("V", _utc(0), now=_utc(0), window_seconds=600)  # V=1
     store.update("U", _utc(300), now=_utc(300), window_seconds=600)  # U=1
     # now=700：V 过期、U 在窗内
     snap = store.update("U", _utc(300), now=_utc(700), window_seconds=600)
@@ -70,6 +72,7 @@ def test_window_length_edge():
 # ---------------------------------------------------------------------------
 # track_key = visitor_instance_id
 # ---------------------------------------------------------------------------
+
 
 def test_keyed_by_visitor_instance_id():
     """store 以 visitor_instance_id 为主键（稳定），同一访客多次进入合并计数。"""
@@ -93,6 +96,7 @@ def test_distinct_instance_ids_separate():
 # 重启即空（volatile）
 # ---------------------------------------------------------------------------
 
+
 def test_volatile_restart_empty():
     """新 store 即空；reset() 模拟重启丢弃。"""
     store = RecentBehaviorStore()
@@ -107,6 +111,7 @@ def test_volatile_restart_empty():
 # ---------------------------------------------------------------------------
 # 只读返回 / 引用隔离
 # ---------------------------------------------------------------------------
+
 
 def test_return_is_readonly_proxy():
     """update() 返回 MappingProxyType（只读），防止调用方意外改写内部状态。"""
@@ -141,6 +146,7 @@ def test_enter_after_now_rejected():
 # ---------------------------------------------------------------------------
 # 空键清理（发现 4）：过期后不残留空列表
 # ---------------------------------------------------------------------------
+
 
 def test_empty_bucket_key_removed_after_expiry():
     """所有进入记录过期后，visitor_instance_id 键应被删除（防空键累积）。"""

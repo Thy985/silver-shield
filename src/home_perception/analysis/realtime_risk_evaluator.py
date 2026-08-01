@@ -33,12 +33,13 @@ visitor_instance_id 首次出现在 ctxs
 **key 选型（防 track_id 串号）**：`_active` 键**必须用 `visitor_instance_id`**（会话级 UUID），
 绝不用 `track_id`——后者会被 ByteTrack 回收重用，导致后继主体继承前人残留的 ACTIVE_RISK。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from ..common.logging import get_logger
@@ -47,8 +48,8 @@ from .behavior_state import BehaviorPhase, BehaviorState, RealtimeContext
 from .risk_signal import (
     RiskSignal,
     SignalCategory,
-    SourceModality,
     SignalTransition,
+    SourceModality,
     SubjectType,
 )
 from .rule_engine import ThresholdConfig
@@ -62,7 +63,7 @@ log = get_logger(__name__)
 class RiskPhase(str, Enum):
     """风险状态机持续态（枚举化，勿与 BehaviorPhase 混淆：这是"风险机"态，非"访问生命周期"态）。"""
 
-    NONE = "none"            # 未处于风险
+    NONE = "none"  # 未处于风险
     ACTIVE_RISK = "active_risk"  # 已 RAISED 未 CLEARED
 
 
@@ -81,9 +82,9 @@ class _TrackRiskState:
 
     phase: RiskPhase
     raised_signal_id: str
-    raised_at: Optional[datetime]
+    raised_at: datetime | None
     first_seen: datetime
-    last_track_id: Optional[int] = None
+    last_track_id: int | None = None
     confidence: float = 1.0
 
 
@@ -102,12 +103,12 @@ class RealTimeRiskEvaluator:
     def __init__(
         self,
         thresholds: ThresholdConfig,
-        now_provider: Optional[Any] = None,
+        now_provider: Any | None = None,
     ) -> None:
         self._thresholds = thresholds
         self._now_provider = now_provider
         # key = visitor_instance_id（会话级 UUID，防 track_id 重用串号）
-        self._active: Dict[str, _TrackRiskState] = {}
+        self._active: dict[str, _TrackRiskState] = {}
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -115,9 +116,9 @@ class RealTimeRiskEvaluator:
 
     def evaluate(
         self,
-        ctxs: List[RealtimeContext],
+        ctxs: list[RealtimeContext],
         now: datetime,
-    ) -> List[RiskSignal]:
+    ) -> list[RiskSignal]:
         """评估一批 RealtimeContext，产出 RiskSignal 列表（RAISED + CLEARED）。
 
         参数：
@@ -135,8 +136,8 @@ class RealTimeRiskEvaluator:
         """
         require_utc(now, "now")
 
-        signals: List[RiskSignal] = []
-        seen_ids: Set[str] = set()
+        signals: list[RiskSignal] = []
+        seen_ids: set[str] = set()
 
         for ctx in ctxs:
             state = ctx.current_state
@@ -171,15 +172,12 @@ class RealTimeRiskEvaluator:
             else:
                 # 已有条目：重检测到同一 visitor → confidence 升至 1.0（单调上升，§5.5.0）
                 # STALE(0.5) 恢复的条目被重新见到即升为 FRESH，避免"重启即警报"后长期降级
-                if existing.confidence < 1.0:
-                    existing.confidence = 1.0
+                existing.confidence = max(existing.confidence, 1.0)
                 existing.last_track_id = state.track_id
                 if existing.phase is RiskPhase.ACTIVE_RISK:
                     # 已在风险中：回落或离场 → CLEARED
                     if is_left or not triggered:
-                        cleared = self._emit_cleared(
-                            vid, existing.raised_signal_id, state, now
-                        )
+                        cleared = self._emit_cleared(vid, existing.raised_signal_id, state, now)
                         signals.append(cleared)
                         if is_left:
                             # 离场：删除条目（防泄漏）
@@ -229,7 +227,7 @@ class RealTimeRiskEvaluator:
     # Snapshot 持久化 / 冷启动恢复（ADR-0024 Slice 3 Stage C / E，解 TD-0027）
     # ------------------------------------------------------------------
 
-    def snapshot(self, now: datetime) -> "List[ActiveTrackSnapshot]":
+    def snapshot(self, now: datetime) -> list[ActiveTrackSnapshot]:
         """导出当前 `_active` 状态为可持久化快照（reconstructable only）。
 
         公开方法，不暴露 `_active` 私有字段。只导出无法重算的字段
@@ -253,7 +251,7 @@ class RealTimeRiskEvaluator:
 
     def restore(
         self,
-        snapshots: "List[ActiveTrackSnapshot]",
+        snapshots: list[ActiveTrackSnapshot],
         confidence: float = 1.0,
     ) -> None:
         """从快照恢复 `_active` 状态（ADR-0024 Slice 3 Stage E）。
@@ -307,10 +305,7 @@ class RealTimeRiskEvaluator:
             return True
 
         # 3) odd_hour（state.is_odd_hour 已由 BehaviorBuilder 按 now 计算）
-        if state.is_odd_hour:
-            return True
-
-        return False
+        return bool(state.is_odd_hour)
 
     # ------------------------------------------------------------------
     # 内部：信号构造
@@ -331,7 +326,7 @@ class RealTimeRiskEvaluator:
         visits = recent.get("visits_in_window", 0) if isinstance(recent, dict) else 0
         if not isinstance(visits, (int, float)):
             visits = 0
-        features: Dict[str, Any] = {
+        features: dict[str, Any] = {
             "dwell_seconds": round(state.dwell_seconds, 3),
             "visits_in_window": int(visits),
             "is_odd_hour": state.is_odd_hour,
@@ -372,7 +367,7 @@ class RealTimeRiskEvaluator:
         now: datetime,
     ) -> RiskSignal:
         """构造 CLEARED 信号（有 state 时，features 放回落证据）。"""
-        features: Dict[str, Any] = {
+        features: dict[str, Any] = {
             "dwell_seconds": round(state.dwell_seconds, 3),
             "is_odd_hour": state.is_odd_hour,
         }

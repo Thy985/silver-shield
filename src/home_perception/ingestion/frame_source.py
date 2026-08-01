@@ -3,6 +3,7 @@
 所有视频源（CAVIAR / RTSP / EZVIZ）实现同一 ``FrameSource`` 抽象接口，
 Pipeline 仅依赖该抽象，不感知具体来源类型（Source → Pipeline → Consumer 三段解耦）。
 """
+
 from __future__ import annotations
 
 import time
@@ -79,7 +80,8 @@ class CaviarFrameSource(FrameSource):
                 try:
                     self._cap = self._open()
                     log.info("frame.reconnected", retries=retries)
-                except Exception:
+                except Exception as e:  # noqa: BLE001  # 重连失败：记录后继续退避重试
+                    log.warning("frame.reconnect_failed", retries=retries, error=str(e))
                     continue
                 continue
             retries = 0

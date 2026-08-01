@@ -3,11 +3,12 @@
 > **P0-7a = 结构化数值特征；P0-7b = 风险语义层（Rule Engine）。**
 > 本测试严格验证 Feature 是"被测量的数值"，不验证任何业务判断逻辑（"长停留" / "夜间"等阈值判断）。
 """
+
 from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -28,13 +29,13 @@ from home_perception.analysis.feature_extractor import (
     VisitFrequencyFeatureExtractor,
 )
 
-
 # ============================================================================
 # 时区 helper
 # ============================================================================
 
+
 def utc(year, month, day, hour=0, minute=0, second=0):
-    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
 
 
 def make_event(
@@ -63,6 +64,7 @@ def make_event(
 # Feature 基类与具体 Feature
 # ============================================================================
 
+
 class TestFeatureBase:
     def test_feature_base_fields(self):
         v_id = uuid.uuid4()
@@ -76,22 +78,27 @@ class TestFeatureBase:
     def test_str_uuid_accepted(self):
         f = Feature(
             visitor_id="550e8400-e29b-41d4-a716-446655440000",
-            event_id="e1", source_video="cam01",
+            event_id="e1",
+            source_video="cam01",
         )
         assert isinstance(f.visitor_id, uuid.UUID)
 
     def test_naive_datetime_rejected(self):
         with pytest.raises(ValueError, match="computed_at"):
             Feature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-                computed_at=datetime(2026, 7, 19, 12, 0, 0),  # naive
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
+                computed_at=datetime(2026, 7, 19, 12, 0, 0),  # noqa: DTZ001 (naive test)
             )
 
 
 class TestDurationFeature:
     def test_basic(self):
         f = DurationFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
             duration_seconds=480.0,
         )
         assert f.duration_seconds == 480.0
@@ -102,7 +109,9 @@ class TestDurationFeature:
     def test_negative_duration_rejected(self):
         with pytest.raises(ValueError, match="duration_seconds"):
             DurationFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
                 duration_seconds=-1.0,
             )
 
@@ -110,8 +119,11 @@ class TestDurationFeature:
 class TestVisitFrequencyFeature:
     def test_basic(self):
         f = VisitFrequencyFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-            visits_in_window=3, window_seconds=1800.0,
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
+            visits_in_window=3,
+            window_seconds=1800.0,
         )
         assert f.visits_in_window == 3
         assert f.window_seconds == 1800.0
@@ -119,23 +131,33 @@ class TestVisitFrequencyFeature:
     def test_zero_visits_rejected(self):
         with pytest.raises(ValueError, match="visits_in_window"):
             VisitFrequencyFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-                visits_in_window=0, window_seconds=1800.0,
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
+                visits_in_window=0,
+                window_seconds=1800.0,
             )
 
     def test_zero_window_rejected(self):
         with pytest.raises(ValueError, match="window_seconds"):
             VisitFrequencyFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-                visits_in_window=1, window_seconds=0.0,
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
+                visits_in_window=1,
+                window_seconds=0.0,
             )
 
 
 class TestTimeFeature:
     def test_basic(self):
         f = TimeFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-            hour_of_day=14, day_of_week=0, is_weekend=False,
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
+            hour_of_day=14,
+            day_of_week=0,
+            is_weekend=False,
         )
         assert f.hour_of_day == 14
         assert f.day_of_week == 0
@@ -145,7 +167,10 @@ class TestTimeFeature:
         # 2026-07-19 是周日（day_of_week=6）
         dt = utc(2026, 7, 19, 23, 30, 0)
         f = TimeFeature.from_datetime(
-            dt, visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+            dt,
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
         )
         assert f.hour_of_day == 23
         assert f.day_of_week == 6  # 周日
@@ -155,23 +180,34 @@ class TestTimeFeature:
         """is_weekend 必须与 day_of_week 一致（避免人为误填）。"""
         with pytest.raises(ValueError, match="is_weekend"):
             TimeFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-                hour_of_day=10, day_of_week=0,  # 周一
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
+                hour_of_day=10,
+                day_of_week=0,  # 周一
                 is_weekend=True,  # 但标为周末 → 矛盾
             )
 
     def test_invalid_hour_rejected(self):
         with pytest.raises(ValueError, match="hour_of_day"):
             TimeFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-                hour_of_day=25, day_of_week=0, is_weekend=False,
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
+                hour_of_day=25,
+                day_of_week=0,
+                is_weekend=False,
             )
 
     def test_invalid_day_rejected(self):
         with pytest.raises(ValueError, match="day_of_week"):
             TimeFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-                hour_of_day=10, day_of_week=7, is_weekend=False,
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
+                hour_of_day=10,
+                day_of_week=7,
+                is_weekend=False,
             )
 
 
@@ -179,7 +215,9 @@ class TestTrajectoryFeature:
     def test_basic_mvp_default(self):
         """MVP 单摄默认：bbox_center_displacement=0, segment_count=1。"""
         f = TrajectoryFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
         )
         assert f.bbox_center_displacement == 0.0
         assert f.segment_count == 1
@@ -187,14 +225,18 @@ class TestTrajectoryFeature:
     def test_negative_displacement_rejected(self):
         with pytest.raises(ValueError, match="bbox_center_displacement"):
             TrajectoryFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
                 bbox_center_displacement=-1.0,
             )
 
     def test_zero_segment_rejected(self):
         with pytest.raises(ValueError, match="segment_count"):
             TrajectoryFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
                 segment_count=0,
             )
 
@@ -203,17 +245,43 @@ class TestTrajectoryFeature:
 # RiskFeature 聚合
 # ============================================================================
 
+
 class TestRiskFeature:
     def test_aggregate_all_features(self):
         v_id = uuid.uuid4()
         t = utc(2026, 7, 19, 12, 0, 0)
         risk = RiskFeature(
-            visitor_id=v_id, event_id="e1", source_video="cam01",
+            visitor_id=v_id,
+            event_id="e1",
+            source_video="cam01",
             computed_at=t,
-            duration=DurationFeature(visitor_id=v_id, event_id="e1", source_video="cam01", duration_seconds=480.0, computed_at=t),
-            frequency=VisitFrequencyFeature(visitor_id=v_id, event_id="e1", source_video="cam01", visits_in_window=3, window_seconds=1800.0, computed_at=t),
-            time=TimeFeature(visitor_id=v_id, event_id="e1", source_video="cam01", hour_of_day=12, day_of_week=0, is_weekend=False, computed_at=t),
-            trajectory=TrajectoryFeature(visitor_id=v_id, event_id="e1", source_video="cam01", computed_at=t),
+            duration=DurationFeature(
+                visitor_id=v_id,
+                event_id="e1",
+                source_video="cam01",
+                duration_seconds=480.0,
+                computed_at=t,
+            ),
+            frequency=VisitFrequencyFeature(
+                visitor_id=v_id,
+                event_id="e1",
+                source_video="cam01",
+                visits_in_window=3,
+                window_seconds=1800.0,
+                computed_at=t,
+            ),
+            time=TimeFeature(
+                visitor_id=v_id,
+                event_id="e1",
+                source_video="cam01",
+                hour_of_day=12,
+                day_of_week=0,
+                is_weekend=False,
+                computed_at=t,
+            ),
+            trajectory=TrajectoryFeature(
+                visitor_id=v_id, event_id="e1", source_video="cam01", computed_at=t
+            ),
         )
         assert risk.has_all_features() is True
         d = risk.to_dict()
@@ -226,7 +294,9 @@ class TestRiskFeature:
         """未指定的具体 Feature 默认为 None（Rule Engine 跳过对应规则）。"""
         v_id = uuid.uuid4()
         risk = RiskFeature(
-            visitor_id=v_id, event_id="e1", source_video="cam01",
+            visitor_id=v_id,
+            event_id="e1",
+            source_video="cam01",
             computed_at=utc(2026, 7, 19, 12, 0, 0),
         )
         assert risk.duration is None
@@ -242,8 +312,17 @@ class TestRiskFeature:
         v_id = uuid.uuid4()
         t = utc(2026, 7, 19, 12, 0, 0)
         risk = RiskFeature(
-            visitor_id=v_id, event_id="e1", source_video="cam01", computed_at=t,
-            duration=DurationFeature(visitor_id=v_id, event_id="e1", source_video="cam01", duration_seconds=480.0, computed_at=t),
+            visitor_id=v_id,
+            event_id="e1",
+            source_video="cam01",
+            computed_at=t,
+            duration=DurationFeature(
+                visitor_id=v_id,
+                event_id="e1",
+                source_video="cam01",
+                duration_seconds=480.0,
+                computed_at=t,
+            ),
         )
         j = risk.to_json()
         parsed = json.loads(j)
@@ -253,14 +332,17 @@ class TestRiskFeature:
     def test_naive_computed_at_rejected(self):
         with pytest.raises(ValueError, match="computed_at"):
             RiskFeature(
-                visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-                computed_at=datetime(2026, 7, 19, 12, 0, 0),
+                visitor_id=uuid.uuid4(),
+                event_id="e1",
+                source_video="cam01",
+                computed_at=datetime(2026, 7, 19, 12, 0, 0),  # noqa: DTZ001 (naive test)
             )
 
 
 # ============================================================================
 # 4 个具体 Extractor
 # ============================================================================
+
 
 class TestDurationFeatureExtractor:
     def test_extract(self):
@@ -275,6 +357,7 @@ class TestVisitFrequencyFeatureExtractor:
     def test_first_visit_count_is_one(self):
         """首次访问窗口内 = 1 次。"""
         from collections import deque
+
         event = make_event(duration_s=5.0, leave_hour=10)
         f = VisitFrequencyFeatureExtractor.extract(event, deque(), 1800.0)
         assert f.visits_in_window == 1
@@ -283,18 +366,22 @@ class TestVisitFrequencyFeatureExtractor:
     def test_includes_recent_history(self):
         """窗口内历史事件被计入。"""
         from collections import deque
+
         event = make_event(duration_s=5.0, leave_hour=10)
         # 2 个历史事件 leave_time 都在窗口内
-        hist = deque([
-            make_event(leave_hour=9),
-            make_event(leave_hour=9, visitor_id=event.visitor_id),
-        ])
+        hist = deque(
+            [
+                make_event(leave_hour=9),
+                make_event(leave_hour=9, visitor_id=event.visitor_id),
+            ]
+        )
         f = VisitFrequencyFeatureExtractor.extract(event, hist, 1800.0)
         assert f.visits_in_window == 3  # 2 历史 + 1 当前
 
     def test_excludes_old_history_outside_window(self):
         """窗口外历史事件不计入。"""
         from collections import deque
+
         event = make_event(duration_s=5.0, leave_hour=10)
         # 1 个历史事件 leave_time=2:00（远早于 10:00 - 1800s）
         old = VisitorEvent(
@@ -336,6 +423,7 @@ class TestTrajectoryFeatureExtractor:
 # ============================================================================
 # FeatureExtractor 编排器
 # ============================================================================
+
 
 class TestFeatureExtractor:
     def test_single_event(self):
@@ -389,18 +477,31 @@ class TestFeatureExtractor:
 # 契约边界：Feature 严禁包含业务判断字段（ADR-0007 / ADR-0008）
 # ============================================================================
 
+
 class TestFeatureContractBoundary:
     """Feature / RiskFeature 严格不含业务判断字段。"""
 
-    FORBIDDEN = {
-        "risk_level", "score", "visit_type", "is_suspicious",
-        "is_long_visit", "is_odd_hour", "is_repeat", "is_night",
-        "warning", "verdict", "event_type",
-    }
+    FORBIDDEN = frozenset(
+        {
+            "risk_level",
+            "score",
+            "visit_type",
+            "is_suspicious",
+            "is_long_visit",
+            "is_odd_hour",
+            "is_repeat",
+            "is_night",
+            "warning",
+            "verdict",
+            "event_type",
+        }
+    )
 
     def test_duration_feature_no_business_judgment(self):
         d = DurationFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
             duration_seconds=10.0,
         ).to_dict()
         assert not (self.FORBIDDEN & set(d.keys())), (
@@ -409,15 +510,22 @@ class TestFeatureContractBoundary:
 
     def test_visit_frequency_feature_no_business_judgment(self):
         d = VisitFrequencyFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-            visits_in_window=3, window_seconds=1800.0,
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
+            visits_in_window=3,
+            window_seconds=1800.0,
         ).to_dict()
         assert not (self.FORBIDDEN & set(d.keys()))
 
     def test_time_feature_no_business_judgment(self):
         d = TimeFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
-            hour_of_day=3, day_of_week=0, is_weekend=False,
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
+            hour_of_day=3,
+            day_of_week=0,
+            is_weekend=False,
         ).to_dict()
         # is_weekend 是日历事实，不在禁用集
         leaked = self.FORBIDDEN & set(d.keys())
@@ -428,7 +536,9 @@ class TestFeatureContractBoundary:
 
     def test_trajectory_feature_no_business_judgment(self):
         d = TrajectoryFeature(
-            visitor_id=uuid.uuid4(), event_id="e1", source_video="cam01",
+            visitor_id=uuid.uuid4(),
+            event_id="e1",
+            source_video="cam01",
         ).to_dict()
         assert not (self.FORBIDDEN & set(d.keys()))
 
@@ -436,8 +546,17 @@ class TestFeatureContractBoundary:
         v_id = uuid.uuid4()
         t = utc(2026, 7, 19, 12, 0, 0)
         risk = RiskFeature(
-            visitor_id=v_id, event_id="e1", source_video="cam01", computed_at=t,
-            duration=DurationFeature(visitor_id=v_id, event_id="e1", source_video="cam01", duration_seconds=480.0, computed_at=t),
+            visitor_id=v_id,
+            event_id="e1",
+            source_video="cam01",
+            computed_at=t,
+            duration=DurationFeature(
+                visitor_id=v_id,
+                event_id="e1",
+                source_video="cam01",
+                duration_seconds=480.0,
+                computed_at=t,
+            ),
         )
         d = risk.to_dict()
         assert not (self.FORBIDDEN & set(d.keys())), (
@@ -458,11 +577,13 @@ def test_caviar_end_to_end_pipeline_yields_risk_features():
     验证：CAVIAR 真实监控上 FeatureExtractor 能产出 RiskFeature 列表，字段全部为数值。
     """
     pytest.importorskip("ultralytics")
-    import cv2
     from pathlib import Path
+
+    import cv2
+
+    from home_perception.analysis.event_builder import VisitorEventBuilder
     from home_perception.detection.detector import YOLODetector
     from home_perception.detection.tracker import VisitorTracker
-    from home_perception.analysis.event_builder import VisitorEventBuilder
 
     p = Path(CAVIAR_ONE_STOP_ENTER)
     if not p.is_dir() or not list(p.glob("frame_*.jpg")):
@@ -477,9 +598,13 @@ def test_caviar_end_to_end_pipeline_yields_risk_features():
         pytest.skip("CAVIAR frames 解析失败")
 
     det = YOLODetector(
-        model="yolo11n.pt", conf_threshold=0.25,
-        classes=[0], imgsz=416, device="cpu",
-        enable_track=True, tracker="bytetrack",
+        model="yolo11n.pt",
+        conf_threshold=0.25,
+        classes=[0],
+        imgsz=416,
+        device="cpu",
+        enable_track=True,
+        tracker="bytetrack",
     ).load()
     tracker = VisitorTracker(absence_gap_s=5.0)
     event_builder = VisitorEventBuilder(tracker, source_video="CAVIAR/OneStopEnter1cor")
@@ -501,9 +626,14 @@ def test_caviar_end_to_end_pipeline_yields_risk_features():
     else:
         for rf in risk_features:
             # 所有 Feature 都是数值字段，无判断字段
-            assert rf.has_all_features() or any([
-                rf.duration, rf.frequency, rf.time, rf.trajectory,
-            ])
+            assert rf.has_all_features() or any(
+                [
+                    rf.duration,
+                    rf.frequency,
+                    rf.time,
+                    rf.trajectory,
+                ]
+            )
             if rf.duration:
                 assert rf.duration.duration_seconds >= 0
             if rf.frequency:

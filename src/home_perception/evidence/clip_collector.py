@@ -3,22 +3,24 @@
 隐私约束（风险 T5）：仅中/高风险或受中心指令时采集；截图/片段中无关路人、
 门牌/银行卡等敏感区域应遮挡/模糊后再落盘。普通来访默认不存像素。
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..core.event import EvidenceRef
 from ..analysis.perception import PerceptionEvent
+from ..core.event import EvidenceRef
 
 
 class EvidenceCollector(ABC):
     @abstractmethod
-    def collect(self, event: PerceptionEvent, frame, recent_frames) -> list[EvidenceRef]:
-        ...
+    def collect(self, event: PerceptionEvent, frame, recent_frames) -> list[EvidenceRef]: ...
 
 
 class LocalClipCollector(EvidenceCollector):
-    def __init__(self, local_dir: str = "data/evidence", clip_seconds: int = 10, snapshot: bool = True):
+    def __init__(
+        self, local_dir: str = "data/evidence", clip_seconds: int = 10, snapshot: bool = True
+    ):
         self.local_dir = local_dir
         self.clip_seconds = clip_seconds
         self.snapshot = snapshot

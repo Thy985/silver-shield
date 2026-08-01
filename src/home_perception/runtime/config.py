@@ -8,15 +8,15 @@
 边界：本文件**只做构造参数转换 + 帧读取**，不实例化具体组件
 （组件装配在 `pipeline.PerceptionPipeline.from_settings`）。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 
 from ..action.dispatcher import DispatcherConfig
 from ..action.notifier import FamilyContact
-from ..core.config import ActionConfig, RuleConfig
 from ..analysis.rule_engine import ThresholdConfig
+from ..core.config import ActionConfig, RuleConfig
 
 
 def build_threshold_config(rule_cfg: RuleConfig) -> ThresholdConfig:
@@ -24,7 +24,7 @@ def build_threshold_config(rule_cfg: RuleConfig) -> ThresholdConfig:
     return rule_cfg.to_threshold_config()
 
 
-def _build_family_contact(action_cfg: ActionConfig) -> Optional[FamilyContact]:
+def _build_family_contact(action_cfg: ActionConfig) -> FamilyContact | None:
     """ActionConfig.family_contact → FamilyContact（未配置返回 None）。
 
     模块私有：仅 build_dispatcher_config 内部使用，不进 runtime 公共 API 表面积。
@@ -53,7 +53,7 @@ def read_caviar_frames(
     base_dir: str,
     scenario: str,
     frame_glob: str = "frame_*.jpg",
-) -> List["object"]:
+) -> list[object]:
     """读取 CAVIAR 场景目录下的抽帧 JPG，返回 BGR 帧列表（按文件名排序）。
 
     依赖 cv2；任一环节缺失（cv2 未装 / 目录不存在 / 无 jpg）返回空列表，
@@ -71,7 +71,7 @@ def read_caviar_frames(
     if not files:
         return []
 
-    frames: List["object"] = []
+    frames: list[object] = []
     for f in files:
         img = cv2.imread(str(f))
         if img is not None:

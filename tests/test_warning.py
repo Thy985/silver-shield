@@ -7,12 +7,12 @@
 > - risk_level 是严重度，不是诈骗概率
 > - DecisionPolicy 独立于 Rule（不复算 Feature / 不重新组合 Rule）
 """
+
 from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime, timezone
 
 import pytest
 
@@ -31,21 +31,21 @@ from home_perception.analysis.warning import (
     WarningEvent,
 )
 
-
 # ============================================================================
 # 时区 helper
 # ============================================================================
 
+
 def utc(year, month, day, hour=0, minute=0, second=0):
-    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
 
 
 def make_perception(
     event_type: str = "visit_normal",
     score: float = 0.5,
-    visitor_id: Optional[uuid.UUID] = None,
+    visitor_id: uuid.UUID | None = None,
     device_id: str = "home_entry_01",
-    timestamp: Optional[float] = None,
+    timestamp: float | None = None,
     is_odd_hour: bool = False,
 ) -> PerceptionEvent:
     """构造一个用于决策层测试的最小 PerceptionEvent。"""
@@ -55,7 +55,7 @@ def make_perception(
         score=score,
         visitor_id=visitor_id or uuid.uuid4(),
         source_video="cam01",
-        timestamp=timestamp or datetime.now(timezone.utc).timestamp(),
+        timestamp=timestamp or datetime.now(UTC).timestamp(),
         is_odd_hour=is_odd_hour,
         meta={"rule": f"TestRule_{event_type}"},
     )
@@ -64,27 +64,32 @@ def make_perception(
 def make_warning(
     risk_level: str = "MEDIUM",
     recommended_action: str = "NOTIFY_FAMILY",
-    trigger_events: Optional[List[dict]] = None,
-    reason_summary: Optional[List[str]] = None,
+    trigger_events: list[dict] | None = None,
+    reason_summary: list[str] | None = None,
     perception_score: float = 0.7,
     elder_id: str = "elder_001",
     device_id: str = "home_entry_01",
-    warning_id: Optional[uuid.UUID] = None,
+    warning_id: uuid.UUID | None = None,
     status: str = "CREATED",
-    meta: Optional[dict] = None,
+    meta: dict | None = None,
 ) -> WarningEvent:
     """构造一个用于决策层测试的最小 WarningEvent。"""
     if trigger_events is None:
-        trigger_events = [{
-            "event_id": f"{uuid.uuid4()}:abnormal_dwell",
-            "event_type": "abnormal_dwell",
-            "score": 0.5,
-            "timestamp": 1.0,
-        }]
+        trigger_events = [
+            {
+                "event_id": f"{uuid.uuid4()}:abnormal_dwell",
+                "event_type": "abnormal_dwell",
+                "score": 0.5,
+                "timestamp": 1.0,
+            }
+        ]
     if reason_summary is None:
         reason_summary = ["异常停留"]
     if meta is None:
-        meta = {"policy": "RuleBasedDecisionPolicy", "decided_at": utc(2026, 7, 19, 12, 0, 0).isoformat()}
+        meta = {
+            "policy": "RuleBasedDecisionPolicy",
+            "decided_at": utc(2026, 7, 19, 12, 0, 0).isoformat(),
+        }
     return WarningEvent(
         elder_id=elder_id,
         device_id=device_id,
@@ -102,6 +107,7 @@ def make_warning(
 # ============================================================================
 # WarningEvent 字段校验
 # ============================================================================
+
 
 class TestWarningEventFieldValidation:
     def test_basic_construction(self):
@@ -168,6 +174,7 @@ class TestWarningEventFieldValidation:
 # WarningEvent UTC timezone 强制
 # ============================================================================
 
+
 class TestWarningEventUTCTimezone:
     def test_naive_datetime_raises(self):
         with pytest.raises(ValueError, match="UTC timezone-aware"):
@@ -176,13 +183,16 @@ class TestWarningEventUTCTimezone:
                 device_id="home_entry_01",
                 risk_level="LOW",
                 recommended_action="MONITOR",
-                trigger_events=[{"event_id": "x", "event_type": "y", "score": 0.1, "timestamp": 1.0}],
+                trigger_events=[
+                    {"event_id": "x", "event_type": "y", "score": 0.1, "timestamp": 1.0}
+                ],
                 reason_summary=["x"],
-                created_at=datetime(2026, 7, 19, 12, 0, 0),  # naive
+                created_at=datetime(2026, 7, 19, 12, 0, 0),  # noqa: DTZ001 (naive test)
             )
 
     def test_non_utc_timezone_raises(self):
-        from datetime import timezone, timedelta as td
+        from datetime import timedelta as td
+
         beijing = timezone(td(hours=8))
         with pytest.raises(ValueError, match="UTC timezone-aware"):
             WarningEvent(
@@ -190,7 +200,9 @@ class TestWarningEventUTCTimezone:
                 device_id="home_entry_01",
                 risk_level="LOW",
                 recommended_action="MONITOR",
-                trigger_events=[{"event_id": "x", "event_type": "y", "score": 0.1, "timestamp": 1.0}],
+                trigger_events=[
+                    {"event_id": "x", "event_type": "y", "score": 0.1, "timestamp": 1.0}
+                ],
                 reason_summary=["x"],
                 created_at=datetime(2026, 7, 19, 12, 0, 0, tzinfo=beijing),  # +08:00
             )
@@ -213,6 +225,7 @@ class TestWarningEventUTCTimezone:
 # WarningEvent 契约边界（黑名单：决策层不做最终判定）
 # ============================================================================
 
+
 class TestWarningEventContractBoundary:
     """决策层黑名单测试：禁止任何"最终判定" / "犯罪认定"字段。
 
@@ -231,12 +244,14 @@ class TestWarningEventContractBoundary:
 
     def test_trigger_event_dict_structure_required(self):
         """trigger_events 元素必须是 dict（是 PerceptionEvent 引用，含 event_type/score/timestamp 元数据）。"""
-        trigger = [{
-            "event_id": "x:y",
-            "event_type": "y",
-            "score": 0.5,
-            "timestamp": 1.0,
-        }]
+        trigger = [
+            {
+                "event_id": "x:y",
+                "event_type": "y",
+                "score": 0.5,
+                "timestamp": 1.0,
+            }
+        ]
         w = make_warning(trigger_events=trigger)  # 应不抛异常
         assert w.trigger_events[0]["event_type"] == "y"
         assert w.trigger_events[0]["score"] == 0.5
@@ -247,9 +262,18 @@ class TestWarningEventContractBoundary:
         d = w.to_dict()
         # 合法字段白名单
         allowed = {
-            "warning_id", "elder_id", "device_id", "risk_level",
-            "recommended_action", "status", "perception_score",
-            "trigger_events", "reason_summary", "evidence", "meta", "created_at",
+            "warning_id",
+            "elder_id",
+            "device_id",
+            "risk_level",
+            "recommended_action",
+            "status",
+            "perception_score",
+            "trigger_events",
+            "reason_summary",
+            "evidence",
+            "meta",
+            "created_at",
         }
         leaked = set(d.keys()) - allowed
         assert not leaked, f"WarningEvent 泄漏字段 {leaked}，应只含白名单字段"
@@ -275,6 +299,7 @@ class TestWarningEventContractBoundary:
 # ============================================================================
 # WarningEvent 序列化
 # ============================================================================
+
 
 class TestWarningEventSerialization:
     def test_to_dict_basic(self):
@@ -312,6 +337,7 @@ class TestWarningEventSerialization:
 # ============================================================================
 # DecisionPolicy 路由逻辑
 # ============================================================================
+
 
 class TestRuleBasedDecisionPolicy:
     def test_empty_events_returns_none(self):
@@ -474,6 +500,7 @@ class TestRuleBasedDecisionPolicy:
 # RuleBasedDecisionPolicy 路由表定制
 # ============================================================================
 
+
 class TestRuleBasedDecisionPolicyCustomization:
     def test_custom_routing_table(self):
         """家庭可定制路由表：把 abnormal_dwell 视为 MEDIUM 而非 LOW。"""
@@ -527,6 +554,7 @@ class TestRuleBasedDecisionPolicyCustomization:
 # DecisionEngine 编排器
 # ============================================================================
 
+
 class TestDecisionEngine:
     def test_requires_elder_id(self):
         with pytest.raises(ValueError, match="elder_id"):
@@ -540,6 +568,7 @@ class TestDecisionEngine:
     def test_custom_policy(self):
         class _StubPolicy(RuleBasedDecisionPolicy):
             name = "StubPolicy"
+
         engine = DecisionEngine(elder_id="e1", policy=_StubPolicy())
         assert engine.policy.name == "StubPolicy"
 
@@ -587,6 +616,7 @@ class TestDecisionEngine:
 # ============================================================================
 # 链路集成：RuleEngine → DecisionEngine
 # ============================================================================
+
 
 class TestRuleEngineToDecisionEngine:
     """P0-7b RuleEngine 输出 → P0-8 DecisionEngine 消费 集成测试。"""
@@ -647,6 +677,7 @@ def _make_high_risk_feature(visitor_id: uuid.UUID):
         TrajectoryFeature,
         VisitFrequencyFeature,
     )
+
     t = utc(2026, 7, 19, 2, 0, 0)  # 凌晨 2 点（异常时段）
     return RiskFeature(
         visitor_id=visitor_id,
@@ -654,18 +685,32 @@ def _make_high_risk_feature(visitor_id: uuid.UUID):
         source_video="cam01",
         computed_at=t,
         duration=DurationFeature(
-            visitor_id=visitor_id, event_id="e1", source_video="cam01",
-            duration_seconds=600.0, computed_at=t,  # > 300 阈值
+            visitor_id=visitor_id,
+            event_id="e1",
+            source_video="cam01",
+            duration_seconds=600.0,
+            computed_at=t,  # > 300 阈值
         ),
         frequency=VisitFrequencyFeature(
-            visitor_id=visitor_id, event_id="e1", source_video="cam01",
-            visits_in_window=5, window_seconds=1800.0, computed_at=t,  # > 3 阈值
+            visitor_id=visitor_id,
+            event_id="e1",
+            source_video="cam01",
+            visits_in_window=5,
+            window_seconds=1800.0,
+            computed_at=t,  # > 3 阈值
         ),
         time=TimeFeature.from_datetime(
-            t, visitor_id=visitor_id, event_id="e1", source_video="cam01", computed_at=t,
+            t,
+            visitor_id=visitor_id,
+            event_id="e1",
+            source_video="cam01",
+            computed_at=t,
         ),
         trajectory=TrajectoryFeature(
-            visitor_id=visitor_id, event_id="e1", source_video="cam01", computed_at=t,
+            visitor_id=visitor_id,
+            event_id="e1",
+            source_video="cam01",
+            computed_at=t,
         ),
     )
 
@@ -673,8 +718,9 @@ def _make_high_risk_feature(visitor_id: uuid.UUID):
 def test_caviar_end_to_end_pipeline_yields_decision():
     """CAVIAR OneStopEnter1cor: detector → tracker → event → feature → rule → perception → decision 全链路。"""
     pytest.importorskip("ultralytics")
-    import cv2
     from pathlib import Path
+
+    import cv2
 
     p = Path(CAVIAR_ONE_STOP_ENTER)
     if not p.is_dir() or not list(p.glob("frame_*.jpg")):

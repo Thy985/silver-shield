@@ -10,9 +10,10 @@
 - 状态机 key=visitor_instance_id：track_id 重用不串号
 - CLEARED.paired_signal_id == 对应 RAISED.signal_id（成对性）
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -26,13 +27,13 @@ from home_perception.analysis.realtime_risk_evaluator import RealTimeRiskEvaluat
 from home_perception.analysis.risk_signal import SignalTransition
 from home_perception.analysis.rule_engine import ThresholdConfig
 
-
 # ============================================================================
 # 辅助构造
 # ============================================================================
 
+
 def _utc(y, mo, d, h=0, mi=0, s=0) -> datetime:
-    return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+    return datetime(y, mo, d, h, mi, s, tzinfo=UTC)
 
 
 def _state(
@@ -82,6 +83,7 @@ def _thresholds(
 # ============================================================================
 # 1. 状态机基础：NONE → RAISED → ACTIVE_RISK → CLEARED → NONE
 # ============================================================================
+
 
 class TestStateMachineBasics:
     def test_first_seen_no_trigger_creates_none_no_signal(self):
@@ -155,6 +157,7 @@ class TestStateMachineBasics:
 # 2. 离场兜底
 # ============================================================================
 
+
 class TestLeaveFallback:
     def test_phase_left_emits_cleared_and_deletes(self):
         """phase==LEFT：强制 CLEARED + 删除条目（防泄漏）。"""
@@ -217,6 +220,7 @@ class TestLeaveFallback:
 # 3. 重启丢弃语义（§4.3）
 # ============================================================================
 
+
 class TestResetSemantics:
     def test_reset_clears_active_no_cleared_emitted(self):
         """reset() 清空全部状态，不补发 CLEARED（§4.3 volatile 语义）。"""
@@ -243,6 +247,7 @@ class TestResetSemantics:
 # ============================================================================
 # 4. track_id 重用不串号（key=visitor_instance_id）
 # ============================================================================
+
 
 class TestTrackIdReuseNoBleed:
     def test_track_id_reuse_does_not_inherit_active_risk(self):
@@ -278,6 +283,7 @@ class TestTrackIdReuseNoBleed:
 # ============================================================================
 # 5. 阈值来自 ThresholdConfig（非硬编码）
 # ============================================================================
+
 
 class TestThresholdsFromConfig:
     def test_dwell_threshold_from_config(self):
@@ -315,6 +321,7 @@ class TestThresholdsFromConfig:
 # ============================================================================
 # 5b. features 反映实际触发证据（防 visits_in_window 硬编码 0 回归）
 # ============================================================================
+
 
 class TestRaisedFeaturesReflectTrigger:
     """RAISED 信号的 features 必须反映实际触发证据，不能硬编码。
@@ -389,11 +396,12 @@ class TestRaisedFeaturesReflectTrigger:
 # 6. 输入校验
 # ============================================================================
 
+
 class TestInputValidation:
     def test_naive_now_rejected(self):
         """naive datetime 被 require_utc 拒绝。"""
         ev = RealTimeRiskEvaluator(_thresholds())
-        naive_now = datetime(2026, 7, 27, 10, 0, 0)  # 无 tzinfo
+        naive_now = datetime(2026, 7, 27, 10, 0, 0)  # noqa: DTZ001 (naive test)
         with pytest.raises(ValueError, match="now 必须是 timezone-aware"):
             ev.evaluate([], naive_now)
 
@@ -407,6 +415,7 @@ class TestInputValidation:
 # ============================================================================
 # 7. 端到端状态机序列：NONE→ACTIVE_RISK→NONE（防 Dashboard 闪烁）
 # ============================================================================
+
 
 class TestStateMachineSequence:
     """验证状态机序列：多帧触发只产 1 RAISED + 1 CLEARED。

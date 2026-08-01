@@ -9,11 +9,12 @@
 - `WhitelistProvider` protocol（PendingVerifyRule 用，第一版 NotImplementedError）
 - `RuleEngine`：编排器，集成 CooldownGate
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol, Set
+from typing import Any, Protocol
 from uuid import UUID
 
 from ..common.logging import get_logger
@@ -30,6 +31,7 @@ log = get_logger(__name__)
 # ThresholdConfig（ADR-0009 Decision 6：阈值配置化）
 # ============================================================================
 
+
 @dataclass
 class ThresholdConfig:
     """阈值与权重集中配置（不硬编码在 Rule 类里）。"""
@@ -39,21 +41,27 @@ class ThresholdConfig:
     # RepeatVisitRule
     repeat_visit_count: int = 3
     # OddHourRule
-    odd_hour_set: Set[int] = field(default_factory=lambda: {23, 0, 1, 2, 3, 4})
+    odd_hour_set: set[int] = field(default_factory=lambda: {23, 0, 1, 2, 3, 4})
     # CooldownGate
     cooldown_seconds: float = 600.0
     reset_gap_seconds: float = 1800.0
     # HighRiskApproachRule (Composite)
-    high_risk_required_rules: Set[str] = field(default_factory=lambda: {
-        "LongDurationRule", "RepeatVisitRule", "OddHourRule",
-    })
+    high_risk_required_rules: set[str] = field(
+        default_factory=lambda: {
+            "LongDurationRule",
+            "RepeatVisitRule",
+            "OddHourRule",
+        }
+    )
     # Rule 命中权重（perception_score 基础值）
-    rule_weights: Dict[str, float] = field(default_factory=lambda: {
-        "LongDurationRule": 0.50,
-        "RepeatVisitRule": 0.30,
-        "OddHourRule": 0.10,
-        "HighRiskApproachRule": 0.90,
-    })
+    rule_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "LongDurationRule": 0.50,
+            "RepeatVisitRule": 0.30,
+            "OddHourRule": 0.10,
+            "HighRiskApproachRule": 0.90,
+        }
+    )
 
     def weight_for(self, rule_name: str) -> float:
         return self.rule_weights.get(rule_name, 0.0)
@@ -62,6 +70,7 @@ class ThresholdConfig:
 # ============================================================================
 # WhitelistProvider（PendingVerifyRule 用，v2 实现）
 # ============================================================================
+
 
 class WhitelistProvider(Protocol):
     """白名单提供方协议（PendingVerifyRule 用）。
@@ -79,29 +88,36 @@ class WhitelistProvider(Protocol):
 # 4 条基础 Rule
 # ============================================================================
 
+
 class LongDurationRule(Rule):
     """停留时长超阈值 → abnormal_dwell。"""
 
     name = "LongDurationRule"
 
-    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> List[RuleResult]:
+    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> list[RuleResult]:
         if risk.duration is None:
             return [RuleResult(rule_name=self.name, matched=False, notes="DurationFeature 缺失")]
         d = risk.duration.duration_seconds
         threshold = ctx.thresholds.long_duration_seconds
         if d >= threshold:
-            return [RuleResult(
-                rule_name=self.name, matched=True,
-                event_type="abnormal_dwell",
-                perception_score=ctx.thresholds.weight_for(self.name),
+            return [
+                RuleResult(
+                    rule_name=self.name,
+                    matched=True,
+                    event_type="abnormal_dwell",
+                    perception_score=ctx.thresholds.weight_for(self.name),
+                    evidence={"duration_seconds": d, "threshold": threshold},
+                    notes=f"停留 {d:.1f}s >= 阈值 {threshold:.1f}s",
+                )
+            ]
+        return [
+            RuleResult(
+                rule_name=self.name,
+                matched=False,
                 evidence={"duration_seconds": d, "threshold": threshold},
-                notes=f"停留 {d:.1f}s >= 阈值 {threshold:.1f}s",
-            )]
-        return [RuleResult(
-            rule_name=self.name, matched=False,
-            evidence={"duration_seconds": d, "threshold": threshold},
-            notes=f"停留 {d:.1f}s < 阈值 {threshold:.1f}s（不触发）",
-        )]
+                notes=f"停留 {d:.1f}s < 阈值 {threshold:.1f}s（不触发）",
+            )
+        ]
 
 
 class RepeatVisitRule(Rule):
@@ -109,25 +125,37 @@ class RepeatVisitRule(Rule):
 
     name = "RepeatVisitRule"
 
-    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> List[RuleResult]:
+    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> list[RuleResult]:
         if risk.frequency is None:
-            return [RuleResult(rule_name=self.name, matched=False, notes="VisitFrequencyFeature 缺失")]
+            return [
+                RuleResult(rule_name=self.name, matched=False, notes="VisitFrequencyFeature 缺失")
+            ]
         count = risk.frequency.visits_in_window
         threshold = ctx.thresholds.repeat_visit_count
         if count >= threshold:
-            return [RuleResult(
-                rule_name=self.name, matched=True,
-                event_type="repeat_visit",
-                perception_score=ctx.thresholds.weight_for(self.name),
-                evidence={"visits_in_window": count, "threshold": threshold, "window_s": risk.frequency.window_seconds},
-                repeat_count=count,
-                notes=f"窗口内 {count} 次 >= 阈值 {threshold} 次",
-            )]
-        return [RuleResult(
-            rule_name=self.name, matched=False,
-            evidence={"visits_in_window": count, "threshold": threshold},
-            notes=f"窗口内 {count} 次 < 阈值 {threshold} 次（不触发）",
-        )]
+            return [
+                RuleResult(
+                    rule_name=self.name,
+                    matched=True,
+                    event_type="repeat_visit",
+                    perception_score=ctx.thresholds.weight_for(self.name),
+                    evidence={
+                        "visits_in_window": count,
+                        "threshold": threshold,
+                        "window_s": risk.frequency.window_seconds,
+                    },
+                    repeat_count=count,
+                    notes=f"窗口内 {count} 次 >= 阈值 {threshold} 次",
+                )
+            ]
+        return [
+            RuleResult(
+                rule_name=self.name,
+                matched=False,
+                evidence={"visits_in_window": count, "threshold": threshold},
+                notes=f"窗口内 {count} 次 < 阈值 {threshold} 次（不触发）",
+            )
+        ]
 
 
 class OddHourRule(Rule):
@@ -135,24 +163,33 @@ class OddHourRule(Rule):
 
     name = "OddHourRule"
 
-    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> List[RuleResult]:
+    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> list[RuleResult]:
         if risk.time is None:
             return [RuleResult(rule_name=self.name, matched=False, notes="TimeFeature 缺失")]
         hour = risk.time.hour_of_day
         if hour in ctx.thresholds.odd_hour_set:
-            return [RuleResult(
-                rule_name=self.name, matched=True,
-                event_type="visit_normal",  # §7.2：异常时段是 visit_normal + is_odd_hour 标记
-                perception_score=ctx.thresholds.weight_for(self.name),
-                evidence={"hour_of_day": hour, "odd_hour_set": sorted(ctx.thresholds.odd_hour_set)},
-                is_odd_hour=True,
-                notes=f"hour={hour} 属异常时段",
-            )]
-        return [RuleResult(
-            rule_name=self.name, matched=False,
-            evidence={"hour_of_day": hour},
-            notes=f"hour={hour} 非异常时段（不触发）",
-        )]
+            return [
+                RuleResult(
+                    rule_name=self.name,
+                    matched=True,
+                    event_type="visit_normal",  # §7.2：异常时段是 visit_normal + is_odd_hour 标记
+                    perception_score=ctx.thresholds.weight_for(self.name),
+                    evidence={
+                        "hour_of_day": hour,
+                        "odd_hour_set": sorted(ctx.thresholds.odd_hour_set),
+                    },
+                    is_odd_hour=True,
+                    notes=f"hour={hour} 属异常时段",
+                )
+            ]
+        return [
+            RuleResult(
+                rule_name=self.name,
+                matched=False,
+                evidence={"hour_of_day": hour},
+                notes=f"hour={hour} 非异常时段（不触发）",
+            )
+        ]
 
 
 class PendingVerifyRule(Rule):
@@ -164,31 +201,38 @@ class PendingVerifyRule(Rule):
 
     name = "PendingVerifyRule"
 
-    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> List[RuleResult]:
-        whitelist: Optional[WhitelistProvider] = ctx.extra.get("whitelist")
+    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> list[RuleResult]:
+        whitelist: WhitelistProvider | None = ctx.extra.get("whitelist")
         if whitelist is None:
             raise NotImplementedError(
                 "PendingVerifyRule 需要 WhitelistProvider；"
                 "P0-7b 第一版未提供，请通过 ctx.extra['whitelist'] 注入"
             )
         if whitelist.is_whitelisted(risk.visitor_id):
-            return [RuleResult(
-                rule_name=self.name, matched=False,
-                evidence={"whitelisted": True},
-                notes="访客在白名单，跳过 PendingVerify",
-            )]
-        return [RuleResult(
-            rule_name=self.name, matched=True,
-            event_type="visit_pending_verify",
-            perception_score=ctx.thresholds.weight_for(self.name),
-            evidence={"whitelisted": False},
-            notes="访客不在白名单",
-        )]
+            return [
+                RuleResult(
+                    rule_name=self.name,
+                    matched=False,
+                    evidence={"whitelisted": True},
+                    notes="访客在白名单，跳过 PendingVerify",
+                )
+            ]
+        return [
+            RuleResult(
+                rule_name=self.name,
+                matched=True,
+                event_type="visit_pending_verify",
+                perception_score=ctx.thresholds.weight_for(self.name),
+                evidence={"whitelisted": False},
+                notes="访客不在白名单",
+            )
+        ]
 
 
 # ============================================================================
 # CompositeRule：HighRiskApproachRule
 # ============================================================================
+
 
 class HighRiskApproachRule(CompositeRule):
     """组合规则：长停留 + 重复 + 异常时段 同时命中 → high_risk_approach（最高风险）。
@@ -202,43 +246,47 @@ class HighRiskApproachRule(CompositeRule):
         self,
         ctx: RuleContext,
         risk: RiskFeature,
-        prior_results: List[RuleResult],
-    ) -> List[RuleResult]:
+        prior_results: list[RuleResult],
+    ) -> list[RuleResult]:
         matched_names = {r.rule_name for r in prior_results if r.matched}
         required = ctx.thresholds.high_risk_required_rules
         if required.issubset(matched_names):
             # 计算 perception_score = 子 Rule weight 之和（封顶 1.0）
             # round 固定精度：消除浮点累加顺序 / 平台差异导致的 0.8999... 抖动
             # （set 迭代顺序受 PYTHONHASHSEED 影响，不同顺序累加结果可能差 1 ULP）
-            sub_score = sum(
-                ctx.thresholds.weight_for(name)
-                for name in required
-            )
+            sub_score = sum(ctx.thresholds.weight_for(name) for name in required)
             score = round(min(1.0, sub_score), 4)
-            return [RuleResult(
-                rule_name=self.name, matched=True,
-                event_type="high_risk_approach",
-                perception_score=score,
+            return [
+                RuleResult(
+                    rule_name=self.name,
+                    matched=True,
+                    event_type="high_risk_approach",
+                    perception_score=score,
+                    evidence={
+                        "required_rules": sorted(required),
+                        "matched_rules": sorted(matched_names),
+                        "sub_score_sum": round(sub_score, 4),
+                    },
+                    notes=f"组合规则命中：{sorted(required)}",
+                )
+            ]
+        return [
+            RuleResult(
+                rule_name=self.name,
+                matched=False,
                 evidence={
                     "required_rules": sorted(required),
                     "matched_rules": sorted(matched_names),
-                    "sub_score_sum": round(sub_score, 4),
                 },
-                notes=f"组合规则命中：{sorted(required)}",
-            )]
-        return [RuleResult(
-            rule_name=self.name, matched=False,
-            evidence={
-                "required_rules": sorted(required),
-                "matched_rules": sorted(matched_names),
-            },
-            notes=f"组合规则未全命中（matched={sorted(matched_names)}，required={sorted(required)}）",
-        )]
+                notes=f"组合规则未全命中（matched={sorted(matched_names)}，required={sorted(required)}）",
+            )
+        ]
 
 
 # ============================================================================
 # RuleEngine 编排器
 # ============================================================================
+
 
 class RuleEngine:
     """Rule Engine 编排器（P0-7b 入口）。
@@ -260,11 +308,11 @@ class RuleEngine:
     def __init__(
         self,
         device_id: str,
-        location: Optional[str] = None,
-        thresholds: Optional[ThresholdConfig] = None,
-        cooldown: Optional[CooldownGate] = None,
+        location: str | None = None,
+        thresholds: ThresholdConfig | None = None,
+        cooldown: CooldownGate | None = None,
         now_provider=None,
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ):
         if device_id is None or not str(device_id).strip():
             raise ValueError("device_id 不能为空")
@@ -280,14 +328,14 @@ class RuleEngine:
 
         # 注册 Rule（顺序：先基础 Rule，后 CompositeRule）
         # 4 条基础 Rule 权重来自 ThresholdConfig
-        self._basic_rules: List[Rule] = [
+        self._basic_rules: list[Rule] = [
             LongDurationRule(weight=self.thresholds.weight_for("LongDurationRule")),
             RepeatVisitRule(weight=self.thresholds.weight_for("RepeatVisitRule")),
             OddHourRule(weight=self.thresholds.weight_for("OddHourRule")),
             # PendingVerifyRule 不默认注册（需 Whitelist）；用户可显式 enable_pending_verify() 加入
         ]
-        self._pending_rule: Optional[PendingVerifyRule] = None
-        self._composite_rules: List[CompositeRule] = [
+        self._pending_rule: PendingVerifyRule | None = None
+        self._composite_rules: list[CompositeRule] = [
             HighRiskApproachRule(weight=self.thresholds.weight_for("HighRiskApproachRule")),
         ]
 
@@ -298,10 +346,10 @@ class RuleEngine:
         )
         self._extra["whitelist"] = whitelist
 
-    def evaluate(self, risk: RiskFeature) -> List[PerceptionEvent]:
+    def evaluate(self, risk: RiskFeature) -> list[PerceptionEvent]:
         """单次评估：消费 RiskFeature，输出 PerceptionEvent 列表（含 Cooldown 过滤）。"""
         ctx = RuleContext(now=self._now(), thresholds=self.thresholds, extra=self._extra)
-        results: List[RuleResult] = []
+        results: list[RuleResult] = []
 
         # 1) 基础 Rule
         for rule in self._basic_rules:
@@ -315,22 +363,27 @@ class RuleEngine:
             results.extend(comp.evaluate(ctx, risk, results))
 
         # 3) Cooldown 过滤 + 4) 转 PerceptionEvent
-        events: List[PerceptionEvent] = []
+        events: list[PerceptionEvent] = []
         for r in results:
             if not r.matched:
                 continue
             if not self.cooldown.try_trigger(risk.visitor_id, r.rule_name, now=ctx.now):
-                log.debug("cooldown.suppressed", rule_name=r.rule_name, visitor_id=str(risk.visitor_id))
+                log.debug(
+                    "cooldown.suppressed", rule_name=r.rule_name, visitor_id=str(risk.visitor_id)
+                )
                 continue
             events.append(self._to_perception(r, risk, ctx.now))
         return events
 
     def _to_perception(
-        self, result: RuleResult, risk: RiskFeature, now: datetime,
+        self,
+        result: RuleResult,
+        risk: RiskFeature,
+        now: datetime,
     ) -> PerceptionEvent:
         """RuleResult → PerceptionEvent。"""
         # meta 必含 rule 字段（§7.2）
-        meta: Dict[str, Any] = {
+        meta: dict[str, Any] = {
             "rule": result.rule_name,
             "evidence": result.evidence,
             "notes": result.notes,

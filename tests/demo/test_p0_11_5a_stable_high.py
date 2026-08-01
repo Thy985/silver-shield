@@ -17,15 +17,15 @@ P0-11.5a 目标：CCTV 夜间场景确定性产出 HIGH + family + community 命
 > 实际接线（防止后续改 config 时意外把 family_contact 改回 null 而漏检）。
 > 端到端 3-loop 验证见 ``scripts/measure_cctv_high.py``（runtime-gated）。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,13 +34,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # 1. 场景规则覆盖（rule_overrides）合约
 # ============================================================================
 
+
 def test_scenario_config_rule_overrides_defaults_to_none():
     """ScenarioConfig.rule_overrides 默认 None（不影响全局默认 repeat_visit_count=3）。"""
     from silver_demo.scenarios import ScenarioConfig
 
     sc = ScenarioConfig(
-        scenario_id="t", source="t",
-        start_time=datetime(2026, 7, 22, tzinfo=timezone.utc),
+        scenario_id="t",
+        source="t",
+        start_time=datetime(2026, 7, 22, tzinfo=UTC),
     )
     assert sc.rule_overrides is None
 
@@ -49,8 +51,9 @@ def test_scenario_config_accepts_rule_overrides():
     from silver_demo.scenarios import ScenarioConfig
 
     sc = ScenarioConfig(
-        scenario_id="t", source="t",
-        start_time=datetime(2026, 7, 22, tzinfo=timezone.utc),
+        scenario_id="t",
+        source="t",
+        start_time=datetime(2026, 7, 22, tzinfo=UTC),
         rule_overrides={"repeat_visit_count": 2},
     )
     assert sc.rule_overrides == {"repeat_visit_count": 2}
@@ -70,8 +73,7 @@ def test_cctv_surveillance_yaml_has_rule_overrides_repeat_visit_count_2():
     assert sc.scenario_id == "cctv_surveillance_suspicious"
     assert sc.source_type == "video_file"
     assert sc.rule_overrides == {"repeat_visit_count": 2}, (
-        "CCTV 场景必须降 repeat_visit_count 至 2 以稳定产出 HIGH；"
-        f"当前 {sc.rule_overrides!r}"
+        f"CCTV 场景必须降 repeat_visit_count 至 2 以稳定产出 HIGH；当前 {sc.rule_overrides!r}"
     )
 
 
@@ -85,8 +87,9 @@ def test_apply_scenario_rule_overrides_writes_thresholds():
     from silver_demo.scenarios import ScenarioConfig
 
     sc = ScenarioConfig(
-        scenario_id="t", source="t",
-        start_time=datetime(2026, 7, 22, tzinfo=timezone.utc),
+        scenario_id="t",
+        source="t",
+        start_time=datetime(2026, 7, 22, tzinfo=UTC),
         rule_overrides={"repeat_visit_count": 2},
     )
     thresholds = SimpleNamespace(repeat_visit_count=3, odd_hour_set=(0,))
@@ -108,8 +111,9 @@ def test_apply_scenario_rule_overrides_no_op_when_none():
     from silver_demo.scenarios import ScenarioConfig
 
     sc = ScenarioConfig(
-        scenario_id="t", source="t",
-        start_time=datetime(2026, 7, 22, tzinfo=timezone.utc),
+        scenario_id="t",
+        source="t",
+        start_time=datetime(2026, 7, 22, tzinfo=UTC),
         rule_overrides=None,
     )
     thresholds = SimpleNamespace(repeat_visit_count=3)
@@ -129,8 +133,9 @@ def test_apply_scenario_rule_overrides_unknown_key_warns_skips():
     from silver_demo.scenarios import ScenarioConfig
 
     sc = ScenarioConfig(
-        scenario_id="t", source="t",
-        start_time=datetime(2026, 7, 22, tzinfo=timezone.utc),
+        scenario_id="t",
+        source="t",
+        start_time=datetime(2026, 7, 22, tzinfo=UTC),
         rule_overrides={"repeat_visit_count": 2, "nonsense_key_xyz_999": 99},
     )
     thresholds = SimpleNamespace(repeat_visit_count=3)
@@ -150,6 +155,7 @@ def test_apply_scenario_rule_overrides_unknown_key_warns_skips():
 # ============================================================================
 # 2. 家属联系配置（family_contact）合约
 # ============================================================================
+
 
 def test_default_yaml_family_contact_is_configured():
     """``config/default.yaml`` 必须配置 ``action.family_contact``，使 NOTIFY_FAMILY 不降级为 LOG_ONLY。
@@ -176,8 +182,8 @@ def test_dispatcher_notify_family_with_configured_contact_emits_send_family_mess
     证明 demo 的 family_contact 配置切实接进 dispatcher 派发链路。
     """
     from home_perception.action import ActionDispatcher, DispatcherConfig, FamilyContact
-    from home_perception.core.config import Settings
     from home_perception.analysis.warning import WarningEvent
+    from home_perception.core.config import Settings
 
     settings = Settings.load(str(REPO_ROOT / "config" / "default.yaml"))
     fc = settings.action.family_contact
@@ -186,7 +192,10 @@ def test_dispatcher_notify_family_with_configured_contact_emits_send_family_mess
     dispatcher = ActionDispatcher(
         DispatcherConfig(
             family_contact=FamilyContact(
-                elder_id=fc.elder_id, name=fc.name, phone=fc.phone, relation=fc.relation,
+                elder_id=fc.elder_id,
+                name=fc.name,
+                phone=fc.phone,
+                relation=fc.relation,
             ),
         )
     )
@@ -195,12 +204,14 @@ def test_dispatcher_notify_family_with_configured_contact_emits_send_family_mess
         device_id="home_entry_01",
         risk_level="LOW",
         recommended_action="NOTIFY_FAMILY",
-        trigger_events=[{
-            "event_id": f"{uuid4()}:abnormal_dwell",
-            "event_type": "abnormal_dwell",
-            "score": 0.5,
-            "timestamp": 1.0,
-        }],
+        trigger_events=[
+            {
+                "event_id": f"{uuid4()}:abnormal_dwell",
+                "event_type": "abnormal_dwell",
+                "score": 0.5,
+                "timestamp": 1.0,
+            }
+        ],
         reason_summary=["异常停留"],
         warning_id=uuid4(),
     )

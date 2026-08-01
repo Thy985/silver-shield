@@ -6,9 +6,10 @@
 - 产物过冻结 schema 校验（EventType 5 类之一，score ∈ [0,1]）
 - 黑名单字段（fraud/suspect/verdict 等）结构性拒绝（RiskSignal 已守，adapter 透传）
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -18,19 +19,19 @@ from home_perception.analysis.risk_signal import (
     FORBIDDEN_RISKSIGNAL_FIELDS,
     RiskSignal,
     SignalCategory,
-    SourceModality,
     SignalTransition,
+    SourceModality,
     SubjectType,
 )
 from home_perception.analysis.signal_adapter import risk_signal_to_perception
-
 
 # ============================================================================
 # 辅助构造
 # ============================================================================
 
+
 def _utc(y, mo, d, h=0, mi=0, s=0) -> datetime:
-    return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+    return datetime(y, mo, d, h, mi, s, tzinfo=UTC)
 
 
 def _raised_signal(
@@ -76,6 +77,7 @@ def _cleared_signal(vid: str, raised_id: str) -> RiskSignal:
 # 1. CLEARED → None（不产出）
 # ============================================================================
 
+
 class TestClearedNoOutput:
     def test_cleared_returns_none(self):
         """CLEARED 信号 → None（不产出 PerceptionEvent）。"""
@@ -91,16 +93,20 @@ class TestClearedNoOutput:
 # 2. RAISED → PerceptionEvent 标签映射
 # ============================================================================
 
+
 class TestRaisedLabelMapping:
     def test_dwell_over_threshold_maps_to_abnormal_dwell(self):
         """dwell_seconds >= threshold → abnormal_dwell。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 350.0,
-            "visits_in_window": 0,
-            "is_odd_hour": False,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 350.0,
+                "visits_in_window": 0,
+                "is_odd_hour": False,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test", location="入户门")
 
@@ -116,12 +122,15 @@ class TestRaisedLabelMapping:
     def test_visits_over_threshold_maps_to_repeat_visit(self):
         """visits_in_window >= threshold → repeat_visit（dwell 不超阈时）。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 10.0,  # 不超阈
-            "visits_in_window": 5,
-            "is_odd_hour": False,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 10.0,  # 不超阈
+                "visits_in_window": 5,
+                "is_odd_hour": False,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test")
 
@@ -132,12 +141,15 @@ class TestRaisedLabelMapping:
     def test_odd_hour_maps_to_visit_pending_verify(self):
         """is_odd_hour=True → visit_pending_verify（dwell/visits 不超阈时）。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 10.0,
-            "visits_in_window": 0,
-            "is_odd_hour": True,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 10.0,
+                "visits_in_window": 0,
+                "is_odd_hour": True,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test")
 
@@ -148,12 +160,15 @@ class TestRaisedLabelMapping:
     def test_dwell_priority_over_visits_and_odd_hour(self):
         """多条件同时满足：dwell 优先（→ abnormal_dwell）。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 400.0,  # 超阈
-            "visits_in_window": 5,   # 也超阈
-            "is_odd_hour": True,     # 也满足
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 400.0,  # 超阈
+                "visits_in_window": 5,  # 也超阈
+                "is_odd_hour": True,  # 也满足
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test")
         assert perc.event_type == "abnormal_dwell"
@@ -161,12 +176,15 @@ class TestRaisedLabelMapping:
     def test_visits_priority_over_odd_hour(self):
         """dwell 不超阈、visits + odd_hour 同时满足：visits 优先（→ repeat_visit）。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 10.0,
-            "visits_in_window": 5,
-            "is_odd_hour": True,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 10.0,
+                "visits_in_window": 5,
+                "is_odd_hour": True,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test")
         assert perc.event_type == "repeat_visit"
@@ -176,16 +194,20 @@ class TestRaisedLabelMapping:
 # 3. Schema 校验（产物过冻结契约）
 # ============================================================================
 
+
 class TestSchemaConformance:
     def test_event_type_in_five_types(self):
         """产物 event_type 必须是 §7.2 5 类之一。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 350.0,
-            "visits_in_window": 0,
-            "is_odd_hour": False,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 350.0,
+                "visits_in_window": 0,
+                "is_odd_hour": False,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test")
         assert perc.event_type in EVENT_TYPES
@@ -193,12 +215,15 @@ class TestSchemaConformance:
     def test_score_in_zero_one(self):
         """score ∈ [0, 1]。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 1000.0,  # 远超阈
-            "visits_in_window": 0,
-            "is_odd_hour": False,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 1000.0,  # 远超阈
+                "visits_in_window": 0,
+                "is_odd_hour": False,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test")
         assert 0.0 <= perc.score <= 1.0
@@ -206,12 +231,15 @@ class TestSchemaConformance:
     def test_returns_perception_event_instance(self):
         """产物是 PerceptionEvent 实例。"""
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 350.0,
-            "visits_in_window": 0,
-            "is_odd_hour": False,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 350.0,
+                "visits_in_window": 0,
+                "is_odd_hour": False,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
 
         perc = risk_signal_to_perception(sig, device_id="dev/test")
         assert isinstance(perc, PerceptionEvent)
@@ -220,6 +248,7 @@ class TestSchemaConformance:
 # ============================================================================
 # 4. 输入校验 + 黑名单
 # ============================================================================
+
 
 class TestInputValidation:
     def test_non_risksignal_rejected(self):
@@ -248,12 +277,15 @@ class TestInputValidation:
         同样不含这些字段。本测试断言此约束在 adapter 路径仍成立。
         """
         vid = str(uuid4())
-        sig = _raised_signal(vid, {
-            "dwell_seconds": 350.0,
-            "visits_in_window": 0,
-            "is_odd_hour": False,
-            "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
-        })
+        sig = _raised_signal(
+            vid,
+            {
+                "dwell_seconds": 350.0,
+                "visits_in_window": 0,
+                "is_odd_hour": False,
+                "thresholds": {"long_duration_seconds": 300.0, "repeat_visit_count": 3},
+            },
+        )
         perc = risk_signal_to_perception(sig, device_id="dev/test")
         assert perc is not None
         # 顶层字段不含黑名单
@@ -267,6 +299,7 @@ class TestInputValidation:
 # ============================================================================
 # 5. 端到端：RealTimeRiskEvaluator → signal_adapter（防 features 硬编码回归）
 # ============================================================================
+
 
 class TestEvaluatorToAdapterIntegration:
     """端到端：evaluator 产出 RAISED → signal_adapter 映射 PerceptionEvent。
@@ -316,10 +349,12 @@ class TestEvaluatorToAdapterIntegration:
             current_state=state,
             recent_behavior={"visits_in_window": visits},
         )
-        ev = RealTimeRiskEvaluator(ThresholdConfig(
-            long_duration_seconds=long_duration,
-            repeat_visit_count=repeat_count,
-        ))
+        ev = RealTimeRiskEvaluator(
+            ThresholdConfig(
+                long_duration_seconds=long_duration,
+                repeat_visit_count=repeat_count,
+            )
+        )
         signals = ev.evaluate([ctx], _utc(2026, 7, 27, 10, 0, int(dwell) if dwell < 60 else 0))
         assert len(signals) == 1, f"应产 1 个 RAISED，实际 {len(signals)}"
         assert signals[0].transition is SignalTransition.RAISED

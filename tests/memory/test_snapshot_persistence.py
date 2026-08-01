@@ -3,9 +3,10 @@
 覆盖工程方案 §8.5：save→load 往返字段无损、缺失/损坏视为冷启动（load→None）、
 原子写不残留 .tmp。
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from home_perception.memory.snapshot import (
@@ -17,9 +18,7 @@ from home_perception.memory.snapshot import (
 
 
 def _utc(sec: int) -> datetime:
-    return datetime(2026, 1, 1, tzinfo=timezone.utc) + __import__("datetime").timedelta(
-        seconds=sec
-    )
+    return datetime(2026, 1, 1, tzinfo=UTC) + __import__("datetime").timedelta(seconds=sec)
 
 
 def _build_snapshot() -> RuntimeSnapshot:

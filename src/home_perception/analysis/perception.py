@@ -8,17 +8,18 @@
 - 中心侧不能用 `score` 直接判定诈骗；综合判断由中心 AI Understand / Predict 层负责
 - 字段增删按 ADR-0005 走 schema_version 评审
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _coerce_uuid(value) -> UUID:
@@ -42,6 +43,7 @@ EVENT_TYPES = (
 # ============================================================================
 # PerceptionEvent
 # ============================================================================
+
 
 @dataclass
 class PerceptionEvent:
@@ -74,13 +76,13 @@ class PerceptionEvent:
     visitor_id: UUID
     source_video: str
     timestamp: float  # Unix 秒（与 §7.2 兼容；datetime 也可从 meta.enter_at 派生）
-    track_id: Optional[int] = None
-    bbox: Optional[List[float]] = None
-    location: Optional[str] = None
-    repeat_count: Optional[int] = None
+    track_id: int | None = None
+    bbox: list[float] | None = None
+    location: str | None = None
+    repeat_count: int | None = None
     is_odd_hour: bool = False
-    evidence: List[Dict[str, Any]] = field(default_factory=list)
-    meta: Dict[str, Any] = field(default_factory=dict)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=_utc_now)
 
     def __post_init__(self) -> None:
@@ -104,7 +106,7 @@ class PerceptionEvent:
         if "rule" not in self.meta:
             raise ValueError("meta 必须含 'rule' 字段（§7.2：触发的 Rule 名称）")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典（datetime 已转 ISO 字符串）。"""
         return {
             "device_id": self.device_id,

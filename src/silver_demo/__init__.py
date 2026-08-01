@@ -12,6 +12,7 @@
 严禁 import 7 层内部（``rule_engine`` / ``decision_engine`` / ``action.executor`` 等）；
 ``tests/demo/test_freeze_boundary.py`` 以 importlib 攻击性契约测试守此边界。
 """
+
 from __future__ import annotations
 
 __version__ = "0.1.0"

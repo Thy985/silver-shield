@@ -4,6 +4,7 @@
 - 支持 ${ENV_VAR:-default} 形式引用环境变量（凭证走 .env，不入库）
 - 使用 pydantic 做结构化校验，缺失项回退到默认值
 """
+
 from __future__ import annotations
 
 import math
@@ -11,7 +12,7 @@ import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -83,7 +84,7 @@ class ImgszProfile(str, Enum):
         return {"accuracy": 640, "balanced": 480, "realtime": 416}[self.value]
 
     @classmethod
-    def resolve(cls, profile: "ImgszProfile | str | None", explicit_imgsz: Optional[int]) -> int:
+    def resolve(cls, profile: ImgszProfile | str | None, explicit_imgsz: int | None) -> int:
         """解析最终 imgsz：显式 imgsz 优先；否则用 profile；再否则回退 balanced(480)。"""
         if explicit_imgsz:
             return int(explicit_imgsz)
@@ -106,6 +107,7 @@ class TrackingConfig(BaseModel):
     - absence_gap_s：离场判定宽限（见 detection.tracker.DEFAULT_ABSENCE_GAP_S 注释）；
       同 track_id 连续该秒数未出现 → 视为本次在场 visit 结束。
     """
+
     enabled: bool = True
     algorithm: str = "bytetrack"  # bytetrack | botsort
     absence_gap_s: float = 5.0  # 离场判定宽限（容忍漏检闪烁）
@@ -130,7 +132,9 @@ class DetectionConfig(BaseModel):
     # P0-4 实测结论：纯 CPU 边缘机 yolo11n@640 推理 ~124ms 未达实时目标；
     # MVP 默认 480（balanced）满足 <100ms 且 >10FPS。详见 docs/09。
     imgsz: int = ImgszProfile.BALANCED.imgsz  # 480
-    imgsz_profile: ImgszProfile = ImgszProfile.BALANCED  # accuracy=640 / balanced=480 / realtime=416
+    imgsz_profile: ImgszProfile = (
+        ImgszProfile.BALANCED
+    )  # accuracy=640 / balanced=480 / realtime=416
     tracking: TrackingConfig = TrackingConfig()  # P0-5 跨帧跟踪（默认开启 bytetrack）
     enable_track: bool = True  # 向后兼容：值优先取自 tracking.enabled
     tracker: str = "bytetrack"  # 向后兼容：值优先取自 tracking.algorithm
@@ -169,6 +173,7 @@ class OutputConfig(BaseModel):
 
 class FamilyContactConfig(BaseModel):
     """家属联系方式（P0-10 行动层；MVP 从 config 读，v2 从中心 RiskTwin 拉）。"""
+
     elder_id: str
     name: str = ""
     phone: str = ""
@@ -183,14 +188,14 @@ class RuleConfig(BaseModel):
 
     long_duration_seconds: float = 300.0
     repeat_visit_count: int = 3
-    odd_hour_set: List[int] = Field(default_factory=lambda: [23, 0, 1, 2, 3, 4])
+    odd_hour_set: list[int] = Field(default_factory=lambda: [23, 0, 1, 2, 3, 4])
     cooldown_seconds: float = 600.0
     reset_gap_seconds: float = 1800.0
     frequency_window_s: float = 1800.0
-    high_risk_required_rules: List[str] = Field(
+    high_risk_required_rules: list[str] = Field(
         default_factory=lambda: ["LongDurationRule", "RepeatVisitRule", "OddHourRule"]
     )
-    rule_weights: Dict[str, float] = Field(
+    rule_weights: dict[str, float] = Field(
         default_factory=lambda: {
             "LongDurationRule": 0.50,
             "RepeatVisitRule": 0.30,
@@ -221,7 +226,7 @@ class RuleConfig(BaseModel):
     @classmethod
     def _reject_bool_count(cls, v: object) -> object:
         if isinstance(v, bool):
-            raise ValueError(f"repeat_visit_count 必须是整数，收到 bool {v!r}")
+            raise ValueError(f"repeat_visit_count 必须是整数，收到 bool {v!r}")  # noqa: TRY004  # pydantic validator 走 ValueError 转 ValidationError
         return v
 
     @field_validator("repeat_visit_count")
@@ -235,7 +240,7 @@ class RuleConfig(BaseModel):
     # 语义上必须在 [0, 1]；越界（如 2.5）或 NaN 必须明确报错，不得静默流入规则层。
     @field_validator("rule_weights")
     @classmethod
-    def _weights_in_unit_range(cls, v: "Dict[str, float]") -> "Dict[str, float]":
+    def _weights_in_unit_range(cls, v: dict[str, float]) -> dict[str, float]:
         for name, w in v.items():
             if isinstance(w, float) and math.isnan(w):
                 raise ValueError(f"rule_weights[{name!r}] 不能是 NaN，收到 {w!r}")
@@ -243,7 +248,7 @@ class RuleConfig(BaseModel):
                 raise ValueError(f"rule_weights[{name!r}] 必须在 [0, 1]，收到 {w!r}")
         return v
 
-    def to_threshold_config(self) -> "ThresholdConfig":
+    def to_threshold_config(self) -> ThresholdConfig:
         """转换为 RuleEngine 内部阈值配置（懒导入，避免 core→analysis 加载期耦合）。"""
         from ..analysis.rule_engine import ThresholdConfig
 
@@ -270,12 +275,12 @@ class DecisionConfig(BaseModel):
 class ActionConfig(BaseModel):
     """P0-10 行动层配置（MVP 用 Mock；v1 接真实 paho-mqtt / 短信网关 / 社区工单）。"""
 
-    family_contact: Optional[FamilyContactConfig] = None
-    community_endpoint: Optional[str] = None
+    family_contact: FamilyContactConfig | None = None
+    community_endpoint: str | None = None
     mqtt_topic_prefix: str = "silvershield/home"
     max_retries: int = 3
     # MockPublisher 落盘 JSONL 路径；None = 仅内存收集（不落盘）
-    mock_publisher_output: Optional[str] = None
+    mock_publisher_output: str | None = None
 
 
 class RuntimeConfig(BaseModel):
@@ -287,7 +292,7 @@ class RuntimeConfig(BaseModel):
     mode: str = "demo"  # demo | realtime (realtime 留待 v1)
     caviar_base_dir: str = "tests/fixtures/doorway"
     frame_glob: str = "frame_*.jpg"
-    demo_scenarios: List[str] = Field(
+    demo_scenarios: list[str] = Field(
         default_factory=lambda: [
             "one_stop_enter",
             "one_leave_reenter",
@@ -295,9 +300,9 @@ class RuntimeConfig(BaseModel):
         ]
     )
     # 覆盖 detection 段（demo 可用更轻量模型/分辨率提速）
-    detector_model: Optional[str] = None
-    detector_imgsz: Optional[int] = None
-    detector_conf: Optional[float] = None
+    detector_model: str | None = None
+    detector_imgsz: int | None = None
+    detector_conf: float | None = None
     # Demo 模拟时钟起点（ISO 8601，必须带时区）。默认 23:30 UTC：
     # 让 OddHourRule 在 CAVIAR 短片（~25s）自然触发，同时把 Demo 时间线交由 YAML 控制，
     # 更换场景 / 调整异常时段无需改源码（见 ADR-0013）。
@@ -335,11 +340,9 @@ class RealtimeRiskConfig(BaseModel):
         # mode="before"：在 pydantic 把 bool 强转 int 之前拦截（bool 是 int 子类，
         # 默认 mode 会把 True 当 1 通过，掩盖配置类型错误）
         if isinstance(v, bool):
-            raise ValueError(f"eval_interval_frames 必须是整数，收到 bool {v!r}")
+            raise ValueError(f"eval_interval_frames 必须是整数，收到 bool {v!r}")  # noqa: TRY004  # pydantic validator 走 ValueError
         if not isinstance(v, int) or isinstance(v, bool):
-            raise ValueError(
-                f"eval_interval_frames 必须是 int，收到 {type(v).__name__} {v!r}"
-            )
+            raise ValueError(f"eval_interval_frames 必须是 int，收到 {type(v).__name__} {v!r}")  # noqa: TRY004  # pydantic validator 走 ValueError
         if v < 1:
             raise ValueError(f"eval_interval_frames 必须 >= 1，收到 {v!r}")
         return v
@@ -424,7 +427,7 @@ class Settings(BaseModel):
     memory: MemoryConfig = MemoryConfig()
 
     @classmethod
-    def load(cls, path: str | os.PathLike = "config/default.yaml") -> "Settings":
+    def load(cls, path: str | os.PathLike = "config/default.yaml") -> Settings:
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         raw = _expand_env(raw)
         return cls(**raw)

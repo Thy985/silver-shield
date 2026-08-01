@@ -8,23 +8,25 @@
 
 `Rule` 抽象基类 + `RuleResult`（Rule 命中输出）+ `RuleContext`（执行上下文）。
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from .feature import RiskFeature
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ============================================================================
 # RuleContext：执行上下文（向 Rule 注入时间 / 阈值 / 历史等）
 # ============================================================================
+
 
 @dataclass
 class RuleContext:
@@ -43,12 +45,13 @@ class RuleContext:
 
     now: datetime = field(default_factory=_utc_now)
     thresholds: Any = None  # ThresholdConfig，由 rule_engine.py 定义并注入（避免循环 import）
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 # ============================================================================
 # RuleResult：Rule 命中输出（尚未序列化为 PerceptionEvent）
 # ============================================================================
+
 
 @dataclass
 class RuleResult:
@@ -66,18 +69,16 @@ class RuleResult:
 
     rule_name: str
     matched: bool
-    event_type: Optional[str] = None
+    event_type: str | None = None
     perception_score: float = 0.0
-    evidence: Dict[str, Any] = field(default_factory=dict)
+    evidence: dict[str, Any] = field(default_factory=dict)
     is_odd_hour: bool = False
     repeat_count: int = 1
     notes: str = ""
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.perception_score <= 1.0):
-            raise ValueError(
-                f"perception_score 必须在 [0, 1]，收到 {self.perception_score}"
-            )
+            raise ValueError(f"perception_score 必须在 [0, 1]，收到 {self.perception_score}")
         if self.matched and self.event_type is None:
             raise ValueError("matched=True 时必须指定 event_type")
         if not self.matched and self.event_type is not None:
@@ -86,14 +87,15 @@ class RuleResult:
         if self.repeat_count < 0:
             raise ValueError(f"repeat_count 必须 >= 0，收到 {self.repeat_count}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "rule_name": self.rule_name,
             "matched": self.matched,
             "event_type": self.event_type,
             "perception_score": round(self.perception_score, 4),
-            "evidence": {k: (round(v, 3) if isinstance(v, float) else v)
-                         for k, v in self.evidence.items()},
+            "evidence": {
+                k: (round(v, 3) if isinstance(v, float) else v) for k, v in self.evidence.items()
+            },
             "is_odd_hour": self.is_odd_hour,
             "repeat_count": self.repeat_count,
             "notes": self.notes,
@@ -103,6 +105,7 @@ class RuleResult:
 # ============================================================================
 # Rule 抽象基类
 # ============================================================================
+
 
 class Rule(ABC):
     """规则抽象基类。所有具体 Rule 必须实现 `evaluate(ctx, risk)`。
@@ -123,7 +126,7 @@ class Rule(ABC):
         self.weight = weight
 
     @abstractmethod
-    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> List[RuleResult]:
+    def evaluate(self, ctx: RuleContext, risk: RiskFeature) -> list[RuleResult]:
         """消费 RiskFeature，输出 RuleResult 列表（matched=True 才会转 PerceptionEvent）。
 
         通常实现：
@@ -144,7 +147,7 @@ class CompositeRule(Rule):
         self,
         ctx: RuleContext,
         risk: RiskFeature,
-        prior_results: List[RuleResult],
-    ) -> List[RuleResult]:
+        prior_results: list[RuleResult],
+    ) -> list[RuleResult]:
         """消费 `prior_results`（前序 Rule 命中情况），返回 CompositeRule 自己的 RuleResult。"""
         raise NotImplementedError

@@ -20,20 +20,21 @@
 4. `schema_version` / `memory_status` 有默认值，向后兼容
 5. `model_version` 必填非空（EpisodicRecord / SemanticAggregate）
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..common.timeutil import now_dt, require_utc
-
 
 # ============================================================================
 # 枚举（严格白名单，禁止自由文本）
 # ============================================================================
+
 
 class MemoryStatus(str, Enum):
     """Memory Record 生命周期状态（ADR-0024 §5.7 Memory Validity Version）。
@@ -48,10 +49,10 @@ class MemoryStatus(str, Enum):
         任意 → ACTIVE  ❌ 禁止（违反单调性）
     """
 
-    ACTIVE = "active"           # 可被 Agent / 聚合消费
-    DEPRECATED = "deprecated"   # 因模型升级/规则修正而降级；保留历史证据但不参与新决策
-    ARCHIVED = "archived"       # 归档；只读，不参与任何消费
-    INVALID = "invalid"         # 标记为无效（如发现误判）；保留可追溯但不消费
+    ACTIVE = "active"  # 可被 Agent / 聚合消费
+    DEPRECATED = "deprecated"  # 因模型升级/规则修正而降级；保留历史证据但不参与新决策
+    ARCHIVED = "archived"  # 归档；只读，不参与任何消费
+    INVALID = "invalid"  # 标记为无效（如发现误判）；保留可追溯但不消费
 
 
 class VisitorPresenceStatus(str, Enum):
@@ -93,14 +94,15 @@ MEMORY_STATUS_VALUES: tuple[str, ...] = tuple(e.value for e in MemoryStatus)
 class RecordIdPrefix(str, Enum):
     """record_id 前缀枚举（I1 校验用，禁止自由前缀）。"""
 
-    SHORT_TERM = "st-"          # ShortTermRecord
-    EPISODIC = "ep-"            # EpisodicRecord
-    SEMANTIC = "sem-"           # SemanticAggregate
+    SHORT_TERM = "st-"  # ShortTermRecord
+    EPISODIC = "ep-"  # EpisodicRecord
+    SEMANTIC = "sem-"  # SemanticAggregate
 
 
 # ============================================================================
 # 辅助 dataclass
 # ============================================================================
+
 
 @dataclass
 class ActionSummary:
@@ -110,10 +112,10 @@ class ActionSummary:
     payload 属于业务对象，Memory 不直接理解（ADR-0024 §3.2.1）。
     """
 
-    command_type: str           # ActionCommand.command_type
-    command_id: str             # ActionCommand.command_id
-    status: str                 # ActionCommand.status
-    error: Optional[str] = None  # ActionCommand.error（无错误则 None）
+    command_type: str  # ActionCommand.command_type
+    command_id: str  # ActionCommand.command_id
+    status: str  # ActionCommand.status
+    error: str | None = None  # ActionCommand.error（无错误则 None）
 
     def __post_init__(self) -> None:
         if not self.command_type or not self.command_type.strip():
@@ -123,7 +125,7 @@ class ActionSummary:
         if not self.status or not self.status.strip():
             raise ValueError("status 不能为空")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "command_type": self.command_type,
             "command_id": self.command_id,
@@ -132,7 +134,7 @@ class ActionSummary:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ActionSummary":
+    def from_dict(cls, data: dict[str, Any]) -> ActionSummary:
         return cls(
             command_type=data["command_type"],
             command_id=data["command_id"],
@@ -149,10 +151,10 @@ class EvidenceRef:
     v2：Episode Builder 接 EvidenceItem 后填充。
     """
 
-    evidence_id: str            # EvidenceItem.evidence_id
-    modality: str               # EvidenceModality.value（vision / audio / sensor）
-    captured_at: datetime       # EvidenceItem.captured_at（UTC）
-    uri: Optional[str] = None   # 本地路径 / 片段 id（不上传原视频，ADR §3.3）
+    evidence_id: str  # EvidenceItem.evidence_id
+    modality: str  # EvidenceModality.value（vision / audio / sensor）
+    captured_at: datetime  # EvidenceItem.captured_at（UTC）
+    uri: str | None = None  # 本地路径 / 片段 id（不上传原视频，ADR §3.3）
 
     def __post_init__(self) -> None:
         if not self.evidence_id or not self.evidence_id.strip():
@@ -161,7 +163,7 @@ class EvidenceRef:
             raise ValueError("modality 不能为空")
         require_utc(self.captured_at, "captured_at")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "evidence_id": self.evidence_id,
             "modality": self.modality,
@@ -170,7 +172,7 @@ class EvidenceRef:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EvidenceRef":
+    def from_dict(cls, data: dict[str, Any]) -> EvidenceRef:
         return cls(
             evidence_id=data["evidence_id"],
             modality=data["modality"],
@@ -183,6 +185,7 @@ class EvidenceRef:
 # 校验工具
 # ============================================================================
 
+
 def _validate_record_id(record_id: str, expected_prefix: RecordIdPrefix) -> None:
     """I1 幂等键校验：record_id 必须以预期前缀开头。
 
@@ -194,14 +197,11 @@ def _validate_record_id(record_id: str, expected_prefix: RecordIdPrefix) -> None
         raise ValueError(f"record_id 不能为空，收到 {record_id!r}")
     if not record_id.startswith(expected_prefix.value):
         raise ValueError(
-            f"record_id 必须以 {expected_prefix.value!r} 开头（I1 幂等键约束），"
-            f"收到 {record_id!r}"
+            f"record_id 必须以 {expected_prefix.value!r} 开头（I1 幂等键约束），收到 {record_id!r}"
         )
 
 
-def _validate_non_empty_str_list(
-    ids: List[str], field_name: str = "source_event_ids"
-) -> None:
+def _validate_non_empty_str_list(ids: list[str], field_name: str = "source_event_ids") -> None:
     """I4 可解释性校验：id 列表不能为空，且每个元素必须是非空 str。
 
     通用校验器，同时服务两种语义：
@@ -214,19 +214,13 @@ def _validate_non_empty_str_list(
     否则 Memory 变成黑盒，Agent 无法回答"这个记忆基于哪个事件/Episode"。
     """
     if not ids:
-        raise ValueError(
-            f"{field_name} 不能为空（I4 可解释性：每条记忆必须可追溯到源对象）"
-        )
+        raise ValueError(f"{field_name} 不能为空（I4 可解释性：每条记忆必须可追溯到源对象）")
     for i, sid in enumerate(ids):
         if not isinstance(sid, str) or not sid.strip():
-            raise ValueError(
-                f"{field_name}[{i}] 必须是非空 str，收到 {sid!r}"
-            )
+            raise ValueError(f"{field_name}[{i}] 必须是非空 str，收到 {sid!r}")
 
 
-def _coerce_memory_status(
-    value: Any, field_name: str = "memory_status"
-) -> MemoryStatus:
+def _coerce_memory_status(value: Any, field_name: str = "memory_status") -> MemoryStatus:
     """将 str / MemoryStatus 归一为 MemoryStatus 枚举。
 
     三个 Record 的 `__post_init__` 共用此函数（DRY）。
@@ -243,13 +237,9 @@ def _coerce_memory_status(
         except ValueError as exc:
             valid = ", ".join(repr(e.value) for e in MemoryStatus)
             raise ValueError(
-                f"{field_name} 必须是 MemoryStatus 之一，"
-                f"收到 {value!r}；合法值：{valid}"
+                f"{field_name} 必须是 MemoryStatus 之一，收到 {value!r}；合法值：{valid}"
             ) from exc
-    raise TypeError(
-        f"{field_name} 必须是 MemoryStatus 或 str，"
-        f"收到 {type(value).__name__}"
-    )
+    raise TypeError(f"{field_name} 必须是 MemoryStatus 或 str，收到 {type(value).__name__}")
 
 
 # ============================================================================
@@ -302,9 +292,9 @@ class ShortTermRecord:
     phase: str
     first_seen: datetime
     last_seen_at: datetime
-    source_event_ids: List[str]
-    raised_signal_id: Optional[str] = None
-    raised_at: Optional[datetime] = None
+    source_event_ids: list[str]
+    raised_signal_id: str | None = None
+    raised_at: datetime | None = None
     memory_status: MemoryStatus = MemoryStatus.ACTIVE
     schema_version: int = 1
     created_at: datetime = field(default_factory=now_dt)
@@ -328,15 +318,11 @@ class ShortTermRecord:
         # 5) phase 闭合校验（Phase 1 仅 none / active_risk）
         valid_phases = ("none", "active_risk")
         if self.phase not in valid_phases:
-            raise ValueError(
-                f"phase 必须是 {valid_phases} 之一，收到 {self.phase!r}"
-            )
+            raise ValueError(f"phase 必须是 {valid_phases} 之一，收到 {self.phase!r}")
 
         # 6) ACTIVE_RISK 时必有 raised_signal_id
         if self.phase == "active_risk" and not self.raised_signal_id:
-            raise ValueError(
-                "phase=active_risk 时 raised_signal_id 必填（CLEARED 回填依赖）"
-            )
+            raise ValueError("phase=active_risk 时 raised_signal_id 必填（CLEARED 回填依赖）")
 
         # 7) 时间字段 UTC 校验（I3 前置）
         require_utc(self.first_seen, "first_seen")
@@ -351,7 +337,7 @@ class ShortTermRecord:
                 f"last_seen_at({self.last_seen_at}) 不能早于 first_seen({self.first_seen})"
             )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典（datetime → ISO 字符串，枚举 → value）。"""
         return {
             "record_id": self.record_id,
@@ -371,7 +357,7 @@ class ShortTermRecord:
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ShortTermRecord":
+    def from_dict(cls, data: dict[str, Any]) -> ShortTermRecord:
         return cls(
             record_id=data["record_id"],
             visitor_instance_id=data["visitor_instance_id"],
@@ -387,7 +373,7 @@ class ShortTermRecord:
         )
 
     @classmethod
-    def from_json(cls, json_str: str) -> "ShortTermRecord":
+    def from_json(cls, json_str: str) -> ShortTermRecord:
         return cls.from_dict(json.loads(json_str))
 
 
@@ -453,17 +439,17 @@ class EpisodicRecord:
     enter_time: datetime
     leave_time: datetime
     duration_seconds: float
-    source_event_ids: List[str]
+    source_event_ids: list[str]
     summary: str
     model_version: str
-    reason_summary: List[str] = field(default_factory=list)
-    actions: List[ActionSummary] = field(default_factory=list)
-    evidence_refs: List[EvidenceRef] = field(default_factory=list)
-    risk_level: Optional[str] = None
-    recommended_action: Optional[str] = None
-    person_identity_id: Optional[str] = None  # v1 恒 None
+    reason_summary: list[str] = field(default_factory=list)
+    actions: list[ActionSummary] = field(default_factory=list)
+    evidence_refs: list[EvidenceRef] = field(default_factory=list)
+    risk_level: str | None = None
+    recommended_action: str | None = None
+    person_identity_id: str | None = None  # v1 恒 None
     memory_status: MemoryStatus = MemoryStatus.ACTIVE
-    corrections: List[Dict[str, Any]] = field(default_factory=list)
+    corrections: list[dict[str, Any]] = field(default_factory=list)
     schema_version: int = 1
     created_at: datetime = field(default_factory=now_dt)
 
@@ -480,9 +466,7 @@ class EpisodicRecord:
                 "human-interpretable summary）"
             )
         if not self.model_version or not self.model_version.strip():
-            raise ValueError(
-                "model_version 不能为空（必须标明由哪个版本的算法生成）"
-            )
+            raise ValueError("model_version 不能为空（必须标明由哪个版本的算法生成）")
 
         # 3) I4 可解释性
         _validate_non_empty_str_list(self.source_event_ids, "source_event_ids")
@@ -494,8 +478,7 @@ class EpisodicRecord:
         valid_risk_levels = ("LOW", "MEDIUM", "HIGH")
         if self.risk_level is not None and self.risk_level not in valid_risk_levels:
             raise ValueError(
-                f"risk_level 必须是 {valid_risk_levels} 之一或 None，"
-                f"收到 {self.risk_level!r}"
+                f"risk_level 必须是 {valid_risk_levels} 之一或 None，收到 {self.risk_level!r}"
             )
 
         # 6) 时间字段 UTC 校验
@@ -511,17 +494,13 @@ class EpisodicRecord:
 
         # 8) duration_seconds >= 0
         if self.duration_seconds < 0:
-            raise ValueError(
-                f"duration_seconds 必须 >= 0，收到 {self.duration_seconds}"
-            )
+            raise ValueError(f"duration_seconds 必须 >= 0，收到 {self.duration_seconds}")
 
         # 9) v1 约束：person_identity_id 恒 None（ADR-0023）
         if self.person_identity_id is not None:
-            raise ValueError(
-                "v1 person_identity_id 必须为 None（ADR-0023：v1 不冒充真实身份）"
-            )
+            raise ValueError("v1 person_identity_id 必须为 None（ADR-0023：v1 不冒充真实身份）")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典（datetime → ISO，枚举 → value，嵌套 dataclass → dict）。"""
         return {
             "record_id": self.record_id,
@@ -548,7 +527,7 @@ class EpisodicRecord:
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EpisodicRecord":
+    def from_dict(cls, data: dict[str, Any]) -> EpisodicRecord:
         return cls(
             record_id=data["record_id"],
             visitor_instance_id=data["visitor_instance_id"],
@@ -560,9 +539,7 @@ class EpisodicRecord:
             model_version=data["model_version"],
             reason_summary=list(data.get("reason_summary", [])),
             actions=[ActionSummary.from_dict(a) for a in data.get("actions", [])],
-            evidence_refs=[
-                EvidenceRef.from_dict(e) for e in data.get("evidence_refs", [])
-            ],
+            evidence_refs=[EvidenceRef.from_dict(e) for e in data.get("evidence_refs", [])],
             risk_level=data.get("risk_level"),
             recommended_action=data.get("recommended_action"),
             person_identity_id=data.get("person_identity_id"),
@@ -573,7 +550,7 @@ class EpisodicRecord:
         )
 
     @classmethod
-    def from_json(cls, json_str: str) -> "EpisodicRecord":
+    def from_json(cls, json_str: str) -> EpisodicRecord:
         return cls.from_dict(json.loads(json_str))
 
 
@@ -626,9 +603,9 @@ class SemanticAggregate:
     dimension: str
     period_key: str
     episode_count: int
-    statistics: Dict[str, Any]
+    statistics: dict[str, Any]
     confidence: float
-    source_episode_ids: List[str]
+    source_episode_ids: list[str]
     model_version: str
     memory_status: MemoryStatus = MemoryStatus.ACTIVE
     schema_version: int = 1
@@ -649,10 +626,7 @@ class SemanticAggregate:
         # 3) dimension 闭合校验
         valid_dimensions = ("environment", "identity")
         if self.dimension not in valid_dimensions:
-            raise ValueError(
-                f"dimension 必须是 {valid_dimensions} 之一，"
-                f"收到 {self.dimension!r}"
-            )
+            raise ValueError(f"dimension 必须是 {valid_dimensions} 之一，收到 {self.dimension!r}")
 
         # 4) I4 可解释性（聚合也必须可追溯到源 Episode）
         _validate_non_empty_str_list(self.source_episode_ids, "source_episode_ids")
@@ -662,9 +636,7 @@ class SemanticAggregate:
 
         # 6) episode_count >= 0
         if not isinstance(self.episode_count, int) or self.episode_count < 0:
-            raise ValueError(
-                f"episode_count 必须是非负 int，收到 {self.episode_count!r}"
-            )
+            raise ValueError(f"episode_count 必须是非负 int，收到 {self.episode_count!r}")
 
         # 7) confidence ∈ [0, 1]
         if not isinstance(self.confidence, (int, float)):
@@ -672,21 +644,17 @@ class SemanticAggregate:
                 f"confidence 必须是 int 或 float，收到 {type(self.confidence).__name__}"
             )
         if not (0.0 <= float(self.confidence) <= 1.0):
-            raise ValueError(
-                f"confidence 必须在 [0, 1]，收到 {self.confidence}"
-            )
+            raise ValueError(f"confidence 必须在 [0, 1]，收到 {self.confidence}")
         self.confidence = float(self.confidence)
 
         # 8) statistics 必须是 dict
         if not isinstance(self.statistics, dict):
-            raise TypeError(
-                f"statistics 必须是 dict，收到 {type(self.statistics).__name__}"
-            )
+            raise TypeError(f"statistics 必须是 dict，收到 {type(self.statistics).__name__}")
 
         # 9) created_at UTC 校验
         require_utc(self.created_at, "created_at")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "aggregate_id": self.aggregate_id,
             "dimension": self.dimension,
@@ -705,7 +673,7 @@ class SemanticAggregate:
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SemanticAggregate":
+    def from_dict(cls, data: dict[str, Any]) -> SemanticAggregate:
         return cls(
             aggregate_id=data["aggregate_id"],
             dimension=data["dimension"],
@@ -721,13 +689,14 @@ class SemanticAggregate:
         )
 
     @classmethod
-    def from_json(cls, json_str: str) -> "SemanticAggregate":
+    def from_json(cls, json_str: str) -> SemanticAggregate:
         return cls.from_dict(json.loads(json_str))
 
 
 # ============================================================================
 # 便捷工具（测试 / 诊断用）
 # ============================================================================
+
 
 def records_equal(a: Any, b: Any) -> bool:
     """深度比较两个 Memory record 是否字段级相等（忽略 created_at）。

@@ -6,6 +6,7 @@
 - WarningEvent.status：决策生命周期（CREATED→PENDING→CONFIRMED→RESOLVED/REJECTED）
 - ActionCommand.status：执行层内部状态机（独立，不污染 WarningEvent.status）
 """
+
 from __future__ import annotations
 
 import pytest

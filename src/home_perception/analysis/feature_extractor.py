@@ -8,10 +8,10 @@
 - `FeatureExtractor` 编排器维护 `VisitFrequencyFeature` 需要的滑动窗口状态
 - `reset()` 清空滑动窗口（视频源切换 / 多会话）
 """
+
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from typing import Deque, Dict, Optional
 from uuid import UUID
 
 from ..common.logging import get_logger
@@ -31,12 +31,14 @@ log = get_logger(__name__)
 # 4 个具体 Extractor（纯函数为主）
 # ============================================================================
 
+
 class DurationFeatureExtractor:
     """从 VisitorEvent 提取停留时长（直接抄字段）。"""
 
     @staticmethod
     def extract(event: VisitorEvent, computed_at=None) -> DurationFeature:
         from .feature import _utc_now
+
         return DurationFeature(
             visitor_id=event.visitor_id,
             event_id=event.event_id,
@@ -56,11 +58,12 @@ class VisitFrequencyFeatureExtractor:
     @staticmethod
     def extract(
         event: VisitorEvent,
-        history: Deque[VisitorEvent],
+        history: deque[VisitorEvent],
         window_seconds: float,
         computed_at=None,
     ) -> VisitFrequencyFeature:
         from .feature import _utc_now
+
         # 窗口起点 = 当前事件 leave_time - window_seconds
         # 历史事件中 leave_time >= 起点 的算入窗口（含当前）
         window_start_ts = event.leave_time.timestamp() - window_seconds
@@ -85,6 +88,7 @@ class TimeFeatureExtractor:
     @staticmethod
     def extract(event: VisitorEvent, computed_at=None) -> TimeFeature:
         from .feature import _utc_now
+
         return TimeFeature.from_datetime(
             event.leave_time,
             visitor_id=event.visitor_id,
@@ -103,6 +107,7 @@ class TrajectoryFeatureExtractor:
     @staticmethod
     def extract(event: VisitorEvent, computed_at=None) -> TrajectoryFeature:
         from .feature import _utc_now
+
         return TrajectoryFeature(
             visitor_id=event.visitor_id,
             event_id=event.event_id,
@@ -116,6 +121,7 @@ class TrajectoryFeatureExtractor:
 # ============================================================================
 # FeatureExtractor 编排器
 # ============================================================================
+
 
 class FeatureExtractor:
     """编排器：接收 VisitorEvent 流，输出 RiskFeature 流。
@@ -152,7 +158,7 @@ class FeatureExtractor:
         self._frequency_window_s = frequency_window_s
         self._max_history = max_history_per_visitor
         # visitor_id → 历史事件 deque（按 leave_time 顺序追加）
-        self._recent_by_visitor: Dict[UUID, Deque[VisitorEvent]] = defaultdict(
+        self._recent_by_visitor: dict[UUID, deque[VisitorEvent]] = defaultdict(
             lambda: deque(maxlen=self._max_history)
         )
 
@@ -165,7 +171,9 @@ class FeatureExtractor:
         # 1) 4 个 Feature 并行提取
         duration = DurationFeatureExtractor.extract(event)
         frequency = VisitFrequencyFeatureExtractor.extract(
-            event, self._recent_by_visitor[event.visitor_id], self._frequency_window_s,
+            event,
+            self._recent_by_visitor[event.visitor_id],
+            self._frequency_window_s,
         )
         time_ = TimeFeatureExtractor.extract(event)
         trajectory = TrajectoryFeatureExtractor.extract(event)
@@ -199,7 +207,7 @@ class FeatureExtractor:
         """清空滑动窗口（视频源切换 / 多会话）。"""
         self._recent_by_visitor.clear()
 
-    def history_size(self, visitor_id: Optional[UUID] = None) -> int:
+    def history_size(self, visitor_id: UUID | None = None) -> int:
         """查询滑动窗口历史事件数（用于测试 / 调试）。"""
         if visitor_id is None:
             return sum(len(d) for d in self._recent_by_visitor.values())

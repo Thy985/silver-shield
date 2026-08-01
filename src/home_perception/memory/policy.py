@@ -39,18 +39,19 @@ MemoryPolicy.aggregate_semantic(
 - I3 Causality：MemoryRecord.timestamp >= source event.timestamp
 - I4 Explainability：每条 EpisodicRecord 必须引用 source evidence
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # 避免运行时循环 import；接口签名只在类型检查时需要这些类
+    from ..action.command import ActionCommand
     from ..analysis.behavior_state import BehaviorState
     from ..analysis.event import VisitorEvent
     from ..analysis.risk_signal import RiskSignal
     from ..analysis.warning import WarningEvent
-    from ..action.command import ActionCommand
 
 from .records import EpisodicRecord, SemanticAggregate, ShortTermRecord
 
@@ -72,10 +73,10 @@ class MemoryPolicy(ABC):
     @abstractmethod
     def transform_short_term(
         self,
-        state_snapshot: "BehaviorState",
-        transition: Optional["RiskSignal"],
-        current_record: Optional[ShortTermRecord] = None,
-    ) -> Optional[ShortTermRecord]:
+        state_snapshot: BehaviorState,
+        transition: RiskSignal | None,
+        current_record: ShortTermRecord | None = None,
+    ) -> ShortTermRecord | None:
         """Short-term Memory 写入（ADR-0024 §3.1.1）。
 
         触发时机：
@@ -99,10 +100,10 @@ class MemoryPolicy(ABC):
     @abstractmethod
     def project_episode(
         self,
-        visitor_event: "VisitorEvent",
-        warnings: List["WarningEvent"],
-        actions: List["ActionCommand"],
-    ) -> Optional[EpisodicRecord]:
+        visitor_event: VisitorEvent,
+        warnings: list[WarningEvent],
+        actions: list[ActionCommand],
+    ) -> EpisodicRecord | None:
         """Episodic Memory 投影（ADR-0024 §3.2.1 Episode Builder）。
 
         触发时机：VisitorEvent 生成（访客离场）。
@@ -120,10 +121,10 @@ class MemoryPolicy(ABC):
     @abstractmethod
     def aggregate_semantic(
         self,
-        episodes: List[EpisodicRecord],
+        episodes: list[EpisodicRecord],
         dimension: str,
         period_key: str,
-    ) -> Optional[SemanticAggregate]:
+    ) -> SemanticAggregate | None:
         """Semantic Memory 聚合（ADR-0024 §3.1.3）。
 
         v1 Slice 1 不实现具体逻辑，子类可返回 None。

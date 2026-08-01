@@ -11,10 +11,10 @@
 - 已存在 + 字段不同 → 抛 InvariantViolationError
 - 已存在 + 追加 corrections → 允许（I2 例外）
 """
+
 from __future__ import annotations
 
 from dataclasses import fields
-from typing import Dict, List
 
 from .records import (
     EpisodicRecord,
@@ -26,8 +26,6 @@ from .records import (
 class InvariantViolationError(Exception):
     """Memory 不变量违反异常。"""
 
-    pass
-
 
 class MemoryStore:
     """Memory Object 存储后端抽象（v1 仅 InMemoryStore 实现）。"""
@@ -38,10 +36,10 @@ class MemoryStore:
     def upsert_episodic(self, record: EpisodicRecord) -> bool:
         raise NotImplementedError
 
-    def get_episodic_by_visitor(self, visitor_instance_id: str) -> List[EpisodicRecord]:
+    def get_episodic_by_visitor(self, visitor_instance_id: str) -> list[EpisodicRecord]:
         raise NotImplementedError
 
-    def get_active_episodic(self) -> List[EpisodicRecord]:
+    def get_active_episodic(self) -> list[EpisodicRecord]:
         raise NotImplementedError
 
     def short_term_count(self) -> int:
@@ -53,7 +51,7 @@ class MemoryStore:
         """
         raise NotImplementedError
 
-    def snapshot(self) -> Dict:
+    def snapshot(self) -> dict:
         raise NotImplementedError
 
 
@@ -61,8 +59,8 @@ class InMemoryStore(MemoryStore):
     """v1 内存后端：进程内 dict，重启即空。"""
 
     def __init__(self) -> None:
-        self._short_term: Dict[str, ShortTermRecord] = {}
-        self._episodic: Dict[str, EpisodicRecord] = {}
+        self._short_term: dict[str, ShortTermRecord] = {}
+        self._episodic: dict[str, EpisodicRecord] = {}
 
     def upsert_short_term(self, record: ShortTermRecord) -> bool:
         is_new = record.record_id not in self._short_term
@@ -80,19 +78,15 @@ class InMemoryStore(MemoryStore):
         self._episodic[record.record_id] = record
         return True
 
-    def get_episodic_by_visitor(self, visitor_instance_id: str) -> List[EpisodicRecord]:
+    def get_episodic_by_visitor(self, visitor_instance_id: str) -> list[EpisodicRecord]:
         result = [
-            ep for ep in self._episodic.values()
-            if ep.visitor_instance_id == visitor_instance_id
+            ep for ep in self._episodic.values() if ep.visitor_instance_id == visitor_instance_id
         ]
         result.sort(key=lambda e: e.enter_time)
         return result
 
-    def get_active_episodic(self) -> List[EpisodicRecord]:
-        return [
-            ep for ep in self._episodic.values()
-            if ep.memory_status == MemoryStatus.ACTIVE
-        ]
+    def get_active_episodic(self) -> list[EpisodicRecord]:
+        return [ep for ep in self._episodic.values() if ep.memory_status == MemoryStatus.ACTIVE]
 
     def short_term_count(self) -> int:
         return len(self._short_term)
@@ -107,7 +101,7 @@ class InMemoryStore(MemoryStore):
                 return True
         return False
 
-    def snapshot(self) -> Dict:
+    def snapshot(self) -> dict:
         return {
             "short_term": [r.to_dict() for r in self._short_term.values()],
             "episodic": [r.to_dict() for r in self._episodic.values()],
@@ -118,4 +112,4 @@ class InMemoryStore(MemoryStore):
         self._episodic.clear()
 
 
-__all__ = ["InvariantViolationError", "InMemoryStore", "MemoryStore"]
+__all__ = ["InMemoryStore", "InvariantViolationError", "MemoryStore"]

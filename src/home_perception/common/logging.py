@@ -2,6 +2,7 @@
 
 生产用 JSON 行日志，便于接入中心日志系统；本地调试可切 console。
 """
+
 from __future__ import annotations
 
 import logging

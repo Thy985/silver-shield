@@ -8,26 +8,27 @@
 
 若运行环境无 httpx（TestClient 依赖），整文件自动跳过。
 """
+
 from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("httpx")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from silver_demo.config import DemoSettings  # noqa: E402
-from silver_demo.gateway import DemoGateway, create_app  # noqa: E402
-from silver_demo.scenarios import ScenarioConfig  # noqa: E402
+from silver_demo.config import DemoSettings
+from silver_demo.gateway import DemoGateway, create_app
+from silver_demo.scenarios import ScenarioConfig
 
 
 @pytest.fixture
@@ -59,18 +60,40 @@ def _seed(gateway: DemoGateway) -> None:
     """手工注入一帧派生数据到服务端聚合状态（模拟已运行一段时间的系统）。"""
     gateway.aggregate_state.ingest(
         [
-            {"warning_id": "w1", "risk_level": "LOW", "status": "PENDING",
-             "created_at": "2026-01-01T00:00:01", "reason_summary": ["夜间异常"]},
-            {"warning_id": "w2", "risk_level": "HIGH", "status": "PENDING",
-             "created_at": "2026-01-01T00:00:02"},
+            {
+                "warning_id": "w1",
+                "risk_level": "LOW",
+                "status": "PENDING",
+                "created_at": "2026-01-01T00:00:01",
+                "reason_summary": ["夜间异常"],
+            },
+            {
+                "warning_id": "w2",
+                "risk_level": "HIGH",
+                "status": "PENDING",
+                "created_at": "2026-01-01T00:00:02",
+            },
         ],
-        [{"visitor_id": "v1", "event_type": "abnormal_dwell", "created_at": "t",
-          "location": "门口", "score": 0.7, "repeat_count": 1}],
+        [
+            {
+                "visitor_id": "v1",
+                "event_type": "abnormal_dwell",
+                "created_at": "t",
+                "location": "门口",
+                "score": 0.7,
+                "repeat_count": 1,
+            }
+        ],
         [],
-        {"family": [{"command_id": "c1", "warning_id": "w1",
-                      "command_type": "SEND_FAMILY_MESSAGE"}],
-         "community": [], "log_only": []},
-        7, 2,
+        {
+            "family": [
+                {"command_id": "c1", "warning_id": "w1", "command_type": "SEND_FAMILY_MESSAGE"}
+            ],
+            "community": [],
+            "log_only": [],
+        },
+        7,
+        2,
     )
 
 
@@ -145,8 +168,11 @@ def test_switch_source_clears_aggregate_real(monkeypatch):
     )
 
     scn = ScenarioConfig(
-        scenario_id="s", source="x", source_type="video_file",
-        media_path="data/demo/x.mp4", start_time=datetime.now(timezone.utc),
+        scenario_id="s",
+        source="x",
+        source_type="video_file",
+        media_path="data/demo/x.mp4",
+        start_time=datetime.now(UTC),
     )
     gw.scenario = scn
     gw.aggregate_state.warnings = {"w1": {"warning_id": "w1", "risk_level": "LOW"}}

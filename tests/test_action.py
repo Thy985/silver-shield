@@ -6,11 +6,12 @@
 > 2. **幂等**：同 warning_id 重复 execute → 只产生一个下游任务
 > 3. **失败保护**：publisher 失败时 Warning 保持 PENDING 不丢，重试 → max_retries → REJECTED
 """
+
 from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -30,13 +31,13 @@ from home_perception.action import (
 )
 from home_perception.analysis.warning import WarningEvent
 
-
 # ============================================================================
 # 时区 helper
 # ============================================================================
 
+
 def utc(year, month, day, hour=0, minute=0, second=0):
-    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
 
 
 def make_warning(
@@ -45,17 +46,19 @@ def make_warning(
     status: str = "CREATED",
     elder_id: str = "elder_001",
     device_id: str = "home_entry_01",
-    warning_id: uuid.UUID = None,
-    trigger_events: list = None,
-    reason_summary: list = None,
+    warning_id: uuid.UUID | None = None,
+    trigger_events: list | None = None,
+    reason_summary: list | None = None,
 ) -> WarningEvent:
     if trigger_events is None:
-        trigger_events = [{
-            "event_id": f"{uuid.uuid4()}:abnormal_dwell",
-            "event_type": "abnormal_dwell",
-            "score": 0.5,
-            "timestamp": 1.0,
-        }]
+        trigger_events = [
+            {
+                "event_id": f"{uuid.uuid4()}:abnormal_dwell",
+                "event_type": "abnormal_dwell",
+                "score": 0.5,
+                "timestamp": 1.0,
+            }
+        ]
     if reason_summary is None:
         reason_summary = ["异常停留"]
     return WarningEvent(
@@ -73,6 +76,7 @@ def make_warning(
 # ============================================================================
 # ActionCommand 字段校验
 # ============================================================================
+
 
 class TestActionCommandFieldValidation:
     def test_basic_construction(self):
@@ -113,13 +117,14 @@ class TestActionCommandFieldValidation:
                 command_type="LOG_ONLY",
                 warning_id=uuid.uuid4(),
                 payload={},
-                created_at=datetime(2026, 7, 19, 12, 0, 0),  # naive
+                created_at=datetime(2026, 7, 19, 12, 0, 0),  # noqa: DTZ001 (naive test)
             )
 
 
 # ============================================================================
 # ActionCommand 黑名单（行动层不做最终判定）
 # ============================================================================
+
 
 class TestActionCommandBlacklist:
     @pytest.mark.parametrize("forbidden_field", sorted(FORBIDDEN_ACTION_FIELDS))
@@ -145,6 +150,7 @@ class TestActionCommandBlacklist:
 # ============================================================================
 # 状态翻转
 # ============================================================================
+
 
 class TestWarningStatusTransitions:
     def test_can_transition_created_to_pending(self):
@@ -178,6 +184,7 @@ class TestWarningStatusTransitions:
 # ============================================================================
 # MockPublisher
 # ============================================================================
+
 
 class TestMockPublisher:
     def test_publish_success(self):
@@ -217,6 +224,7 @@ class TestMockPublisher:
 # MockNotifier
 # ============================================================================
 
+
 class TestMockNotifier:
     def test_notify_family(self):
         n = MockNotifier()
@@ -245,6 +253,7 @@ class TestMockNotifier:
 # ============================================================================
 # ActionDispatcher 路由
 # ============================================================================
+
 
 class TestActionDispatcherRouting:
     def test_monitor_routes_to_log_only(self):
@@ -301,6 +310,7 @@ class TestActionDispatcherRouting:
 # ActionExecutor 基础执行
 # ============================================================================
 
+
 class TestActionExecutorBasic:
     def test_monitor_executes_log_only_success(self):
         d = ActionDispatcher()
@@ -348,6 +358,7 @@ class TestActionExecutorBasic:
 # ActionExecutor 幂等（Owner 三大必验证 #2）
 # ============================================================================
 
+
 class TestActionExecutorIdempotency:
     def test_same_warning_id_dispatched_once(self):
         """同 warning_id 重复 execute → 只产生一个下游任务。"""
@@ -386,6 +397,7 @@ class TestActionExecutorIdempotency:
 # ============================================================================
 # ActionExecutor 失败保护（Owner 三大必验证 #3）
 # ============================================================================
+
 
 class TestActionExecutorFailureHandling:
     def test_publisher_failure_keeps_warning_pending(self):
@@ -442,7 +454,7 @@ class TestActionExecutorFailureHandling:
         executor.retry_pending()
 
         # Command 状态 GIVEN_UP
-        cmd = list(executor._command_index.values())[0]
+        cmd = next(iter(executor._command_index.values()))
         assert cmd.status == "GIVEN_UP"
         assert cmd.attempts == 3  # 1 + 2 retries
         # Warning 状态 REJECTED
@@ -464,12 +476,15 @@ class TestActionExecutorFailureHandling:
     def test_max_retries_negative_raises(self):
         d = ActionDispatcher()
         with pytest.raises(ValueError, match="max_retries"):
-            ActionExecutor(dispatcher=d, publisher=MockPublisher(), notifier=MockNotifier(), max_retries=-1)
+            ActionExecutor(
+                dispatcher=d, publisher=MockPublisher(), notifier=MockNotifier(), max_retries=-1
+            )
 
 
 # ============================================================================
 # 警告事件无业务判定字段（黑名单）
 # ============================================================================
+
 
 class TestActionLayerNoBusinessJudgment:
     """行动层黑名单测试：所有 ActionCommand 字段（含 payload + meta）不含业务判定字段。"""
@@ -521,8 +536,9 @@ CAVIAR_ONE_STOP_ENTER = "tests/fixtures/doorway/one_stop_enter"
 def test_caviar_end_to_end_pipeline_emits_action_command():
     """CAVIAR OneStopEnter1cor: detector → ... → decision → action 全链路。"""
     pytest.importorskip("ultralytics")
-    import cv2
     from pathlib import Path
+
+    import cv2
 
     p = Path(CAVIAR_ONE_STOP_ENTER)
     if not p.is_dir() or not list(p.glob("frame_*.jpg")):

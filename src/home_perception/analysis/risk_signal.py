@@ -17,13 +17,14 @@
 - 不输出 fraud / suspect / verdict 等犯罪认定字段（黑名单由下游 adapter 拦截，本类型也不提供该字段）。
 - **禁止** import ADR-0022 的 `EvidenceModality`（两者是不同限界上下文的独立枚举，见 ADR-0021 §3.3 命名消歧）。
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 from uuid import UUID
 
 from ..common.timeutil import now_dt, require_utc
@@ -41,9 +42,7 @@ def _coerce_enum(enum_cls: type, value: Any, field_name: str) -> Enum:
             raise ValueError(
                 f"{field_name} 必须是 {enum_cls.__name__} 之一，收到 {value!r}；合法值：{valid}"
             ) from exc
-    raise TypeError(
-        f"{field_name} 必须是 {enum_cls.__name__} 或 str，收到 {type(value).__name__}"
-    )
+    raise TypeError(f"{field_name} 必须是 {enum_cls.__name__} 或 str，收到 {type(value).__name__}")
 
 
 def _coerce_uuid(value: Any) -> str:
@@ -61,14 +60,15 @@ def _coerce_uuid(value: Any) -> str:
 # 枚举（严格白名单，禁止自由文本）
 # ============================================================================
 
+
 class SignalCategory(str, Enum):
     """异常类别（按风险语义域划分，非检测手段；未来新检测器归入既有域，不新增枚举）。"""
 
-    BEHAVIORAL = "behavioral"      # 行为异常（停留/重复/接近/徘徊轨迹）
-    IDENTITY = "identity"          # 身份异常（陌生人脸/声纹，Phase 4）
+    BEHAVIORAL = "behavioral"  # 行为异常（停留/重复/接近/徘徊轨迹）
+    IDENTITY = "identity"  # 身份异常（陌生人脸/声纹，Phase 4）
     COMMUNICATION = "communication"  # 沟通/话术异常（语音威胁/诱导话术，Phase 3）
-    SAFETY = "safety"              # 安全威胁（持械/跌倒/老人走失等人身安全）
-    ENVIRONMENT = "environment"    # 环境异常（预留）
+    SAFETY = "safety"  # 安全威胁（持械/跌倒/老人走失等人身安全）
+    ENVIRONMENT = "environment"  # 环境异常（预留）
 
 
 class SourceModality(str, Enum):
@@ -82,16 +82,16 @@ class SourceModality(str, Enum):
 class SignalTransition(str, Enum):
     """本次发射是升起还是解除（是跃迁类型，不是长期状态）。"""
 
-    RAISED = "raised"    # 异常升起的一次跃迁
+    RAISED = "raised"  # 异常升起的一次跃迁
     CLEARED = "cleared"  # 异常解除的一次跃迁
 
 
 class SubjectType(str, Enum):
     """风险主体类型（前瞻接口：信号未必来自视觉 track）。"""
 
-    VISITOR = "visitor"        # 门口访客（Phase 1 唯一取值）
-    PERSON = "person"          # 已识别的具体人（Phase 4 ReID 之后）
-    DEVICE = "device"          # 设备 / 终端（如电话诈骗、异常转账，未来）
+    VISITOR = "visitor"  # 门口访客（Phase 1 唯一取值）
+    PERSON = "person"  # 已识别的具体人（Phase 4 ReID 之后）
+    DEVICE = "device"  # 设备 / 终端（如电话诈骗、异常转账，未来）
     ENVIRONMENT = "environment"  # 环境主体（无具体人，如烟感 / 门磁，未来）
 
 
@@ -118,18 +118,20 @@ RISKSIGNAL_DICT_KEYS: tuple = (
 )
 
 # RiskSignal 顶层**禁止**出现的犯罪认定 / 判定字段（模块边界铁律，见 docstring）
-FORBIDDEN_RISKSIGNAL_FIELDS: frozenset = frozenset({
-    "fraud_result",
-    "fraud_probability",
-    "is_fraud",
-    "is_scammer",
-    "is_criminal",
-    "verdict",
-    "final_decision",
-    "crime_probability",
-    "guilt_score",
-    "deception_score",
-})
+FORBIDDEN_RISKSIGNAL_FIELDS: frozenset = frozenset(
+    {
+        "fraud_result",
+        "fraud_probability",
+        "is_fraud",
+        "is_scammer",
+        "is_criminal",
+        "verdict",
+        "final_decision",
+        "crime_probability",
+        "guilt_score",
+        "deception_score",
+    }
+)
 
 
 @dataclass
@@ -163,11 +165,11 @@ class RiskSignal:
     category: SignalCategory
     source: SourceModality
     transition: SignalTransition
-    features: Dict[str, Any]
-    paired_signal_id: Optional[str] = None
-    track_id: Optional[int] = None
-    visitor_instance_id: Optional[str] = None
-    severity_hint: Optional[float] = None
+    features: dict[str, Any]
+    paired_signal_id: str | None = None
+    track_id: int | None = None
+    visitor_instance_id: str | None = None
+    severity_hint: float | None = None
     created_at: datetime = field(default_factory=now_dt)
 
     def __post_init__(self) -> None:
@@ -196,9 +198,7 @@ class RiskSignal:
                     f"severity_hint 必须是 float，收到 {type(self.severity_hint).__name__}"
                 )
             if not (0.0 <= float(self.severity_hint) <= 1.0):
-                raise ValueError(
-                    f"severity_hint 必须在 [0, 1]，收到 {self.severity_hint}"
-                )
+                raise ValueError(f"severity_hint 必须在 [0, 1]，收到 {self.severity_hint}")
             self.severity_hint = float(self.severity_hint)
 
         # 6) 黑名单字段结构性保证（features 内也不允许出现判定字段）
@@ -206,14 +206,12 @@ class RiskSignal:
         if forbidden_top:
             raise ValueError(f"RiskSignal 含禁止字段 {forbidden_top}")
         if not isinstance(self.features, dict):
-            raise TypeError(
-                f"features 必须是 dict，收到 {type(self.features).__name__}"
-            )
+            raise TypeError(f"features 必须是 dict，收到 {type(self.features).__name__}")
         forbidden_in_features = FORBIDDEN_RISKSIGNAL_FIELDS.intersection(self.features.keys())
         if forbidden_in_features:
             raise ValueError(f"RiskSignal.features 含禁止字段 {forbidden_in_features}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """structlog-safe 字典（枚举转 value、datetime 转 ISO 字符串）。"""
         return {
             "signal_id": self.signal_id,
@@ -235,7 +233,7 @@ class RiskSignal:
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RiskSignal":
+    def from_dict(cls, data: dict[str, Any]) -> RiskSignal:
         """从 to_dict() 产出的字典反序列化（枚举 value → 枚举实例、ISO 字符串 → datetime）。
 
         用于 Stage B/C 跨进程传递 / 日志回放 / 测试构造。与 `to_dict()` 严格对称。
@@ -256,6 +254,6 @@ class RiskSignal:
         )
 
     @classmethod
-    def from_json(cls, json_str: str) -> "RiskSignal":
+    def from_json(cls, json_str: str) -> RiskSignal:
         """从 to_json() 产出的 JSON 字符串反序列化。"""
         return cls.from_dict(json.loads(json_str))

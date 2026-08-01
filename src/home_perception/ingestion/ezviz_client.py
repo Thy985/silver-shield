@@ -3,6 +3,7 @@
 已落地（沿用 prototypes/ 的验证逻辑）：支持 RTSP（低延迟，默认）与 HLS（回退）。
 凭证通过环境变量 EZVIZ_APP_KEY / EZVIZ_APP_SECRET 注入，禁止硬编码。
 """
+
 from __future__ import annotations
 
 import os
