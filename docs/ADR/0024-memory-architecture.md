@@ -907,6 +907,7 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | **Integration Closure · Slice D** | 外部闭环·文档冻结 | 4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ 本 ADR 标注 | #95 | ✅ 已合并 |
 
 > **消费层承接（ADR-0025）**：本 ADR 定义"存储过去"，Memory 如何被消费以反哺理解（Retrieval / Aggregation / Context Builder / Reasoning Interface + 执行模型）已由 **ADR-0025** 定义。本 ADR 不再覆盖消费层契约；推理逻辑本身仍归 Phase 5 Reasoning ADR。
+> （注：ADR-0025 中 Context Builder 仅指其 §3.4 组件 3，与本文 §7 范围表中"消费层上下文组装契约"含义一致——专指上下文组装，不含推理逻辑。）
 
 **Integration Closure 完成标志**：System × Memory 外部闭环全部收口——
 B（真实链路闭环，证明系统存在）→ C（Product Closure，证明价值）→ A（MemoryHook 代码整理）→ D（文档冻结，纯文档不重构接口）。

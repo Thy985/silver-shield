@@ -102,8 +102,8 @@ src/home_perception/memory/consumer/
    interfaces.py      # MemoryConsumer / Retrieval / Aggregation / ContextBuilder ABC
    contracts.py       # ReasoningInput / ReasoningResult / DecisionRequest dataclasses
    orchestrator.py    # MemoryConsumer.consume()：按序驱动 Retrieval→Aggregation→ContextBuilder
-   retrieval.py       # RetrievalStrategy 默认实现（只召回）
-   aggregation.py     # AggregationStrategy 默认实现（只计算）
+   retrieval.py       # RuleBasedRetrieval 默认实现（只召回）
+   aggregation.py     # RuleBasedAggregation 默认实现（只计算）
    context.py         # ReasoningInput 组装（只组装）
    triggers.py        # MemoryConsumerHook：模式 B 触发接入（门控 + 容错）
    exceptions.py      # ConsumerError / RetrievalError / AggregationError / BelowThresholdError
@@ -129,13 +129,15 @@ tests/home_perception/memory/consumer/
 | --- | --- | --- | --- | --- |
 | `current_event` | `CurrentEvent` | ADR-0021 运行时对象 | ✅ | 当前触发事件（RiskSignal / VisitorEvent） |
 | `historical_context` | `list[EpisodicRecord]` | Retrieval 召回 | ✅ | 按相关性排序的相关历史原始记录（ADR-0024） |
-| `visitor_profile` | `VisitorProfile \| None` | Aggregation 计算 | 否 | 访客长期画像；低于观测阈值时为 `None` 或标 `confidence=low` |
+| `visitor_profile` | `VisitorProfile \| None` | Aggregation 计算 | 否 | 访客长期画像；低于观测阈值时为 `None` 或标 `confidence=low`；**必带 `identity_confirmed: bool`**（v1 常 `False`，对齐 ADR-0023） |
 | `risk_pattern` | `RiskPattern \| None` | Aggregation 计算 | 否 | 风险模式（非分数） |
 | `evidence_refs` | `list[EvidenceRef]` | ADR-0022 | ✅（可空列表） | 证据引用，保证可审计 |
 | `previous_actions` | `list[ActionRecord]` | ADR-0011 动作历史 | ✅（可空列表） | 该访客/模式既往被派遣的动作 |
 | `conflicts` | `list[ConflictFlag]` | Aggregation / ContextBuilder 标记 | ✅（可空列表） | 历史与当前的冲突（ADR-0025 §3.6） |
 
 **硬约束（C1）**：`ReasoningInput` **不得**含 `risk_score` / `decision` / `warning` / 任何可被直接喂给 Decision 的判定字段。
+
+> ⚠ **身份确认标记（对齐 ADR-0023）**：`VisitorProfile` 必须含 `identity_confirmed: bool` 字段；v1 临时画像该字段恒为 `False`（未确认身份），Reasoning 不得把临时画像当作真实身份画像使用。这是 C1/C5 之外的强制约束。
 
 ### 2.2 `ReasoningResult`（Reasoning Engine 输出 —— 本方案只定义签名）
 
@@ -178,9 +180,11 @@ tests/home_perception/memory/consumer/
 3. 事件类型相似度：同 `VisitorEvent` 类型 / 同源 `RiskSignal` 跃迁类型。
 4. 时空特征：同 `device_id` / 同门口区域。
 
-**实现落点**：直接复用 ADR-0024 Slice C 的 `MemoryQuery.compose_context`（Product Closure，已合 #91），在其之上包一层 `RetrievalStrategy`，不另起召回实现。
+> ⚠ **隐私边界（device_id）**：`device_id` 仅用作召回**排序键**（同设备优先），**绝不**进入 `ReasoningInput` 任何字段；若需向 Reasoning 传递空间信息，须脱敏为 `area_code`（如 `door` / `living_room`），不得携带可定位住户布局的原始 `device_id`（违反家庭隐私与 ADR-0024 §3.2 隐私约束）。
 
-**输出**：`list[EpisodicRecord]`，**确定性排序**（C3）：v1 规则召回**不使用任何 `similarity_score`**（向量分数属未来 `VectorRetrievalStrategy`，见 O1），排序键为命中强度，顺序固定为：① `identity_match`（身份键一致优先）② `event_type_match`（同事件 / 同源 RiskSignal 类型）③ `time_distance asc`（距当前越近越前，即 `timestamp desc`）。保证同输入两次召回顺序一致（回放 / 审计一致）。召回结果的数据来源见 §0.4（Memory Dataset / Episode Replay Layer）。
+**实现落点**：直接复用 ADR-0024 Slice C 的 `MemoryQuery.compose_context`（Product Closure，已合 #91），在其之上包一层 `RuleBasedRetrieval`（默认规则召回实现），不另起召回实现。
+
+**输出**：`list[EpisodicRecord]`，**确定性排序**（C3）：v1 规则召回**不使用任何 `similarity_score`**（向量分数属未来 `VectorRetrieval`，见 O1），排序键为命中强度，顺序固定为：① `identity_match`（身份键一致优先）② `event_type_match`（同事件 / 同源 RiskSignal 类型）③ `time_distance asc`（距当前越近越前，即 `timestamp desc`）。保证同输入两次召回顺序一致（回放 / 审计一致）。召回结果的数据来源见 §0.4（Memory Dataset / Episode Replay Layer）。
 
 **复用接口签名**：
 ```python
@@ -254,7 +258,8 @@ class ReasoningEngine(ABC):
     @abstractmethod
     def infer(self, ctx: ReasoningInput) -> ReasoningResult: ...
 
-# DecisionPolicy 接入（ADR-0010，本方案只定义派生）
+# ⚠ 仅签名示意：DecisionRequest 实际由 ADR-0010 DecisionPolicy 模块构造，不归 Consumer / Reasoning（见 §2.3 硬约束）。
+# 此处列出只为展示链路 Context → Inference → Decision；实现期不得把 to_decision_request 放进 consumer/ 包，否则触发 ADR-0010 "唯一决策中心"边界违反。
 def to_decision_request(self, signal: RiskSignal, result: ReasoningResult | None) -> DecisionRequest: ...
 ```
 
@@ -264,7 +269,7 @@ def to_decision_request(self, signal: RiskSignal, result: ReasoningResult | None
 
 ### 4.1 触发模型：Phase 1 = 模式 B（修订：MEDIUM+ 或存在历史时触发）
 
-**接入点**：类比 ADR-0024 的 `MemoryHook`（PR#94）。新增 `MemoryConsumerHook`（或扩展 `MemoryHook`），触发条件（Phase 1，修订自 ADR-0025 §3.10）：
+**接入点**：新增独立接入点 `runtime/memory_consumer_hook.py`（`MemoryConsumerHook`），与 ADR-0024 的 `MemoryHook`（PR#94）**并列、不耦合**；两者 metrics 语义独立，Consumer 的 metrics **不得混入** MemoryHook 的 metrics（避免将来埋点 / 告警语义漂移）。触发条件（Phase 1，修订自 ADR-0025 §3.10）：
 
 - `RiskSignal.level in {MEDIUM, HIGH}`（含 ADR-0010 落入 `ESCALATE_COMMUNITY` 等高优先动作）；**或**
 - 当前 `VisitorEvent` 命中已有历史（`prior_episode_count > 0`，即"已知 / 重复访客再现"）。
@@ -308,10 +313,10 @@ class MemoryConsumer:
 | Slice | 内容 | DoD |
 | --- | --- | --- |
 | **C-0** | `contracts.py`（三数据类型）+ `interfaces.py`（四 ABC）+ `exceptions.py` | 类型可构造；ABC 不可实例化；`node --check` 不适用，ruff 通过 |
-| **C-1** | `retrieval.py`：基于 `MemoryQuery.compose_context` 的默认规则召回 | 召回单测：返回 `EpisodicRecord` 列表；C3 确定性（同输入两次顺序一致） |
-| **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档；C1 无 score；O1 排序稳定 |
+| **C-1** | `retrieval.py`（`RuleBasedRetrieval`）：基于 `MemoryQuery.compose_context` 的默认规则召回 | 召回单测：返回 `EpisodicRecord` 列表；C3 确定性（同输入两次顺序一致）；**O1 规则排序键命中强度稳定**（identity_match→event_type_match→time_distance asc） |
+| **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档（cold_start→weak_pattern→stable_pattern）；C1 无 score；**窗口边界裁剪**（默认 100 条 / 30d）正确、越界记录不入聚合 |
 | **C-3** | `context.py`：组装 `ReasoningInput` | 组装单测：C1 无 score 字段、C5 每项历史带 `source_event_ids` |
-| **C-4** | `orchestrator.py` + `triggers.py`：`MemoryConsumer.consume` + `MemoryConsumerHook` 接入 pipeline（模式 B 门控） | 集成单测：HIGH 触发→`ReasoningInput` 产出；`consumer_enabled=False` 时不触发 |
+| **C-4** | `orchestrator.py` + `triggers.py`（`MemoryConsumerHook`，新文件，与 `MemoryHook` 并列）：`MemoryConsumer.consume` 接入 pipeline（模式 B 门控） | 集成单测：**三档 `RiskSignal.level` 断言**（LOW=不触发 / MEDIUM=触发 / HIGH=触发）+ 已知访客首现（`prior_episode_count>0`）即便 LOW 也触发；`consumer_enabled=False` 时不触发 |
 | **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | `test_invariants.py` 全绿；monkeypatch 验证 Aggregation 不调 Retrieval |
 
 每个 Slice 经 `ruff check src tests` + `pytest tests/` 门禁，零回归。工程推进顺序与 M0–M5 阶段映射见 §0.5：**M0（Memory Replay Dataset）优先级最高，须先于 C-1 完成**——没有真实 Memory 数据，C-1~C-5 只是"能跑的空壳"。
@@ -320,15 +325,17 @@ class MemoryConsumer:
 
 ## 6. 测试策略
 
-| 不变量 | 测试方法 |
+| 不变量（Consumer C1–C5，与 ADR-0024 存储侧 I1–I4 **区分**；C1 ≠ I1） | 测试方法 |
 | --- | --- |
 | **C1 无分数变异** | 构造 `ReasoningInput`，断言不含 `risk_score` / `decision` / `warning` 字段（dataclass 字段白名单校验） |
 | **C2 只读** | `consume` 前后 `MemoryStore` 写入计数 = 0（`short_term_count()` 等只读口不变） |
 | **C3 确定性** | 同 Memory 状态 + 同 `current_event` 两次 `retrieve`，断言返回顺序一致 |
-| **C4 冲突透明** | 构造"历史低风险 vs 本次高风险" fixture，断言 `conflicts` 非空且新旧并存 |
+| **C3' 临时画像确定性**（2.2） | 同 `visitor_profile`（`person_identity_id=None`，按 `visitor_instance_id` 建临时画像）两次 `consume`，断言 `VisitorProfile` 字段一致——仅依赖检索结果，不依赖 wall-clock / 当前时间戳（防破坏 C3 确定性） |
+| **C4 冲突透明** | **正向**：构造"历史低风险 vs 本次高风险" fixture，断言 `conflicts` 非空且新旧并存；**反向**：构造"历史与当前一致" fixture，断言 `conflicts == []`（防 false positive） |
 | **C5 可解释** | 构造无 `source_event_ids` 的历史项，断言被拒绝或标 `missing_source` |
-| **跨层调用禁令** | monkeypatch `Retrieval.retrieve`，在 `Aggregation.aggregate` 中断言其未被调用（验证单向管道） |
+| **跨层调用禁令** | monkeypatch `Retrieval.retrieve`，在 `Aggregation.aggregate` 中断言其未被调用（验证单向管道的直接方法调用边界；**间接触发——回调 / 全局状态 / 共享状态——需配合 ADR-0024 I1 实现层验证**） |
 | **Replay 一致性** | 用 `DESIGN-memory-replay-dataset.md` 定义的 case（case_001 重复访客 / case_002 行为升级 / case_003 冲突透明）做回放，断言同输入同输出 |
+| **Baseline 区分** ⚠（4.3） | Consumer 回放 baseline = `tests/fixtures/memory_consumer_baseline.json`（消费侧 `ReasoningInput`，待 M0 生成）；**不得**复用 ADR-0024 Slice 6 的 `tests/fixtures/memory_baseline.json`（写入侧 `EpisodicRecord`）。二者概念不同，混用会导致「读 EpisodicRecord 却断言 ReasoningInput」的逻辑错乱 |
 
 ---
 
@@ -336,7 +343,7 @@ class MemoryConsumer:
 
 | 编号 | 决策 | 本方案默认选择 + 扩展点 |
 | --- | --- | --- |
-| O1 | 相关性排序算法（向量 / 规则 / 混合） | **默认规则召回**（§3.1）；`RetrievalStrategy` 留 `VectorRetrievalStrategy` 扩展点，向量召回未来接入 |
+| O1 | 相关性排序算法（向量 / 规则 / 混合） | **默认规则召回**（`RuleBasedRetrieval`，§3.1）；`RuleBasedRetrieval` 留 `VectorRetrieval` 扩展点，向量召回未来接入 |
 | O2 | 聚合窗口（100? 200?）+ 时间窗（30d? 90d?） | 默认 **100 条 / 30d**，服从置信度分级（§3.2）；常量提 `consumer/config.py` 可配 |
 | O3 | 序列化格式 | `pydantic.BaseModel` + `model_dump()` → JSON；契约稳定即可 |
 | O4 | `person_identity_id=None` 时临时画像生命周期 | 按 `visitor_instance_id` 建临时画像并标"未确认身份"；真实身份归 ADR-0023 |

@@ -155,7 +155,7 @@ Reasoning        # 外部：消费 ReasoningInput → ReasoningResult
 ```
 当前事件 (Current Event)
    │
-   │  RetrievalStrategy
+   │  Retrieval（组件；默认实现 RuleBasedRetrieval）
    ▼
 相关历史事件 (Ranked Relevant History)
 ```
@@ -167,6 +167,8 @@ Reasoning        # 外部：消费 ReasoningInput → ReasoningResult
 - 事件类型相似度：同类 `VisitorEvent` 类型 / 同类 `RiskSignal` 跃迁
 - 时空特征：同设备 / 同门口区域 / 相似停留模式
 
+  > ⚠ **隐私边界**：`device_id` 仅参与召回**排序键**（同设备优先），**绝不**进入 `ReasoningInput` 任何字段；若需向 Reasoning 传递空间信息，须脱敏为 `area_code`（如 `door` / `living_room`），不得携带可定位住户布局的原始 `device_id`（见 DESIGN-memory-consumer.md §3.1）。
+
 **契约**：
 
 ```
@@ -177,6 +179,8 @@ Retrieval.retrieve(current_event: CurrentEvent) -> list[EpisodicRecord]
 
 **复用**：直接建立在 ADR-0024 Slice C 的 `MemoryQuery.compose_context` 之上（Product Closure 已合），不另起炉灶。
 
+**V0 冻结边界（ADR-0024 §10.1）**：Consumer **只调用** `compose_context`，**不修改**其签名或返回值，确保 V0 边界不被无意打破（5.4）。
+
 **单一职责（呼应 §3.1.1）**：Retrieval **只召回**——返回按相关性排序的原始 `EpisodicRecord` 列表，**绝不**返回聚合画像 / 风险模式 / 任何形式的"是否异常"结论。判定"异常与否"是上游 Aggregation 的职责。
 
 ### 3.3 组件 2：Aggregation（形成长期模式）
@@ -186,7 +190,7 @@ Retrieval.retrieve(current_event: CurrentEvent) -> list[EpisodicRecord]
 ```
 100 Episodes (检索到的 EpisodicRecord，数量示例)
    │
-   │  AggregationStrategy（读侧组合）
+   │  Aggregation（组件；默认实现 RuleBasedAggregation）
    ▼
 Visitor Profile（访客画像）
    │
@@ -209,7 +213,7 @@ Risk Pattern（风险模式）
 
 - "100 Episodes"是示例窗口，具体数量 / 时间窗由工程方案定；
 - 必须服从 ADR-0024 最低观测阈值（≥30 episodes、≥7 天）才产出高置信模式，否则标注 `confidence=low` 且不供 Reasoning 消费；
-- v1 `person_identity_id=None` 时，Profile 按 `visitor_instance_id` 建临时画像并标注"未确认身份"（ADR-0024 §3.3）。
+- v1 `person_identity_id=None` 时，Profile 按 `visitor_instance_id` 建临时画像并标注"未确认身份"（`VisitorProfile.identity_confirmed = False`，对齐 ADR-0023）；Reasoning 不得将临时画像当作真实身份画像使用。
 
 **单一职责（呼应 §3.1.1）**：Aggregation **只计算**——输入是 Retrieval 交付的原始记录，产出 Visitor Profile / Risk Pattern；**绝不**内部再调 Retrieval 做召回（召回是上游给的）。它也**不回答**"该访客是否异常"的最终结论，只产出可观测的模式视图（结论归 Reasoning）。
 
@@ -234,7 +238,7 @@ Current Event
 ReasoningInput {
     current_event: CurrentEvent                # 当前事件（ADR-0021 对象）
     historical_context: list[EpisodicRecord]   # 检索到的相关历史
-    visitor_profile: VisitorProfile            # 聚合出的访客画像（可为空/低置信）
+    visitor_profile: VisitorProfile            # 聚合出的访客画像（可为空/低置信）；必带 identity_confirmed: bool（v1 常 False，对齐 ADR-0023）
     risk_pattern: RiskPattern                  # 聚合出的风险模式（非分数）
     evidence_refs: list[EvidenceRef]           # 证据引用（ADR-0022）
     previous_actions: list[ActionRecord]       # 既往动作（供 Reasoning 参考"上次怎么处理"）
@@ -264,21 +268,7 @@ DecisionPolicy    (ADR-0010 唯一决策中心)
 
 **三个数据契约**：
 
-- **`ReasoningInput`**（Consumer 输出，即 Context Builder 产物）：
-
-  ```
-  ReasoningInput {
-      current_event: CurrentEvent
-      historical_context: list[EpisodicRecord]
-      visitor_profile: VisitorProfile
-      risk_pattern: RiskPattern
-      evidence_refs: list[EvidenceRef]
-      previous_actions: list[ActionRecord]
-      conflicts: list[ConflictFlag]
-  }
-  ```
-
-  不含 `risk_score` / `decision` / `warning`（C1）。
+- **`ReasoningInput`**（Consumer 输出，即 Context Builder 产物）：字段定义以 **§3.4** 为单一事实来源，此处不重复罗列。要点回顾：纯上下文、不含 `risk_score` / `decision` / `warning`（C1），每个历史项携带 `source_event_ids` / `evidence_refs`（C5）。
 
 - **`ReasoningResult`**（Reasoning Engine 输出）：
 
@@ -307,6 +297,15 @@ ADR-0024 §3.8 把冲突解决策略（覆盖 / 衰减 / 版本化）推迟到�
 - 当检索 / 聚合发现历史与当前事件矛盾（如"历史低风险" vs "本次高风险"、"通常白天" vs "本次夜间"），Consumer **不解决、不覆盖**；
 - 而是把冲突作为 `ConflictFlag` 放进 `ReasoningInput.conflicts`，由 Reasoning 同时看到新旧并自行推理（呼应 ADR-0024 §3.8 C3）；
 - 冲突解决策略（如何衰减旧模式、是否版本化）归未来 ADR，本 ADR 不决策。
+
+**`ConflictFlag` 数据结构**（工程方案落地字段，示例见 `DESIGN-memory-replay-dataset.md` Case 3）：
+
+- `type: str` —— 冲突类别（如 `behavior_shift` / `time_shift` / `identity_shift`）
+- `historical: str` —— 历史侧状态描述（如 `normal` / `daytime`）
+- `current: str` —— 当前侧状态描述（如 `abnormal` / `night`）
+- `detail: str` —— 新旧并存的补充说明（供 Reasoning 推理，Consumer 不解决）
+
+> 实现时 `ConflictFlag` 须为结构化的具名字段（**不可退化为单一 `type: str` 字符串**），否则 C4 验证拿不到"新旧并存"细节。
 
 ### 3.7 Consumer Invariants（不变量）
 
@@ -349,8 +348,8 @@ src/home_perception/memory/
       interfaces.py      # MemoryConsumer / Retrieval / Aggregation / ContextBuilder ABC
       contracts.py       # ReasoningInput / ReasoningResult / DecisionRequest dataclasses
       orchestrator.py    # MemoryConsumer.consume()：按序驱动 Retrieval→Aggregation→ContextBuilder
-      retrieval.py       # RetrievalStrategy 默认实现（只召回）
-      aggregation.py     # AggregationStrategy 默认实现（只计算）
+      retrieval.py       # RuleBasedRetrieval 默认实现（只召回）
+      aggregation.py     # RuleBasedAggregation 默认实现（只计算）
       context.py         # ReasoningInput 组装（只组装）
 ```
 
@@ -404,6 +403,8 @@ DecisionPolicy (ADR-0010) 将 ReasoningResult 作为增广上下文并入决策
 ```
 
 **生命周期不变量**：Consumer 仅在触发时物化 `ReasoningInput`；非触发期**不保留任何跨请求状态**（无会话、无"当前画像"缓存），保证 C2（只读）+ 无副作用 + 可复现。
+
+**异常路径（守 C2 只读）**：触发期内若某组件抛异常（如 Aggregation 计算失败 / 数据损坏 / OOM），Consumer **不得写入 Memory、不得持有跨请求状态**；向上层返回 `None` 或显式 `ConsumerError`（见 DESIGN §5 C-0 `exceptions.py`），并遵循 ADR-0024 C2 只读——异常绝不沉淀临时画像到 Memory 缓存，主链路不受影响（非阻塞，见 DESIGN §4.1）。
 
 ---
 
@@ -492,7 +493,7 @@ Memory Integration Closure 完成前做 Consumer 没有可消费的 Memory；完
 
 ## 8. 开放问题（Open Questions）
 
-> 注：原 O5（Consumer 触发时机）已升级为架构决策，见 **§3.10**——Phase 1 采用**模式 B（高风险触发）**，模式 C 用于离线 Semantic Profile 预计算，模式 A 排除为默认。
+> 注：原 O5（Consumer 触发时机）已升级为架构决策，见 **§3.10**——Phase 1 采用**模式 B（修订：MEDIUM+ 或已知访客再现时触发）**，模式 C 用于离线 Semantic Profile 预计算，模式 A 排除为默认。
 
 | # | 问题 | 留给 |
 | --- | --- | --- |
