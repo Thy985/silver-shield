@@ -273,3 +273,76 @@ def test_realtime_enabled_assembles_pipeline_components():
     assert pipe._recent_behavior_store is not None
     # 决策接入随 decision_enabled 同步开启（Stage D 单一决策中心）
     assert pipe._decision_enabled is True
+
+
+# ----------------------------------------------------------------------
+# 7. 跨场景状态泄漏回归（review 最实质回归点）
+# ----------------------------------------------------------------------
+
+
+def test_realtime_override_does_not_leak_across_scenarios():
+    """从「开启 realtime」的场景热切到「无 realtime_risk override」的场景时，
+    hp_settings.realtime_risk 必须复位为基线（enabled/decision_enabled = False）。
+
+    否则 CCTV（enabled=true）切到 Delivery（无 override）会残留 True，导致实时旁路
+    意外开启（跨场景状态泄漏）。修复点：_apply_scenario_realtime_overrides 先复位基线
+    再覆盖，且 _rebuild_pipeline（switch_source 经由此）在 from_settings 前调用它。
+    """
+    gw = DemoGateway.create_for_test()
+    from home_perception.core.config import Settings
+    from silver_demo.config import DemoSettings
+
+    gw.hp_settings = Settings.load(DemoSettings.from_env().home_perception_config)
+    assert gw.hp_settings.realtime_risk.enabled is False
+    assert gw.hp_settings.realtime_risk.decision_enabled is False
+
+    # 1) CCTV 场景覆盖：开启
+    gw.scenario = ScenarioConfig(
+        scenario_id="cctv",
+        source="cctv",
+        source_type="video_file",
+        media_path="data/demo/CCTV_Surveillance_Final.mp4",
+        start_time=datetime.now(UTC),
+        realtime_risk={"enabled": True, "decision_enabled": True},
+    )
+    gw._apply_scenario_realtime_overrides()
+    assert gw.hp_settings.realtime_risk.enabled is True
+    assert gw.hp_settings.realtime_risk.decision_enabled is True
+
+    # 2) 热切到无 override 的场景（如 Delivery）—— 必须复位，不能残留 True
+    gw.scenario = ScenarioConfig(
+        scenario_id="delivery",
+        source="delivery",
+        source_type="video_file",
+        media_path="data/demo/Delivery.mp4",
+        start_time=datetime.now(UTC),
+        # 注意：无 realtime_risk 字段
+    )
+    gw._apply_scenario_realtime_overrides()
+    assert gw.hp_settings.realtime_risk.enabled is False
+    assert gw.hp_settings.realtime_risk.decision_enabled is False
+
+
+def test_realtime_override_whitelist_rejects_unknown_fields():
+    """realtime_risk 覆盖仅接受白名单字段（enabled / decision_enabled），
+    其余键（含 RealtimeRiskConfig 已有但不该经 YAML 改写的字段）必须被拒绝，
+    杜绝任意字段名经 setattr 改写配置对象私有属性（review 安全风险项）。
+    """
+    gw = DemoGateway.create_for_test()
+    from home_perception.core.config import Settings
+    from silver_demo.config import DemoSettings
+
+    gw.hp_settings = Settings.load(DemoSettings.from_env().home_perception_config)
+    # eval_interval_frames 是 RealtimeRiskConfig 已有字段，但不在白名单 → 应被拒绝
+    gw.scenario = ScenarioConfig(
+        scenario_id="cctv",
+        source="cctv",
+        source_type="video_file",
+        media_path="data/demo/CCTV_Surveillance_Final.mp4",
+        start_time=datetime.now(UTC),
+        realtime_risk={"enabled": True, "eval_interval_frames": 99},
+    )
+    gw._apply_scenario_realtime_overrides()
+    assert gw.hp_settings.realtime_risk.enabled is True
+    # 非白名单字段未被 setattr 改写（保持基线 1）
+    assert gw.hp_settings.realtime_risk.eval_interval_frames == 1

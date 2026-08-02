@@ -41,7 +41,7 @@ from home_perception.action.command import ActionCommand  # noqa: F401  # 类型
 from home_perception.analysis.warning import WarningEvent  # noqa: F401  # 类型标注
 
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
-from home_perception.core.config import Settings
+from home_perception.core.config import RealtimeRiskConfig, Settings
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 
 # === 本包内部 ===
@@ -298,6 +298,10 @@ class DemoGateway:
                     scenario=self.scenario.scenario_id,
                 )
 
+    # 允许经场景 YAML 覆盖的实时开关字段白名单：仅这两个语义明确的开关可被 setattr 写入
+    # RealtimeRiskConfig；禁止把任意字段名经 setattr 改写配置对象（避免误用私有/未文档字段）。
+    _REALTIME_OVERRIDE_ALLOWED = ("enabled", "decision_enabled")
+
     def _apply_scenario_realtime_overrides(self) -> None:
         """场景级实时风险开关覆盖（ADR-0021 Phase 1）。
 
@@ -305,17 +309,30 @@ class DemoGateway:
         （如 CCTV 夜间场景 ``{enabled: true, decision_enabled: true}``），使单个场景
         可开启实时风险旁路，不影响全局默认与其他场景。
 
-        必须在 ``assemble`` 的 ``PerceptionPipeline.from_settings`` 之前调用：``from_settings``
-        读 ``hp_settings.realtime_risk`` 决定装配哪些实时组件；``hp_settings`` 在
-        ``assemble`` / ``_rebuild_pipeline`` 复用同一对象，故此处改一次即对后续所有重建设计生效。
-        仅在键存在于 ``RealtimeRiskConfig`` 时生效；未知键告警跳过。
+        **跨场景复位（防状态泄漏，关键）**：进入本方法先无条件把 ``enabled`` /
+        ``decision_enabled`` 复位为基线（``RealtimeRiskConfig`` 默认值 ``False``），
+        再应用本场景覆盖。否则从「已开启 realtime 的场景」热切到「无 realtime_risk
+        override」的场景时，旧值会残留为 ``True``，导致实时旁路意外开启（跨场景状态泄漏）。
+
+        **必须在 ``from_settings`` 之前调用**：``from_settings`` 读 ``hp_settings.realtime_risk``
+        决定构造哪些实时组件（不同于 ``rule_overrides`` 阈值可在构造后覆盖）；本方法在
+        ``assemble`` 与 ``_rebuild_pipeline`` 的 ``from_settings`` 之前各调用一次，故切换场景 /
+        循环重放都会重新读取正确值。``hp_settings`` 在二者间复用同一对象。
+
+        **白名单**：仅 ``enabled`` / ``decision_enabled`` 可被覆盖；其他键视为未知键告警跳过，
+        不写入配置对象（避免任意字段名经 ``setattr`` 改写私有属性）。
         """
+        rt = self.hp_settings.realtime_risk
+        # 1) 先复位到基线，杜绝跨场景泄漏
+        baseline = RealtimeRiskConfig()
+        rt.enabled = baseline.enabled
+        rt.decision_enabled = baseline.decision_enabled
+        # 2) 再应用本场景覆盖（仅白名单内字段）
         overrides = getattr(self.scenario, "realtime_risk", None)
         if not overrides:
             return
-        rt = self.hp_settings.realtime_risk
         for k, v in overrides.items():
-            if hasattr(rt, k):
+            if k in self._REALTIME_OVERRIDE_ALLOWED:
                 setattr(rt, k, v)
             else:
                 structlog.get_logger(__name__).warning(
@@ -390,6 +407,10 @@ class DemoGateway:
         仅重建组件，detector 实例复用（model.track(persist=True) 要求同一实例保证 track_id 一致）。
         """
         self.clock = DemoClock(start=scenario.start_time, interval_s=scenario.frame_interval_s)
+        # 场景级实时风险开关覆盖（与 assemble 对齐）：必须在 from_settings 之前，
+        # 因实时组件是否构造取决于 hp_settings.realtime_risk。内部先复位基线再覆盖，
+        # 切到「无 realtime_risk override」的场景时不会残留上一个场景的 True（防泄漏）。
+        self._apply_scenario_realtime_overrides()
         self.pipeline = PerceptionPipeline.from_settings(
             self.hp_settings,
             detector=self.pipeline.detector,

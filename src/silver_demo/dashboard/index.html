@@ -593,6 +593,11 @@
       // paired_signal_id 配对移除（熄卡）；TTL 兜底：主体离场后 evaluator 未补发
       // CLEARED 时自动熄灭（工程方案 §4.3 volatile 语义，展示层兜底）。
       riskSignalMap: new Map(),
+      // 活跃实时风险卡的 TTL 兜底（毫秒）。取值依据：服务端 RealTimeRiskEvaluator 的
+      // "volatile" 语义 = 主体离场后约 1~2 个评估周期补发 CLEARED；单帧循环 + 5 帧在场
+      // 即可续期（见 ingestRiskSignals）。20s 远大于最坏续期间隔，给正常在场主体充足续期窗口，
+      // 仅在主体已离场且 evaluator 未补发 CLEARED 的罕见情况下才自动熄卡。若服务端调整
+      // volatile / 真实停留语义或单帧循环 > 20s，需同步上调此处。
       rtTtlMs: 20000
     };
 
@@ -1199,6 +1204,9 @@
 
     // ---------- ADR-0021 Phase 1 · 实时风险信号（区域③.5） ----------
     // 消费本帧 risk_signals（RAISED/CLEARED 跃迁），维护活跃风险卡映射（服务端权威去重）。
+    // 续期前提（设计取舍）：下方「主体在场续期」只作用于【已存在】的卡（原 RAISED 已记录、
+    // 以 visitor_instance_id 命中），不会凭空创建新卡。即「在场但未收到过 RAISED 的访客」
+    // 仅延长既有卡寿命、不新增卡——这是有意的保守行为，避免展示层臆造风险。
     function ingestRiskSignals(view) {
       var sigs = (view && view.risk_signals) || [];
       for (var i = 0; i < sigs.length; i++) {
@@ -1215,6 +1223,7 @@
       }
       // TTL 兜底 + 主体在场续期：当前帧在场访客（behavior_states）对应主体仍活跃 → 续期，
       // 避免 evaluator 漏发 CLEARED 时风险卡永久亮着（工程方案 §4.3 volatile 语义，展示层兜底）。
+      // 仅对「已存在」卡续期（见函数顶部续期前提），不创建新卡。
       var present = {};
       var bss = (view && view.behavior_states) || [];
       for (var j = 0; j < bss.length; j++) {
@@ -1223,7 +1232,7 @@
       }
       state.riskSignalMap.forEach(function (sig) {
         if (sig.visitor_instance_id && present[sig.visitor_instance_id]) {
-          sig.expiresAt = Date.now() + state.rtTtlMs;  // 主体在场 → 续期
+          sig.expiresAt = Date.now() + state.rtTtlMs;  // 主体在场 → 续期（已有卡）
         }
       });
     }
@@ -1231,11 +1240,18 @@
       var body = $("realtime-body");
       if (!body) return;
       var now = Date.now();
+      // 过期清理：用 Array.from 快照 + 重建 Map，逻辑直白且避免「for...of 迭代中删条目」
+      // 这类未来重构可能引入的隐性 bug（forEach 下删当前条目虽安全，但此处显式分离更稳）。
+      var entries = Array.from(state.riskSignalMap);
       var active = [];
-      state.riskSignalMap.forEach(function (sig, sid) {
-        if (!sig || now > sig.expiresAt) { state.riskSignalMap.delete(sid); return; }
-        active.push(sig);
-      });
+      for (var e = 0; e < entries.length; e++) {
+        var sid = entries[e][0], sig = entries[e][1];
+        if (!sig || now > sig.expiresAt) {
+          state.riskSignalMap.delete(sid);  // 过期熄卡
+        } else {
+          active.push(sig);
+        }
+      }
       // 排序：严重度降序 → 时间升序（早触发在前）
       var rank = { HIGH: 3, MEDIUM: 2, LOW: 1 };
       active.sort(function (a, b) {

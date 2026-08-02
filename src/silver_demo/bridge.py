@@ -87,6 +87,11 @@ def frame_result_to_view(
     只调 ``to_dict()``，不调构造器、不改字段。若对象无 to_dict 则降级为空 dict
     （防御性，不崩溃）。behavior_states / risk_signals 为实时旁路产物，关闭
     realtime_risk 时 FrameResult 默认给空列表，本函数安全返回空列表。
+
+    ⚠️ 下游不可信约定：``_safe_to_dict`` 对「无 ``to_dict()`` 或调用抛错」的对象会**静默**
+    丢弃为 ``{}``（不记录、不告警）。调用方（DemoAggregateState.ingest /
+    Dashboard 渲染）必须能容忍列表中出现空 dict，不得假设每个元素都是完整结构。
+    这是有意的防御性取舍——保证单条坏数据不拖垮整帧展示。
     """
 
     def _safe_to_dict(obj: Any) -> dict[str, Any]:
