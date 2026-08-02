@@ -1,0 +1,8 @@
+{
+  "event_id": "cur-002",
+  "event_type": "risk_signal",
+  "visitor_instance_id": "B002",
+  "occurred_at": "2026-07-12T21:05:00+00:00",
+  "risk_level": "HIGH",
+  "markers": ["observe_camera", "carry"]
+}

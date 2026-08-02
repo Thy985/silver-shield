@@ -1,0 +1,8 @@
+{
+  "event_id": "cur-001",
+  "event_type": "risk_signal",
+  "visitor_instance_id": "A001",
+  "occurred_at": "2026-07-08T22:10:00+00:00",
+  "risk_level": "MEDIUM",
+  "markers": ["night"]
+}
