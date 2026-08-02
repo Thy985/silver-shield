@@ -1,6 +1,6 @@
 # DESIGN-memory-consumer.md · Memory Consumer Layer 工程落地方案
 
-- **状态**：Draft（随 ADR-0025 Accepted 一同落库，待实现）
+- **状态**：Partial（C-0/C-1/C-2 已合，C-3..C-5 待实现）
 - **日期**：2026-08-02
 - **承接**：ADR-0025（Memory Consumer Architecture，Accepted）
 - **前置 ADR**：ADR-0024（Memory 架构，定义"存储过去"）/ ADR-0021（实时风险流）/ ADR-0023（身份连续性）/ ADR-0010（DecisionPolicy）/ ADR-0022（Evidence Chain）
@@ -381,3 +381,24 @@ class MemoryConsumer:
    - 最终确定性排序 = `risk_category_match` → `same_time_band` → `recency` → `record_id asc`。
 3. **§3.1 device_id 处理**：v1 `EpisodicRecord` 无 `device_id` 字段，`device_id` 仅作为 `RuleBasedRetrieval` 的保留参数（no-op），绝不进入 `ReasoningInput`。不伪实现、不污染 ADR-0024 schema。
 4. **O1 VectorRetrieval 定位**：VectorRetrieval 是延迟扩展点，**不是** C-1 之后的直接下一步。正确推进路径：C-1 规则召回 → C-2 聚合 → C-3 ReasoningContext → 真实 Reasoning 消费 → 评估瓶颈 → 再决定是否引入向量召回。避免技术驱动。
+
+## Errata（2026-08-02，C-2 实施反修）
+
+C-2 落地时被真实契约约束修正如下（避免「让代码迁就 ADR 理想模型」）：
+
+1. **VisitorProfile 真实字段 != DESIGN §3.2 描述**：§3.2 列出 `visit_frequency` /
+   `dwell_distribution` / `abnormal_time_ratio` / `repeat_pattern` / `prior_actions`，
+   但 C-0 冻结契约 `VisitorProfile` 实际只有 `visitor_instance_id` / `visit_count` /
+   `night_visit_ratio` / `confidence` / `identity_confirmed` / `first_seen` /
+   `last_seen`。`RuleBasedAggregation` 严格按真实契约实现（扩展契约属 BREAKING，需
+   Owner 评审，不在本 Slice）。
+2. **窗口边界由 Retrieval 施加，Aggregation 不重复裁剪**：§3.2 描述"默认窗口 100 条 /
+   30d"为聚合的有界轻量聚合；但 C-1 `RetrievalConfig`（`max_records=100` /
+   `lookback_days=30`）已在召回阶段完成边界化。遵循 C-1 review #7（窗口用
+   `RetrievalConfig`，不写死在聚合），`Aggregation.aggregate` 信任已边界化输入，
+   `AggregationConfig` 只暴露置信度阈值 / 夜间窗 / `min_records_for_pattern`，不重复
+   施加 100/30d。
+3. **previous_actions / evidence_refs / conflicts 不属 Aggregation**：`Aggregation`
+   接口签名仅 `(records) -> (profile, pattern)`，无 `current_event`；`conflicts`
+   需要当前事件（-> C-3 ContextBuilder），`previous_actions` / `evidence_refs` 可由
+   `records` 派生但属组装阶段（-> C-3）。C-2 只产出 `VisitorProfile` / `RiskPattern`。
