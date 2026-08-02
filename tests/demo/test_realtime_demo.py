@@ -191,8 +191,8 @@ def test_gateway_wiring_bridge_to_aggregate():
 
 def test_realtime_override_flips_settings():
     gw = DemoGateway.create_for_test()
-    from silver_demo.config import DemoSettings
     from home_perception.core.config import Settings
+    from silver_demo.config import DemoSettings
 
     gw.hp_settings = Settings.load(DemoSettings.from_env().home_perception_config)
     assert gw.hp_settings.realtime_risk.enabled is False
@@ -213,8 +213,8 @@ def test_realtime_override_flips_settings():
 
 def test_realtime_override_unknown_key_is_safe():
     gw = DemoGateway.create_for_test()
-    from silver_demo.config import DemoSettings
     from home_perception.core.config import Settings
+    from silver_demo.config import DemoSettings
 
     gw.hp_settings = Settings.load(DemoSettings.from_env().home_perception_config)
     gw.scenario = ScenarioConfig(
@@ -255,9 +255,9 @@ def test_realtime_enabled_assembles_pipeline_components():
 
     不调 load_detector（懒加载，不触权重），仅验证装配接线 —— 与 ADR-0021 工程方案一致。
     """
-    from silver_demo.config import DemoSettings
     from home_perception.core.config import Settings
     from home_perception.runtime.pipeline import DemoClock, PerceptionPipeline
+    from silver_demo.config import DemoSettings
 
     hp = Settings.load(DemoSettings.from_env().home_perception_config)
     hp.realtime_risk.enabled = True
