@@ -359,6 +359,12 @@ class MemoryConfig(BaseModel):
       经 ``DefaultEpisodeBuilder.project_episode`` 投影为 ``EpisodicRecord`` 并写入
       ``InMemoryStore``。影子写入只记录、不接决策、不产 Warning；是否开启与 Snapshot
       Recovery 相互独立（可仅开快照恢复，不落 Episode）。
+    - ``consumer_enabled``：ADR-0025 C-4 Memory Consumer 接入开关。默认 ``false``
+      ——**默认关闭，零行为变化**。仅当 ``memory.enabled`` **且** ``episodic_shadow``
+      **且** ``consumer_enabled`` 三者同时为真时，流水线才在每次访客离场按模式 B
+      门控（MEDIUM+ 或已知访客再现）召回历史并组装 ``ReasoningInput``。消费侧
+      **只读、不决策、不产 Warning**（守 ADR-0010）；依赖 ``episodic_shadow`` 是因为
+      ``MemoryStore`` 仅在影子写入激活时才被构造——没有历史可读时消费无意义。
     - ``snapshot_path``：JSON 持久化路径（原子写：先 .tmp 再 os.replace）。
     - ``snapshot_interval_seconds``：周期快照间隔（默认 30s）；写入时机见工程方案 §5.3.6。
     - ``snapshot_fresh_threshold_seconds``：FRESH/STALE 分界（默认 30s）。
@@ -372,6 +378,8 @@ class MemoryConfig(BaseModel):
     enabled: bool = False
     # Stage F（Slice 5）Episodic Memory 影子写入开关；默认关闭（v1 不产 Warning）。
     episodic_shadow: bool = False
+    # ADR-0025 C-4 Memory Consumer 接入开关；默认关闭（消费侧只读、不决策）。
+    consumer_enabled: bool = False
     snapshot_path: str = "data/memory/snapshot.json"
     snapshot_interval_seconds: float = 30.0
     snapshot_fresh_threshold_seconds: float = 30.0

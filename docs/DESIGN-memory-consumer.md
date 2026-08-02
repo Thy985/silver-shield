@@ -1,6 +1,6 @@
 # DESIGN-memory-consumer.md · Memory Consumer Layer 工程落地方案
 
-- **状态**：Partial（C-0/C-1/C-2/C-3 已合，C-4..C-5 待实现）
+- **状态**：Partial（C-0/C-1/C-2/C-3 已合，C-4 实现完成待合并 PR#106，C-5 待实现）
 - **日期**：2026-08-02
 - **承接**：ADR-0025（Memory Consumer Architecture，Accepted）
 - **前置 ADR**：ADR-0024（Memory 架构，定义"存储过去"）/ ADR-0021（实时风险流）/ ADR-0023（身份连续性）/ ADR-0010（DecisionPolicy）/ ADR-0022（Evidence Chain）
@@ -316,7 +316,7 @@ class MemoryConsumer:
 | **C-1** | `retrieval.py`（`RuleBasedRetrieval`）：基于 `MemoryQuery.compose_context` 的默认规则召回 | 召回单测：返回 `EpisodicRecord` 列表；C3 确定性（同输入两次顺序一致）；**O1 规则排序键命中强度稳定**（identity_match→event_type_match→time_distance asc） |
 | **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档（cold_start→weak_pattern→stable_pattern）；C1 无 score；**信任 Retrieval 已边界化输入（100 条 / 30d 由 `RetrievalConfig` 施加），不重复裁剪窗口**（越界记录已在召回阶段过滤）；混合访客输入显式抛 `AggregationError`；升级模式仅当唯一非空行为标记 >= 2 |
 | **C-3** | `context.py`：组装 `ReasoningInput` | 组装单测：C1 无 score 字段、C5 每项历史带 `source_event_ids` |
-| **C-4** | `orchestrator.py` + `triggers.py`（`MemoryConsumerHook`，新文件，与 `MemoryHook` 并列）：`MemoryConsumer.consume` 接入 pipeline（模式 B 门控） | 集成单测：**三档 `RiskSignal.level` 断言**（LOW=不触发 / MEDIUM=触发 / HIGH=触发）+ 已知访客首现（`prior_episode_count>0`）即便 LOW 也触发；`consumer_enabled=False` 时不触发 |
+| **C-4** | `orchestrator.py` + `triggers.py`（`MemoryConsumerHook`，新文件，与 `MemoryHook` 并列）：`MemoryConsumer.consume` 接入 pipeline（模式 B 门控） | ✅ 实现完成（PR#106 待合并）：集成单测覆盖三档 `RiskSignal.level`（LOW=不触发 / MEDIUM=触发 / HIGH=触发）+ 已知访客首现（`prior_episode_count>0`）即便 LOW 也触发 + `consumer_enabled=False` 不触发 + **调用次序**（consume 必须在 record 之前）+ **VisitorEvent→CurrentEvent 投影**（`risk_level`=max wins、`markers`=`behavior:` 同口径）+ 消费侧只读零泄漏 |
 | **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | `test_invariants.py` 全绿；monkeypatch 验证 Aggregation 不调 Retrieval |
 
 每个 Slice 经 `ruff check src tests` + `pytest tests/` 门禁，零回归。工程推进顺序与 M0–M5 阶段映射见 §0.5：**M0（Memory Replay Dataset）优先级最高，须先于 C-1 完成**——没有真实 Memory 数据，C-1~C-5 只是"能跑的空壳"。
@@ -420,3 +420,53 @@ C-1 / C-2 的「代码权威」原则）：
 3. **C5 `source_event_ids` 由 `EpisodicRecord` 契约保证**：`EpisodicRecord.__post_init__`
    强制 `source_event_ids` 非空（ADR-0024 I4）；C-3 不重复校验，仅靠单测断言透传后
    每条历史记录仍携带 `source_event_ids`。
+
+### Errata（2026-08-02，C-4 实施反修）
+
+C-4 落地时与 §3.4 / §4 叙述存在多处权责与命名分歧，以**已合入代码为准**（同 C-1/C-2/C-3
+「代码权威」原则）：
+
+1. **冲突检测 / 证据 / 动作派生归编排器（`orchestrator.py`），非 `ContextBuilder`**：
+   §3.3 / §4.2 伪代码把 `self._collect_conflicts` / `_evidence_of` / `_prior_actions`
+   列在 `MemoryConsumer.consume` 流程里，与 C-3 Errata #1 一致——`ContextBuilder.build`
+   只做透传组装（C2 只读、不检测）。`RuleBasedMemoryConsumer` 在 `consume` 内先调
+   Retrieval → Aggregation → 自行派生 `conflicts` / `evidence_refs` / `previous_actions`
+   后，再传给 `ContextBuilder.build` 组装 `ReasoningInput`。
+2. **运行时接入点文件命名为 `runtime/memory_consumer_hook.py`（非 `triggers.py`）**：
+   §1 模块结构曾写 `triggers.py`，实际落地文件为 `runtime/memory_consumer_hook.py`，
+   含 `MemoryConsumerHook`（与 ADR-0024 `MemoryHook` 并列、不耦合）。`MemoryConsumer`
+   抽象基类仍居 `consumer/__init__.py`（继承 C-0 `interfaces.py` 的 `MemoryConsumer`
+   Protocol/ABC）；`RuleBasedMemoryConsumer` 在 `consumer/orchestrator.py`。
+3. **`MemoryConsumerHook` 拥有独立 `ConsumerMetrics`，不混入 `PipelineMetrics`**：
+   §4.1 已声明两者 metrics 语义独立，落地为 `ConsumerMetrics`（含 `consumer_evaluated` /
+   `consumer_triggered` / `consumer_errors` / `last_error` 等），挂在 hook 实例上，
+   与 `MemoryHook.metrics`（`PipelineMetrics`）完全隔离，不污染 ADR-0024 埋点。
+4. **触发配置为 `ConsumerTriggerConfig(enabled_levels, trigger_on_known_visitor)`**：
+   §4.1 模式 B 的"MEDIUM+ 或存在历史（已知访客再现）"由 `ConsumerTriggerConfig`
+   承载——`enabled_levels=("MEDIUM","HIGH")`（LOW 不触发）+ `trigger_on_known_visitor=True`
+   （`prior_episode_count>0` 即便 LOW 也触发）。缺 `MemoryStore` 时降级为纯 level 判定
+   （已知访客分支不可用，不误触）。配置校验：拒绝未知 level、拒绝全关（无任何触发条件）。
+5. **`RiskSignal` 无 `level` 字段 → 改用 `CurrentEvent.risk_level` 做模式 B 判定**：
+   ADR-0021 的 `RiskSignal` 不含 `level`（只有 `signal_id` / `visitor_instance_id` /
+   `risk_category` 等）；运行期门控的"风险档位"取自 `CurrentEvent.risk_level`
+   （`∈ {LOW, MEDIUM, HIGH, None}`），由 `VisitorEvent→CurrentEvent` 投影派生（见 #6）。
+6. **`VisitorEvent → CurrentEvent` 投影是口径统一关键**：`VisitorEvent` 无 `risk_level`
+   / `markers`（ADR-0007 事实层只记 `visitor_id` / `enter` / `leave` 等）。pipeline 在
+   调用 `MemoryConsumerHook.maybe_consume` 前，用该访客当帧的 `WarningEvent` 列表投影：
+   `risk_level = max(w.risk_level for w in warnings)`（同 `DefaultEpisodeBuilder._pick_max_risk`），
+   `markers = [behavior: 前缀 from extract_behavior_markers(warnings)]`。这保证"当前事件"
+   与"历史 `EpisodicRecord`"用同一 `behavior:` 约定口径，避免"当前 vs 历史"恒判行为突变
+   （`behavior_shift` false positive）。投影逻辑落在 `PerceptionPipeline._to_current_event`
+   （static method），`extract_behavior_markers` 经 `SupportsReasonSummary` Protocol 同时
+   适配 `EpisodicRecord` 与 `WarningEvent`（不引入 `memory.records` 导入环）。
+7. **调用次序硬约束：consume 必须在 record 之前**：`MemoryConsumerHook.maybe_consume`
+   在 `process_frame` 的访客循环内、`MemoryHook.record` **之前**执行。若颠倒，当前事件会
+   先被写入 episode 再被消费，导致"已知访客再现"误判（`prior_episode_count` 从 0 变 1）。
+   该不变量由 `tests/runtime/test_pipeline_memory_consumer.py::TestCallOrder` 以
+   "消费时刻 `get_episodic_by_visitor(vid)` 计数恒为 0"作可观测证据（次序回归会从 0→1）。
+8. **`consumer_enabled` 默认 `False`，三级开关缺 `MemoryStore` 静默降级**：
+   `MemoryConfig.consumer_enabled=False`（golden 默认关闭）；`from_settings` 仅当
+   `settings.memory.consumer_enabled and memory_store is not None` 时才构造
+   `RuleBasedMemoryConsumer` 并置 `consumer_enabled=True`；两者任一缺失则降级为关闭并
+   记 warning，**不抛、不半开**。测试用 `Settings.load().memory.consumer_enabled is False`
+   守住默认。
