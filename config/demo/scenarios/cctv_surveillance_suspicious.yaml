@@ -34,3 +34,15 @@ loop: true                               # 可视化演示：循环重放，Dash
 # 仅作用于本场景，不动全局默认与其他场景。
 rule_overrides:
   repeat_visit_count: 2
+
+# ADR-0021 Phase 1 · 演示层接入：本场景开启实时风险旁路 + 决策接入。
+# - enabled: true  → 装配 BehaviorBuilder / RecentBehaviorStore / RealTimeRiskEvaluator，
+#   流水线每帧产出 behavior_states（在场访客纯实时快照）+ risk_signals（RAISED/CLEARED 跃迁）。
+# - decision_enabled: true → RAISED 信号经 signal_adapter 汇入 DecisionEngine 产 WarningEvent
+#   （与历史逐事件路径共用同一决策中心，单一决策中心不漂移）。
+# 默认全局关闭（settings.realtime_risk.enabled=false），仅本场景显式开启，便于在真实 CCTV
+# 录像上演示"进行中风险"亮卡（RAISED）与解除（CLEARED），并与 Dashboard 实时风险区联动。
+realtime_risk:
+  enabled: true
+  decision_enabled: true
+
