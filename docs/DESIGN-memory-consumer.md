@@ -1,6 +1,6 @@
 # DESIGN-memory-consumer.md · Memory Consumer Layer 工程落地方案
 
-- **状态**：Partial（C-0/C-1/C-2 已合，C-3..C-5 待实现）
+- **状态**：Partial（C-0/C-1/C-2/C-3 已合，C-4..C-5 待实现）
 - **日期**：2026-08-02
 - **承接**：ADR-0025（Memory Consumer Architecture，Accepted）
 - **前置 ADR**：ADR-0024（Memory 架构，定义"存储过去"）/ ADR-0021（实时风险流）/ ADR-0023（身份连续性）/ ADR-0010（DecisionPolicy）/ ADR-0022（Evidence Chain）
@@ -402,3 +402,21 @@ C-2 落地时被真实契约约束修正如下（避免「让代码迁就 ADR �
    接口签名仅 `(records) -> (profile, pattern)`，无 `current_event`；`conflicts`
    需要当前事件（-> C-3 ContextBuilder），`previous_actions` / `evidence_refs` 可由
    `records` 派生但属组装阶段（-> C-3）。C-2 只产出 `VisitorProfile` / `RiskPattern`。
+
+### Errata（2026-08-02，C-3 实施反修）
+
+C-3 落地时与 §3.3 叙述存在一处权责分歧，以**已合入的 `interfaces.py` 代码为准**（同
+C-1 / C-2 的「代码权威」原则）：
+
+1. **`conflicts` / `evidence_refs` / `previous_actions` 是 `build` 的入参，不是
+   ContextBuilder 内部步骤**。已合入的 `ContextBuilder.build` 接口签名把它们列为入参；
+   冲突检测与证据 / 动作派生由 **C-4 编排器**（`MemoryConsumer.consume`，见 §4.2 伪代码
+   的 `self._collect_conflicts` / `_evidence_of` / `_prior_actions`）计算后传入。
+   §3.3 第 4–5 步「取 evidence_refs / 收集 conflicts」是按数据流描述的消费来源，
+   实现上归 C-4，C-3 `RuleBasedContextBuilder` 仅做**透传组装**（C2 只读、不检测）。
+2. **C3 确定性排序由 ContextBuilder 负责**：`historical_context` 在 `build` 内按
+   `(enter_time, record_id)` 确定性排序后转 `tuple`，与 Retrieval（C-1）的召回排序解耦，
+   保证同输入两次产出顺序一致（审计 / 回放一致）。
+3. **C5 `source_event_ids` 由 `EpisodicRecord` 契约保证**：`EpisodicRecord.__post_init__`
+   强制 `source_event_ids` 非空（ADR-0024 I4）；C-3 不重复校验，仅靠单测断言透传后
+   每条历史记录仍携带 `source_event_ids`。
