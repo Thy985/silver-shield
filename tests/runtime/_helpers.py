@@ -34,6 +34,7 @@ from home_perception.analysis.rule_engine import RuleEngine, ThresholdConfig
 from home_perception.core.config import MemoryConfig
 from home_perception.detection.tracker import VisitorTracker
 from home_perception.memory import DefaultEpisodeBuilder, InMemoryStore
+from home_perception.memory.consumer import MemoryConsumer
 from home_perception.runtime import PerceptionPipeline
 
 
@@ -94,6 +95,8 @@ def build_full_pipeline(
     decision_enabled: bool = False,
     eval_interval_frames: int = 1,
     realtime_enabled: bool = True,
+    memory_consumer: MemoryConsumer | None = None,
+    consumer_enabled: bool = False,
 ):
     """构造完整 PerceptionPipeline（实时旁路 + 可选 Memory 影子写入 + 可选快照恢复）。
 
@@ -143,6 +146,8 @@ def build_full_pipeline(
         episode_builder=episode_builder,
         episodic_shadow=episodic_shadow,
         memory_config=memory_config,
+        memory_consumer=memory_consumer,
+        consumer_enabled=consumer_enabled,
     )
 
 

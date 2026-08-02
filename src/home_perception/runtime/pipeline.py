@@ -64,8 +64,19 @@ from ..memory import (
     MemoryStore,
 )
 from ..memory.cold_start import ColdStartCoordinator
+from ..memory.consumer import (
+    CurrentEvent,
+    MemoryConsumer,
+    RuleBasedAggregation,
+    RuleBasedContextBuilder,
+    RuleBasedMemoryConsumer,
+    RuleBasedRetrieval,
+    extract_behavior_markers,
+    max_risk_level,
+)
 from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
 from .config import build_dispatcher_config, build_threshold_config
+from .memory_consumer_hook import MemoryConsumerHook
 from .memory_hook import MemoryHook
 from .observability import PipelineMetrics
 
@@ -236,6 +247,10 @@ class PerceptionPipeline:
         memory_store: MemoryStore | None = None,
         episode_builder: DefaultEpisodeBuilder | None = None,
         episodic_shadow: bool = False,
+        # —— ADR-0025 C-4：Memory Consumer 读侧接线（可选；默认 None/false，
+        #    仅 memory.enabled + episodic_shadow + consumer_enabled 时激活）——
+        memory_consumer: MemoryConsumer | None = None,
+        consumer_enabled: bool = False,
     ):
         self.detector = detector
         self.tracker = tracker
@@ -317,6 +332,22 @@ class PerceptionPipeline:
             self._memory_store,
             self._episodic_shadow,
             self.metrics,
+        )
+
+        # —— ADR-0025 C-4：Memory Consumer 接线点（与 MemoryHook 并列，默认关闭）——
+        # 读侧：按模式 B 门控召回历史 → 组装 ReasoningInput。只读、不决策、不产
+        # Warning，关闭时 maybe_consume 立即返回 None（零行为变化）。
+        # 指标独立存放于 hook.metrics（ConsumerMetrics），刻意不并入 PipelineMetrics。
+        self._consumer_enabled = bool(consumer_enabled and memory_consumer is not None)
+        if consumer_enabled and memory_consumer is None:
+            log.warning(
+                "pipeline.consumer_enabled_without_consumer",
+                note="consumer_enabled=true 但 memory_consumer 缺失，消费侧未激活",
+            )
+        self._memory_consumer_hook = MemoryConsumerHook(
+            memory_consumer,
+            self._memory_store,
+            self._consumer_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -427,6 +458,25 @@ class PerceptionPipeline:
                 "pipeline.episodic_shadow_requires_memory",
                 note="episodic_shadow=true 但 memory.enabled=false，影子模式未激活",
             )
+        # —— ADR-0025 C-4：Memory Consumer 读侧装配（默认关闭）——
+        # consumer_enabled 依赖 memory_store 已就位（无 store 就无历史可召回），
+        # 故它是 episodic_shadow 的下游子开关：memory.enabled + episodic_shadow +
+        # consumer_enabled 三者同真才装配。三组件在此组合（编排器只依赖 ABC）。
+        memory_consumer: MemoryConsumer | None = None
+        consumer_enabled = False
+        if settings.memory.consumer_enabled:
+            if memory_store is not None:
+                memory_consumer = RuleBasedMemoryConsumer(
+                    RuleBasedRetrieval(memory_store),
+                    RuleBasedAggregation(),
+                    RuleBasedContextBuilder(),
+                )
+                consumer_enabled = True
+            else:
+                log.warning(
+                    "pipeline.consumer_requires_episodic_shadow",
+                    note="consumer_enabled=true 但 memory_store 缺失（需 memory.enabled + episodic_shadow），消费侧未激活",
+                )
         return cls(
             detector=det,
             tracker=tracker,
@@ -448,6 +498,8 @@ class PerceptionPipeline:
             memory_store=memory_store,
             episode_builder=episode_builder,
             episodic_shadow=episodic_shadow,
+            memory_consumer=memory_consumer,
+            consumer_enabled=consumer_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -504,6 +556,41 @@ class PerceptionPipeline:
     # process_frame 中每个 VisitorEvent 经 ``self._memory_hook.record`` 投影落库。
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # ADR-0025 C-4：Memory Consumer 读侧（VisitorEvent → CurrentEvent 投影）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_current_event(ev: VisitorEvent, warnings: list[WarningEvent]) -> CurrentEvent:
+        """把一次访客离场投影为 Consumer 侧的 ``CurrentEvent``。
+
+        ``VisitorEvent`` 按 ADR-0007 刻意不含 ``risk_level`` / ``markers``（事实事件层
+        不承载风险语义），故这两项从**本次同一事件产出的** ``WarningEvent`` 派生：
+
+        - ``risk_level``：max wins（HIGH > MEDIUM > LOW），与
+          ``DefaultEpisodeBuilder._pick_max_risk`` 同口径——否则同一次访问"当下"的等级
+          与它日后被召回为"历史"时的等级会不一致，冲突判定会凭空抖动；
+        - ``markers``：``reason_summary`` 中 ``behavior:`` 前缀标记（去前缀、去空、去重），
+          与 ``RuleBasedAggregation`` / ``RuleBasedMemoryConsumer`` 读历史标记走**同一个**
+          ``extract_behavior_markers``——两侧口径若不同，"当前 vs 历史"比较会恒判行为突变。
+
+        注意：此处传入的 ``warnings`` 是 ``_act_on_event(ev)`` 刚产出的本事件 warning，
+        无需再做 visitor/时间窗关联（那是 ``DefaultEpisodeBuilder`` 面对全局 warning 列表
+        时才需要的）。
+        """
+        markers: list[str] = []
+        for marker in extract_behavior_markers(warnings):
+            if marker and marker not in markers:
+                markers.append(marker)
+        return CurrentEvent(
+            event_id=ev.event_id,
+            event_type="visitor_event",
+            visitor_instance_id=str(ev.visitor_id),
+            occurred_at=ev.leave_time,
+            risk_level=max_risk_level(w.risk_level for w in warnings),
+            markers=tuple(markers),
+        )
+
     def process_frame(self, frame: object, frame_index: int = 0) -> FrameResult:
         """处理单帧：detector → tracker → builder → feature → rule → decision → action。
 
@@ -534,6 +621,12 @@ class PerceptionPipeline:
             perception_events.extend(percs)
             warnings.extend(ev_warnings)
             commands.extend(cmds)
+            # —— ADR-0025 C-4：Memory Consumer 读侧（经 MemoryConsumerHook）——
+            # ⚠️ 必须在 MemoryHook.record **之前**：先写后读会把刚落库的"当下"当作
+            # "历史"召回（首次来访被判已知访客 + historical_context 被自身污染）。
+            # 次序即语义，不可为了"看起来更顺"而调换（见 memory_consumer_hook 模块 docstring）。
+            if self._memory_consumer_hook.enabled:
+                self._memory_consumer_hook.maybe_consume(self._to_current_event(ev, ev_warnings))
             # —— ADR-0024 Slice 5：Stage F Episodic Memory 影子写入（经 MemoryHook）——
             # 仅记录本次访客离场的投影（含其已产出的 warning/action），
             # 不接决策、不产 Warning，开启影子开关不改变任何历史行为。
