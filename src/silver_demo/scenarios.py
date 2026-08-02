@@ -55,6 +55,10 @@ class ScenarioConfig(BaseModel):
     loop: bool = True
     description: str = ""
     rule_overrides: dict[str, Any] | None = None
+    # 场景级实时风险开关覆盖（ADR-0021 Phase 1 · 演示层接入）：
+    # 形如 {enabled: true, decision_enabled: true}，覆盖 settings.realtime_risk，
+    # 使单个场景可开启实时风险旁路（如 CCTV 夜间场景），不影响全局默认与其他场景。
+    realtime_risk: dict[str, Any] | None = None
 
     @field_validator("frame_interval_s")
     @classmethod

@@ -144,6 +144,11 @@ class DemoAggregateState:
         self._visitor_n = 0
         self._behavior_n = 0
 
+        # 实时风险信号聚合（ADR-0021 Phase 1 · 演示层接入）：
+        # signal_id -> RAISED 信号 dict（活跃卡）。CLEARED 经 paired_signal_id 配对移除，
+        # 不在服务端长期保留（volatile 语义，见工程方案 §4.3）。展示层 TTL 为最终兜底。
+        self.risk_signals: dict[str, dict[str, Any]] = {}
+
         # 运行时元数据
         self.session_status: str = "RUNNING"
         self.frame_index: int = 0
@@ -166,6 +171,7 @@ class DemoAggregateState:
         routed: dict[str, list[dict[str, Any]]],
         frame_index: int,
         loop_count: int,
+        risk_signals: list[dict[str, Any]] | None = None,
     ) -> None:
         """消费一帧的派生数据，更新聚合状态。
 
@@ -175,12 +181,15 @@ class DemoAggregateState:
             all_warnings: ``view["warnings"]``（本帧全部 warning，用于 snapshot 兜底）。
             routed: ``route_commands(view["commands"])``（按三端路由的命令）。
             frame_index / loop_count: 当前帧序号 / 循环计数（来自网关）。
+            risk_signals: ``view["risk_signals"]``（本帧实时风险跃迁；RAISED 亮卡 /
+                CLEARED 熄卡，经 paired_signal_id 配对移除）。关闭实时路径时为 None/[]。
         """
         self.frame_index = frame_index
         self.loop_count = loop_count
         self._ingest_warnings(active_warnings)
         self._merge_commands(routed)
         self._ingest_behavior(perception_events, active_warnings)
+        self._ingest_risk_signals(risk_signals)
         self._recompute_last_warning()
 
     def _ingest_warnings(self, active_warnings: list[dict[str, Any]]) -> None:
@@ -317,6 +326,29 @@ class DemoAggregateState:
                 }
             )
 
+    def _ingest_risk_signals(self, signals: list[dict[str, Any]] | None) -> None:
+        """消费本帧实时风险跃迁，维护活跃风险卡映射。
+
+        - ``transition == "raised"``：以 ``signal_id`` 为键写入活跃卡（RAISED 亮卡）。
+        - ``transition == "cleared"``：经 ``paired_signal_id`` 配对移除对应的 RAISED 卡
+          （熄卡）；同时移除 CLEARED 自身（防御：若曾被误存）。
+
+        不长期保留已解除信号（volatile 语义，工程方案 §4.3）：展示层对残留活跃卡设
+        TTL 超时自动熄灭，作为最终兜底。
+        """
+        for sig in signals or []:
+            if not isinstance(sig, dict) or not sig.get("signal_id"):
+                continue
+            sid = sig["signal_id"]
+            tr = sig.get("transition")
+            if tr == "raised":
+                self.risk_signals[sid] = dict(sig)
+            elif tr == "cleared":
+                pid = sig.get("paired_signal_id")
+                if pid:
+                    self.risk_signals.pop(pid, None)
+                self.risk_signals.pop(sid, None)
+
     def _recompute_last_warning(self) -> None:
         if not self.warnings:
             self.last_warning = None
@@ -346,6 +378,7 @@ class DemoAggregateState:
         self._visitor_first = {}
         self._visitor_n = 0
         self._behavior_n = 0
+        self.risk_signals = {}
         self.frame_index = 0
         self.loop_count = 0
         self.last_warning = None
@@ -368,6 +401,7 @@ class DemoAggregateState:
             "warnings": list(self.warnings.values()),
             "behaviors": list(self.behaviors),
             "commands": commands_out,
+            "risk_signals": list(self.risk_signals.values()),
             "visitor_seq": dict(self._visitor_seq),
             "behavior_seen": list(self._behavior_seen.keys()),
             "visitor_first": list(self._visitor_first.keys()),
@@ -385,4 +419,6 @@ class DemoAggregateState:
             "source": self.source,
             "source_type": self.source_type,
             "n_frames": self.n_frames,
+            # 实时风险活跃卡数（ADR-0021 Phase 1 · 状态面板展示）
+            "active_risk_signals": len(self.risk_signals),
         }

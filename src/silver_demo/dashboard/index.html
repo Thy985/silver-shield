@@ -64,8 +64,9 @@
     .video { grid-column: span 7; grid-row: 1; }
     .timeline { grid-column: span 5; grid-row: 1 / span 2; }
     .risk { grid-column: span 7; grid-row: 2; }
-    .closure { grid-column: span 12; grid-row: 3; }
-    .arch { grid-column: span 12; grid-row: 4; }
+    .realtime { grid-column: span 7; grid-row: 3; }   /* ADR-0021 Phase 1 · 实时风险信号区 */
+    .closure { grid-column: span 12; grid-row: 4; }
+    .arch { grid-column: span 12; grid-row: 5; }
     @media (max-width: 900px) {
       .video, .timeline, .risk, .closure, .arch { grid-column: span 12; grid-row: auto; }
     }
@@ -156,6 +157,19 @@
     .rc-ev { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
     .ev-chip2 { font-size: 10.5px; color: #475569; background: #f1f5f9; border: 1px solid var(--line); padding: 1px 7px; border-radius: 6px; }
     .rc-link { margin-top: 10px; font-size: 11px; color: var(--brand); font-weight: 600; }
+
+    /* ---------- Region 3.5: 实时风险信号（进行中） ---------- */
+    .realtime .body { max-height: 560px; }
+    .rt-card { border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #fff7f7; }
+    .rt-card:last-child { margin-bottom: 0; }
+    .rt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .rt-badge { font-size: 10.5px; font-weight: 800; padding: 1px 8px; border-radius: 6px; color: #fff; letter-spacing: .5px; }
+    .rt-badge.live { animation: rt-pulse 1.3s ease-in-out infinite; }
+    @keyframes rt-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+    .rt-id { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .rt-time { font-size: 11px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .rt-subj { font-size: 12.5px; font-weight: 600; margin-top: 6px; }
+    .rt-feat { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 
     /* ---------- Region 4 deepen: 三端任务卡联动 ---------- */
     .cl-reasons { font-size: 12px; color: var(--ink); margin: 6px 0; font-weight: 600; }
@@ -305,6 +319,7 @@
         <div class="s-item"><span class="s-k">Loop</span><span class="s-v" id="st-loop">–</span></div>
         <div class="s-item"><span class="s-k">Pipeline</span><span class="s-v run" id="st-pipe">–</span></div>
         <div class="s-item"><span class="s-k">Last Warning</span><span class="s-v" id="st-last">–</span></div>
+        <div class="s-item"><span class="s-k">实时信号</span><span class="s-v" id="st-rtsig">–</span></div>
         <div class="s-item"><span class="s-k">Session</span><span class="s-v" id="st-session">00:00</span></div>
       </div>
     </section>
@@ -341,6 +356,14 @@
         <h2>③ 风险解释卡片 <span class="tag">人话原因 · 触发规则</span></h2>
         <div class="body" id="risk-body">
           <div class="tl-empty">当前无活跃风险</div>
+        </div>
+      </section>
+
+      <!-- Region 3.5: Real-time risk signals (ADR-0021 Phase 1 · 演示层接入) -->
+      <section class="region realtime">
+        <h2>③.5 实时风险信号 <span class="tag">进行中 · RAISED/CLEARED</span></h2>
+        <div class="body" id="realtime-body">
+          <div class="tl-empty">当前无进行中风险信号</div>
         </div>
       </section>
 
@@ -564,7 +587,13 @@
       visitorSeq: {},          // visitor_id(UUID) -> "访客#N" 友好名
       visitorSeqN: 0,
       visitorFirst: {},        // visitor_id -> 是否已记"首次出现"
-      meta: {}                 // P0-11.3.5 运行时元数据（session_status/loop/frame/last_warning/started_at 等）
+      meta: {},                // P0-11.3.5 运行时元数据（session_status/loop/frame/last_warning/started_at 等）
+      // ── ADR-0021 Phase 1 · 实时风险信号（进行中）──
+      // 活跃 RAISED 卡映射 signal_id -> {..., expiresAt}。CLEARED 经 signal_id /
+      // paired_signal_id 配对移除（熄卡）；TTL 兜底：主体离场后 evaluator 未补发
+      // CLEARED 时自动熄灭（工程方案 §4.3 volatile 语义，展示层兜底）。
+      riskSignalMap: new Map(),
+      rtTtlMs: 20000
     };
 
     // ---------- helpers ----------
@@ -704,6 +733,7 @@
         state.routed = msg.routed_commands || { family: [], community: [], log_only: [] };
         mergeCommands(state.routed);   // 跨帧累积三端命令，供区域④按 warning_id 联动
         ingestBehavior(msg.view, activeNow);  // 累积访客行为里程碑（区域② 行为演化）
+        ingestRiskSignals(msg.view);          // ADR-0021 Phase 1 · 实时风险信号（区域③.5）
         renderAll();
       } else if (msg.type === "snapshot") {
         applySnapshot(msg);            // P0-11.3.5 晚连恢复历史状态
@@ -751,6 +781,13 @@
       (s.visitor_first || []).forEach(function (v) { state.visitorFirst[v] = true; });
       state.visitorSeqN = Object.keys(state.visitorSeq).length;
       state.behaviorN = state.behaviorEvents.length;
+      // ADR-0021 Phase 1 · 恢复活跃实时风险卡（晚连也能看到进行中风险）
+      state.riskSignalMap = new Map();
+      (s.risk_signals || []).forEach(function (sig) {
+        if (sig && sig.signal_id) {
+          state.riskSignalMap.set(sig.signal_id, Object.assign({ expiresAt: Date.now() + state.rtTtlMs }, sig));
+        }
+      });
       if (s.meta) state.meta = s.meta;
       renderAll();
       toast("已恢复当前系统状态（" + state.behaviorEvents.length + " 条行为里程碑 / " + Object.keys(state.warningMap).length + " 风险）");
@@ -806,6 +843,7 @@
       state.visitorSeq = {};
       state.visitorSeqN = 0;
       state.visitorFirst = {};
+      state.riskSignalMap = new Map();   // ADR-0021 Phase 1 · 清空实时风险卡（新会话）
       // 清空视频帧与各区
       $("video-img").style.display = "none";
       $("video-ph").style.display = "block";
@@ -898,6 +936,7 @@
       renderRisks();
       renderClosure();
       renderRouting();
+      renderRealtimeRisk();      // ADR-0021 Phase 1 · 实时风险信号
       renderStatus();           // P0-11.3.5 状态面板
     }
 
@@ -1155,6 +1194,88 @@
         lastEl.style.color = "";
       }
       $("st-session").textContent = sessionElapsed(m.started_at);
+      $("st-rtsig").textContent = (m.active_risk_signals != null ? m.active_risk_signals : "–");
+    }
+
+    // ---------- ADR-0021 Phase 1 · 实时风险信号（区域③.5） ----------
+    // 消费本帧 risk_signals（RAISED/CLEARED 跃迁），维护活跃风险卡映射（服务端权威去重）。
+    function ingestRiskSignals(view) {
+      var sigs = (view && view.risk_signals) || [];
+      for (var i = 0; i < sigs.length; i++) {
+        var s = sigs[i];
+        if (!s || !s.signal_id) continue;
+        if (s.transition === "cleared") {
+          // 熄卡：经 signal_id 与 paired_signal_id 配对移除对应 RAISED 卡
+          state.riskSignalMap.delete(s.signal_id);
+          if (s.paired_signal_id) state.riskSignalMap.delete(s.paired_signal_id);
+        } else if (s.transition === "raised") {
+          // 亮卡：以 signal_id 为键写入（含完整展示字段），刷新 TTL
+          state.riskSignalMap.set(s.signal_id, Object.assign({ expiresAt: Date.now() + state.rtTtlMs }, s));
+        }
+      }
+      // TTL 兜底 + 主体在场续期：当前帧在场访客（behavior_states）对应主体仍活跃 → 续期，
+      // 避免 evaluator 漏发 CLEARED 时风险卡永久亮着（工程方案 §4.3 volatile 语义，展示层兜底）。
+      var present = {};
+      var bss = (view && view.behavior_states) || [];
+      for (var j = 0; j < bss.length; j++) {
+        var vi = bss[j] && bss[j].visitor_instance_id;
+        if (vi) present[vi] = true;
+      }
+      state.riskSignalMap.forEach(function (sig) {
+        if (sig.visitor_instance_id && present[sig.visitor_instance_id]) {
+          sig.expiresAt = Date.now() + state.rtTtlMs;  // 主体在场 → 续期
+        }
+      });
+    }
+    function renderRealtimeRisk() {
+      var body = $("realtime-body");
+      if (!body) return;
+      var now = Date.now();
+      var active = [];
+      state.riskSignalMap.forEach(function (sig, sid) {
+        if (!sig || now > sig.expiresAt) { state.riskSignalMap.delete(sid); return; }
+        active.push(sig);
+      });
+      // 排序：严重度降序 → 时间升序（早触发在前）
+      var rank = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+      active.sort(function (a, b) {
+        var ra = rank[a.severity_hint] || 0, rb = rank[b.severity_hint] || 0;
+        if (rb !== ra) return rb - ra;
+        return String(a.created_at || "").localeCompare(String(b.created_at || ""));
+      });
+      if (!active.length) {
+        body.innerHTML = '<div class="tl-empty">当前无进行中风险信号</div>';
+        return;
+      }
+      body.innerHTML = active.map(function (sig) {
+        var sev = sig.severity_hint || "MEDIUM";
+        var color = sev === "HIGH" ? "var(--danger)" : sev === "MEDIUM" ? "var(--warn)" : "var(--ok)";
+        var cat = sig.category || "RISK";
+        var subj;
+        if (sig.subject_type === "visitor") {
+          var vid = (sig.visitor_instance_id || sig.track_id || "");
+          subj = vid ? "在场访客 " + String(vid).slice(0, 8) : "在场访客";
+        } else {
+          subj = sig.subject_id || "主体";
+        }
+        var feat = [];
+        if (sig.features && typeof sig.features === "object") {
+          for (var k in sig.features) { if (sig.features[k]) feat.push(k); }
+        }
+        if (feat.length > 4) feat = feat.slice(0, 4);
+        var featHtml = feat.length
+          ? '<div class="rt-feat">' + feat.map(function (f) { return '<span class="ev-chip2">' + esc(f) + '</span>'; }).join("") + '</div>'
+          : '';
+        return '<div class="rt-card" style="border-left-color:' + color + '">'
+          + '<div class="rt-head">'
+          +   '<span class="rt-badge live" style="background:' + color + '">RAISED</span>'
+          +   '<span class="rt-id">' + esc(cat) + '</span>'
+          +   '<span class="rt-time">' + esc(hhmmss(sig.created_at)) + '</span>'
+          + '</div>'
+          + '<div class="rt-subj">' + esc(subj) + '</div>'
+          + featHtml
+          + '</div>';
+      }).join('');
     }
 
     // ---------- P0-11.4 阶段叙事 Tab（切 Tab 不重订 WS；同一 state 多角色共享） ----------

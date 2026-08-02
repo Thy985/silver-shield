@@ -77,11 +77,16 @@ def frame_result_to_view(
           "perception_events": [ {event_type, score, ...}, ... ],   # 经 to_dict()
           "warnings": [ {warning_id, risk_level, reason_summary, ...}, ... ],
           "commands": [ {command_id, command_type, payload, ...}, ... ],
+          # —— 实时风险状态流（ADR-0021 Phase 1 · 演示层接入）——
+          "behavior_states": [ {track_id, phase, dwell_seconds, ...}, ... ],  # 在场访客纯实时快照
+          "risk_signals":   [ {signal_id, transition, category, ...}, ... ],  # RAISED/CLEARED 跃迁
         }
         ```
 
-    冻结合规：对 warnings/commands/perception_events 只调 ``to_dict()``，
-    不调构造器、不改字段。若对象无 to_dict 则降级为空 dict（防御性，不崩溃）。
+    冻结合规：对 warnings/commands/perception_events/behavior_states/risk_signals
+    只调 ``to_dict()``，不调构造器、不改字段。若对象无 to_dict 则降级为空 dict
+    （防御性，不崩溃）。behavior_states / risk_signals 为实时旁路产物，关闭
+    realtime_risk 时 FrameResult 默认给空列表，本函数安全返回空列表。
     """
 
     def _safe_to_dict(obj: Any) -> dict[str, Any]:
@@ -95,6 +100,10 @@ def frame_result_to_view(
     perception_events = [_safe_to_dict(p) for p in getattr(frame_result, "perception_events", [])]
     warnings = [_safe_to_dict(w) for w in getattr(frame_result, "warnings", [])]
     commands = [_safe_to_dict(c) for c in getattr(frame_result, "commands", [])]
+    # 实时风险状态流（ADR-0021 Phase 1 · 演示层接入）：纯只读 to_dict 翻译，
+    # 不调构造器、不改字段；关闭 realtime_risk 时 FrameResult 给空列表，安全返回 []。
+    behavior_states = [_safe_to_dict(s) for s in getattr(frame_result, "behavior_states", [])]
+    risk_signals = [_safe_to_dict(s) for s in getattr(frame_result, "risk_signals", [])]
 
     # 时间线一致性修复（Region 1 模拟时间 vs Region 2 AI 行为时间线对不上）：
     # 模型里 perception_event/warning 的 created_at 是真实墙钟 UTC（default_factory=_utc_now），
@@ -109,6 +118,11 @@ def frame_result_to_view(
         for _d in warnings:
             if isinstance(_d, dict):
                 _d["created_at"] = demo_time
+        # 实时信号 created_at 同为真实墙钟 UTC（now_provider），重打为 demo_time
+        # 使风险卡与 ①② 区共用同一模拟时基（同 perception/warnings 的处理）。
+        for _d in risk_signals:
+            if isinstance(_d, dict):
+                _d["created_at"] = demo_time
 
     return {
         "frame_index": frame_index,
@@ -119,6 +133,8 @@ def frame_result_to_view(
         "perception_events": perception_events,
         "warnings": warnings,
         "commands": commands,
+        "behavior_states": behavior_states,
+        "risk_signals": risk_signals,
     }
 
 

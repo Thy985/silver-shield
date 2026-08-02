@@ -117,6 +117,13 @@ class DemoGateway:
             start=self.scenario.start_time,
             interval_s=self.scenario.frame_interval_s,
         )
+        # 场景级实时风险开关覆盖（ADR-0021 Phase 1：CCTV 夜间场景开启实时旁路 + 决策）
+        # 必须在 PerceptionPipeline.from_settings 之前生效：它直接改 hp_settings.realtime_risk，
+        # from_settings 读 hp_settings 装配实时组件（BehaviorBuilder / RecentBehaviorStore /
+        # RealTimeRiskEvaluator）。hp_settings 在 assemble / _rebuild_pipeline 复用同一对象，
+        # 故只需 assemble 应用一次，循环重放 / 切换场景都会重新读取该对象。
+        self._apply_scenario_realtime_overrides()
+
         # device_id 用场景 source 名（与 runtime/lifecycle.run_demo 一致）
         self.pipeline = PerceptionPipeline.from_settings(
             self.hp_settings,
@@ -214,6 +221,7 @@ class DemoGateway:
                 routed_commands,
                 self._frame_index,
                 self.loop_count,
+                view["risk_signals"],  # ADR-0021 Phase 1 · 实时风险跃迁（RAISED/CLEARED）
             )
             state_snap = await self.store.snapshot()
             await self.hub.broadcast(
@@ -286,6 +294,32 @@ class DemoGateway:
             else:
                 structlog.get_logger(__name__).warning(
                     "scenario.rule_overrides.unknown_key",
+                    key=k,
+                    scenario=self.scenario.scenario_id,
+                )
+
+    def _apply_scenario_realtime_overrides(self) -> None:
+        """场景级实时风险开关覆盖（ADR-0021 Phase 1）。
+
+        从 ``scenario.realtime_risk`` 把开关覆盖进 ``hp_settings.realtime_risk``
+        （如 CCTV 夜间场景 ``{enabled: true, decision_enabled: true}``），使单个场景
+        可开启实时风险旁路，不影响全局默认与其他场景。
+
+        必须在 ``assemble`` 的 ``PerceptionPipeline.from_settings`` 之前调用：``from_settings``
+        读 ``hp_settings.realtime_risk`` 决定装配哪些实时组件；``hp_settings`` 在
+        ``assemble`` / ``_rebuild_pipeline`` 复用同一对象，故此处改一次即对后续所有重建设计生效。
+        仅在键存在于 ``RealtimeRiskConfig`` 时生效；未知键告警跳过。
+        """
+        overrides = getattr(self.scenario, "realtime_risk", None)
+        if not overrides:
+            return
+        rt = self.hp_settings.realtime_risk
+        for k, v in overrides.items():
+            if hasattr(rt, k):
+                setattr(rt, k, v)
+            else:
+                structlog.get_logger(__name__).warning(
+                    "scenario.realtime_risk.unknown_key",
                     key=k,
                     scenario=self.scenario.scenario_id,
                 )
