@@ -11,11 +11,12 @@
 - ``retrieval`` / ``config``：C-1 ``RuleBasedRetrieval`` 默认规则召回 + 可配参数。
 - ``replay_dataset`` / ``replay_layer``：M0 Episode Replay Layer（数据闭环验证）。
 
-Aggregation / ContextBuilder 的默认实现（C-2..C-3）与 MemoryConsumer 编排 +
+Aggregation（C-2 `RuleBasedAggregation`）默认实现已落地；ContextBuilder（C-3）与 MemoryConsumer 编排 +
 MemoryConsumerHook 触发接入（C-4）后续补充。
 """
 
-from home_perception.memory.consumer.config import RetrievalConfig
+from home_perception.memory.consumer.aggregation import RuleBasedAggregation
+from home_perception.memory.consumer.config import AggregationConfig, RetrievalConfig
 from home_perception.memory.consumer.contracts import (
     ActionRecord,
     ConflictFlag,
@@ -50,6 +51,7 @@ from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
 __all__ = [
     "ActionRecord",
     "Aggregation",
+    "AggregationConfig",
     "AggregationError",
     "BelowThresholdError",
     "ConflictFlag",
@@ -67,6 +69,7 @@ __all__ = [
     "RetrievalConfig",
     "RetrievalError",
     "RiskPattern",
+    "RuleBasedAggregation",
     "RuleBasedRetrieval",
     "VisitorProfile",
 ]

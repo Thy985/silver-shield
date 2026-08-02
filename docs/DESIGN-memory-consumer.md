@@ -1,6 +1,6 @@
 # DESIGN-memory-consumer.md · Memory Consumer Layer 工程落地方案
 
-- **状态**：Draft（随 ADR-0025 Accepted 一同落库，待实现）
+- **状态**：Partial（C-0/C-1/C-2 已合，C-3..C-5 待实现）
 - **日期**：2026-08-02
 - **承接**：ADR-0025（Memory Consumer Architecture，Accepted）
 - **前置 ADR**：ADR-0024（Memory 架构，定义"存储过去"）/ ADR-0021（实时风险流）/ ADR-0023（身份连续性）/ ADR-0010（DecisionPolicy）/ ADR-0022（Evidence Chain）
@@ -203,7 +203,7 @@ class Retrieval(ABC):
 
 **读侧组合（承接 ADR-0025 §3.3）**：
 - 优先 join 已物化的 `SemanticAggregate`（ADR-0024 Stage G/H 若已落地）；
-- 否则在请求期从召回记录做**有界轻量聚合**（默认窗口 100 条 / 30d）。
+- 否则在请求期从召回记录做读侧组合；**窗口边界（100 条 / 30d）由 C-1 `RetrievalConfig`（`max_records` / `lookback_days`）在召回阶段施加**，本组件信任已边界化输入、**不重复裁剪**（见 Errata 分歧点 2 / C-1 review #7；窗口常量归属 `RetrievalConfig`，不写在聚合内）。
 
 **置信度分级（取代硬性门槛，继承 ADR-0024 §3.1.3）**：
 银龄盾场景下诈骗 / 踩点常"第一次出现"，硬门槛（`>=30` 且 `>=7d` 才进 `ReasoningInput`）会削弱早期发现能力。改为按样本量分级、但**始终进入** `ReasoningInput`（由 Reasoning 自行按 `confidence` 降权）：
@@ -314,7 +314,7 @@ class MemoryConsumer:
 | --- | --- | --- |
 | **C-0** | `contracts.py`（三数据类型）+ `interfaces.py`（四 ABC）+ `exceptions.py` | 类型可构造；ABC 不可实例化；`node --check` 不适用，ruff 通过 |
 | **C-1** | `retrieval.py`（`RuleBasedRetrieval`）：基于 `MemoryQuery.compose_context` 的默认规则召回 | 召回单测：返回 `EpisodicRecord` 列表；C3 确定性（同输入两次顺序一致）；**O1 规则排序键命中强度稳定**（identity_match→event_type_match→time_distance asc） |
-| **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档（cold_start→weak_pattern→stable_pattern）；C1 无 score；**窗口边界裁剪**（默认 100 条 / 30d）正确、越界记录不入聚合 |
+| **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档（cold_start→weak_pattern→stable_pattern）；C1 无 score；**信任 Retrieval 已边界化输入（100 条 / 30d 由 `RetrievalConfig` 施加），不重复裁剪窗口**（越界记录已在召回阶段过滤）；混合访客输入显式抛 `AggregationError`；升级模式仅当唯一非空行为标记 >= 2 |
 | **C-3** | `context.py`：组装 `ReasoningInput` | 组装单测：C1 无 score 字段、C5 每项历史带 `source_event_ids` |
 | **C-4** | `orchestrator.py` + `triggers.py`（`MemoryConsumerHook`，新文件，与 `MemoryHook` 并列）：`MemoryConsumer.consume` 接入 pipeline（模式 B 门控） | 集成单测：**三档 `RiskSignal.level` 断言**（LOW=不触发 / MEDIUM=触发 / HIGH=触发）+ 已知访客首现（`prior_episode_count>0`）即便 LOW 也触发；`consumer_enabled=False` 时不触发 |
 | **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | `test_invariants.py` 全绿；monkeypatch 验证 Aggregation 不调 Retrieval |
@@ -344,7 +344,7 @@ class MemoryConsumer:
 | 编号 | 决策 | 本方案默认选择 + 扩展点 |
 | --- | --- | --- |
 | O1 | 相关性排序算法（向量 / 规则 / 混合） | **默认规则召回**（`RuleBasedRetrieval`，§3.1）；`RuleBasedRetrieval` 留 `VectorRetrieval` 扩展点，向量召回未来接入 |
-| O2 | 聚合窗口（100? 200?）+ 时间窗（30d? 90d?） | 默认 **100 条 / 30d**，服从置信度分级（§3.2）；常量提 `consumer/config.py` 可配 |
+| O2 | 聚合窗口（100? 200?）+ 时间窗（30d? 90d?） | 窗口边界 **100 条 / 30d 由 C-1 `RetrievalConfig`（`max_records` / `lookback_days`）在召回阶段施加**；Aggregation 信任已边界化输入、不重复裁剪（§3.2）；常量提 `consumer/config.py` 可配 |
 | O3 | 序列化格式 | `pydantic.BaseModel` + `model_dump()` → JSON；契约稳定即可 |
 | O4 | `person_identity_id=None` 时临时画像生命周期 | 按 `visitor_instance_id` 建临时画像并标"未确认身份"；真实身份归 ADR-0023 |
 
@@ -381,3 +381,24 @@ class MemoryConsumer:
    - 最终确定性排序 = `risk_category_match` → `same_time_band` → `recency` → `record_id asc`。
 3. **§3.1 device_id 处理**：v1 `EpisodicRecord` 无 `device_id` 字段，`device_id` 仅作为 `RuleBasedRetrieval` 的保留参数（no-op），绝不进入 `ReasoningInput`。不伪实现、不污染 ADR-0024 schema。
 4. **O1 VectorRetrieval 定位**：VectorRetrieval 是延迟扩展点，**不是** C-1 之后的直接下一步。正确推进路径：C-1 规则召回 → C-2 聚合 → C-3 ReasoningContext → 真实 Reasoning 消费 → 评估瓶颈 → 再决定是否引入向量召回。避免技术驱动。
+
+## Errata（2026-08-02，C-2 实施反修）
+
+C-2 落地时被真实契约约束修正如下（避免「让代码迁就 ADR 理想模型」）：
+
+1. **VisitorProfile 真实字段 != DESIGN §3.2 描述**：§3.2 列出 `visit_frequency` /
+   `dwell_distribution` / `abnormal_time_ratio` / `repeat_pattern` / `prior_actions`，
+   但 C-0 冻结契约 `VisitorProfile` 实际只有 `visitor_instance_id` / `visit_count` /
+   `night_visit_ratio` / `confidence` / `identity_confirmed` / `first_seen` /
+   `last_seen`。`RuleBasedAggregation` 严格按真实契约实现（扩展契约属 BREAKING，需
+   Owner 评审，不在本 Slice）。
+2. **窗口边界由 Retrieval 施加，Aggregation 不重复裁剪**：§3.2 描述"默认窗口 100 条 /
+   30d"为聚合的有界轻量聚合；但 C-1 `RetrievalConfig`（`max_records=100` /
+   `lookback_days=30`）已在召回阶段完成边界化。遵循 C-1 review #7（窗口用
+   `RetrievalConfig`，不写死在聚合），`Aggregation.aggregate` 信任已边界化输入，
+   `AggregationConfig` 只暴露置信度阈值 / 夜间窗 / `min_records_for_pattern`，不重复
+   施加 100/30d。
+3. **previous_actions / evidence_refs / conflicts 不属 Aggregation**：`Aggregation`
+   接口签名仅 `(records) -> (profile, pattern)`，无 `current_event`；`conflicts`
+   需要当前事件（-> C-3 ContextBuilder），`previous_actions` / `evidence_refs` 可由
+   `records` 派生但属组装阶段（-> C-3）。C-2 只产出 `VisitorProfile` / `RiskPattern`。
