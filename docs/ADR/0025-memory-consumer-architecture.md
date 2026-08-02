@@ -376,20 +376,21 @@ Consumer 增强的是"**理解**"与"**回溯解释**"两步：把历史注入�
 三种模式：
 
 - **模式 A · 实时逐事件消费**：每个 RiskSignal → Consumer → Reasoning。实时性最好，但每次风险事件都要跑召回 + 聚合，在边缘 CPU 上违反帧预算；**Phase 1 不采用为默认**。
-- **模式 B · 高风险触发（Phase 1 选定）**：仅当 `RiskSignal.level >= HIGH`（或 ADR-0010 决策落入 ESCALATE_COMMUNITY 等高优先动作）时，才触发 `MemoryConsumer.consume(event)` → Reasoning。符合银龄盾"只对真正高风险情形深加工历史"的取向；把消费成本绑定到少量 HIGH 事件，边缘可控。
+- **模式 B · 风险触发（Phase 1 选定，修订）**：触发条件 = `RiskSignal.level in {MEDIUM, HIGH}`（含 ADR-0010 决策落入 ESCALATE_COMMUNITY 等高优先动作）**或** 当前 `VisitorEvent` 命中已有历史（`prior_episode_count > 0`，即"已知 / 重复访客再现"）。这样 Consumer 在"中风险"或"熟悉面孔再次出现"时即介入，实现"提前理解"而非仅"事后解释"；仍把消费成本绑定到少量事件，边缘可控。
 - **模式 C · 后台周期批处理**：如每日凌晨对全量访客跑 Aggregation 生成 / 刷新 Visitor Profile（Semantic 画像）。适合"长期模式"的物化，不要求实时；与 ADR-0024 推迟的写侧 SemanticAggregator（Stage G/H）接壤——模式 C 预计算并物化的 Profile，Retrieval 可直接 join，无需每次请求期聚合。
 
-**Phase 1 决策**：
+**Phase 1 决策（触发条件修订）**：
 
-- 触发 = **模式 B（HIGH 触发）**；
+- 触发 = **模式 B（修订：MEDIUM+ 或存在历史时触发）**；仅 HIGH 会沦为"事后解释系统"，故放宽到 MEDIUM 与"已知访客再现"（详见 DESIGN-memory-consumer.md §4.1 / §0.5）；
 - 模式 C 用于 Semantic Profile 的离线预计算（未来，接 ADR-0024 Stage G/H）；
 - 模式 A 明确排除为默认（成本 + 边缘约束）。
 
-Phase 1 数据流：
+Phase 1 数据流（修订触发条件）：
 
 ```
-HIGH RiskSignal
-   │
+RiskSignal ≥ MEDIUM  │  已知访客再现(prior_episode_count>0)
+   │                │
+   └──── 任一成立 ───┘
    ▼
 MemoryConsumer.consume(event)
    → Retrieval（召回）→ Aggregation（计算）→ Context Builder（组装）

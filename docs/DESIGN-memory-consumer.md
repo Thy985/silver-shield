@@ -28,12 +28,69 @@
 
 ### 0.3 本方案范围
 
-- ✅ 实现四组件（Retrieval / Aggregation / Context Builder / Reasoning Interface 交付边界）+ 编排 + 触发接入（模式 B）。
+- ✅ 实现四组件（Retrieval / Aggregation / Context Builder / Reasoning Interface 交付边界）+ 编排 + 触发接入（模式 B，修订见 §4.1）。
 - ✅ 三数据契约（`ReasoningInput` / `ReasoningResult` / `DecisionRequest`）的字段具体化。
 - ✅ 不变量 C1–C5 的测试覆盖。
 - ❌ 不实现推理算法（规则 v2 / LLM v2 / Agent）——那是 Phase 5 Reasoning ADR 的事；本方案只定义 `ReasoningEngine.infer` 的**签名**。
 - ❌ 不实现写侧 Semantic Aggregator（Stage G/H，ADR-0024 推迟）——Aggregation 只做读侧组合。
 - ❌ 不引入 LLM。
+
+---
+
+### 0.4 数据来源与回放闭环（Memory Dataset / Episode Replay Layer）
+
+> **本方案此前的头号工程风险**（Owner review 指出）：组件设计正确，但"Consumer 吃什么真实 Memory 数据、如何产生、如何验证 Memory 真改变了理解"没有定义。本节约束这一缺口——这是验收前必须先解决的前提。
+
+**Consumer 的真实数据来源**：`ReasoningInput.historical_context` 里的 `EpisodicRecord` **不是凭空造的**，而是由 ADR-0024 的整条写入链路产生的：
+
+```
+CCTV 视频
+  │  Perception Pipeline（检测 / 跟踪 / 行为 / 风险）
+  ▼
+BehaviorState / RiskSignal
+  │  MemoryHook（PR#94，已合）
+  ▼
+Episode Builder（ADR-0024 Slice 1-3：抽象成 EpisodicRecord）
+  │
+  ▼
+Memory Store（Short-term / Episodic / Semantic）
+  │  MemoryQuery.compose_context（ADR-0024 Slice C，已合 #91）
+  ▼
+Memory Dataset / Episode Replay Layer   ← 本方案明确的"消费者数据源"边界
+  │
+  ▼
+MemoryConsumer.Retrieval → Aggregation → Context Builder → ReasoningInput
+```
+
+- **Memory Dataset** = Memory Store 中已落库、可查询的 `EpisodicRecord` 集合（经 `MemoryQuery.compose_context` 暴露）。
+- **Episode Replay Layer** = 一个回放工具：把**录制的真实 CCTV 样本**喂进完整 Perception Pipeline → Memory 写入链路，**重产** `EpisodicRecord`，使 Consumer 验证端到端可跑、可复现。它不造数据，只"重放真实视频行为"。
+
+**验证三阶段（禁止纯 Mock 作为主验证）**：
+
+| 阶段 | 数据 | 用途 | 能否证明"Memory 反哺理解" |
+| --- | --- | --- | --- |
+| A · 纯 Mock（仅开发期） | 手写 `EpisodicRecord` JSON | C-0~C-2 接口联调、提速 | ❌ 只能证明 Consumer 代码能跑 |
+| B · 录制 CCTV 回放（主验证） | 真实 CCTV → Pipeline → Memory | C-3 起 + 集成 + Shadow | ✅ 证明 CCTV→Memory 链路有价值、Consumer 真读到历史 |
+| C · 由回放派生的 Case（见新文档） | 从 B 的真实回放整理出的结构化 case | 回归 / 验收 | ✅ 每个 case 针对一类"Memory 价值" |
+
+> Mock 只用于 C-0~C-2（接口 / 开发快）；**C-3 及之后必须用 B/C 的真实 Memory 数据**。否则会写出"很漂亮但无真实记忆证明"的 Consumer。
+
+**配套文档**：验证数据（case 设计、fixture 结构、回放执行）单独定义于 **`DESIGN-memory-replay-dataset.md`**（本 PR 一同新增）。
+
+### 0.5 工程推进顺序（M0–M5，最高优先 = 数据闭环）
+
+不要直接 C-0~C-5 平推。按"先打通数据闭环，再写消费代码"的顺序：
+
+| 阶段 | 对应 Slice | 目标 | 验收 |
+| --- | --- | --- | --- |
+| **M0 · 数据闭环** | （先于 C-1） | 建立 `memory_replay_dataset` + Episode Replay Layer，能重放已有 CCTV 跑通 Memory → Consumer | 真实 CCTV → Memory → 至少一个 `ReasoningInput` 产出（见 `DESIGN-memory-replay-dataset.md`） |
+| **M1 · Consumer Skeleton** | C-0 | `contracts.py` + `interfaces.py` + `exceptions.py` | 类型可构造、ABC 不可实例化、ruff 通过 |
+| **M2 · Retrieval** | C-1 | 基于 `MemoryQuery.compose_context` 的规则召回，吃真实 Memory 数据 | C3 确定性、召回真实 `EpisodicRecord` |
+| **M3 · Aggregation** | C-2 | 读侧聚合 + 置信度分级 | 三档均产 `VisitorProfile`、模式发现正确 |
+| **M4 · Context** | C-3 | 组装 `ReasoningInput` | C1 无 score、C5 溯源 |
+| **M5 · Shadow Mode** | C-4 / C-5 | `MemoryConsumerHook` 接入 pipeline，门控 + 非阻塞 | Consumer 不影响主链路；记录 old decision vs consumer context 差异 |
+
+> M0 优先级最高：没有真实 Memory 数据，后续 C-1~C-5 只是"能跑的空壳"。M5 的 Shadow Mode 重点是"Consumer 不影响主链路"，输出如 `old decision: LOW / consumer context: 发现历史重复访问模式 / difference: 记录`。
 
 ---
 
@@ -123,7 +180,7 @@ tests/home_perception/memory/consumer/
 
 **实现落点**：直接复用 ADR-0024 Slice C 的 `MemoryQuery.compose_context`（Product Closure，已合 #91），在其之上包一层 `RetrievalStrategy`，不另起召回实现。
 
-**输出**：`list[EpisodicRecord]`，**确定性排序**（C3）：主排序键 `timestamp desc`，副键 `similarity_score desc`，保证同输入两次召回顺序一致（回放/审计一致）。
+**输出**：`list[EpisodicRecord]`，**确定性排序**（C3）：v1 规则召回**不使用任何 `similarity_score`**（向量分数属未来 `VectorRetrievalStrategy`，见 O1），排序键为命中强度，顺序固定为：① `identity_match`（身份键一致优先）② `event_type_match`（同事件 / 同源 RiskSignal 类型）③ `time_distance asc`（距当前越近越前，即 `timestamp desc`）。保证同输入两次召回顺序一致（回放 / 审计一致）。召回结果的数据来源见 §0.4（Memory Dataset / Episode Replay Layer）。
 
 **复用接口签名**：
 ```python
@@ -144,9 +201,14 @@ class Retrieval(ABC):
 - 优先 join 已物化的 `SemanticAggregate`（ADR-0024 Stage G/H 若已落地）；
 - 否则在请求期从召回记录做**有界轻量聚合**（默认窗口 100 条 / 30d）。
 
-**最低观测阈值（继承 ADR-0024 §3.1.3）**：
-- 仅当 `episodes >= 30` 且 `span_days >= 7` 时产出高置信 `VisitorProfile` / `RiskPattern`；
-- 否则 `confidence = low`，且**不进入** `ReasoningInput`（避免 false pattern）；或进入但显式标 `low`，由 Reasoning 自行降权。
+**置信度分级（取代硬性门槛，继承 ADR-0024 §3.1.3）**：
+银龄盾场景下诈骗 / 踩点常"第一次出现"，硬门槛（`>=30` 且 `>=7d` 才进 `ReasoningInput`）会削弱早期发现能力。改为按样本量分级、但**始终进入** `ReasoningInput`（由 Reasoning 自行按 `confidence` 降权）：
+
+- `cold_start`（episodes 0–5）：`confidence = low`，仅给最薄画像（如 `visit_count` 与原始 `night_visit_ratio`）；
+- `weak_pattern`（5–30）：`confidence = medium`；
+- `stable_pattern`（30+）：`confidence = high`。
+
+所有档位都产出 `VisitorProfile`（可为稀疏字段），**绝不因样本少而隐藏历史**——C1 仍成立（无 score）；`confidence` 只是供 Reasoning 参考的元信息，不是判定，不得被 Consumer 翻译成分数或决策。
 
 **临时画像（v1）**：`person_identity_id = None` 时按 `visitor_instance_id` 建临时画像并标注"未确认身份"（ADR-0024 §3.3）。
 
@@ -200,9 +262,14 @@ def to_decision_request(self, signal: RiskSignal, result: ReasoningResult | None
 
 ## 4. 编排与触发（承接 ADR-0025 §3.10）
 
-### 4.1 触发模型：Phase 1 = 模式 B（HIGH 触发）
+### 4.1 触发模型：Phase 1 = 模式 B（修订：MEDIUM+ 或存在历史时触发）
 
-**接入点**：类比 ADR-0024 的 `MemoryHook`（PR#94）。新增 `MemoryConsumerHook`（或扩展 `MemoryHook`），在 pipeline 检测到 `RiskSignal.level >= HIGH`（或 DecisionPolicy 落入 `ESCALATE_COMMUNITY` 等高优先动作）时触发 `MemoryConsumer.consume(event)`。
+**接入点**：类比 ADR-0024 的 `MemoryHook`（PR#94）。新增 `MemoryConsumerHook`（或扩展 `MemoryHook`），触发条件（Phase 1，修订自 ADR-0025 §3.10）：
+
+- `RiskSignal.level in {MEDIUM, HIGH}`（含 ADR-0010 落入 `ESCALATE_COMMUNITY` 等高优先动作）；**或**
+- 当前 `VisitorEvent` 命中已有历史（`prior_episode_count > 0`，即"已知 / 重复访客再现"）。
+
+> 仅 HIGH 会沦为"事后解释系统"：风险已高才查历史，只能解释"为什么高"。放宽到 MEDIUM 与"熟悉面孔再现"，Consumer 才能在"历史模式 → 提前理解 → 辅助发现风险"上发挥价值。
 
 **位置**：`runtime/pipeline.py`，与 `MemoryHook` 并列。门控开关 `memory.consumer_enabled`（默认 `False`，遵循 ADR-0024 "默认关闭、v1 不产"的演进纪律）。
 
@@ -242,12 +309,12 @@ class MemoryConsumer:
 | --- | --- | --- |
 | **C-0** | `contracts.py`（三数据类型）+ `interfaces.py`（四 ABC）+ `exceptions.py` | 类型可构造；ABC 不可实例化；`node --check` 不适用，ruff 通过 |
 | **C-1** | `retrieval.py`：基于 `MemoryQuery.compose_context` 的默认规则召回 | 召回单测：返回 `EpisodicRecord` 列表；C3 确定性（同输入两次顺序一致） |
-| **C-2** | `aggregation.py`：读侧聚合 + 最低观测阈值门控 | 聚合单测：≥30/≥7d 出高置信；低于阈值标 `low` 且不进 `ReasoningInput`；O1 排序稳定 |
+| **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档；C1 无 score；O1 排序稳定 |
 | **C-3** | `context.py`：组装 `ReasoningInput` | 组装单测：C1 无 score 字段、C5 每项历史带 `source_event_ids` |
 | **C-4** | `orchestrator.py` + `triggers.py`：`MemoryConsumer.consume` + `MemoryConsumerHook` 接入 pipeline（模式 B 门控） | 集成单测：HIGH 触发→`ReasoningInput` 产出；`consumer_enabled=False` 时不触发 |
 | **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | `test_invariants.py` 全绿；monkeypatch 验证 Aggregation 不调 Retrieval |
 
-每个 Slice 经 `ruff check src tests` + `pytest tests/` 门禁，零回归。
+每个 Slice 经 `ruff check src tests` + `pytest tests/` 门禁，零回归。工程推进顺序与 M0–M5 阶段映射见 §0.5：**M0（Memory Replay Dataset）优先级最高，须先于 C-1 完成**——没有真实 Memory 数据，C-1~C-5 只是"能跑的空壳"。
 
 ---
 
@@ -261,7 +328,7 @@ class MemoryConsumer:
 | **C4 冲突透明** | 构造"历史低风险 vs 本次高风险" fixture，断言 `conflicts` 非空且新旧并存 |
 | **C5 可解释** | 构造无 `source_event_ids` 的历史项，断言被拒绝或标 `missing_source` |
 | **跨层调用禁令** | monkeypatch `Retrieval.retrieve`，在 `Aggregation.aggregate` 中断言其未被调用（验证单向管道） |
-| **Replay 一致性** | 用 ADR-0024 风格 fixture（类比 `tests/fixtures/memory_baseline.json`）做回放，断言同输入同输出 |
+| **Replay 一致性** | 用 `DESIGN-memory-replay-dataset.md` 定义的 case（case_001 重复访客 / case_002 行为升级 / case_003 冲突透明）做回放，断言同输入同输出 |
 
 ---
 
@@ -270,7 +337,7 @@ class MemoryConsumer:
 | 编号 | 决策 | 本方案默认选择 + 扩展点 |
 | --- | --- | --- |
 | O1 | 相关性排序算法（向量 / 规则 / 混合） | **默认规则召回**（§3.1）；`RetrievalStrategy` 留 `VectorRetrievalStrategy` 扩展点，向量召回未来接入 |
-| O2 | 聚合窗口（100? 200?）+ 时间窗（30d? 90d?） | 默认 **100 条 / 30d**，服从最低观测阈值（§3.2）；常量提 `consumer/config.py` 可配 |
+| O2 | 聚合窗口（100? 200?）+ 时间窗（30d? 90d?） | 默认 **100 条 / 30d**，服从置信度分级（§3.2）；常量提 `consumer/config.py` 可配 |
 | O3 | 序列化格式 | `pydantic.BaseModel` + `model_dump()` → JSON；契约稳定即可 |
 | O4 | `person_identity_id=None` 时临时画像生命周期 | 按 `visitor_instance_id` 建临时画像并标"未确认身份"；真实身份归 ADR-0023 |
 
@@ -280,10 +347,10 @@ class MemoryConsumer:
 
 | 风险 | 缓解 |
 | --- | --- |
-| 召回 / 聚合成本 | 模式 B 把消费绑定到少量 HIGH 事件（§4.1），边缘 CPU 可控；非触发期零开销 |
+| 召回 / 聚合成本 | 模式 B（修订）把消费绑定到 MEDIUM+ 或已知访客再现等少量事件（§4.1），边缘 CPU 可控；非触发期零开销 |
 | Reasoning Engine 缺位（Phase 1 只有 Consumer） | `ReasoningInput` 产出后可由 `MemoryConsumerHook` 记录 / 审计；`DecisionRequest.reasoning_result` 允许为 `None`，走原决策路径，不强制消费 |
 | 与 ADR-0024 Memory 演进耦合 | Consumer 只读、依赖 `MemoryQuery.compose_context` 抽象；Memory 内部演进不影响 Consumer 契约 |
-| 小样本误判 | 最低观测阈值（§3.2）+ `confidence=low` 不入 `ReasoningInput` |
+| 小样本误判 | 分级 `confidence` 始终进 `ReasoningInput`，由 Reasoning 按 `confidence` 降权；`cold_start` 档显式标 `low` 提示早期样本稀疏（§3.2） |
 
 ---
 
