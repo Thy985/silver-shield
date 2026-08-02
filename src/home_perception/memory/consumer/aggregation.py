@@ -46,13 +46,31 @@ class RuleBasedAggregation(Aggregation):
         if not records:
             return (None, None)
         try:
+            self._assert_same_visitor(records)  # 混合访客输入 -> 显式异常（守 C2 只读 / C3 确定性）
             profile = self._build_profile(records)
             pattern = self._build_pattern(records)
-        except Exception as exc:  # 转译为分层异常，不静默、不向上抛未分类异常
+        except AggregationError:  # 契约违例（混合访客）原样上抛，不二次包装
+            raise
+        except Exception as exc:  # 其余意外异常转译为分层异常，不静默、不向上抛未分类异常
             raise AggregationError(
                 f"Aggregation 计算失败 (n={len(records)}): {exc}"
             ) from exc
         return (profile, pattern)
+
+    def _assert_same_visitor(self, records: list[EpisodicRecord]) -> None:
+        """校验输入全部归属同一 ``visitor_instance_id``（C2/C3）。
+
+        Aggregation 仅接受 Retrieval 已边界化的单一访客记录；若混入其他访客，
+        静默聚合会得到错乱画像，且 ``records[0]`` 顺序可改变归属，破坏 C3 确定性。
+        显式抛 ``AggregationError`` 让编排器决定如何处理。
+        """
+        anchor = records[0].visitor_instance_id
+        for ep in records:
+            if ep.visitor_instance_id != anchor:
+                raise AggregationError(
+                    f"聚合输入含多访客记录：锚定 {anchor!r} 但出现 {ep.visitor_instance_id!r}；"
+                    f"Aggregation 仅接受单一 visitor_instance_id 的边界化输入"
+                )
 
     # -- 访客画像（统计描述，非分数）---------------------------------------
     def _build_profile(self, records: list[EpisodicRecord]) -> VisitorProfile:
@@ -79,21 +97,26 @@ class RuleBasedAggregation(Aggregation):
         tags: list[str] = []
         if n >= 2:  # 重复来访 → repeated_visit
             tags.append("repeated_visit")
-        esc = self._behavior_markers(records)
-        if len(esc) >= 2:  # 多阶段行为 → 视为升级模式（启发式）
+        markers = self._behavior_markers(records)
+        # 升级模式要求"多阶段（不同阶段）"：过滤空后缀 + 去重，仅唯一非空标记数
+        # >= 2 才判升级（避免两条相同 behavior:loiter 或空 behavior: 误判为升级）。
+        unique_markers = tuple(sorted({m for m in markers if m}))
+        escalation_history: tuple[str, ...] | None = None
+        if len(unique_markers) >= 2:
             tags.append("escalating_behavior")
+            escalation_history = unique_markers
         if not tags:
             return None
         return RiskPattern(
             tags=tuple(sorted(set(tags))),
-            escalation_history=tuple(sorted(esc)) or None,
+            escalation_history=escalation_history,
             confidence=self._confidence_tier(n),
         )
 
     # -- 辅助（纯函数，确定性）---------------------------------------------
     @staticmethod
     def _behavior_markers(records: list[EpisodicRecord]) -> list[str]:
-        """从记录 ``reason_summary`` 抽取 ``behavior:`` 前缀标记（按记录序）。"""
+        """从记录 ``reason_summary`` 抽取 ``behavior:`` 后缀（含可能为空者，按记录序）；空后缀过滤与去重在 ``_build_pattern`` 完成。"""
         markers: list[str] = []
         for ep in records:
             for r in ep.reason_summary or []:

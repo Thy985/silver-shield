@@ -244,3 +244,55 @@ def test_night_window_configurable() -> None:
         .night_visit_ratio
     )
     assert cfg_ratio == 0.5
+# --------------------------------------------------------------------------
+# Fix 1 回归：混合访客输入 -> 显式 AggregationError（C2/C3）
+# --------------------------------------------------------------------------
+def test_rejects_mixed_visitors() -> None:
+    mixed = [
+        _make_record("ep-0", 23, 23, visitor_instance_id="vA"),
+        _make_record("ep-1", 10, 10, visitor_instance_id="vB"),
+    ]
+    with pytest.raises(AggregationError):
+        RuleBasedAggregation().aggregate(mixed)
+
+
+def test_mixed_visitors_order_independent() -> None:
+    # 同一组混合访客，仅改变顺序，均须抛 AggregationError
+    # （不产出顺序相关的错乱画像，守 C3 确定性）
+    forward = [
+        _make_record("ep-0", 23, 23, visitor_instance_id="vA"),
+        _make_record("ep-1", 10, 10, visitor_instance_id="vB"),
+    ]
+    backward = [forward[1], forward[0]]
+    with pytest.raises(AggregationError):
+        RuleBasedAggregation().aggregate(forward)
+    with pytest.raises(AggregationError):
+        RuleBasedAggregation().aggregate(backward)
+
+
+# --------------------------------------------------------------------------
+# Fix 2 回归：升级模式须基于"不同（非空）阶段"，重复 / 空标记不算升级
+# --------------------------------------------------------------------------
+def test_escalation_requires_distinct_markers() -> None:
+    # 两次相同 behavior:loiter -> 唯一非空标记仅 1 -> 不判升级（仅 repeated_visit）
+    records = [
+        _make_record("ep-0", 10, 10, reason_summary=("behavior:loiter",)),
+        _make_record("ep-1", 11, 11, reason_summary=("behavior:loiter",)),
+    ]
+    pattern = RuleBasedAggregation().aggregate(records)[1]
+    assert pattern is not None
+    assert "repeated_visit" in pattern.tags
+    assert "escalating_behavior" not in pattern.tags
+    assert pattern.escalation_history is None
+
+
+def test_empty_behavior_suffix_ignored() -> None:
+    # 一条空 behavior: 后缀 + 一条 observe_camera -> 唯一非空标记仅 1 -> 不判升级
+    records = [
+        _make_record("ep-0", 10, 10, reason_summary=("behavior:",)),
+        _make_record("ep-1", 11, 11, reason_summary=("behavior:observe_camera",)),
+    ]
+    pattern = RuleBasedAggregation().aggregate(records)[1]
+    assert pattern is not None
+    assert "escalating_behavior" not in pattern.tags
+    assert pattern.escalation_history is None
