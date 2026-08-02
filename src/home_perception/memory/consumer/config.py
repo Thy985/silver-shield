@@ -1,7 +1,8 @@
-"""Memory Consumer 配置（C-1 / C-2，DESIGN §7 O2）。
+"""Memory Consumer 配置（C-1 / C-2 / C-4，DESIGN §7 O2）。
 
-把召回窗口 / 上限 / 时段带宽提为可配常量，便于后续实验调整（如诈骗周期可能
-需更长 lookback，老人行为可能需季节窗口），不写死在逻辑里。
+把召回窗口 / 上限 / 时段带宽 / 触发门槛提为可配常量，便于后续实验调整（如诈骗
+周期可能需更长 lookback，老人行为可能需季节窗口，灰度期可能需收紧或放宽触发），
+不写死在逻辑里。
 """
 
 from __future__ import annotations
@@ -55,4 +56,35 @@ class AggregationConfig:
             raise ValueError("AggregationConfig.min_records_for_pattern 必须 >= 1")
 
 
-__all__ = ["AggregationConfig", "RetrievalConfig"]
+@dataclass
+class ConsumerTriggerConfig:
+    """模式 B 触发门控可配参数（C-4 / ADR-0025 §3.10 / DESIGN §4.1）。
+
+    Phase 1 触发条件 = ``risk_level ∈ enabled_levels`` **或**
+    （``trigger_on_known_visitor`` 且该访客既往 episode 数 > 0）。
+
+    「已知访客再现」是刻意放宽（ADR-0025 §3.10 修订）：若只在 HIGH 触发，Consumer
+    会沦为事后解释系统——风险已经升起才去理解历史，拿不到「提前理解」的价值。
+    灰度期可通过本配置收紧（如 ``enabled_levels=("HIGH",)``、
+    ``trigger_on_known_visitor=False``）观察触发率与误触率。
+    """
+
+    enabled_levels: tuple[str, ...] = ("MEDIUM", "HIGH")
+    trigger_on_known_visitor: bool = True
+
+    def __post_init__(self) -> None:
+        allowed = ("LOW", "MEDIUM", "HIGH")
+        for level in self.enabled_levels:
+            if level not in allowed:
+                raise ValueError(
+                    f"ConsumerTriggerConfig.enabled_levels 只能取 {allowed}，收到 {level!r}"
+                )
+        if not self.enabled_levels and not self.trigger_on_known_visitor:
+            raise ValueError(
+                "ConsumerTriggerConfig 至少需保留一种触发条件："
+                "enabled_levels 非空 或 trigger_on_known_visitor=True"
+                "（两者同时关闭等价于永不触发，应改用 memory.consumer_enabled=false）"
+            )
+
+
+__all__ = ["AggregationConfig", "ConsumerTriggerConfig", "RetrievalConfig"]

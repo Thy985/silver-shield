@@ -26,6 +26,15 @@ from home_perception.runtime.memory_consumer_hook import ConsumerMetrics, Memory
 KNOWN = "visitor-known"
 UNKNOWN = "visitor-unknown"
 
+# 与 ``memory_consumer_hook.CONSUMER_LOG_FIELDS`` 同源：断言字段集合一致，
+# 新增消费者指标时只改实现常量一处即可，测试自动跟随（避免字段/断言漂移）。
+CONSUMER_LOG_FIELDS = (
+    "consumer_evaluated",
+    "consumer_triggered",
+    "consumer_produced",
+    "consumer_errors",
+)
+
 
 def _utc(*args: int) -> datetime:
     return datetime(*args, tzinfo=UTC)
@@ -192,12 +201,7 @@ class TestEnabledSwitch:
         assert hook.enabled is False
         assert hook.maybe_consume(_event(KNOWN, "HIGH")) is None
         assert consumer.calls == []
-        assert hook.metrics.as_log_fields() == {
-            "consumer_evaluated": 0,
-            "consumer_triggered": 0,
-            "consumer_produced": 0,
-            "consumer_errors": 0,
-        }
+        assert hook.metrics.as_log_fields() == {name: 0 for name in CONSUMER_LOG_FIELDS}
 
     def test_enabled_but_consumer_missing_is_noop(self):
         hook = MemoryConsumerHook(None, _store_with_history(), True)
@@ -228,10 +232,9 @@ class TestNonBlocking:
         hook.maybe_consume(_event(KNOWN, "HIGH"))
         hook.maybe_consume(_event(UNKNOWN, "LOW"))  # 未触发
         assert hook.metrics.as_log_fields() == {
-            "consumer_evaluated": 2,
-            "consumer_triggered": 1,
-            "consumer_produced": 1,
-            "consumer_errors": 0,
+            name: {"consumer_evaluated": 2, "consumer_triggered": 1,
+                   "consumer_produced": 1, "consumer_errors": 0}[name]
+            for name in CONSUMER_LOG_FIELDS
         }
 
     def test_metrics_instance_is_injectable_and_shared(self):

@@ -9,14 +9,25 @@
   MemoryConsumer 四个 ABC）。
 - ``exceptions``：C-0 分层异常。
 - ``retrieval`` / ``config``：C-1 ``RuleBasedRetrieval`` 默认规则召回 + 可配参数。
+- ``aggregation``：C-2 ``RuleBasedAggregation`` 默认读侧聚合。
+- ``context``：C-3 ``RuleBasedContextBuilder`` 默认组装器。
+- ``orchestrator``：C-4 ``RuleBasedMemoryConsumer`` 默认编排器（单向驱动三组件，
+  并派生 evidence / previous_actions / conflicts）。
+- ``conventions``：记录语义约定基元（``behavior:`` 标记解析 / 风险等级序），供上述
+  组件共用，避免同一约定多处内联漂移。
 - ``replay_dataset`` / ``replay_layer``：M0 Episode Replay Layer（数据闭环验证）。
 
-Aggregation（C-2 `RuleBasedAggregation`）与 ContextBuilder（C-3 `RuleBasedContextBuilder`）默认实现已落地；MemoryConsumer 编排 +
-MemoryConsumerHook 触发接入（C-4）后续补充。
+C-0..C-4 默认实现均已落地。运行期接线点在 ``runtime/memory_consumer_hook.py``
+（``MemoryConsumerHook``，模式 B 门控，默认关闭）——它属 runtime 层，刻意不在本包
+导出，与写侧 ``runtime/memory_hook.py`` 对称。C-5（不变量测试收口）后续补充。
 """
 
 from home_perception.memory.consumer.aggregation import RuleBasedAggregation
-from home_perception.memory.consumer.config import AggregationConfig, RetrievalConfig
+from home_perception.memory.consumer.config import (
+    AggregationConfig,
+    ConsumerTriggerConfig,
+    RetrievalConfig,
+)
 from home_perception.memory.consumer.context import RuleBasedContextBuilder
 from home_perception.memory.consumer.contracts import (
     ActionRecord,
@@ -25,6 +36,12 @@ from home_perception.memory.consumer.contracts import (
     ReasoningInput,
     RiskPattern,
     VisitorProfile,
+)
+from home_perception.memory.consumer.conventions import (
+    BEHAVIOR_MARKER_PREFIX,
+    extract_behavior_markers,
+    max_risk_level,
+    risk_rank,
 )
 from home_perception.memory.consumer.exceptions import (
     AggregationError,
@@ -39,6 +56,7 @@ from home_perception.memory.consumer.interfaces import (
     MemoryConsumer,
     Retrieval,
 )
+from home_perception.memory.consumer.orchestrator import RuleBasedMemoryConsumer
 from home_perception.memory.consumer.replay_dataset import (
     MemoryReplayDataset,
     ReplayCase,
@@ -50,6 +68,7 @@ from home_perception.memory.consumer.replay_layer import (
 from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
 
 __all__ = [
+    "BEHAVIOR_MARKER_PREFIX",
     "ActionRecord",
     "Aggregation",
     "AggregationConfig",
@@ -57,6 +76,7 @@ __all__ = [
     "BelowThresholdError",
     "ConflictFlag",
     "ConsumerError",
+    "ConsumerTriggerConfig",
     "ContextBuildError",
     "ContextBuilder",
     "CurrentEvent",
@@ -72,6 +92,10 @@ __all__ = [
     "RiskPattern",
     "RuleBasedAggregation",
     "RuleBasedContextBuilder",
+    "RuleBasedMemoryConsumer",
     "RuleBasedRetrieval",
     "VisitorProfile",
+    "extract_behavior_markers",
+    "max_risk_level",
+    "risk_rank",
 ]
