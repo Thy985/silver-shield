@@ -835,7 +835,8 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | Trust Layer confidence 计算/衰减算法 | ❌ 否 | 未来 ADR-00xx Memory Consistency Policy |
 | 存储格式（SQLite/Parquet/...） | ❌ 否 | 工程方案 |
 | 查询接口（REST/GraphQL/...） | ❌ 否 | 工程方案 |
-| Agent 推理逻辑 / Context Builder | ❌ 否 | Phase 5 ADR |
+| Context Builder（消费层上下文组装契约） | ❌ 否（契约由 ADR-0025 定义） | ADR-0025 |
+| Agent 推理逻辑（规则 v2 / LLM v2 / Agent 本身） | ❌ 否 | Phase 5 ADR |
 | ReID 算法 | ❌ 否 | Phase 4 ADR-0023 |
 | Memory Policy 的具体提炼规则（状态转移触发条件/快照频率/聚合粒度） | ❌ 否（本 ADR 只定义抽象） | 工程方案 |
 | Episode Builder 的具体投影规则（字段映射/summary 模板） | ❌ 否（本 ADR 只定义必要性） | 工程方案 |
@@ -904,6 +905,8 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 | **Integration Closure · Slice C** | 外部闭环·用户价值 | `memory/query.py`：`MemoryQuery.compose_context`（Product Closure，V0 边界冻结） | #91 | ✅ 已合并 |
 | **Integration Closure · Slice A** | 外部闭环·代码整理 | `runtime/memory_hook.py`：抽出 `MemoryHook`（0 行为变化，门控/容错/metrics 语义不变） | #94 | ✅ 已合并 |
 | **Integration Closure · Slice D** | 外部闭环·文档冻结 | 4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ 本 ADR 标注 | #95 | ✅ 已合并 |
+
+> **消费层承接（ADR-0025）**：本 ADR 定义"存储过去"，Memory 如何被消费以反哺理解（Retrieval / Aggregation / Context Builder / Reasoning Interface + 执行模型）已由 **ADR-0025** 定义。本 ADR 不再覆盖消费层契约；推理逻辑本身仍归 Phase 5 Reasoning ADR。
 
 **Integration Closure 完成标志**：System × Memory 外部闭环全部收口——
 B（真实链路闭环，证明系统存在）→ C（Product Closure，证明价值）→ A（MemoryHook 代码整理）→ D（文档冻结，纯文档不重构接口）。

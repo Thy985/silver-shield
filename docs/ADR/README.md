@@ -78,3 +78,4 @@
 | [0022](0022-evidence-chain-multimodal-interface.md) | 证据链与多模态接口·具体设计：EvidenceItem(类型化证据)+EvidenceAggregator(只整理不重推)+WarningEvent.evidence_items（Phase 2） | Proposed | 2026-07-26 |
 | [0023](0023-identity-continuity-system.md) | 身份连续性系统·具体设计：track_id/visitor_instance_id/person_identity_id 三层 + IdentityResolver（Phase 4，v1 不冒充真实身份） | Proposed | 2026-07-26 |
 | [0024](0024-memory-architecture.md) | Memory 架构·三类记忆模型与 Memory Policy：Short-term / Episodic / Semantic（Environment+Identity）+ Episode Builder + Invariants + Trust Layer + Snapshot 原则（Phase 4-5，v1 不实现） | Accepted | 2026-07-28 |
+| [0025](0025-memory-consumer-architecture.md) | Memory Consumer 架构·让记忆反哺理解：Retrieval/Aggregation/Context Builder/Reasoning Interface 四组件 + 严格单向管道 + 三数据契约（ReasoningInput/ReasoningResult/DecisionRequest）+ 执行模型（触发时机）；不直接决策、不改 Risk Score（v2，承接 ADR-0024） | Accepted | 2026-08-02 |
