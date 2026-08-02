@@ -85,7 +85,7 @@ MemoryConsumer.Retrieval → Aggregation → Context Builder → ReasoningInput
 | --- | --- | --- | --- |
 | **M0 · 数据闭环** | （先于 C-1） | 建立 `memory_replay_dataset` + Episode Replay Layer，能重放已有 CCTV 跑通 Memory → Consumer | 真实 CCTV → Memory → 至少一个 `ReasoningInput` 产出（见 `DESIGN-memory-replay-dataset.md`） |
 | **M1 · Consumer Skeleton** | C-0 | `contracts.py` + `interfaces.py` + `exceptions.py` | 类型可构造、ABC 不可实例化、ruff 通过 |
-| **M2 · Retrieval** | C-1 | 基于 `MemoryQuery.compose_context` 的规则召回，吃真实 Memory 数据 | C3 确定性、召回真实 `EpisodicRecord` |
+| **M2 · Retrieval** | C-1 | 基于 `MemoryStore.get_episodic_by_visitor` 的规则召回，吃真实 Memory 数据 | C3 确定性、召回真实 `EpisodicRecord` |
 | **M3 · Aggregation** | C-2 | 读侧聚合 + 置信度分级 | 三档均产 `VisitorProfile`、模式发现正确 |
 | **M4 · Context** | C-3 | 组装 `ReasoningInput` | C1 无 score、C5 溯源 |
 | **M5 · Shadow Mode** | C-4 / C-5 | `MemoryConsumerHook` 接入 pipeline，门控 + 非阻塞 | Consumer 不影响主链路；记录 old decision vs consumer context 差异 |
@@ -182,9 +182,9 @@ tests/home_perception/memory/consumer/
 
 > ⚠ **隐私边界（device_id）**：`device_id` 仅用作召回**排序键**（同设备优先），**绝不**进入 `ReasoningInput` 任何字段；若需向 Reasoning 传递空间信息，须脱敏为 `area_code`（如 `door` / `living_room`），不得携带可定位住户布局的原始 `device_id`（违反家庭隐私与 ADR-0024 §3.2 隐私约束）。
 
-**实现落点**：直接复用 ADR-0024 Slice C 的 `MemoryQuery.compose_context`（Product Closure，已合 #91），在其之上包一层 `RuleBasedRetrieval`（默认规则召回实现），不另起召回实现。
+**实现落点**：直接复用 ADR-0024 的 `MemoryStore.get_episodic_by_visitor`（原始 Episode 查询基元，已合 #91 / #102），在其之上包一层 `RuleBasedRetrieval`（默认规则召回实现），不另起召回实现。`MemoryQuery.compose_context` 仅用于解释型上下文消费（人类可读 dict），**不是**召回原语——若强行用其 dict 反解 `EpisodicRecord`，会破坏 C3 确定性 / C5 溯源（ADR-0024 I4）。
 
-**输出**：`list[EpisodicRecord]`，**确定性排序**（C3）：v1 规则召回**不使用任何 `similarity_score`**（向量分数属未来 `VectorRetrieval`，见 O1），排序键为命中强度，顺序固定为：① `identity_match`（身份键一致优先）② `event_type_match`（同事件 / 同源 RiskSignal 类型）③ `time_distance asc`（距当前越近越前，即 `timestamp desc`）。保证同输入两次召回顺序一致（回放 / 审计一致）。召回结果的数据来源见 §0.4（Memory Dataset / Episode Replay Layer）。
+**输出**：`list[EpisodicRecord]`，**确定性排序**（C3）：v1 规则召回**不使用任何 `similarity_score`**（向量分数属未来 `VectorRetrieval`，见 O1），排序键为命中强度，顺序固定为（C3 确定性）：① `risk_category_match`（risk_signal 当前事件命中含 risk_level 的记录；visitor_event 命中 risk_level 为 None 的记录——属 heuristic proxy，非语义相似度）② `same_time_band`（记录 enter hour 与当前事件 hour 环形距离 <= same_time_band_hours）③ `recency`（enter_time desc，距当前越近越前）④ `record_id asc`（最终 tiebreak，保证完全确定）。注：原 `identity_match` 排序键已移除——召回已按 `visitor_instance_id` 完成身份过滤，再排身份键为退化键。保证同输入两次召回顺序一致（回放 / 审计一致）。召回结果的数据来源见 §0.4（Memory Dataset / Episode Replay Layer）。
 
 **复用接口签名**：
 ```python
@@ -366,3 +366,18 @@ class MemoryConsumer:
 - Reasoning Engine（规则 v2 / LLM v2 / Agent）落地时，直接消费 `ReasoningInput`、产出 `ReasoningResult`，归其独立 ADR（Phase 5）。
 - 模式 C（离线 Semantic Profile 预计算）接 ADR-0024 Stage G/H。
 - 冲突解决策略（覆盖 / 衰减 / 版本化）归未来 Memory Consistency Policy ADR。
+
+
+## Errata（2026-08-02，C-1 实施反修）
+
+本 DESIGN 在 C-1 落地时被真实代码约束修正如下，避免「让代码迁就 ADR 理想模型」：
+
+1. **§0.5 / §3.1 数据源修正**：Retrieval 召回原语从 `MemoryQuery.compose_context` 改为 `MemoryStore.get_episodic_by_visitor`。
+   - 原因：`compose_context()` 返回人类可读 `dict`（解释视图），不是 `EpisodicRecord` 列表；若用它反解记录会破坏 C3 确定性 / C5 溯源（ADR-0024 I4）。
+   - 规则：`compose_context` 仅用于解释型上下文消费，不作为召回原语。
+2. **§3.1 排序键修正**：
+   - 移除退化的 `identity_match`（召回已按 `visitor_instance_id` 过滤，再排身份键无意义）；
+   - `event_type_match` 更名为 `risk_category_match`，并显式标注为 heuristic proxy（risk_signal↔含 risk_level 记录 / visitor_event↔risk_level 为 None 记录），非语义相似度；
+   - 最终确定性排序 = `risk_category_match` → `same_time_band` → `recency` → `record_id asc`。
+3. **§3.1 device_id 处理**：v1 `EpisodicRecord` 无 `device_id` 字段，`device_id` 仅作为 `RuleBasedRetrieval` 的保留参数（no-op），绝不进入 `ReasoningInput`。不伪实现、不污染 ADR-0024 schema。
+4. **O1 VectorRetrieval 定位**：VectorRetrieval 是延迟扩展点，**不是** C-1 之后的直接下一步。正确推进路径：C-1 规则召回 → C-2 聚合 → C-3 ReasoningContext → 真实 Reasoning 消费 → 评估瓶颈 → 再决定是否引入向量召回。避免技术驱动。
