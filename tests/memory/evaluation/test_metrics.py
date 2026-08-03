@@ -8,12 +8,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from home_perception.memory.consumer.contracts import ReasoningResult, SourceRef
-from home_perception.memory.evaluation.ground_truth import GroundTruthRecord
+from home_perception.memory.evaluation.ground_truth import ACCEPTABLE_HINT_NA, GroundTruthRecord
 from home_perception.memory.evaluation.metrics import (
+    CaseEvaluation,
     EarlyDetectionResult,
+    acceptable_upper,
     compute_lead_time,
     evaluate_case,
+    fp_severity_excess,
     hint_severity,
     metric_fn,
     metric_fp,
@@ -21,6 +26,7 @@ from home_perception.memory.evaluation.metrics import (
     metric_q2_historical_reference,
     metric_q3_pattern_grounding,
 )
+from home_perception.memory.evaluation.report import early_detection_term
 
 # ---------------------------------------------------------------------------
 # 构造辅助
@@ -242,6 +248,19 @@ def test_compute_lead_time_missing_detection():
     ts = datetime(2026, 7, 8, 15, 0, tzinfo=UTC)
     res = compute_lead_time(None, ts)
     assert res.status == "missing_detection"
+    assert res.missing_arm == "baseline"
+    # Baseline 缺失而 Memory 检出 → Early Detection term 记正向（1.0），非 0（评审 issue 1）
+    ev = CaseEvaluation(
+        case_id="x", q1=True, q2=True, q3=True, fp=True,
+        fn_m=0, fn_b=1, early_detection=res, hard_gate_pass=True, notes=(), fp_excess=0,
+    )
+    assert early_detection_term([ev]) == pytest.approx(1.0)
+
+
+def test_compute_lead_time_both_missing_is_both_arm():
+    res = compute_lead_time(None, None)
+    assert res.status == "missing_detection"
+    assert res.missing_arm == "both"
 
 
 def test_evaluate_case_marks_early_detection_na():
@@ -258,3 +277,31 @@ def test_evaluate_case_hard_gate_pass():
     assert ev.q1 and ev.q2 and ev.q3 and ev.fp
     assert ev.fn_m < ev.fn_b
     assert ev.hard_gate_pass is True
+
+
+# ---------------------------------------------------------------------------
+# acceptable_hint 边界（评审 issue 3：缺失不得静默变为 severity 0）
+# ---------------------------------------------------------------------------
+def _na_gt() -> GroundTruthRecord:
+    return GroundTruthRecord.from_dict(
+        {
+            "case_id": "case_na",
+            "category": "x",
+            "expected_pattern": ("p",),
+            "required_evidence": (),
+            "acceptable_hint": ACCEPTABLE_HINT_NA,
+        }
+    )
+
+
+def test_acceptable_upper_na_is_none():
+    assert acceptable_upper(_na_gt()) is None
+
+
+def test_metric_fp_na_is_not_failure():
+    """显式未标注 → FP 指标剔除（返回 True），不把遗漏误判为方案失败。"""
+    assert metric_fp(_memory_result(), _baseline_result(), _na_gt()) is True
+
+
+def test_fp_severity_excess_na_is_zero():
+    assert fp_severity_excess(_memory_result(), _na_gt()) == 0

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from home_perception.memory.consumer.contracts import ReasoningResult, SourceRef
-from home_perception.memory.evaluation.ground_truth import GroundTruthRecord
+from home_perception.memory.evaluation.ground_truth import ACCEPTABLE_HINT_NA, GroundTruthRecord
 
 # ---------------------------------------------------------------------------
 # severity 冻结映射（§4.2）
@@ -134,17 +134,49 @@ def metric_q3_pattern_grounding(result_m: ReasoningResult) -> bool:
 # ---------------------------------------------------------------------------
 # FP — False Positive（不恶化约束，§4.2）
 # ---------------------------------------------------------------------------
+def acceptable_upper(gt: GroundTruthRecord) -> int | None:
+    """Ground Truth 可接受 hint 的严重度上限。
+
+    - 显式未标注（``ACCEPTABLE_HINT_NA``）或空元组 → ``None``（N/A）：FP 指标剔除，
+      绝不默认 severity 0。默认 0 会把数据治理遗漏（忘记标注）误判为被评方案的
+      FP / Hard Gate 失败（PR#112 评审 issue 3）。
+    - 否则返回各 acceptable_hint 的严重度最大值。
+    """
+    if not gt.acceptable_hint or ACCEPTABLE_HINT_NA in gt.acceptable_hint:
+        return None
+    return max(hint_severity(h) for h in gt.acceptable_hint)
+
+
 def metric_fp(
     result_m: ReasoningResult,
     result_b: ReasoningResult,
     gt: GroundTruthRecord,
 ) -> bool:
-    """两臂 hint 均不超过 Ground Truth 可接受上限（对照 GT，非两臂差值）。"""
-    upper = max(hint_severity(h) for h in gt.acceptable_hint)
+    """两臂 hint 均不超过 Ground Truth 可接受上限（对照 GT，非两臂差值）。
+
+    ``acceptable_upper`` 为 ``None``（显式未标注 / N/A）→ 无法判定 FP，按「剔除」处理
+    返回 ``True``，不让未标注的 Ground Truth 把 case 误判为方案失败（评审 issue 3）。
+    """
+    upper = acceptable_upper(gt)
+    if upper is None:
+        return True
     return (
         hint_severity(result_m.suggested_action_hint) <= upper
         and hint_severity(result_b.suggested_action_hint) <= upper
     )
+
+
+def fp_severity_excess(result_m: ReasoningResult, gt: GroundTruthRecord) -> int:
+    """Memory 臂 hint 超出 GT 上限的严重度差（§8.2 ``FP_term`` 输入）；未超 → 0。
+
+    与 ``metric_fp`` 的布尔判定互补：布尔进 Hard Gate（§9），本函数给 Score 提供
+    可折扣的连续量，避免报告层反查 Ground Truth。``acceptable_upper`` 为 ``None``
+    （N/A 未标注）→ 返回 ``0``，FP 指标剔除、不折扣 Score（评审 issue 3）。
+    """
+    upper = acceptable_upper(gt)
+    if upper is None:
+        return 0
+    return max(0, hint_severity(result_m.suggested_action_hint) - upper)
 
 
 # ---------------------------------------------------------------------------
@@ -219,13 +251,15 @@ class EarlyDetectionResult:
 
     - ``na``：E-1A 无时序 step 数据，标记 ``N/A（data-gated → E-1B）``，不计入 Hard Gate。
     - ``computed``：LeadTime 已算（供 E-1c / E-1B）。
-    - ``missing_detection``：某臂始终未检测，记最坏（退化）。
+    - ``missing_detection``：某臂始终未检测；``missing_arm`` 区分缺失的是哪一臂，
+      评分时分别处理（M 缺失→0 / B 缺失且 M 检出→正向 / 两臂均缺失→N/A）。
     """
 
     status: str  # "na" | "computed" | "missing_detection"
     lead_time_minutes: float | None = None
     step_delta: int | None = None
     detail: str = ""
+    missing_arm: str | None = None  # "memory" | "baseline" | "both"；仅 missing_detection 有意义
 
     @classmethod
     def na(cls, detail: str = "data-gated → E-1B") -> EarlyDetectionResult:
@@ -246,7 +280,8 @@ class EarlyDetectionResult:
             status="missing_detection",
             lead_time_minutes=None,
             step_delta=None,
-            detail=f"{arm} 臂未检测，记最坏（退化）",
+            missing_arm=arm,
+            detail=f"{arm} 臂未检测",
         )
 
 
@@ -258,12 +293,17 @@ def compute_lead_time(
 ) -> EarlyDetectionResult:
     """§4.4 LeadTime = ts(B) − ts(M)；>0 表示 Memory 更早检测。
 
-    某臂缺失检测 → 最坏（退化，``missing_detection``）。供 E-1c / E-1B 调用；
+    某臂缺失检测 → ``missing_detection``，并以 ``missing_arm`` 区分缺失的是哪一臂：
+    ``"memory"`` / ``"baseline"`` / ``"both"``，供 ``early_detection_term`` 分别计分
+    （M 缺失→0；B 缺失且 M 检出→正向；两臂均缺失→N/A）。供 E-1c / E-1B 调用；
     E-1A（单当前事件、无 step 序列）不调用，evaluate_case 直接返回 ``na()``。
     """
-    if baseline_detection_ts is None or memory_detection_ts is None:
-        missing = "baseline" if baseline_detection_ts is None else "memory"
-        return EarlyDetectionResult.missing_detection(missing)
+    if baseline_detection_ts is None and memory_detection_ts is None:
+        return EarlyDetectionResult.missing_detection("both")
+    if baseline_detection_ts is None:
+        return EarlyDetectionResult.missing_detection("baseline")
+    if memory_detection_ts is None:
+        return EarlyDetectionResult.missing_detection("memory")
     delta_min = (baseline_detection_ts - memory_detection_ts).total_seconds() / 60.0
     step_delta = None
     if baseline_step is not None and memory_step is not None:
@@ -288,6 +328,8 @@ class CaseEvaluation:
     early_detection: EarlyDetectionResult
     hard_gate_pass: bool
     notes: tuple[str, ...]
+    # Memory 臂 hint 超出 GT 上限的严重度差（§8.2 FP_term 输入；Hard Gate 只看 fp 布尔）
+    fp_excess: int = 0
 
 
 def evaluate_case(
@@ -323,6 +365,7 @@ def evaluate_case(
         early_detection=ed,
         hard_gate_pass=hard_gate_pass,
         notes=notes,
+        fp_excess=fp_severity_excess(result_m, gt),
     )
 
 
@@ -330,8 +373,10 @@ __all__ = [
     "HINT_SEVERITY",
     "CaseEvaluation",
     "EarlyDetectionResult",
+    "acceptable_upper",
     "compute_lead_time",
     "evaluate_case",
+    "fp_severity_excess",
     "hint_severity",
     "metric_fn",
     "metric_fp",
