@@ -367,13 +367,24 @@ Memory Value Score（仅报告/横向比较，不替代硬门槛）
 
 | Slice | 内容 | 依赖 | 状态 |
 |-------|------|------|------|
-| E-1a | `ab_runner` + `metrics` 纯函数（四指标可计算） | C-6 已合 | **可开发** |
-| E-1b | `test_e1_ab.py` + `report`（含 §8 统计占位） | E-1a | 可开发 |
+| E-1a | `ab_runner` + `metrics` 纯函数（四指标可计算） | C-6 已合 | ✅ 已合（PR#111） |
+| E-1b | `test_e1_ab.py` + `report`（含 §8 统计占位） | E-1a | ✅ 已实现（本 slice） |
 | E-1c | 时序 step 展开 + `LeadTime` 时间戳；E-1A 3 case 校准 | E-1b | 可开发 |
 | E-1d | `ground_truth.py` + `GroundTruthRecord` 加载；E-1B 数据集采集/标注（独立数据治理任务） | E-1c | E-1B 待治理 |
 
 实现走分支 + `gh pr` + 文件集复核（仓库铁律）；`ab_runner`/`metrics` 纯函数进 CI。
 E-1A 产出：`e1_report.json` + `e1_report.md`。
+
+**E-1b 落地补充**（与 §7 / §8 的实现约定）：
+
+- CLI 入口 `python -m home_perception.memory.evaluation --fixtures <dir> --out <dir>`，
+  **Hard Gate 失败 → 退出码 1**，可直接作 CI gate；产出默认写 `artifacts/e1/`（已 gitignore，可再生成）。
+- Early Detection 在 E-1A 为 `N/A`：该 term **从 Score 中剔除**，剩余三 term 按原比例重归一化
+  （`0.40 / 0.20 / 0.10 → ÷ 0.70`），报告标记 `partial=true`、`calibrated=false`。
+  **不得用 0 分冒充「无提前量」**——「未测量」与「无提前量」是两回事。
+- §8.1 统计量用 **t 区间 + 内置临界值表**（零依赖、确定性、可单测）；Wilcoxon signed-rank 留待 E-1B。
+- E-1A 实测：Hard Gate **3/3 通过**，但 FN 配对 Δ 的 95% CI 为 `[-0.101, 2.768]`（**跨 0**），
+  如实印证 §9「CI 整体正向」只能由 E-1B 满足——小样本下 Hard Gate 通过 **≠** 统计显著。
 
 ---
 

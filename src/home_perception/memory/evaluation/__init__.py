@@ -1,8 +1,9 @@
 """E-1 Memory Value Evaluation harness（DESIGN-memory-evaluation.md）。
 
 E-1a 落地：``ab_runner``（A/B 两臂执行）+ ``metrics``（四指标纯函数）+ ``ground_truth``
-（GroundTruthRecord + E-1A 注册表）。报告 / 统计汇总（E-1b）、时序 LeadTime 计算（E-1c）、
-E-1B 数据集治理（E-1d）后续 slice。
+（GroundTruthRecord + E-1A 注册表）。
+E-1b 落地：``report``（§8.1 统计汇总 + §8.2 Memory Value Score + ``e1_report.json/md`` 产出）。
+时序 LeadTime 计算（E-1c）、E-1B 数据集治理（E-1d）为后续 slice。
 """
 
 from home_perception.memory.evaluation.ab_runner import (
@@ -21,6 +22,7 @@ from home_perception.memory.evaluation.metrics import (
     EarlyDetectionResult,
     compute_lead_time,
     evaluate_case,
+    fp_severity_excess,
     hint_severity,
     metric_fn,
     metric_fp,
@@ -28,16 +30,43 @@ from home_perception.memory.evaluation.metrics import (
     metric_q2_historical_reference,
     metric_q3_pattern_grounding,
 )
+from home_perception.memory.evaluation.report import (
+    E1Report,
+    HardGateSummary,
+    MemoryValueScore,
+    ScoreTerms,
+    StatSummary,
+    build_report,
+    compute_memory_value_score,
+    compute_score_terms,
+    evaluate_dataset,
+    render_markdown,
+    report_to_dict,
+    run_e1a_report,
+    summarize,
+    summarize_hard_gate,
+    write_report,
+)
 
 __all__ = [
     "ABRun",
     "CaseEvaluation",
+    "E1Report",
     "EarlyDetectionResult",
     "GroundTruthRecord",
+    "HardGateSummary",
+    "MemoryValueScore",
+    "ScoreTerms",
+    "StatSummary",
     "build_baseline_input",
+    "build_report",
     "compute_lead_time",
+    "compute_memory_value_score",
+    "compute_score_terms",
     "e1a_case_ids",
     "evaluate_case",
+    "evaluate_dataset",
+    "fp_severity_excess",
     "get_ground_truth",
     "hint_severity",
     "metric_fn",
@@ -45,6 +74,12 @@ __all__ = [
     "metric_q1_grounded_gain",
     "metric_q2_historical_reference",
     "metric_q3_pattern_grounding",
+    "render_markdown",
+    "report_to_dict",
     "run_ab_case",
     "run_ab_dataset",
+    "run_e1a_report",
+    "summarize",
+    "summarize_hard_gate",
+    "write_report",
 ]

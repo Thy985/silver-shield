@@ -134,17 +134,33 @@ def metric_q3_pattern_grounding(result_m: ReasoningResult) -> bool:
 # ---------------------------------------------------------------------------
 # FP — False Positive（不恶化约束，§4.2）
 # ---------------------------------------------------------------------------
+def acceptable_upper(gt: GroundTruthRecord) -> int:
+    """Ground Truth 可接受 hint 的严重度上限；未标注 → 0（仅允许 ``None``，最严）。"""
+    if not gt.acceptable_hint:
+        return 0
+    return max(hint_severity(h) for h in gt.acceptable_hint)
+
+
 def metric_fp(
     result_m: ReasoningResult,
     result_b: ReasoningResult,
     gt: GroundTruthRecord,
 ) -> bool:
     """两臂 hint 均不超过 Ground Truth 可接受上限（对照 GT，非两臂差值）。"""
-    upper = max(hint_severity(h) for h in gt.acceptable_hint)
+    upper = acceptable_upper(gt)
     return (
         hint_severity(result_m.suggested_action_hint) <= upper
         and hint_severity(result_b.suggested_action_hint) <= upper
     )
+
+
+def fp_severity_excess(result_m: ReasoningResult, gt: GroundTruthRecord) -> int:
+    """Memory 臂 hint 超出 GT 上限的严重度差（§8.2 ``FP_term`` 输入）；未超 → 0。
+
+    与 ``metric_fp`` 的布尔判定互补：布尔进 Hard Gate（§9），本函数给 Score 提供
+    可折扣的连续量，避免报告层反查 Ground Truth。
+    """
+    return max(0, hint_severity(result_m.suggested_action_hint) - acceptable_upper(gt))
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +304,8 @@ class CaseEvaluation:
     early_detection: EarlyDetectionResult
     hard_gate_pass: bool
     notes: tuple[str, ...]
+    # Memory 臂 hint 超出 GT 上限的严重度差（§8.2 FP_term 输入；Hard Gate 只看 fp 布尔）
+    fp_excess: int = 0
 
 
 def evaluate_case(
@@ -323,6 +341,7 @@ def evaluate_case(
         early_detection=ed,
         hard_gate_pass=hard_gate_pass,
         notes=notes,
+        fp_excess=fp_severity_excess(result_m, gt),
     )
 
 
@@ -330,8 +349,10 @@ __all__ = [
     "HINT_SEVERITY",
     "CaseEvaluation",
     "EarlyDetectionResult",
+    "acceptable_upper",
     "compute_lead_time",
     "evaluate_case",
+    "fp_severity_excess",
     "hint_severity",
     "metric_fn",
     "metric_fp",
