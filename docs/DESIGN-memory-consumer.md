@@ -1,6 +1,6 @@
 # DESIGN-memory-consumer.md · Memory Consumer Layer 工程落地方案
 
-- **状态**：Partial（C-0/C-1/C-2/C-3 已合，C-4 实现完成待合并 PR#106，C-5 待实现）
+- **状态**：Partial（C-0/C-1/C-2/C-3/C-4 已合，C-5 实现完成待合并 PR#107）
 - **日期**：2026-08-02
 - **承接**：ADR-0025（Memory Consumer Architecture，Accepted）
 - **前置 ADR**：ADR-0024（Memory 架构，定义"存储过去"）/ ADR-0021（实时风险流）/ ADR-0023（身份连续性）/ ADR-0010（DecisionPolicy）/ ADR-0022（Evidence Chain）
@@ -317,7 +317,7 @@ class MemoryConsumer:
 | **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档（cold_start→weak_pattern→stable_pattern）；C1 无 score；**信任 Retrieval 已边界化输入（100 条 / 30d 由 `RetrievalConfig` 施加），不重复裁剪窗口**（越界记录已在召回阶段过滤）；混合访客输入显式抛 `AggregationError`；升级模式仅当唯一非空行为标记 >= 2 |
 | **C-3** | `context.py`：组装 `ReasoningInput` | 组装单测：C1 无 score 字段、C5 每项历史带 `source_event_ids` |
 | **C-4** | `orchestrator.py` + `triggers.py`（`MemoryConsumerHook`，新文件，与 `MemoryHook` 并列）：`MemoryConsumer.consume` 接入 pipeline（模式 B 门控） | ✅ 实现完成（PR#106 待合并）：集成单测覆盖三档 `RiskSignal.level`（LOW=不触发 / MEDIUM=触发 / HIGH=触发）+ 已知访客首现（`prior_episode_count>0`）即便 LOW 也触发 + `consumer_enabled=False` 不触发 + **调用次序**（consume 必须在 record 之前）+ **VisitorEvent→CurrentEvent 投影**（`risk_level`=max wins、`markers`=`behavior:` 同口径）+ 消费侧只读零泄漏 |
-| **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | `test_invariants.py` 全绿；monkeypatch 验证 Aggregation 不调 Retrieval |
+| **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | ✅ 实现完成（PR#107 待合并）：`tests/memory/consumer/test_invariants.py` 全绿（15 例）；**跨层调用禁令**以 monkeypatch 验证 `Aggregation.aggregate` 执行期间不调 `Retrieval.retrieve`、`ContextBuilder.build` 执行期间不调 `Retrieval`/`Aggregation`、`consume` 严格各调一次；**replay 一致性**用 `tests/fixtures/memory_replay` 三 case 断言同输入同输出 + 各 case 关键 Memory 价值信号；C1 结构性字段白名单 + C2 store 快照不变/不写 + C4 只标记不解决 + C5 `source_event_ids` 透传 |
 
 每个 Slice 经 `ruff check src tests` + `pytest tests/` 门禁，零回归。工程推进顺序与 M0–M5 阶段映射见 §0.5：**M0（Memory Replay Dataset）优先级最高，须先于 C-1 完成**——没有真实 Memory 数据，C-1~C-5 只是"能跑的空壳"。
 
@@ -470,3 +470,38 @@ C-4 落地时与 §3.4 / §4 叙述存在多处权责与命名分歧，以**已�
    `RuleBasedMemoryConsumer` 并置 `consumer_enabled=True`；两者任一缺失则降级为关闭并
    记 warning，**不抛、不半开**。测试用 `Settings.load().memory.consumer_enabled is False`
    守住默认。
+
+### Errata（2026-08-03，C-5 实施反修）
+
+C-5 落地以**代码权威**为准，相对 §5/§6 叙述有一处刻意偏差需记录，避免后续读者误判为缺口：
+
+1. **replay 一致性测试不与 M0 `expected_reasoning_input.json` 做字节级比对**：
+   §6 写"用 case 做回放，断言同输入同输出"，字面可理解为与 fixture 的 `expected`
+   oracle 精确相等。但该 oracle 由 M0 `ProvisionalContextAssembler`（`replay_layer.py`）
+   生成，其冲突逻辑**仅 behavior_shift**（正常→异常）；而正式 `RuleBasedMemoryConsumer`
+   （C-1..C-4）额外标记 `risk_escalation`（当前风险等级严格高于历史最高）。两者冲突集
+   不同属**预期差异**（生产更严格），故 C-5 的 replay 测试改为断言两件事：
+   (a) **同输入同输出**（同一 case 两次 `consume` 产物 `to_dict()` 逐字段相等，C3 确定性）；
+   (b) **每个 case 证明其"Memory 改变了理解"的关键信号**（case_001 `visitor_profile`
+   `visit_count=5`/`night_visit_ratio=1.0`；case_002 `risk_pattern.tags` 含
+   `escalating_behavior`；case_003 `conflicts` 非空且含 `behavior_shift`，新旧并存）。
+   若未来要用生产 consumer 生成权威 baseline，应在 `tests/fixtures/` 下另存
+   `memory_consumer_baseline.json`（DESIGN §4.3 已规划但 M0 未生成），而非复用 M0 的
+   provisional oracle。
+
+2. **跨层调用禁令以 monkeypatch 直接方法调用边界落地（§6「跨层调用禁令」行）**：
+   组件互不调用是架构硬边界，仅靠注释易在重构时丢失。C-5 用 `monkeypatch` 把
+   `RuleBasedRetrieval.retrieve` / `RuleBasedAggregation.aggregate` 包成计数间谍，在
+   `RuleBasedAggregation.aggregate` 与 `RuleBasedContextBuilder.build` 执行期间断言对方
+   计数不增加 → 若有人在聚合/组装内私加一次 retrieve/aggregate，断言立即红（可变异验证）。
+   同时正向控制断言 `consume` 严格按 `retrieve → aggregate → build` 各调一次。
+
+3. **C1 提升至数据结构铁律（补 §3.9 契约层）**：
+   除 `test_orchestrator.py` 的行为级 C1（产物字段白名单）外，C-5 新增契约级断言——
+   `ReasoningInput` dataclass 的字段集本身不含 `risk_score`/`score`/`decision`/`warning`/
+   `recommended_action`（共 7 字段固定）。即便未来有人误加字段，结构断言直接红，把
+   "Consumer 不决策"从运行期产物提升为类型结构约束。
+
+4. **C2 新增"store 写方法不被调用"断言**：除 `test_orchestrator.py` 的记录逐字段不变
+   外，C-5 以 monkeypatch 把 `InMemoryStore.upsert_episodic` 替换为计数器，断言 `consume`
+   全程不触发任何 store 写（只读铁律的双向覆盖：输入不变 + 无新增写入）。
