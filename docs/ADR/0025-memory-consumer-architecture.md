@@ -541,7 +541,9 @@ Memory Integration Closure 完成前做 Consumer 没有可消费的 Memory；完
 | C-3 | 上下文组装 `RuleBasedContextBuilder` | ✅ 已合（PR#105） |
 | C-4 | 编排器 + 运行时门控 `MemoryConsumerHook` | ✅ 已合（PR#106） |
 | C-5 | 不变量全量 + replay 一致性 + 跨层调用禁令 | ✅ 已合（PR#107） |
-| C-6 | **Reasoning Engine 接入**（本 PR 待合并） | 🟡 Shadow 接线：`ReasoningEngine` ABC + `RuleBasedReasoningEngine` 参考实现，经 `MemoryConsumerHook.maybe_reason` + `PerceptionPipeline.process_frame` 接入主链路，结果写入 `FrameResult.reasoning_results`；默认由 `config.memory.reasoning_enabled = False` 关闭，**零泄漏、不影响主链路** |
+| C-6 | **Reasoning Engine 接入** | ✅ 已合（PR#108）：Shadow 接线：`ReasoningEngine` ABC + `RuleBasedReasoningEngine` 参考实现，经 `MemoryConsumerHook.maybe_reason` + `PerceptionPipeline.process_frame` 接入主链路，结果写入 `FrameResult.reasoning_results`；默认由 `config.memory.reasoning_enabled = False` 关闭，**零泄漏、不影响主链路** |
+
+| E-1 | **Memory Value Evaluation**（设计稿已按评审增强 6 项，未实现） | 🟡 A/B 对照 Baseline(空历史 ReasoningInput) vs Memory(完整 M0 链路)，唯一变量=HistoricalContext；四指标（Q3=Pattern Grounding / FP 非决策 / FN 权重最高 / Early Detection 含 LeadTime）+ GroundTruthRecord + E-1A(3 case)/E-1B(20~50 真实 CCTV) + Memory Value Score 加权(FN40/Early30/Expl20/FP10)；作为 Phase 2 决策增强之前的**价值证明 gate**；见 `DESIGN-memory-evaluation.md` |
 
 **Phase 2（决策增强，推后）**：把 `ReasoningResult` 汇入 `DecisionPolicy`（`DecisionContext.extra` 已预留 seam）属 Phase 2，触碰 ADR-0010 单一决策中心，C-6 **不实现**，待独立评审。
 
