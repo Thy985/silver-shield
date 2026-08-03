@@ -1,9 +1,9 @@
 # DESIGN-memory-evaluation.md — Memory Value Evaluation (E-1)
 
-> **状态**：Implementation Ready（2026-08-03 Owner 两轮评审通过；E-1A 可开发，E-1B 待数据治理）
+> **状态**：Implementation Ready（2026-08-03 Owner 评审通过；E-1A 可开发，E-1B 待数据治理；Early Detection 指标已定义、计算推迟 E-1B）
 > **归属**：ADR-0025 Phase 1 收口后的 Evaluation Gate；位于「Consumer 接入」与「Phase 2 决策增强」之间
 > **作者**：silver-shield / Memory Consumer 工作组
-> **最后修订**：2026-08-03（两轮 Owner 评审：6 项增强 + 3 项冻结点，见 Appendix A / B）
+> **最后修订**：2026-08-03（三轮评审：6 增强 + 3 冻结点 + 6 项契约修订，见 Appendix A / B / C）
 
 ---
 
@@ -118,42 +118,60 @@ Baseline 臂**不是**另一套模型，而是同一引擎喂**空历史** `Reas
 判定 Memory 臂是否给出**有历史依据**的解释。
 
 - **Q1 — Grounded Finding Gain（有效新增发现）**：Memory 臂相对 Baseline 臂**新增**的 finding 必须**同时**满足：
-  (a) 其 `source_refs` 至少一条指向历史（`historical_context` 的 `source_event_ids`，C5 透传）；
+  (a) 其 `source_refs` 至少一条 `source == "historical_context"` 且 `ref` 为某条历史 `EpisodicRecord.record_id`（如 `ep-a001-d1`，前缀 `ep-`，由 C5 透传；注意引擎对历史上下文只锚定 `historical_context[0].record_id`，故 `required_evidence` 中的 record_id 必须取首条历史记录）。
   (b) 命中 `GroundTruthRecord.expected_pattern`（§5）。
   即 `ValidFindingGain = (findings(M) \ findings(B)) ∩ HistoricalGrounded ∩ ExpectedPattern`，且 `|ValidFindingGain| ≥ 1`。
   **仅奖励「有历史依据且命中预期模式」的新增发现**，杜绝「话多式」信息膨胀（Baseline 给 1 条、Memory 给 7 条但无一条历史锚定 → 不通过）。
-- **Q2 — 历史引用（强）**：`ReasoningResult(M).source_refs` 至少引用一条来自 `historical_context` 的 `source_event_ids`（C5 透传），即解释指向具体历史事件。
-- **Q3 — Pattern Grounding（最强，替代原「关键词命中」）**：从文本匹配升级为**结构字段引用**。解释文本必须引用 `ReasoningInput` 中**仅历史侧才存在**的字段值，且这些值在 `current_event` 中不可得：
-  - 具体数值：`night_visit_frequency=5` → 解释出现「过去 30 天出现 5 次夜间访问」；
-  - 历史实体：某 `visitor_id` / 某 `episode_id`（非当前事件）；
-  - 历史语义：`repeat_visit` / `behavior_escalation` / `conflict` 等模式标签，且这些标签**定义在历史字段**而非当前事件。
-  - **反例（不通过）**：仅复读「该访客存在历史行为模式」「历史正常」等无锚点文本（假 grounding，false improvement）。
+- **Q2 — 历史引用（强）**：`ReasoningResult(M).source_refs` 至少一条 `source == "historical_context"`（其 `ref` 为历史 `record_id`，C5 透传），即解释指向具体历史事件（而非仅 `current_event`）。
+- **Q3 — Pattern Grounding（最强，证据链形式，替代原「关键词命中」）**：从「扫描解释文本」升级为**结构化证据链验证**，不与 C-6 当前 `_explain()` 输出冲突（C-6 解释文本为模板化「结合该访客历史画像、识别到风险模式、召回 N 条历史记录…」，**不嵌入具体数值**）。Q3 通过条件（全部满足）：
+  1. `explanation` 非空（契约保证）；
+  2. 存在 ≥1 条**历史锚定** `SourceRef`（`source ∈ {visitor_profile, risk_pattern, historical_context, conflicts, previous_actions}`，即非 `current_event`）；
+  3. 该历史 `SourceRef` 对应的 `findings` 条目**携带具体历史值**——如 `visitor_profile` 的 `detail` 含 `visit_count=5` / `night_visit_ratio=1.0`，或 `risk_pattern` 的 `ref` 为具体标签（如 `escalating_behavior`），或 `historical_context` 的 `ref` 为具体 `record_id`——且该历史概念在 `explanation` 中被提及（如「历史画像」「风险模式」「历史记录」「冲突」等词，而非空洞的「存在历史行为模式」）；
+  4. **反例（不通过）**：仅有 `current_event` 锚点的 finding，或 explanation 仅复述「该访客存在历史行为模式」而无任何可追溯的历史 `SourceRef` / `findings` 值。
+  > Q3 验证的是「Memory evidence → SourceRef → findings(值) → explanation(概念)」可追溯链，证明 Memory 真被消费；它衡量 **grounding 机制**（≥1 条历史锚定），与 Q1 衡量「新增有效发现数（Δ）」**正交，不重复计分**。若未来希望 explanation 文本本身携带数值（更强可读性），属 C-6 增强、单独跟踪，**非 E-1A 前置条件**。
 
 > Q3 接近论文实验中的 **evidence grounded reasoning evaluation**：要求 `Memory evidence → finding/source_refs → explanation` 形成可追溯链，证明 Memory 真被消费，而非「看到字段即输出套话」。
 
 ### 4.2 False Positive（误报，不恶化约束）
 
-语义严重度排序：`MONITOR < NOTIFY_FAMILY < ESCALATE_COMMUNITY`。
+**语义严重度排序（冻结映射，含 `None`）**：
 
-- 基准 case：`case_001`（规律夜间访客，正确 = 温和 `MONITOR`）。
-- 约束：`severity(ReasoningResult(M).suggested_action_hint) ≤ severity(ReasoningResult(B).suggested_action_hint)`。Memory 臂不得因引入历史而错误抬高 hint。
+| `suggested_action_hint` | severity |
+| ----------------------- | -------: |
+| `None`（无提示）        | 0 |
+| `MONITOR`               | 1 |
+| `NOTIFY_FAMILY`         | 2 |
+| `ESCALATE_COMMUNITY`    | 3 |
+
+- **判定改为对照 Ground Truth 可接受范围，而非两臂 hint 差值**：`FP = severity(hint) > severity(max(acceptable_hint))`。Baseline 与 Memory 两臂均须满足 `FP = false`（hint 不超过 `GroundTruthRecord.acceptable_hint` 上限）。
+- **为何不再用 `severity(M) ≤ severity(B)`**：当前 C-6 `_hint()` 由 `current_event.risk_level` 主导（HIGH→`ESCALATE_COMMUNITY`、MEDIUM→`NOTIFY_FAMILY`），两臂 `current_event` 完全相同 → hint **恒等**，差值恒为 0，无法区分 Memory 贡献；且当 Memory 本应**新增** advisory hint（如低危重复访客由 `None`→`MONITOR`）时，「≤」会误判为恶化。对照 GT 上限更准确。
+- **case_001 校准说明**：原设计写「正确 = 温和 `MONITOR`」与引擎不符——`current.json` 风险等级为 `MEDIUM` → 两臂均得 `NOTIFY_FAMILY`（severity 2）。修正：`case_001.acceptable_hint = ["MONITOR", "NOTIFY_FAMILY"]`，Memory 价值体现在 **Q1/Q2/Q3 的历史画像 grounding**，而非 hint 变化。两臂 hint 均为 `NOTIFY_FAMILY`（≤ 上限 2）→ FP 通过。
+- **「无 hint」（`None`）处理**：`None = 0` 为最低严重度，FP 比较中 `None` 不算误报；FN 与 Early Detection 不以 hint 是否 `None` 判定（见 §4.3 / §4.4）。
 - 本指标是**不恶化上限**约束，不以「越低越好」计；FP 在 Memory Value Score 中权重最低（见 §8），因安全系统漏报成本 > 误报成本。
+- **hint 级边际贡献的局限（fixture 校准提示）**：当前 M0 三 case 的 `current.json` 风险等级为 `MEDIUM`/`HIGH`/`HIGH`，使 hint 两臂塌缩、无法体现 Memory 对 hint 的**增量**。若要在 E-1B 验证「Memory 是否改变 advisory hint」，对应 case 应使用一个**本身不触发目标 hint** 的 `current_event`（如 `risk_level = LOW/None`），使 hint 增量来自 Memory 揭示的模式（如 `escalating_behavior`/`conflicts` → `NOTIFY_FAMILY`）。此校准属 E-1B 数据治理范畴。
 
-### 4.3 False Negative（漏报，核心指标）
+### 4.3 False Negative（漏报，核心指标，基于 pattern finding）
 
 Memory 的价值在「提前形成模式」。银龄盾场景诈骗风险通常是**行为序列异常**而非单事件异常。
 
-- 基准 case：`case_002`（行为升级）/ `case_003`（冲突透明）。
-- 定义 `FN`：该给出的 escalation / pattern finding 或高风险 hint **缺失**，或虽给出但**未满足 `required_evidence` 证据锚定**，即为一次漏报。Ground Truth 见 §5（`expected_pattern` + `required_evidence` **双约束**：pattern detection + evidence grounding）。
+- **判定基于「预期模式 finding」而非 hint**（避免两臂 hint 恒等导致塌缩）：`FN = |expected_pattern 中未被 Memory 臂 findings 覆盖且经 required_evidence 锚定的条目|`。
+  - Baseline 臂无历史 → 这些 pattern finding **全缺** → `FN_B = |expected_pattern|`；
+  - Memory 臂补全 → `FN_M` 趋近 0。
+- 单条 `expected_pattern` 视为「已检出」须满足**双约束**（§5 `GroundTruthRecord`）：
+  (a) `findings` 出现该 pattern 的语义条目（如 `risk_pattern.tags` 含 `escalating_behavior`，或 `conflicts` 含 `behavior_shift` 类型）；
+  (b) 该条目有**历史锚定** `SourceRef` 且命中 `required_evidence`（pattern detection + evidence grounding）。
 - 约束：`FN_M < FN_B`，理想 `FN_M = 0`。
 - **FN 是四指标中权重最高项**（见 §8），反映「漏报比误报更危险」。
+- **注**：E-1A 中 hint 两臂恒等，故 FN **不**以 hint 缺失计（hint 缺失 ≠ 漏报）；FN 严格以 pattern finding 缺失计。
 
 ### 4.4 Early Detection（提前发现，含时间戳 Lead Time）
 
-把每个 replay case 沿时间轴展开为**时序 step 序列**，定义「检测事件」为：首个 step 满足 `suggested_action_hint ∈ {ESCALATE_COMMUNITY, NOTIFY_FAMILY}` **或** findings 中出现 escalation 类条目。
+> **E-1A 现状（重要）**：当前 M0 三 case 每个 case 仅含**单个 `current_event` + 历史 `EpisodicRecord`**，**没有时序 step 序列**，也**没有每 step 的两臂检测结果**。因此无法从现有输入推导两个不同的检测时刻，Early Detection **无法在 E-1A 计算**。本指标**定义保留**，但**计算推迟到 E-1B**（其拥有真实 CCTV 时序回放）。E-1A 报告中该指标标记为 `N/A（data-gated → E-1B）`，**不计入 E-1A Hard Gate**。
+
+**指标定义（供 E-1B 实现）**：把每个 replay 沿时间轴展开为**有序 step 序列**，定义「检测事件」为：首个 step 满足 `suggested_action_hint ∈ {ESCALATE_COMMUNITY, NOTIFY_FAMILY}` **或** findings 中出现 escalation / conflict 类条目。
 
 - **Step delta（辅助）**：`Δstep = E_step(B) − E_step(M)`，`Δstep ≥ 0` 表示 Memory 臂不晚于 Baseline。
-- **Lead Time（主指标）**：以**时间戳**为权威单位（现实系统 step 数量不稳定）。
+- **Lead Time（主指标，时间戳权威）**：
   ```
   LeadTime = timestamp(B_detection) − timestamp(M_detection)
   ```
@@ -162,6 +180,24 @@ Memory 的价值在「提前形成模式」。银龄盾场景诈骗风险通常�
   - `LeadTime = 0` → 两臂同时检测（持平）
   - `LeadTime < 0` → Memory 臂更晚检测（退化）
   例：`B=15:00, M=14:30` → `+30min`（提前）；`B=15:00, M=15:20` → `−20min`（退化）。
+
+#### 4.4.1 时序 fixture 契约（E-1B / E-1c 须实现）
+
+为使 Early Detection 可计算，E-1B fixture 须提供有序 step 序列（与 M0 fixture 的「单当前事件」结构不同）：
+
+```
+temporal_case/
+  steps.json          # 有序事件序列，每个 step：
+                      #   { "step": int,
+                      #     "timestamp": ISO8601,
+                      #     "current_event": CurrentEvent,                 # 该 step 的当前事件
+                      #     "reasoning_input": ReasoningInput | null }      # 该 step 的 Memory 臂输入（null=无记忆）
+  ground_truth.json   # 含 expected_detection_step / expected_detection_ts（可选）
+```
+
+- 两臂检测时刻由**同一 harness** 对每个 step 分别构造 Baseline（清空历史）与 Memory 输入、过同一引擎得到；
+- `E_step(B)` / `E_step(M)` = 各自首次检测 step；`timestamp` 取该 step 的 `current_event.occurred_at`；
+- **缺失检测**（某臂始终未触发）→ 该臂 LeadTime 记为最坏（`−∞`，退化），E-1B 报告时剔除或按最坏处理（见 §8 缺失值规则）。
 
 ---
 
@@ -173,11 +209,15 @@ Memory 的价值在「提前形成模式」。银龄盾场景诈骗风险通常�
 {
   "case_id": "case_002",
   "category": "behavior_escalation",
-  "expected_pattern": ["repeat_visit", "behavior_escalation"],
-  "required_evidence": ["episode_id_001", "repeat_visit_count"],
+  "expected_pattern": ["repeated_visit", "behavior_escalation"],
+  "required_evidence": [
+    "historical_context[].record_id = ep-b002-d1",
+    "visitor_profile.visit_count = 3",
+    "risk_pattern.tags = escalating_behavior"
+  ],
   "acceptable_hint": ["NOTIFY_FAMILY", "ESCALATE_COMMUNITY"],
-  "expected_detection_step": 7,
-  "expected_detection_ts": "2026-08-03T02:47:00+08:00"
+  "expected_detection_step": null,
+  "expected_detection_ts": null
 }
 ```
 
@@ -185,10 +225,22 @@ Memory 的价值在「提前形成模式」。银龄盾场景诈骗风险通常�
 |------|------|
 | `case_id` | 关联 replay fixture |
 | `category` | E-1B 分层用 |
-| `expected_pattern` | 期望 Memory 臂识别出的模式标签（FN 的 pattern 判定） |
-| `required_evidence` | **期望被 `source_refs` / explanation 引用的历史证据锚点**（episode id / 计数类字段名等）；FN 还需命中此约束，形成 pattern detection + evidence grounding 双判据，杜绝「无依据的口号式发现」 |
-| `acceptable_hint` | 可接受 hint 白名单（必须 ∈ `RECOMMENDED_ACTION_HINTS`） |
-| `expected_detection_step` / `_ts` | 期望首次检测的 step 与时间戳（Early Detection 对照；可选） |
+| `expected_pattern` | 期望 Memory 臂识别出的模式标签（FN 的 pattern 判定）；须 ∈ `risk_pattern.tags` 或对应 `conflicts.type` 语义 |
+| `required_evidence` | **期望被 `source_refs` / `findings` 引用的历史证据锚点**，采用冻结匹配语法 `<path> = <value>`（见下）；FN 还需命中此约束，形成 pattern detection + evidence grounding 双判据，杜绝「无依据的口号式发现」 |
+| `acceptable_hint` | 可接受 hint 白名单（须 ∈ `RECOMMENDED_ACTION_HINTS`，可含 `null` 表示允许无提示）；FP 上限取其中最高 severity（映射见 §4.2） |
+| `expected_detection_step` / `_ts` | E-1B 用（Early Detection 对照）；E-1A 置 `null` |
+
+**`required_evidence` 匹配语法（冻结）**：每条为 `<path> = <value>`，`<path>` 以 `ReasoningInput` 为根的点路径，`<value>` 为期望具体值：
+
+| `<path>` | 匹配规则（对照 C-6 `SourceRef` 产出） |
+|----------|----------------------------------------|
+| `historical_context[].record_id` | 某 `SourceRef(source="historical_context", ref=<record_id>)`；**引擎仅锚定首条历史** `historical_context[0].record_id`，故须取首条（如 `ep-b002-d1`，前缀 `ep-`） |
+| `visitor_profile.<field>`（`visit_count` / `night_visit_ratio` / …） | 某 `SourceRef(source="visitor_profile")` 且其 `detail` 含 `<field>=<value>`（引擎写 `detail="visit_count=3,night_visit_ratio=0.0,confidence=cold_start"`）；**计数字段经 `detail` 字符串绑定具体值** |
+| `risk_pattern.tags` | 某 `SourceRef(source="risk_pattern", ref=<tag>)`（引擎每个 tag 一条 SourceRef） |
+| `conflicts.type` | 某 `SourceRef(source="conflicts", ref=<type>)` |
+
+- **合法锚点组合**：`SourceRef.source ∈ {visitor_profile, risk_pattern, historical_context, conflicts, previous_actions}`（**不含 `current_event`**）且 `ref` / `detail` 满足上述路径约束。
+- **FN 双判据**：某 `expected_pattern` 条目「已检出」= `findings` 含其语义 **且** 至少一条 `required_evidence` 被对应 `SourceRef` 命中（pattern detection + evidence grounding）。
 
 > Ground Truth 只用于**评测 Memory 臂**（FN / Early Detection 对照）；Baseline 臂作对照基线，不要求命中。
 
@@ -199,7 +251,7 @@ Memory 的价值在「提前形成模式」。银龄盾场景诈骗风险通常�
 ### 6.1 E-1A（3 case，harness 的「unit test」，Implementation Ready）
 
 - 范围：case_001 / case_002 / case_003（复用 M0 replay fixtures）。
-- 目标：验证 harness 端到端跑通、四指标可计算、A/B 变量隔离正确。
+- 目标：验证 harness 端到端跑通、**Explainability(Q1/Q2/Q3) / FP / FN 三指标可计算**、A/B 变量隔离正确；Early Detection 指标定义保留但 **data-gated → E-1B**（无时序数据，见 §4.4）。
 - 通过即证明**机制成立**，但**不构成价值证明**（样本太小，无法排除人工设计偏差 / 规则针对性优化 / overfitting）。
 
 ### 6.2 E-1B（20~50 case，真实 CCTV replay，待数据治理）
@@ -246,7 +298,9 @@ memory/evaluation/
 对每个指标跨 N 个 case 报告：`mean` / `std` / **95% 置信区间**（小样本用 bootstrap 或 t 区间）。
 两臂对比用**配对**口径（同一 case 的 B/M 配对）：报告 `Δ = metric(M) − metric(B)` 的均值与 CI；显著性可用 Wilcoxon signed-rank（小样本、非正态友好），仅作报告、不作硬门槛。
 
-### 8.2 Memory Value Score（加权复合，报告用，**非 gate**）
+### 8.2 Memory Value Score（加权复合，报告用，**非 gate**，E-1B 前未标定）
+
+四 term 各自归一化到 `[0, 1]`，**独立不重复计权**：
 
 ```
 Memory Value Score = 0.40 × FN_term
@@ -256,10 +310,21 @@ Memory Value Score = 0.40 × FN_term
 ```
 
 权重依据：安全系统 **漏报成本 > 误报成本**，故 FN（40%）与 Early Detection（30%）主导，Explanation（20%）次之，FP（10%）最末。
-- `FN_term`：FN 降低比例越高越接近 1；`EarlyDetection_term`：`LeadTime(M)` 越早越接近 1；
-- `Explanation_term`：Q1(Grounded)∧Q2∧Q3 命中比例；`FP_term`：不恶化为 1，恶化按严重度折扣。
 
-> **Score ≥ 阈值（待 E-1B 标定）即判定「Memory 确实提高理解」，仅用于报告与横向比较不同 Memory 方案。**
+- **`FN_term`**（输入域 = FN 计数；`clamp(x,0,1)`）：
+  `FN_term = clamp( (FN_B − FN_M) / max(FN_B, 1), 0, 1 )`。
+  `FN_B=0 ∧ FN_M=0` → `0`（无信息，中性）；`FN_M < FN_B` → 正向；`FN_M > FN_B` → 截 0。
+- **`EarlyDetection_term`**（输入域 = LeadTime 分钟；缺失检测 → 最坏）：
+  设 `W = 60`（标定窗口，分钟，E-1B 标定）；`LeadTime_min` 为 M 臂相对 B 臂提前分钟数（负=退化）。
+  `EarlyDetection_term = clamp( LeadTime_min / W, 0, 1 )`；M 臂未检测（缺失）→ `0`。
+- **`Explanation_term`**（输入域 = Q2∧Q3 通过比例，**不含 Q1** 以免与 FN_term 重叠）：
+  每 case `e = (Q2_pass ? 0.5 : 0) + (Q3_pass ? 0.5 : 0)`；`Explanation_term = mean(e over cases)`。
+- **`FP_term`**（输入域 = 严重度折扣）：
+  `FP_term = 1 − max(0, severity(M_hint) − severity(upper(acceptable_hint))) / 3`；两臂均未超上限 → `1`；超出按严重度差折扣到 0。
+- **缺失值**：E-1A 中 `EarlyDetection_term` 因无时序数据不参与（报告标记 `N/A`）；其余 term 按上计算。
+- **聚合**：跨 N case 取 mean；E-1B 加 `std` / 95% CI（bootstrap，见 §8.1）。
+
+> Score **仅用于报告与横向比较不同 Memory 方案**，绝不替代 §9 Hard Gate；E-1B 前阈值未标定，不得据 Score 判定「Memory 有用」。`Explanation_term` 已不含 Q1，避免与 `FN_term`（含 grounded gain 精神）重复计权。
 
 ---
 
@@ -279,9 +344,9 @@ Memory Value Score（仅报告/横向比较，不替代硬门槛）
 ### E-1A（3 case）通过条件（全部满足）
 
 1. Explanation Quality：Q1(Grounded)∧Q2∧Q3 三子判据全过（3/3）；
-2. False Positive：不恶化约束满足（`severity(M) ≤ severity(B)`）；
-3. False Negative：`FN_M < FN_B`，理想 `FN_M = 0`；
-4. Early Detection：`E_step(M) ≤ E_step(B)` 且 `LeadTime(M) ≥ 0`（Memory 臂不晚于 Baseline；`>0` 提前，`=0` 持平，`<0` 退化不通过）。
+2. False Positive：两臂 hint 均 `≤ acceptable_hint` 上限（对照 Ground Truth，非两臂差值；映射见 §4.2）；
+3. False Negative：`FN_M < FN_B`（基于 pattern finding，非 hint），理想 `FN_M = 0`；
+4. Early Detection：**E-1A 不计算**（无时序数据），标记 `N/A（→ E-1B）`，**不计入 Hard Gate**（指标定义与 fixture 契约见 §4.4 / §4.4.1）。
 
 ### E-1B（20~50 case）额外要求
 
@@ -339,3 +404,18 @@ Owner 判定 E-1A **Implementation Ready**、E-1B 需先数据治理，并冻结
 
 第二轮评分：架构边界 9.5/10 · 实验 9/10 · CI 9.5/10 · 科研 8.5/10 · 工程 9/10。
 补充明确：Hard Gate（FN/FP/grounding）**先于** Memory Value Score，Score 仅报告/横向比较，绝不反向替代硬门槛（§7/§9）。
+
+## Appendix C. 第三轮契约修订（2026-08-03，Owner 代码级审查）
+
+Owner 对「Implementation Ready」做契约级复核，指出 6 处会使 E-1A **无法落地**的缺口；本次全部修订（均基于真实 `EpisodicRecord` / `ReasoningInput` / `SourceRef` / `RuleBasedReasoningEngine` 字段核对）：
+
+| # | 严重度 | 位置 | 问题 | 修订 |
+|---|--------|------|------|------|
+| 1 | 高 | §4.4 / §4.4.1 / §9 | Early Detection 无时序数据基础（M0 单当前事件，无 step 序列/每 step 检测） | 计算**推迟 E-1B**；保留指标定义；新增 §4.4.1 时序 fixture 契约；移出 E-1A Hard Gate（标 `N/A`） |
+| 2 | 高 | §5 `required_evidence` | 引用不存在字段（`episode_id_001` / `repeat_visit_count`） | 改用真实路径：`historical_context[].record_id=ep-...` / `visitor_profile.visit_count=n` / `risk_pattern.tags=tag`；冻结 `<path>=<value>` 匹配语法 + SourceRef 锚点规则 + 计数字段经 `detail` 绑定 |
+| 3 | 高 | §4.1 Q3 | 要求扫描 explanation 文本，但 C-6 `_explain()` 为模板化无具体值 → 结构性失败 | 改 Q3 为**证据链验证**（SourceRef→findings(值)→explanation(概念)），不与 C-6 冲突；明确不重复计 Q1 |
+| 4 | 中 | §4.2 / §4.3 / §6.1 | 三 case hint 两臂塌缩（`_hint` 由 `current_event.risk_level` 主导）；case_001「正确=MONITOR」与引擎冲突 | FP 改对照 GT 上限（非两臂差值）；FN 改基于 pattern finding（非 hint）；修正 case_001 校准；加 fixture 校准提示 |
+| 5 | 中 | §8.2 | Score 各项归一化/缺失值未定义；Q1 与 Explanation_term 重复计权 | 定义 FN/Early/Expl/FP 四 term 输入域、归一化函数、缺失值处理；`Explanation_term = Q2∧Q3`（不含 Q1）；标注 E-1B 前未标定 |
+| 6 | 低 | §4.2 | FP 严重度未定义 `None` 排序 | 冻结映射 `None=0, MONITOR=1, NOTIFY_FAMILY=2, ESCALATE_COMMUNITY=3`；明确 `None` 在 FP/FN/Early Detection 中的处理 |
+
+本次修订后，E-1A 可在**现有 M0 fixtures + 当前 C-6 引擎**上直接计算 Explainability(Q1/Q2/Q3) / FP / FN 三指标；Early Detection 与 hint 级边际贡献留待 E-1B（需时序/校准数据）。
