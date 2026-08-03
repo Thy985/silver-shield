@@ -774,7 +774,12 @@
         mergeCommands(state.routed);   // 跨帧累积三端命令，供区域④按 warning_id 联动
         ingestBehavior(msg.view, activeNow);  // 累积访客行为里程碑（区域② 行为演化）
         ingestRiskSignals(msg.view);          // ADR-0021 Phase 1 · 实时风险信号（区域③.5）
-        state.memoryProfiles = (msg.view && msg.view.memory_profiles) || [];  // 区域⑥ Memory Context
+        // 区域⑥ Memory Context：服务端已粘性持有（空帧不清空）；前端仅在收到非空时覆盖，
+        // 作防御层，避免任何意外空帧把面板清空（方案1）。
+        var incomingMem = (msg.view && msg.view.memory_profiles) || [];
+        if (incomingMem.length > 0) {
+          state.memoryProfiles = incomingMem;
+        }
         renderAll();
       } else if (msg.type === "snapshot") {
         applySnapshot(msg);            // P0-11.3.5 晚连恢复历史状态
@@ -885,6 +890,7 @@
       state.visitorSeqN = 0;
       state.visitorFirst = {};
       state.riskSignalMap = new Map();   // ADR-0021 Phase 1 · 清空实时风险卡（新会话）
+      state.memoryProfiles = [];          // 区域⑥ Memory Context：新会话清空粘性画像
       // 清空视频帧与各区
       $("video-img").style.display = "none";
       $("video-ph").style.display = "block";
