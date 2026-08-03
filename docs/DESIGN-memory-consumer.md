@@ -1,7 +1,7 @@
 # DESIGN-memory-consumer.md · Memory Consumer Layer 工程落地方案
 
-- **状态**：Partial（C-0/C-1/C-2/C-3/C-4 已合，C-5 实现完成待合并 PR#107）
-- **日期**：2026-08-02
+- **状态**：Partial（C-0~C-6 已合；C-6=Reasoning Engine 接入，本 PR 待合并；**决策增强 = Phase 2 推后**，不在此 PR 范围）
+- **日期**：2026-08-02（C-0~C-5）/ 2026-08-03（C-6）
 - **承接**：ADR-0025（Memory Consumer Architecture，Accepted）
 - **前置 ADR**：ADR-0024（Memory 架构，定义"存储过去"）/ ADR-0021（实时风险流）/ ADR-0023（身份连续性）/ ADR-0010（DecisionPolicy）/ ADR-0022（Evidence Chain）
 
@@ -31,7 +31,14 @@
 - ✅ 实现四组件（Retrieval / Aggregation / Context Builder / Reasoning Interface 交付边界）+ 编排 + 触发接入（模式 B，修订见 §4.1）。
 - ✅ 三数据契约（`ReasoningInput` / `ReasoningResult` / `DecisionRequest`）的字段具体化。
 - ✅ 不变量 C1–C5 的测试覆盖。
-- ❌ 不实现推理算法（规则 v2 / LLM v2 / Agent）——那是 Phase 5 Reasoning ADR 的事；本方案只定义 `ReasoningEngine.infer` 的**签名**。
+- ✅ **C-6 实现规则参考推理引擎**（`RuleBasedReasoningEngine`，消费 `ReasoningInput` →
+  产出 `ReasoningResult`）：只读、确定性、非分数、非决策（见 §4.3 / Errata C-6）。
+- ✅ C-6 把 `ReasoningResult` 经 `FrameResult.reasoning_results` 做 **Shadow 观测**（默认关闭）。
+- ⚠️ **决策增强（Context → Inference → Decision 闭环）刻意推后到 Phase 2**（ADR-0010
+  单一决策中心边界）：C-6 的 `ReasoningResult` **不**被喂回 `DecisionPolicy`，只暴露、不回流。
+  是否用其增强决策归 Phase 2 独立评审，不在本 PR。
+- ❌ 不实现**真实**推理算法（规则 v2 / LLM v2 / Agent）——那是 Phase 5 Reasoning ADR 的事；
+  C-6 仅落地一个确定性的**规则参考推理**默认实现（可被未来 `ReasoningEngine` 替换）。
 - ❌ 不实现写侧 Semantic Aggregator（Stage G/H，ADR-0024 推迟）——Aggregation 只做读侧组合。
 - ❌ 不引入 LLM。
 
@@ -105,7 +112,8 @@ src/home_perception/memory/consumer/
    retrieval.py       # RuleBasedRetrieval 默认实现（只召回）
    aggregation.py     # RuleBasedAggregation 默认实现（只计算）
    context.py         # ReasoningInput 组装（只组装）
-   triggers.py        # MemoryConsumerHook：模式 B 触发接入（门控 + 容错）
+   reasoning.py       # RuleBasedReasoningEngine 默认参考推理（C-6，消费 ReasoningInput → ReasoningResult）
+   triggers.py        # MemoryConsumerHook：模式 B 触发接入（门控 + 容错，含 maybe_reason 推理接入）
    exceptions.py      # ConsumerError / RetrievalError / AggregationError / BelowThresholdError
 tests/home_perception/memory/consumer/
    test_contracts.py
@@ -139,16 +147,24 @@ tests/home_perception/memory/consumer/
 
 > ⚠ **身份确认标记（对齐 ADR-0023）**：`VisitorProfile` 必须含 `identity_confirmed: bool` 字段；v1 临时画像该字段恒为 `False`（未确认身份），Reasoning 不得把临时画像当作真实身份画像使用。这是 C1/C5 之外的强制约束。
 
-### 2.2 `ReasoningResult`（Reasoning Engine 输出 —— 本方案只定义签名）
+### 2.2 `ReasoningResult`（Reasoning Engine 输出 —— C-6 已实现）
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `findings` | `list[Finding]` | ✅ | 推理发现（如"该访客近 30 天夜间到访占比异常升高"） |
+| `findings` | `tuple[str, ...]` | ✅ | 推理发现（人类可读，如"访客 X 历史到访 5 次，夜间到访占比 100%"） |
 | `explanation` | `str` | ✅ | 可解释说明（继承 ADR-0024 Trust Layer） |
-| `suggested_action_hint` | `ActionType \| None` | 否 | **非绑定**建议，仅供 Decision 参考，非决策 |
-| `source_refs` | `list[SourceRef]` | ✅ | 回溯到 `ReasoningInput` 的具体字段 |
+| `suggested_action_hint` | `str \| None` | 否 | **非绑定**建议，词汇同 `WarningEvent.recommended_action`：`MONITOR` / `NOTIFY_FAMILY` / `ESCALATE_COMMUNITY`；仅供观测 / 未来决策增强参考，**非决策** |
+| `source_refs` | `tuple[SourceRef, ...]` | ✅（可空） | 每项发现回溯到 `ReasoningInput` 的具体字段（`SourceRef.source` = 字段名，`ref` = 该字段内具体 id/键，`detail` = 人类可读说明） |
 
-**硬约束**：`ReasoningResult` **不是分数、不是决策**；`suggested_action_hint` 只是提示，最终是否采用由 ADR-0010 DecisionPolicy 决定。
+**硬约束（C1，ADR-0010 单一决策中心）**：`ReasoningResult` dataclass **不存在** `risk_score` /
+`score` / `decision` / `warning` / `recommended_action` 字段（与 `ReasoningInput` 同款铁律，
+由 `test_reasoning.py::TestContractC1NoScore` 以字段白名单断言兜底）。`suggested_action_hint`
+只是提示，最终是否采用由 ADR-0010 DecisionPolicy 决定；**C-6 阶段该 hint 未被喂回决策**
+（仅经 `FrameResult.reasoning_results` Shadow 暴露）。
+
+> `SourceRef`（`source: str` / `ref: str | None` / `detail: str | None`）是 C-6 新增的溯源
+> 引用类型，供 ADR-0024 I4 可解释性 / C5 溯源：每条 finding 都能追到"它从 ReasoningInput
+> 的哪个字段、哪个具体对象来"。
 
 ### 2.3 `DecisionRequest`（Decision 层输入 —— 由 DecisionPolicy 派生）
 
@@ -306,6 +322,33 @@ class MemoryConsumer:
 
 **生命周期不变量（承接 ADR-0025 §3.10）**：`consume` 仅在触发时物化 `ReasoningInput`；**无跨请求状态**（无会话、无"当前画像"缓存），保证 C2（只读）+ 无副作用 + 可复现。
 
+### 4.3 Reasoning Engine 接入（C-6，默认关闭）
+
+**接入点**：`runtime/memory_consumer_hook.py` 的 `MemoryConsumerHook.maybe_reason(input)`，
+与 `maybe_consume` 并列。`pipeline.process_frame` 在访客循环内、`maybe_consume` 产出
+`ReasoningInput` 后调用 `maybe_reason`，把结果收集进 `FrameResult.reasoning_results`。
+
+**开关**：`memory.reasoning_enabled`（默认 `false`）——仅当 `consumer_enabled` **且**
+`reasoning_enabled` 同时为真时，`from_settings` 才构造 `RuleBasedReasoningEngine` 并注入
+Hook。缺 `MemoryStore` / 缺 `consumer` 时降级为关闭并记 warning（不崩、不半开）。关闭时
+`maybe_reason` 立即返回 `None`，零运行时开销。
+
+**硬边界（ADR-0010 单一决策中心 / ADR-0025 C1）**：
+- `ReasoningResult` **不**被喂回 `DecisionPolicy`——本阶段只经 `FrameResult.reasoning_results`
+  做 Shadow 观测（Dashboard / 审计展示"记忆如何反哺理解"），不产 Warning、不改 Risk Score。
+- `RuleBasedReasoningEngine.infer` 是纯函数：只读 `ReasoningInput`、只产参考结论、不写任何
+  外部状态（C2）；同输入两次产出字段级一致（C3）。
+- `suggested_action_hint` 仅把已观测模式翻译成与 `DecisionPolicy` 同词汇的**非绑定**提示
+  （`MONITOR` / `NOTIFY_FAMILY` / `ESCALATE_COMMUNITY`），绝不提升或设定风险等级。
+
+**非阻塞**：`maybe_reason` 与 `maybe_consume` 同款容错语义——推理抛任何异常（含
+`ReasoningError`）只计 `consumer_errors` + 日志，返回 `None`，绝不中断实时风险主链路。
+指标独立记录在 Hook 的 `ConsumerMetrics`（`consumer_reasoned` 计数成功推理次数）。
+
+> 决策增强（Context → Inference → Decision 闭环）**不在本 PR**：那是 ADR-0025 Phase 2，
+> 触碰 ADR-0010 `DecisionPolicy` 的注入点（`DecisionContext.extra` 已预留）。C-6 只把
+> "推理产物"暴露出来，为 Phase 2 提供可观测的 seam。
+
 ---
 
 ## 5. Slices / 里程碑（DoD）
@@ -317,7 +360,8 @@ class MemoryConsumer:
 | **C-2** | `aggregation.py`：读侧聚合 + 置信度分级（cold_start / weak_pattern / stable_pattern） | 聚合单测：三档均产出 `VisitorProfile` 且进 `ReasoningInput`；`confidence` 随样本量升档（cold_start→weak_pattern→stable_pattern）；C1 无 score；**信任 Retrieval 已边界化输入（100 条 / 30d 由 `RetrievalConfig` 施加），不重复裁剪窗口**（越界记录已在召回阶段过滤）；混合访客输入显式抛 `AggregationError`；升级模式仅当唯一非空行为标记 >= 2 |
 | **C-3** | `context.py`：组装 `ReasoningInput` | 组装单测：C1 无 score 字段、C5 每项历史带 `source_event_ids` |
 | **C-4** | `orchestrator.py` + `triggers.py`（`MemoryConsumerHook`，新文件，与 `MemoryHook` 并列）：`MemoryConsumer.consume` 接入 pipeline（模式 B 门控） | ✅ 实现完成（PR#106 待合并）：集成单测覆盖三档 `RiskSignal.level`（LOW=不触发 / MEDIUM=触发 / HIGH=触发）+ 已知访客首现（`prior_episode_count>0`）即便 LOW 也触发 + `consumer_enabled=False` 不触发 + **调用次序**（consume 必须在 record 之前）+ **VisitorEvent→CurrentEvent 投影**（`risk_level`=max wins、`markers`=`behavior:` 同口径）+ 消费侧只读零泄漏 |
-| **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | ✅ 实现完成（PR#107 待合并）：`tests/memory/consumer/test_invariants.py` 全绿（15 例）；**跨层调用禁令**以 monkeypatch 验证 `Aggregation.aggregate` 执行期间不调 `Retrieval.retrieve`、`ContextBuilder.build` 执行期间不调 `Retrieval`/`Aggregation`、`consume` 严格各调一次；**replay 一致性**用 `tests/fixtures/memory_replay` 三 case 断言同输入同输出 + 各 case 关键 Memory 价值信号；C1 结构性字段白名单 + C2 store 快照不变/不写 + C4 只标记不解决 + C5 `source_event_ids` 透传 |
+| **C-5** | 不变量 C1–C5 全量 + replay 风格一致性 + 跨层调用禁令测试 | ✅ 已合（PR#107）：`tests/memory/consumer/test_invariants.py` 全绿（15 例）；**跨层调用禁令**以 monkeypatch 验证 `Aggregation.aggregate` 执行期间不调 `Retrieval.retrieve`、`ContextBuilder.build` 执行期间不调 `Retrieval`/`Aggregation`、`consume` 严格各调一次；**replay 一致性**用 `tests/fixtures/memory_replay` 三 case 断言同输入同输出 + 各 case 关键 Memory 价值信号；C1 结构性字段白名单 + C2 store 快照不变/不写 + C4 只标记不解决 + C5 `source_event_ids` 透传 |
+| **C-6** | Reasoning Engine 接入（`RuleBasedReasoningEngine` + `maybe_reason` + `FrameResult.reasoning_results` + `reasoning_enabled` 开关） | ✅ 实现完成（本 PR 待合并）：`reasoning.py` 落 `RuleBasedReasoningEngine`（只读、确定性、非分数、非决策）；`MemoryConsumerHook.maybe_reason` 隔离推理失败；`pipeline` 经 `FrameResult.reasoning_results` Shadow 暴露；`MemoryConfig.reasoning_enabled` 默认关闭。**决策增强（Context→Inference→Decision 闭环）刻意推后到 Phase 2**（ADR-0010 边界），`ReasoningResult` 不喂回 `DecisionPolicy`；`tests/memory/consumer/test_reasoning.py` 覆盖 C1 无 score / C2 只读 / C3 确定性 / hint 对齐 |
 
 每个 Slice 经 `ruff check src tests` + `pytest tests/` 门禁，零回归。工程推进顺序与 M0–M5 阶段映射见 §0.5：**M0（Memory Replay Dataset）优先级最高，须先于 C-1 完成**——没有真实 Memory 数据，C-1~C-5 只是"能跑的空壳"。
 
@@ -363,7 +407,12 @@ class MemoryConsumer:
 
 ## 9. 后续
 
-- Reasoning Engine（规则 v2 / LLM v2 / Agent）落地时，直接消费 `ReasoningInput`、产出 `ReasoningResult`，归其独立 ADR（Phase 5）。
+- **Phase 2 决策增强（Context → Inference → Decision 闭环）**：本 PR（C-6）刻意只做 Shadow
+  观测，`ReasoningResult` 未喂回 `DecisionPolicy`。下一步在 ADR-0010 `DecisionContext.extra`
+  注入点接入（v2 增强），需 Owner 评审决策边界，不破坏单决策中心。
+- Reasoning Engine **真实**算法（规则 v2 / LLM v2 / Agent）落地时，直接替换 `ReasoningEngine`
+  实现、消费 `ReasoningInput`、产出 `ReasoningResult`，归其独立 ADR（Phase 5）；C-6 的
+  `RuleBasedReasoningEngine` 仅为确定性参考推理默认实现。
 - 模式 C（离线 Semantic Profile 预计算）接 ADR-0024 Stage G/H。
 - 冲突解决策略（覆盖 / 衰减 / 版本化）归未来 Memory Consistency Policy ADR。
 
@@ -505,3 +554,36 @@ C-5 落地以**代码权威**为准，相对 §5/§6 叙述有一处刻意偏差
 4. **C2 新增"store 写方法不被调用"断言**：除 `test_orchestrator.py` 的记录逐字段不变
    外，C-5 以 monkeypatch 把 `InMemoryStore.upsert_episodic` 替换为计数器，断言 `consume`
    全程不触发任何 store 写（只读铁律的双向覆盖：输入不变 + 无新增写入）。
+
+### Errata（2026-08-03，C-6 实施反修）
+
+C-6（Reasoning Engine 接入）落地以**代码权威**为准，相对 §2.2 / §3.4 / §4 叙述有一处
+刻意偏差与一处范围收窄需记录，避免后续读者误判为缺口：
+
+1. **`ReasoningResult.findings` 从 `list[Finding]` 收敛为 `tuple[str, ...]`**：§2.2 原计划
+   用结构化 `Finding` 对象承载发现，但 Phase 1 规则参考推理的发现本质是"人类可读陈述 +
+   一条 `SourceRef` 溯源"，用 `tuple[str]`（findings）+ `tuple[SourceRef]`（source_refs）
+   同序并列即足够，无需引入 `Finding` 类（避免 BREAKING 扩展契约）。`SourceRef`
+   （`source` / `ref` / `detail`）单独承担"溯源到 ReasoningInput 字段"的职责，与 findings
+   一一对应（顺序一致）。若未来 LLM 推理需要更丰富结构，再在 Phase 5 演进 `Finding`，不影响
+   本契约的稳定性。
+2. **`suggested_action_hint` 类型从 `ActionType` 收敛为 `str`**（词汇白名单
+   `RECOMMENDED_ACTION_HINTS = MONITOR / NOTIFY_FAMILY / ESCALATE_COMMUNITY`，与
+   `WarningEvent.recommended_action` / `ActionCommand` 路由同源）：ADR-0025 原文写
+   `ActionType | None`，但本项目并无 `ActionType` 枚举（action 词汇以 `str` 常量存在于
+   `action/command.py` / `warning.py`）。为不引入重复枚举、保证与决策层词汇单一事实源，C-6
+   直接用 `str` + 白名单校验。`ReasoningResult.__post_init__` 拒绝非法词汇（防污染单一决策
+   中心词汇）。
+3. **决策增强（Context → Inference → Decision）不在 C-6 范围**：§0.3 / §9 已明确 Phase 2
+   才接。`RuleBasedReasoningEngine` 的 `infer` **绝不**提升或设定风险等级；`suggested_action_hint`
+   仅把"已观测事实"用一致词汇复述。C-6 把 `ReasoningResult` 经 `FrameResult.reasoning_results`
+   Shadow 暴露，**不**调用 `DecisionEngine`、不构造 `DecisionRequest`（§2.3 的 `DecisionRequest`
+   仍由 ADR-0010 `DecisionPolicy` 派生，本 PR 不实现）。接入点已预留在 `DecisionContext.extra`。
+4. **`maybe_reason` 复用 `maybe_consume` 的非阻塞语义与指标**：`MemoryConsumerHook` 新增
+   `consumer_reasoned` 指标并扩展模块级 `CONSUMER_LOG_FIELDS`（单一事实源）；推理失败只计
+   `consumer_errors` + 日志、返回 `None`，与消费失败同款隔离。测试用本地 `CONSUMER_LOG_FIELDS`
+   元组须与模块常量同步（新增指标时改一处即可）。
+5. **`reasoning_enabled` 是 `consumer_enabled` 的下游子开关**：`from_settings` 仅当
+   `consumer_enabled` 且 `memory_store` 已就位（历史可读）时才构造 `RuleBasedReasoningEngine`；
+   仅开 `reasoning_enabled` 而 `consumer_enabled=false` 会静默降级并记 warning（不抛、不半开），
+   与 C-4 / C-5 的"依赖链降级"纪律一致。

@@ -1,11 +1,13 @@
 """Memory Consumer 组件接口（ADR-0025 §3.1–§3.4 / DESIGN-memory-consumer.md §1, C-0）。
 
-定义四个 ABC：``Retrieval`` / ``Aggregation`` / ``ContextBuilder`` / ``MemoryConsumer``。
-组件间严格单向（Retrieval → Aggregation → ContextBuilder），互不调用；由
-``MemoryConsumer`` 在 orchestrator.py（C-4）编排。
+定义五个 ABC：``Retrieval`` / ``Aggregation`` / ``ContextBuilder`` / ``MemoryConsumer``
+/ ``ReasoningEngine``。前四者构成严格单向管道（Retrieval → Aggregation →
+ContextBuilder → MemoryConsumer 编排），``ReasoningEngine`` 是管道的下游消费方
+（C-6 接入），由 ``MemoryConsumerHook`` 在产出 ``ReasoningInput`` 后调用。
 
 硬边界（ADR-0025）：Consumer 不决策、不改 Risk Score（C1）；接口层不依赖任何具体
-实现；``MemoryConsumer`` 仅做编排，自身不持有跨请求状态（C2）。
+实现；``MemoryConsumer`` 仅做编排，自身不持有跨请求状态（C2）；``ReasoningEngine``
+只读 ``ReasoningInput``、只产 ``ReasoningResult``，同样不决策、不写 Memory。
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from home_perception.memory.consumer.contracts import (
     CurrentEvent,
     EvidenceRef,
     ReasoningInput,
+    ReasoningResult,
     RiskPattern,
     VisitorProfile,
 )
@@ -86,4 +89,24 @@ class MemoryConsumer(ABC):
         raise NotImplementedError
 
 
-__all__ = ["Aggregation", "ContextBuilder", "MemoryConsumer", "Retrieval"]
+class ReasoningEngine(ABC):
+    """推理引擎（消费 ReasoningInput → 产出 ReasoningResult）。
+
+    仅做参考推理：**不决策、不产分数、不改 Memory**（守 ADR-0010 单一决策中心 +
+    ADR-0025 C1/C2）。``infer`` 必须是纯函数：同输入同输出（C3 确定性），只读
+    ``ReasoningInput``，不写任何外部状态（C2）。
+    """
+
+    @abstractmethod
+    def infer(self, ctx: ReasoningInput) -> ReasoningResult:
+        """把 ReasoningInput 推理为 ReasoningResult（参考推理，非决策）。"""
+        raise NotImplementedError
+
+
+__all__ = [
+    "Aggregation",
+    "ContextBuilder",
+    "MemoryConsumer",
+    "ReasoningEngine",
+    "Retrieval",
+]

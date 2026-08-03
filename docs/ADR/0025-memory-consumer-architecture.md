@@ -62,6 +62,8 @@ Memory Integration Closure（PR#91 / #93 / #94 / #95 / #96，均已合 `main`）
 ### 2.2 非目标（本 ADR 不做）
 
 - ❌ 不实现 Reasoning 算法（规则 v2 / LLM v2 / Agent 本身）——本 ADR 只定义接口与边界
+
+  > **C-6 说明（2026-08-03）**：C-6 新增了 `ReasoningEngine` 抽象与 `RuleBasedReasoningEngine` **参考实现**（落 `memory/consumer/reasoning.py`），作为该边界的占位与契约验证。**参考实现不等于本 ADR 否决的"Reasoning 算法"**——它只是一组确定性的、只读的、advisory 的规则合成（产出 `findings/explanation/suggested_action_hint`），不学习、不调用 LLM、不提升风险等级、不构造 `DecisionRequest`。本 ADR 的"非目标"立场不变：高级 Reasoning（规则 v2 / LLM v2 / Agent）仍归未来独立 Reasoning ADR（Phase 5）；决策增强（把 `ReasoningResult` 喂给 `DecisionPolicy`）归 **Phase 2**，C-6 未实现。
 - ❌ 不重新实现 Memory 写入（Memory Policy / Episode Builder 已定义，Consumer 只读）
 - ❌ 不直接改 Risk Score / 产 WarningEvent（违反 ADR-0010）
 - ❌ 不解决 Memory 冲突（覆盖 / 衰减 / 版本化）——归未来 Memory Consistency Policy ADR
@@ -259,12 +261,16 @@ ReasoningInput {
 MemoryConsumer
    │ provide(ReasoningInput)              # 交付上下文（纯上下文，无 score）
    ▼
-ReasoningEngine  (未来独立组件，归其 ADR，Phase 5)
+ReasoningEngine  (C-6 已实现：ReasoningEngine ABC + RuleBasedReasoningEngine 参考实现；
+   │               默认关闭 Shadow 接线，经 FrameResult.reasoning_results 暴露；
+   │               决策消费 = Phase 2，尚未实现，见 §10 实施状态)
    │ infer(ReasoningInput) -> ReasoningResult
    ▼
 DecisionPolicy    (ADR-0010 唯一决策中心)
-   │ consume(ReasoningResult) -> DecisionRequest -> 决策
+   │ consume(ReasoningResult) -> DecisionRequest -> 决策   # ← 此箭头为 Phase 2，C-6 未接
 ```
+
+> **实施状态（C-6，2026-08-03）**：`ReasoningEngine` 抽象与 `RuleBasedReasoningEngine` 参考实现已落 `src/home_perception/memory/consumer/reasoning.py`，经 `MemoryConsumerHook.maybe_reason` + `PerceptionPipeline.process_frame` 接入主链路，结果写入 `FrameResult.reasoning_results`（默认关闭，由 `config.memory.reasoning_enabled` 门控）。C-6 **只完成 `ReasoningInput → ReasoningResult` 的生成与 Shadow 暴露**，不触碰 ADR-0010：引擎只读、确定性、产出 advisory `findings/explanation/suggested_action_hint`，**绝不提升风险等级、绝不构造 `DecisionRequest`**。把 `ReasoningResult` 汇入 `DecisionPolicy` 的决策增强属 **Phase 2**，本 C-6 不实现（仅预留 `DecisionContext.extra` seam）。详见 `docs/DESIGN-memory-consumer.md` §4.3 与 Errata（C-6）。
 
 **三个数据契约**：
 
@@ -396,10 +402,10 @@ MemoryConsumer.consume(event)
    → ReasoningInput
    │
    ▼
-ReasoningEngine.infer(ReasoningInput) -> ReasoningResult
+ReasoningEngine.infer(ReasoningInput) -> ReasoningResult   # C-6 已实现（Shadow，默认关闭）
    │
    ▼
-DecisionPolicy (ADR-0010) 将 ReasoningResult 作为增广上下文并入决策
+DecisionPolicy (ADR-0010) 将 ReasoningResult 作为增广上下文并入决策   # ← Phase 2，C-6 未接
 ```
 
 **生命周期不变量**：Consumer 仅在触发时物化 `ReasoningInput`；非触发期**不保留任何跨请求状态**（无会话、无"当前画像"缓存），保证 C2（只读）+ 无副作用 + 可复现。
@@ -524,3 +530,19 @@ Memory Integration Closure 完成前做 Consumer 没有可消费的 Memory；完
 本 ADR 为 **Accepted**（2026-08-02，Owner 评审通过）。已在 `docs/ADR/README.md` 清单登记（编号 0025），并于 ADR-0024 §7 / §10.1 标注 Context Builder 已由本 ADR 承接。
 
 工程落地方案：`docs/DESIGN-memory-consumer.md`（按 Retrieval → Aggregation → Context Builder → Reasoning Interface 拆分 Slices，已随本 ADR 一同落库）。
+
+### 10.1 实施状态（C-0 ~ C-6）
+
+| Slice | 内容 | 状态 |
+| --- | --- | --- |
+| C-0 | 组件接口 + 分层异常（`exceptions.py`） | ✅ 已合（PR#102） |
+| C-1 | 规则召回 `RuleBasedRetrieval` | ✅ 已合（PR#103） |
+| C-2 | 读侧聚合 `RuleBasedAggregation` | ✅ 已合（PR#104） |
+| C-3 | 上下文组装 `RuleBasedContextBuilder` | ✅ 已合（PR#105） |
+| C-4 | 编排器 + 运行时门控 `MemoryConsumerHook` | ✅ 已合（PR#106） |
+| C-5 | 不变量全量 + replay 一致性 + 跨层调用禁令 | ✅ 已合（PR#107） |
+| C-6 | **Reasoning Engine 接入**（本 PR 待合并） | 🟡 Shadow 接线：`ReasoningEngine` ABC + `RuleBasedReasoningEngine` 参考实现，经 `MemoryConsumerHook.maybe_reason` + `PerceptionPipeline.process_frame` 接入主链路，结果写入 `FrameResult.reasoning_results`；默认由 `config.memory.reasoning_enabled = False` 关闭，**零泄漏、不影响主链路** |
+
+**Phase 2（决策增强，推后）**：把 `ReasoningResult` 汇入 `DecisionPolicy`（`DecisionContext.extra` 已预留 seam）属 Phase 2，触碰 ADR-0010 单一决策中心，C-6 **不实现**，待独立评审。
+
+> C-6 门禁：ruff 全绿；新增 `tests/memory/consumer/test_reasoning.py`（C1 无 score / 只读 / 确定性 / hint 建议性）+ `tests/runtime/test_memory_consumer_hook.py`（`maybe_reason` 非阻塞）+ `tests/runtime/test_pipeline_memory_consumer.py`（Shadow 接线不影响主链路）全绿；全量 pytest 零回归。

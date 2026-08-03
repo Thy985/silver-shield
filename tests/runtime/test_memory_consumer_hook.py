@@ -16,9 +16,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from home_perception.memory.consumer.config import ConsumerTriggerConfig
-from home_perception.memory.consumer.contracts import CurrentEvent, ReasoningInput
-from home_perception.memory.consumer.exceptions import ConsumerError, RetrievalError
-from home_perception.memory.consumer.interfaces import MemoryConsumer
+from home_perception.memory.consumer.contracts import (
+    CurrentEvent,
+    ReasoningInput,
+    ReasoningResult,
+    SourceRef,
+)
+from home_perception.memory.consumer.exceptions import ConsumerError, ReasoningError, RetrievalError
+from home_perception.memory.consumer.interfaces import MemoryConsumer, ReasoningEngine
 from home_perception.memory.records import EpisodicRecord
 from home_perception.memory.store import InMemoryStore
 from home_perception.runtime.memory_consumer_hook import ConsumerMetrics, MemoryConsumerHook
@@ -32,6 +37,7 @@ CONSUMER_LOG_FIELDS = (
     "consumer_evaluated",
     "consumer_triggered",
     "consumer_produced",
+    "consumer_reasoned",
     "consumer_errors",
 )
 
@@ -84,6 +90,28 @@ class _StubConsumer(MemoryConsumer):
         )
 
 
+class _StubReasoningEngine(ReasoningEngine):
+    """记录调用次数的最小推理引擎；可配置为抛异常 / 返回 None。"""
+
+    def __init__(self, raises: Exception | None = None, returns: ReasoningResult | None = None):
+        self.calls: list[ReasoningInput] = []
+        self._raises = raises
+        self._returns = returns
+
+    def infer(self, ctx: ReasoningInput) -> ReasoningResult:
+        self.calls.append(ctx)
+        if self._raises is not None:
+            raise self._raises
+        if self._returns is not None:
+            return self._returns
+        return ReasoningResult(
+            findings=("stub finding",),
+            explanation="stub explanation",
+            suggested_action_hint=None,
+            source_refs=(SourceRef(source="current_event", ref=ctx.current_event.event_id),),
+        )
+
+
 def _store_with_history() -> InMemoryStore:
     store = InMemoryStore()
     store.upsert_episodic(_record("ep-1", KNOWN))
@@ -96,12 +124,14 @@ def _hook(
     enabled: bool = True,
     store: InMemoryStore | None = None,
     config: ConsumerTriggerConfig | None = None,
+    reasoning_engine: ReasoningEngine | None = None,
 ) -> MemoryConsumerHook:
     return MemoryConsumerHook(
         consumer if consumer is not None else _StubConsumer(),
         store if store is not None else _store_with_history(),
         enabled,
         config=config,
+        reasoning_engine=reasoning_engine,
     )
 
 
@@ -233,7 +263,8 @@ class TestNonBlocking:
         hook.maybe_consume(_event(UNKNOWN, "LOW"))  # 未触发
         assert hook.metrics.as_log_fields() == {
             name: {"consumer_evaluated": 2, "consumer_triggered": 1,
-                   "consumer_produced": 1, "consumer_errors": 0}[name]
+                   "consumer_produced": 1, "consumer_reasoned": 0,
+                   "consumer_errors": 0}[name]
             for name in CONSUMER_LOG_FIELDS
         }
 
@@ -258,3 +289,58 @@ class TestReadOnly:
         hook = _hook(_StubConsumer(), store=store)
         hook.maybe_consume(_event(KNOWN, "HIGH"))
         assert [r.to_dict() for r in store.get_episodic_by_visitor(KNOWN)] == before
+
+
+# ============================================================================
+# 6. C-6 Reasoning Engine 接入（maybe_reason）
+# ============================================================================
+
+
+class TestMaybeReason:
+    @staticmethod
+    def _input(vid: str = UNKNOWN) -> ReasoningInput:
+        return ReasoningInput(
+            current_event=_event(vid, "HIGH"),
+            historical_context=(),
+            visitor_profile=None,
+            risk_pattern=None,
+        )
+
+    def test_no_engine_returns_none_without_counting(self):
+        hook = _hook(_StubConsumer(), reasoning_engine=None)
+        assert hook.reasoning_enabled is False
+        assert hook.maybe_reason(self._input()) is None
+        assert hook.metrics.consumer_reasoned == 0
+
+    def test_none_input_returns_none(self):
+        hook = _hook(_StubConsumer(), reasoning_engine=_StubReasoningEngine())
+        assert hook.maybe_reason(None) is None
+        assert hook.metrics.consumer_reasoned == 0
+
+    def test_reasons_when_engine_present(self):
+        engine = _StubReasoningEngine()
+        hook = _hook(_StubConsumer(), reasoning_engine=engine)
+        assert hook.reasoning_enabled is True
+        out = hook.maybe_reason(self._input())
+        assert isinstance(out, ReasoningResult)
+        assert hook.metrics.consumer_reasoned == 1
+        assert len(engine.calls) == 1
+
+    @pytest.mark.parametrize("exc", [ReasoningError("boom"), RuntimeError("driver down")])
+    def test_reason_failure_is_swallowed_and_counted(self, exc):
+        """推理异常（ReasoningError / 任意异常）只计错误 + 日志，不中断、不返回结果。"""
+        hook = _hook(_StubConsumer(), reasoning_engine=_StubReasoningEngine(raises=exc))
+        assert hook.maybe_reason(self._input()) is None
+        assert hook.metrics.consumer_reasoned == 0
+        assert hook.metrics.consumer_errors == 1
+
+    def test_real_engine_end_to_end(self):
+        """用真实 RuleBasedReasoningEngine 验证 maybe_reason 产出非空 ReasoningResult。"""
+        from home_perception.memory.consumer.reasoning import RuleBasedReasoningEngine
+
+        hook = _hook(_StubConsumer(), reasoning_engine=RuleBasedReasoningEngine())
+        out = hook.maybe_reason(self._input())
+        assert isinstance(out, ReasoningResult)
+        assert out.findings
+        assert out.suggested_action_hint == "ESCALATE_COMMUNITY"
+
