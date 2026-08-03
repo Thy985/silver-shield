@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -37,18 +38,49 @@ from home_perception.memory.evaluation.metrics import (
 
 # §4.4.1 检测判据
 _DETECTION_HINTS = frozenset({"ESCALATE_COMMUNITY", "NOTIFY_FAMILY"})
-_ESCALATION_KEYWORDS = ("升级", "escalat", "escalating")
-_CONFLICT_KEYWORDS = ("冲突", "conflict", "behavior_shift")
+# 精确 tag：整词匹配，避免 "behavior_shifted" / "x-behavior_shift" / 文档片段误命中。
+# 注：仍是文本扫描；理想解是引擎直接输出结构化 escalation/conflict 布尔字段（见 is_detection docstring）。
+_EXACT_TAGS = ("behavior_shift",)
+# 短语关键词：子串匹配（引擎 findings 为确定性正向检测短语，否定语境由 _NEGATION_MARKERS 兜底）。
+_PHRASE_KEYWORDS = ("升级", "escalat", "escalating", "冲突", "conflict")
+# 否定标记：出现则本 finding 不计入短语检测，缓解"未观察到 escalation"/"无 conflict"误判。
+# 不含裸 "不"（过度抑制，如"不稳定"），仅取明确否定前缀。
+_NEGATION_MARKERS = ("未", "无", "没有", "no ", "not ", "without", "absent")
+_TAG_TOKEN_RE = re.compile(r"[A-Za-z_]+")
+
+
+def _finding_has_exact_tag(finding: str) -> bool:
+    return any(tok == tag for tok in _TAG_TOKEN_RE.findall(finding) for tag in _EXACT_TAGS)
+
+
+def _finding_has_negation(finding: str) -> bool:
+    return any(marker in finding for marker in _NEGATION_MARKERS)
 
 
 def is_detection(result: ReasoningResult) -> bool:
-    """§4.4.1 检测事件判定：hint 达 ESCALATE/NOTIFY，或 findings 含 escalation/conflict。"""
+    """§4.4.1 检测事件判定。
+
+    命中条件（任一）：
+    1. ``suggested_action_hint ∈ {ESCALATE_COMMUNITY, NOTIFY_FAMILY}``；
+    2. findings 含精确 tag（如 ``behavior_shift``，整词匹配，避免文档片段误命中）；
+    3. findings 含 escalation/conflict 短语（子串匹配）。
+
+    文本扫描的已知局限：依赖引擎 findings 为**确定性正向**检测短语。
+    - 否定语境（"未观察到 escalation" / "无 conflict"）由 ``_NEGATION_MARKERS`` 兜底跳过；
+    - 描述性提及（如 "behavior_shift in history" 作为背景说明而非检测结论）仍可能误命中 —
+      彻底解法是在 ``RuleBasedReasoningEngine`` 输出结构化 ``escalation: bool`` /
+      ``conflict: bool`` 字段（跨 ADR-0010/0025 C1，本 slice 不做，留作后续）。
+    """
     if result.suggested_action_hint in _DETECTION_HINTS:
         return True
-    return any(
-        any(kw in finding for kw in _ESCALATION_KEYWORDS + _CONFLICT_KEYWORDS)
-        for finding in result.findings
-    )
+    for finding in result.findings:
+        if _finding_has_exact_tag(finding):
+            return True
+        if _finding_has_negation(finding):
+            continue  # 否定语境：跳过本 finding 的短语匹配，避免误判
+        if any(kw in finding for kw in _PHRASE_KEYWORDS):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -74,7 +106,14 @@ class TemporalStep:
 
 @dataclass(frozen=True)
 class TemporalCase:
-    """一个时序 case：有序 step 序列 + 复用的 GroundTruth。"""
+    """一个时序 case：有序 step 序列 + 复用的 GroundTruth。
+
+    约定（harness 契约，B1）：case 的**末 step 必须提供 Memory 输入**
+    （``TemporalStep.reasoning_input`` 非 None）。``run_temporal_ab_case`` 以末 step 的
+    Memory/Baseline 推理结果作为 ``final_memory``/``final_baseline`` 并计算四指标；若末 step
+    无 Memory 输入，harness 抛 ``RuntimeError``（避免 ``final_memory`` 沿用上一轮旧值 /
+    leaky state）。非末 step 允许 ``reasoning_input=None``（仅 Baseline 观测点）。
+    """
 
     case_id: str
     steps: tuple[TemporalStep, ...]
@@ -133,6 +172,12 @@ def run_temporal_ab_case(
     首次满足 ``is_detection`` 的 step 记为该臂检测位置；两臂均缺失 → ``missing_detection``。
     """
     engine = engine or RuleBasedReasoningEngine()
+    # 契约（B1）：末 step 必须提供 Memory 输入，否则 final_memory 会沿用上一轮旧值（leaky state）。
+    if case.steps and case.steps[-1].reasoning_input is None:
+        raise RuntimeError(
+            f"时序 case {case.case_id!r} 末 step 必须提供 Memory 输入（reasoning_input 非 None）；"
+            "否则 final_memory 会沿用上一轮（非末 step）旧值（leaky state）。"
+        )
     m_step = m_ts = b_step = b_ts = None
     last_m: ReasoningResult | None = None
     last_b: ReasoningResult | None = None
@@ -153,7 +198,7 @@ def run_temporal_ab_case(
         if b_step is None and is_detection(b_res):
             b_step, b_ts = step.step, step.timestamp
     early = compute_lead_time(b_ts, m_ts, b_step, m_step)
-    assert last_m is not None and last_b is not None, "时序 case 末 step 必须提供 Memory 输入"
+    # 末 step 契约已在函数入口校验；此处 last_m / last_b 必非 None。
     return TemporalABResult(
         case_id=case.case_id,
         early=early,

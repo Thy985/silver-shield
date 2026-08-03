@@ -337,7 +337,11 @@ def build_report(
     stats_note: str = _E1A_STATS_NOTE,
     extra_notes: Sequence[str] = (),
 ) -> E1Report:
-    """从 case 评估集合构建报告（纯函数：``generated_at`` 可注入以保证可复现）。"""
+    """从 case 评估集合构建报告（纯函数：``generated_at`` 可注入以保证可复现）。
+
+    ``extra_notes``：仅追加语义性补充（如 E-1c 的 Early Detection 说明），入参会与既有
+    ``notes`` 及彼此做去重，避免报告出现重复行（B4）。
+    """
     terms = compute_score_terms(evaluations)
     score = compute_memory_value_score(terms, n_cases=len(evaluations))
     stats = StatsBundle(
@@ -352,7 +356,10 @@ def build_report(
     ]
     if terms.early_detection is None:
         notes.append("Early Detection：N/A（data-gated → E-1B），不计入 Hard Gate 与 Score。")
-    notes.extend(extra_notes)
+    # extra_notes 仅追加语义性补充，并去重（避免与既有 notes 或彼此重复 → 报告重复行，B4）。
+    for note in extra_notes:
+        if note not in notes:
+            notes.append(note)
     return E1Report(
         stage=stage,
         dataset_id=dataset_id,

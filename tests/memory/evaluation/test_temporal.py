@@ -12,6 +12,8 @@ from home_perception.memory.evaluation.report import (
     run_e1c_report,
 )
 from home_perception.memory.evaluation.temporal import (
+    TemporalCase,
+    TemporalStep,
     evaluate_temporal_case,
     is_detection,
     load_temporal_dataset,
@@ -44,6 +46,27 @@ def test_is_detection_by_finding_keyword():
     assert is_detection(_result(None, ["检测到冲突（behavior_shift）：历史=normal，当前=abnormal"]))
     # baseline 清空后（无 pattern / 无 conflict）→ 不检测
     assert not is_detection(_result(None, ["当前事件 X（类型 risk_signal）"]))
+
+
+def test_is_detection_negation_context():
+    """B2：否定语境不应误判为检测（呼应文本扫描脆弱性）。"""
+    # 中文否定
+    assert not is_detection(_result(None, ["未观察到 escalation 行为"]))
+    assert not is_detection(_result(None, ["无 conflict，历史一致"]))
+    # 英文否定
+    assert not is_detection(_result(None, ["no escalation detected"]))
+    # 正向短语仍应命中（不被否定标记误伤）
+    assert is_detection(_result(None, ["发现风险模式：escalating_behavior"]))
+    assert is_detection(_result(None, ["检测到冲突（behavior_shift）"]))
+
+
+def test_is_detection_exact_tag_not_substring_glue():
+    """B2：behavior_shift 整词匹配，避免 glued / 派生词误命中。"""
+    # 派生词不应命中（无整词 "behavior_shift"）
+    assert not is_detection(_result(None, ["检测到 behavior_shifted 趋势"]))
+    assert not is_detection(_result(None, ["prebehavior_shift 已排除"]))
+    # 整词命中
+    assert is_detection(_result(None, ["检测到冲突（behavior_shift）"]))
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +125,26 @@ def test_case_001_both_missing_na():
     assert ab.baseline_detection_step is None
     assert ab.early.status == "missing_detection"
     assert ab.early.missing_arm == "both"
+
+
+def test_run_temporal_ab_case_requires_memory_input_on_last_step():
+    """B1：末 step 无 Memory 输入应抛 RuntimeError（避免 final_memory 沿用上一轮旧值/leaky state）。"""
+    cases = {c.case_id: c for c in load_temporal_dataset(FIXTURE_ROOT)}
+    base = cases["case_001_repeat_visitor"]
+    last = base.steps[-1]
+    broken_last = TemporalStep(
+        step=last.step,
+        timestamp=last.timestamp,
+        current_event=last.current_event,
+        reasoning_input=None,
+    )
+    broken = TemporalCase(
+        case_id=base.case_id,
+        steps=(*base.steps[:-1], broken_last),
+        ground_truth=base.ground_truth,
+    )
+    with pytest.raises(RuntimeError):
+        run_temporal_ab_case(broken)
 
 
 # ---------------------------------------------------------------------------
