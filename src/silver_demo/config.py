@@ -39,6 +39,12 @@ class DemoSettings(BaseModel):
     ws_path: str = "/ws"
     frame_loop_interval_s: float = 0.0
     jpeg_quality: int = 50
+    # demo 推理尺寸：经 runtime.detector_imgsz 覆盖通道设定（pipeline.py:410），
+    # 仅影响 demo 网关、不触碰 config/default.yaml 的 detection.imgsz（生产 480 不变）。
+    # 416 = ImgszProfile.REALTIME，专为无 GPU 实时演示降 CPU 推理耗时、提帧率。
+    detector_imgsz: int | None = 416
+    # 推送给前端的预览帧最大宽度(px)：编码前缩图，降 base64 体积与前端解码耗时（前端更跟手）。
+    preview_max_width: int = 640
     upload_dir: str = "data/demo/uploads"
     scenarios_dir: str = "config/demo/scenarios"
     max_upload_mb: float = 1024.0  # 上传视频软上限；超过则 413 拒绝（Demo 不做文件管理/存储）
@@ -63,4 +69,14 @@ class DemoSettings(BaseModel):
             kwargs["scenario_path"] = v
         if v := os.environ.get("DEMO_HP_CONFIG"):
             kwargs["home_perception_config"] = v
+        if v := os.environ.get("DEMO_DETECTOR_IMGSZ"):
+            try:
+                kwargs["detector_imgsz"] = int(v)
+            except ValueError:
+                raise ValueError(f"DEMO_DETECTOR_IMGSZ 必须是整数，收到 {v!r}") from None
+        if v := os.environ.get("DEMO_PREVIEW_MAX_WIDTH"):
+            try:
+                kwargs["preview_max_width"] = int(v)
+            except ValueError:
+                raise ValueError(f"DEMO_PREVIEW_MAX_WIDTH 必须是整数，收到 {v!r}") from None
         return cls(**kwargs)
