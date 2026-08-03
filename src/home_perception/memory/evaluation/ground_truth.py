@@ -14,6 +14,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+#: 显式「未标注」标记：在 acceptable_hint 中用 ``("__NA__",)`` 表示，FP 指标剔除（非默认 0）。
+ACCEPTABLE_HINT_NA = "__NA__"
+#: 合法的 acceptable_hint 取值（不含 ``None``；``None`` 仅作为 HINT_SEVERITY 内部的下限）。
+_VALID_HINTS = frozenset({"MONITOR", "NOTIFY_FAMILY", "ESCALATE_COMMUNITY"})
+
+
+def _validate_acceptable_hint(hints: tuple[str, ...]) -> None:
+    """校验 acceptable_hint：缺失/空/非法值抛 ``ValueError``，显式 N/A 标记放行。
+
+    数据治理遗漏（忘记标注）必须在此显式暴露，而非被 ``acceptable_upper`` 静默解释
+    为 severity 0、进而误判为被评方案的 FP / Hard Gate 失败（PR#112 评审 issue 3）。
+    """
+    if ACCEPTABLE_HINT_NA in hints:
+        if len(hints) != 1:
+            raise ValueError(
+                f"acceptable_hint 含 N/A 标记时必须仅有该标记，收到 {hints!r}"
+            )
+        return
+    if not hints:
+        raise ValueError(
+            "acceptable_hint 为空：必须显式标注可接受的 hint 上限；"
+            "若确属未标注，请用 ['__NA__'] 显式声明（FP 指标剔除）。"
+        )
+    bad = [h for h in hints if h not in _VALID_HINTS]
+    if bad:
+        raise ValueError(f"acceptable_hint 含非法值 {bad!r}；合法值: {sorted(_VALID_HINTS)}")
+
 
 @dataclass(frozen=True)
 class GroundTruthRecord:
@@ -28,18 +55,38 @@ class GroundTruthRecord:
     category: str
     expected_pattern: tuple[str, ...]
     required_evidence: tuple[str, ...]
-    acceptable_hint: tuple[str | None, ...]
+    acceptable_hint: tuple[str, ...]
     expected_detection_step: int | None = None
     expected_detection_ts: str | None = None
 
+    def validate(self) -> None:
+        """校验字段合法性；``acceptable_hint`` 缺失/空/非法值 → 抛 ``ValueError``。
+
+        数据治理遗漏（忘记标注）必须在此显式暴露，而非被 ``acceptable_upper`` 静默
+        解释为 severity 0、进而误判为被评方案的 FP / Hard Gate 失败（PR#112 评审 issue 3）。
+        """
+        _validate_acceptable_hint(self.acceptable_hint)
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GroundTruthRecord:
+        raw = data.get("acceptable_hint")
+        if raw is None:
+            raise ValueError(
+                f"GroundTruth {data.get('case_id')!r}: 缺少 acceptable_hint 字段，"
+                "必须显式标注；未标注请用 ['__NA__']。"
+            )
+        # 支持显式未标注声明（字符串或单元素列表）
+        if raw == ACCEPTABLE_HINT_NA or (isinstance(raw, list) and raw == [ACCEPTABLE_HINT_NA]):
+            hints: tuple[str, ...] = (ACCEPTABLE_HINT_NA,)
+        else:
+            hints = tuple(raw)
+        _validate_acceptable_hint(hints)
         return cls(
             case_id=data["case_id"],
             category=data["category"],
             expected_pattern=tuple(data["expected_pattern"]),
             required_evidence=tuple(data.get("required_evidence", [])),
-            acceptable_hint=tuple(data.get("acceptable_hint", [])),
+            acceptable_hint=hints,
             expected_detection_step=data.get("expected_detection_step"),
             expected_detection_ts=data.get("expected_detection_ts"),
         )
@@ -97,7 +144,9 @@ def get_ground_truth(case_id: str) -> GroundTruthRecord:
     """返回 E-1A case 的 GroundTruthRecord；未登记（如 E-1B case）抛 KeyError。"""
     if case_id not in _GT_E1A:
         raise KeyError(f"E-1A 未登记 GroundTruth: {case_id}")
-    return _GT_E1A[case_id]
+    rec = _GT_E1A[case_id]
+    rec.validate()  # 防御：确保内置注册表也满足契约（含 acceptable_hint 校验）
+    return rec
 
 
 def e1a_case_ids() -> list[str]:
@@ -106,6 +155,7 @@ def e1a_case_ids() -> list[str]:
 
 
 __all__ = [
+    "ACCEPTABLE_HINT_NA",
     "GroundTruthRecord",
     "e1a_case_ids",
     "get_ground_truth",

@@ -16,8 +16,11 @@ from home_perception.memory.consumer.replay_dataset import MemoryReplayDataset
 from home_perception.memory.evaluation.ground_truth import e1a_case_ids
 from home_perception.memory.evaluation.report import (
     BASE_WEIGHTS,
+    build_report,
     evaluate_dataset,
     main,
+    render_markdown,
+    report_to_dict,
     run_e1a_report,
     write_report,
 )
@@ -125,3 +128,15 @@ def test_cli_returns_one_when_dataset_empty(tmp_path):
     empty_root.mkdir()
     code = main(["--fixtures", str(empty_root), "--out", str(tmp_path / "out")])
     assert code == 1
+
+
+def test_empty_dataset_report_invalid_score_and_json_na():
+    """评审 issue 2：空数据集报告必须显式标记 Score 无效，JSON 写 null 而非 0。"""
+    report = build_report([], dataset_id="empty", generated_at="2026-08-03T00:00:00+00:00")
+    assert report.hard_gate.all_pass is False
+    assert report.score.valid is False
+    assert report.score.score is None
+    payload = report_to_dict(report)
+    assert payload["score"]["score"] is None
+    assert payload["score"]["valid"] is False
+    assert "N/A" in render_markdown(report)

@@ -430,3 +430,14 @@ Owner 对「Implementation Ready」做契约级复核，指出 6 处会使 E-1A 
 | 6 | 低 | §4.2 | FP 严重度未定义 `None` 排序 | 冻结映射 `None=0, MONITOR=1, NOTIFY_FAMILY=2, ESCALATE_COMMUNITY=3`；明确 `None` 在 FP/FN/Early Detection 中的处理 |
 
 本次修订后，E-1A 可在**现有 M0 fixtures + 当前 C-6 引擎**上直接计算 Explainability(Q1/Q2/Q3) / FP / FN 三指标；Early Detection 与 hint 级边际贡献留待 E-1B（需时序/校准数据）。
+
+## Appendix D. PR#112 评审修正（Early Detection 计分 / 空数据集 / GroundTruth 校验）
+
+E-1b（report.py + Memory Value Score）实现后的一轮代码评审，修正 3 处会污染评估结论的缺陷（均已落地于 PR#112）：
+
+| # | 严重度 | 位置 | 问题 | 修订 |
+|---|--------|------|------|------|
+| 1 | 中 | §4.4 / §8.2 `EarlyDetectionResult` / `early_detection_term` | `compute_lead_time(None, ts)` 生成 `missing_detection("baseline")`，但 `early_detection_term` 只检查统一 `status=="missing_detection"`，无论缺失哪一臂都记 0；而 Baseline 缺失 + Memory 检出是 Memory 的强正向收益（与 DESIGN §8.2「M 臂未检测→0」方向相反） | `EarlyDetectionResult` 增结构化 `missing_arm`（`memory`/`baseline`/`both`，不再解析自由文本 detail）；`compute_lead_time` 区分三臂；`early_detection_term` 分计：M 缺失→0 / B 缺失且 M 检出→1.0（正向）/ 两臂均缺失→N/A（排除，未测量≠0） |
+| 2 | 中 | §8.2 `compute_memory_value_score` / `MemoryValueScore` | 空数据集时 `fn_term`/`explanation_term`/`fp_term` 返回 0，仅 Early Detection 为 None；评分器把前三项当有效 term 重归一化得 `score=0.0`，与「真实样本全得 0」无法区分，违反「未测量 ≠ 0」原则 | `MemoryValueScore` 增 `valid` 标志；空数据集 → `valid=False`、`score=None`、四 term 全 None（区别于有效 0）；`build_report` 透传 `n_cases`；`render_markdown`/`main` 渲染为 N/A，JSON 写 `null` 而非零分 |
+| 3 | 中 | §5 `GroundTruthRecord.from_dict` / `acceptable_upper` / `metric_fp` | `from_dict` 对缺失字段默认空 tuple，`acceptable_upper` 把空标注静默解释为严重度上限 0 → 数据治理遗漏（忘记填 `acceptable_hint`）被误判为被评方案的 FP / Hard Gate 失败 | 加载/构造边界校验 `acceptable_hint` 非空且值合法（缺失/空/非法 → 抛 `ValueError`）；支持显式未标注标记 `ACCEPTABLE_HINT_NA`（`"__NA__"`），此时 `acceptable_upper` 返回 `None`、`metric_fp` 返回 `True`、`fp_severity_excess` 返回 0（FP 指标剔除，不默认 severity 0）；E-1A 注册表经 `get_ground_truth` 防御性校验 |
+

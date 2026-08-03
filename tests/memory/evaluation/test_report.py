@@ -177,12 +177,37 @@ def test_early_detection_term_ignores_na_cases_in_mean():
     assert early_detection_term(mixed) == pytest.approx(1.0)
 
 
+def test_early_detection_term_baseline_missing_is_positive():
+    """评审 issue 1：Baseline 缺失而 Memory 检出 → 最强正向提前量（1.0），非 0。"""
+    ev = _ev(early=EarlyDetectionResult.missing_detection("baseline"))
+    assert early_detection_term([ev]) == pytest.approx(1.0)
+
+
+def test_early_detection_term_memory_missing_is_zero():
+    """Memory 缺失 → 0（DESIGN §8.2 规定 M 未检测 → 0）。"""
+    ev = _ev(early=EarlyDetectionResult.missing_detection("memory"))
+    assert early_detection_term([ev]) == pytest.approx(0.0)
+
+
+def test_early_detection_term_both_missing_excluded():
+    """两臂均缺失 → N/A（排除，未测量 ≠ 0），整组无信息时返回 None。"""
+    ev = _ev(early=EarlyDetectionResult.missing_detection("both"))
+    assert early_detection_term([ev]) is None
+
+
+def test_early_detection_term_mixed_baseline_and_computed():
+    """混合：B 缺失（1.0）与 computed(30min→0.5) 取均值 = 0.75。"""
+    a = _ev(early=EarlyDetectionResult.missing_detection("baseline"))
+    b = _ev(early=EarlyDetectionResult.computed(30.0, 1))
+    assert early_detection_term([a, b]) == pytest.approx(0.75)
+
+
 # ---------------------------------------------------------------------------
 # Memory Value Score
 # ---------------------------------------------------------------------------
 def test_score_renormalises_weights_when_early_detection_na():
     terms = compute_score_terms([_ev(fn_m=0, fn_b=1, fp_excess=0)])
-    score = compute_memory_value_score(terms)
+    score = compute_memory_value_score(terms, n_cases=1)
     assert score.partial is True
     assert "early_detection" not in score.weights
     assert sum(score.weights.values()) == pytest.approx(1.0)
@@ -192,7 +217,7 @@ def test_score_renormalises_weights_when_early_detection_na():
 
 def test_score_uses_base_weights_when_all_terms_present():
     ev = _ev(fn_m=0, fn_b=1, early=EarlyDetectionResult.computed(60.0, 1))
-    score = compute_memory_value_score(compute_score_terms([ev]))
+    score = compute_memory_value_score(compute_score_terms([ev]), n_cases=1)
     assert score.partial is False
     assert score.weights == pytest.approx(BASE_WEIGHTS)
     assert score.score == pytest.approx(1.0)
@@ -200,18 +225,34 @@ def test_score_uses_base_weights_when_all_terms_present():
 
 def test_score_never_claims_calibration():
     """Score 非 gate：E-1B 前 calibrated 恒 False，且 note 明示。"""
-    score = compute_memory_value_score(compute_score_terms([_ev()]))
+    score = compute_memory_value_score(compute_score_terms([_ev()]), n_cases=1)
     assert score.calibrated is False
     assert "非 Hard Gate" in score.note
 
 
 def test_score_drops_when_metrics_degrade():
     """变异：FN 恶化 + Q3 失败 → Score 显著下降。"""
-    good = compute_memory_value_score(compute_score_terms([_ev(fn_m=0, fn_b=2)])).score
+    good = compute_memory_value_score(
+        compute_score_terms([_ev(fn_m=0, fn_b=2)]), n_cases=1
+    ).score
     bad = compute_memory_value_score(
-        compute_score_terms([_ev(fn_m=2, fn_b=2, q3=False, fp_excess=1)])
+        compute_score_terms([_ev(fn_m=2, fn_b=2, q3=False, fp_excess=1)]), n_cases=1
     ).score
     assert bad < good
+
+
+def test_compute_score_terms_empty_returns_none_terms():
+    """评审 issue 2：空数据集 → 四 term 全 None（未测量），区别于真实样本得 0。"""
+    t = compute_score_terms([])
+    assert t.fn is None and t.early_detection is None and t.explanation is None and t.fp is None
+
+
+def test_score_invalid_when_no_cases():
+    """评审 issue 2：空数据集 → Score 无效（valid=False、score=None），不写零分。"""
+    score = compute_memory_value_score(compute_score_terms([]), n_cases=0)
+    assert score.valid is False
+    assert score.score is None
+    assert score.weights == {}
 
 
 # ---------------------------------------------------------------------------

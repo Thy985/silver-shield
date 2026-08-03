@@ -157,48 +157,75 @@ def fp_term(evaluations: Sequence[CaseEvaluation]) -> float:
 
 
 def early_detection_term(evaluations: Sequence[CaseEvaluation]) -> float | None:
-    """``clamp(LeadTime_min / W, 0, 1)`` 的均值；全部 ``na`` → ``None``（不参与评分）。
+    """Early Detection term。
 
-    ``missing_detection``（某臂始终未检测）记 ``0``（最坏）；``na``（无时序数据）
-    从分母中剔除，避免把「未测量」当作「无提前量」。
+    - ``na``（无时序数据）→ 排除（未测量 ≠ 无提前量）。
+    - ``computed``（两臂均检出）→ ``clamp(LeadTime / W, 0, 1)``（>0 表示 Memory 更早）。
+    - ``missing_detection``，按 ``missing_arm`` 分三种（§4.4 / 评审 issue 1）：
+        * ``"memory"`` → ``0.0``（M 未检测，DESIGN §8.2 规定 0）；
+        * ``"baseline"`` → ``1.0``（M 检出而 B 从未检出，Memory 最强正向提前量，按明确上界记正向）；
+        * ``"both"`` / 未指定 → 排除（两臂均缺失无法判断，N/A，未测量 ≠ 0）。
+    - 全部排除 → ``None``（不参与评分）。
     """
-    considered = [ev for ev in evaluations if ev.early_detection.status != "na"]
-    if not considered:
-        return None
     scores: list[float] = []
-    for ev in considered:
-        lead = ev.early_detection.lead_time_minutes
-        if ev.early_detection.status == "missing_detection" or lead is None:
-            scores.append(0.0)
-        else:
-            scores.append(_clamp(lead / LEAD_TIME_WINDOW_MINUTES))
+    for ev in evaluations:
+        ed = ev.early_detection
+        if ed.status == "na":
+            continue
+        if ed.status == "computed" and ed.lead_time_minutes is not None:
+            scores.append(_clamp(ed.lead_time_minutes / LEAD_TIME_WINDOW_MINUTES))
+            continue
+        if ed.status == "missing_detection":
+            if ed.missing_arm == "memory":
+                scores.append(0.0)
+            elif ed.missing_arm == "baseline":
+                scores.append(1.0)
+            else:
+                # "both" 或未指定 → 无信息，排除（未测量 ≠ 0）
+                continue
+            continue
+        # 未知 status → 防御性排除
+        continue
+    if not scores:
+        return None
     return _mean(scores)
 
 
 @dataclass(frozen=True)
 class ScoreTerms:
-    """四 term 归一化值；``early_detection is None`` 表示 N/A（不参与评分）。"""
+    """四 term 归一化值；``None`` 表示该 term 无数据（N/A，不参与评分）。
 
-    fn: float
+    空数据集时四个 term 均为 ``None``（compute_score_terms 返回），以区别于「真实
+    样本全部得 0」——后者是有效 0，前者是「未测量」（评审 issue 2）。
+    """
+
+    fn: float | None
     early_detection: float | None
-    explanation: float
-    fp: float
+    explanation: float | None
+    fp: float | None
 
 
 @dataclass(frozen=True)
 class MemoryValueScore:
-    """§8.2 加权复合分。**报告用，非 Hard Gate**；E-1B 前未标定阈值。"""
+    """§8.2 加权复合分。**报告用，非 Hard Gate**；E-1B 前未标定阈值。
+
+    ``valid``：评分是否有意义。空数据集 / 全 term 缺失 → ``False`` 且 ``score=None``，
+    明确表达「无证据」，绝不等价于「Memory 无价值」（未测量 ≠ 0，评审 issue 2）。
+    """
 
     terms: ScoreTerms
     weights: dict[str, float]
-    score: float
+    score: float | None
     partial: bool
     calibrated: bool = False
+    valid: bool = True
     note: str = ""
 
 
 def compute_score_terms(evaluations: Sequence[CaseEvaluation]) -> ScoreTerms:
-    """从 case 评估集合算出四 term（§8.2）。"""
+    """从 case 评估集合算出四 term（§8.2）。空数据集 → 四 term 全 ``None``（未测量）。"""
+    if not evaluations:
+        return ScoreTerms(fn=None, early_detection=None, explanation=None, fp=None)
     return ScoreTerms(
         fn=fn_term(evaluations),
         early_detection=early_detection_term(evaluations),
@@ -207,8 +234,13 @@ def compute_score_terms(evaluations: Sequence[CaseEvaluation]) -> ScoreTerms:
     )
 
 
-def compute_memory_value_score(terms: ScoreTerms) -> MemoryValueScore:
-    """按 §8.2 权重复合；缺失 term 剔除后按原比例重归一化，并标记 ``partial``。"""
+def compute_memory_value_score(terms: ScoreTerms, n_cases: int = 0) -> MemoryValueScore:
+    """按 §8.2 权重复合；缺失 term 剔除后按原比例重归一化，并标记 ``partial``。
+
+    ``n_cases``：参与评分的 case 数（由 ``build_report`` 透传）。``n_cases <= 0`` 或
+    全部 term 缺失 → 评分无效（``valid=False``、``score=None``），报告层渲染为 N/A，
+    明确表达「无证据」，不得写成有效零分（未测量 ≠ 0，评审 issue 2）。
+    """
     values: dict[str, float | None] = {
         "fn": terms.fn,
         "early_detection": terms.early_detection,
@@ -216,16 +248,20 @@ def compute_memory_value_score(terms: ScoreTerms) -> MemoryValueScore:
         "fp": terms.fp,
     }
     active = {k: w for k, w in BASE_WEIGHTS.items() if values[k] is not None}
-    total = sum(active.values())
-    if total <= 0:
+    if n_cases <= 0 or not active:
         return MemoryValueScore(
             terms=terms,
             weights={},
-            score=0.0,
-            partial=True,
+            score=None,
+            partial=False,
             calibrated=False,
-            note="所有 term 均缺失，Score 无意义",
+            valid=False,
+            note=(
+                "无 case 或全 term 缺失：Score 无法计算（N/A），不等价于 Memory 无价值"
+                "（未测量 ≠ 0）。"
+            ),
         )
+    total = sum(active.values())
     weights = {k: w / total for k, w in active.items()}
     score = sum(weights[k] * float(values[k]) for k in weights)  # type: ignore[arg-type]
     partial = len(active) < len(BASE_WEIGHTS)
@@ -239,6 +275,7 @@ def compute_memory_value_score(terms: ScoreTerms) -> MemoryValueScore:
         score=score,
         partial=partial,
         calibrated=False,
+        valid=True,
         note=note,
     )
 
@@ -297,7 +334,7 @@ def build_report(
 ) -> E1Report:
     """从 case 评估集合构建报告（纯函数：``generated_at`` 可注入以保证可复现）。"""
     terms = compute_score_terms(evaluations)
-    score = compute_memory_value_score(terms)
+    score = compute_memory_value_score(terms, n_cases=len(evaluations))
     stats = StatsBundle(
         fn_delta=paired_delta_summary(evaluations),
         explanation_pass=explanation_pass_summary(evaluations),
@@ -407,6 +444,8 @@ def render_markdown(report: E1Report) -> str:
         (
             f"**Score = {report.score.score:.3f}**"
             f"（partial={report.score.partial}, calibrated={report.score.calibrated}）"
+            if report.score.valid
+            else "**Score = N/A（无 case，无法计算；不等价于 Memory 无价值）**"
         ),
         "",
         f"> {report.score.note}",
@@ -476,7 +515,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     json_path, md_path = write_report(report, args.out)
     print(f"[E-1A] Hard Gate: {'PASS' if report.hard_gate.all_pass else 'FAIL'} "
           f"({report.hard_gate.passed}/{report.hard_gate.total})")
-    print(f"[E-1A] Memory Value Score: {report.score.score:.3f} (partial={report.score.partial})")
+    score_str = f"{report.score.score:.3f}" if report.score.valid else "N/A"
+    print(f"[E-1A] Memory Value Score: {score_str} (partial={report.score.partial})")
     print(f"[E-1A] 报告: {json_path} / {md_path}")
     return 0 if report.hard_gate.all_pass else 1
 
