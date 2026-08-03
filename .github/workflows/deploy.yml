@@ -73,6 +73,10 @@ jobs:
               cp .env.example .env
             fi
 
-            # 4) 构建并启动全部 service（dashboard + home-perception + mqtt）
+            # 4) 部署前校验 compose 合法（失败则阻断，避免坏部署）
+            echo "==> 校验 docker-compose.yml"
+            docker compose config -q
+
+            # 5) 构建并启动全部 service（dashboard + home-perception + mqtt）
             docker compose up -d --build
             docker image prune -f
