@@ -31,6 +31,9 @@ config/devices.yaml
 *.engine
 data/models/
 
+# --- 评估产出物（可由 `python -m home_perception.memory.evaluation` 再生成，含时间戳，不入库）---
+artifacts/
+
 # --- 设计思路草稿（团队研究稿，非模块交付；终稿已沉淀到 docs/）---
 .doc/
 data/evidence/**
