@@ -18,6 +18,11 @@ services:
     depends_on:
       - mqtt
     restart: unless-stopped
+    # 演示部署（视频文件 + dashboard）不需要 home-perception 真实流水线；
+    # 仅在需要真实摄像头 pipeline 时用 `docker compose --profile pipeline up` 拉起。
+    # 否则该服务在 Docker 内会因缺失 tests/fixtures 而崩溃重启循环。
+    profiles:
+      - pipeline
 
   # 演示 Dashboard 网关（M-V1 区域⑥ Memory Context Panel 的承载服务）。
   # 绑定 0.0.0.0 对外暴露；默认跑 real_doorway 场景，需 data/demo 下有对应视频才能显示画面。
