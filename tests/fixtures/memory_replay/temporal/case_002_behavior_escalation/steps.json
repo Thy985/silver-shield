@@ -1,0 +1,311 @@
+[
+  {
+    "step": 1,
+    "timestamp": "2026-07-12T19:00:00+00:00",
+    "current_event": {
+      "event_id": "cur-002-s1",
+      "event_type": "risk_signal",
+      "visitor_instance_id": "B002",
+      "occurred_at": "2026-07-12T19:00:00+00:00",
+      "risk_level": "LOW",
+      "markers": [
+        "observe_camera"
+      ]
+    },
+    "reasoning_input": {
+      "current_event": {
+        "event_id": "cur-002-s1",
+        "event_type": "risk_signal",
+        "visitor_instance_id": "B002",
+        "occurred_at": "2026-07-12T19:00:00+00:00",
+        "risk_level": "LOW",
+        "markers": [
+          "observe_camera"
+        ]
+      },
+      "historical_context": [
+        {
+          "record_id": "ep-b002-d1",
+          "visitor_instance_id": "B002",
+          "person_identity_id": null,
+          "enter_time": "2026-07-10T19:00:00+00:00",
+          "leave_time": "2026-07-10T19:03:00+00:00",
+          "duration_seconds": 180.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "behavior:observe"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-b002-d1"
+          ],
+          "summary": "访客门口观察",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-10T19:03:00+00:00"
+        }
+      ],
+      "visitor_profile": null,
+      "risk_pattern": null,
+      "evidence_refs": [],
+      "previous_actions": [],
+      "conflicts": []
+    }
+  },
+  {
+    "step": 2,
+    "timestamp": "2026-07-12T20:00:00+00:00",
+    "current_event": {
+      "event_id": "cur-002-s2",
+      "event_type": "risk_signal",
+      "visitor_instance_id": "B002",
+      "occurred_at": "2026-07-12T20:00:00+00:00",
+      "risk_level": "LOW",
+      "markers": [
+        "observe_camera",
+        "carry"
+      ]
+    },
+    "reasoning_input": {
+      "current_event": {
+        "event_id": "cur-002-s2",
+        "event_type": "risk_signal",
+        "visitor_instance_id": "B002",
+        "occurred_at": "2026-07-12T20:00:00+00:00",
+        "risk_level": "LOW",
+        "markers": [
+          "observe_camera",
+          "carry"
+        ]
+      },
+      "historical_context": [
+        {
+          "record_id": "ep-b002-d1",
+          "visitor_instance_id": "B002",
+          "person_identity_id": null,
+          "enter_time": "2026-07-10T19:00:00+00:00",
+          "leave_time": "2026-07-10T19:03:00+00:00",
+          "duration_seconds": 180.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "behavior:observe"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-b002-d1"
+          ],
+          "summary": "访客门口观察",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-10T19:03:00+00:00"
+        },
+        {
+          "record_id": "ep-b002-d2",
+          "visitor_instance_id": "B002",
+          "person_identity_id": null,
+          "enter_time": "2026-07-11T20:00:00+00:00",
+          "leave_time": "2026-07-11T20:04:00+00:00",
+          "duration_seconds": 240.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "behavior:dwell"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-b002-d2"
+          ],
+          "summary": "访客门口停留",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-11T20:04:00+00:00"
+        },
+        {
+          "record_id": "ep-b002-d3",
+          "visitor_instance_id": "B002",
+          "person_identity_id": null,
+          "enter_time": "2026-07-12T21:00:00+00:00",
+          "leave_time": "2026-07-12T21:05:00+00:00",
+          "duration_seconds": 300.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "behavior:carry+observe_camera"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-b002-d3"
+          ],
+          "summary": "访客携带物品并频繁观察摄像头",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-12T21:05:00+00:00"
+        }
+      ],
+      "visitor_profile": {
+        "visitor_instance_id": "B002",
+        "visit_count": 3,
+        "night_visit_ratio": 0.0,
+        "confidence": "cold_start",
+        "identity_confirmed": false,
+        "first_seen": "2026-07-10T19:00:00+00:00",
+        "last_seen": "2026-07-12T21:05:00+00:00"
+      },
+      "risk_pattern": {
+        "tags": [
+          "repeated_visit",
+          "escalating_behavior"
+        ],
+        "escalation_history": [
+          "observe",
+          "dwell",
+          "carry+observe_camera"
+        ],
+        "confidence": "cold_start"
+      },
+      "evidence_refs": [],
+      "previous_actions": [],
+      "conflicts": []
+    }
+  },
+  {
+    "step": 3,
+    "timestamp": "2026-07-12T20:45:00+00:00",
+    "current_event": {
+      "event_id": "cur-002-s3",
+      "event_type": "risk_signal",
+      "visitor_instance_id": "B002",
+      "occurred_at": "2026-07-12T20:45:00+00:00",
+      "risk_level": "HIGH",
+      "markers": [
+        "observe_camera",
+        "carry"
+      ]
+    },
+    "reasoning_input": {
+      "current_event": {
+        "event_id": "cur-002-s3",
+        "event_type": "risk_signal",
+        "visitor_instance_id": "B002",
+        "occurred_at": "2026-07-12T20:45:00+00:00",
+        "risk_level": "HIGH",
+        "markers": [
+          "observe_camera",
+          "carry"
+        ]
+      },
+      "historical_context": [
+        {
+          "record_id": "ep-b002-d1",
+          "visitor_instance_id": "B002",
+          "person_identity_id": null,
+          "enter_time": "2026-07-10T19:00:00+00:00",
+          "leave_time": "2026-07-10T19:03:00+00:00",
+          "duration_seconds": 180.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "behavior:observe"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-b002-d1"
+          ],
+          "summary": "访客门口观察",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-10T19:03:00+00:00"
+        },
+        {
+          "record_id": "ep-b002-d2",
+          "visitor_instance_id": "B002",
+          "person_identity_id": null,
+          "enter_time": "2026-07-11T20:00:00+00:00",
+          "leave_time": "2026-07-11T20:04:00+00:00",
+          "duration_seconds": 240.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "behavior:dwell"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-b002-d2"
+          ],
+          "summary": "访客门口停留",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-11T20:04:00+00:00"
+        },
+        {
+          "record_id": "ep-b002-d3",
+          "visitor_instance_id": "B002",
+          "person_identity_id": null,
+          "enter_time": "2026-07-12T21:00:00+00:00",
+          "leave_time": "2026-07-12T21:05:00+00:00",
+          "duration_seconds": 300.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "behavior:carry+observe_camera"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-b002-d3"
+          ],
+          "summary": "访客携带物品并频繁观察摄像头",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-12T21:05:00+00:00"
+        }
+      ],
+      "visitor_profile": {
+        "visitor_instance_id": "B002",
+        "visit_count": 3,
+        "night_visit_ratio": 0.0,
+        "confidence": "cold_start",
+        "identity_confirmed": false,
+        "first_seen": "2026-07-10T19:00:00+00:00",
+        "last_seen": "2026-07-12T21:05:00+00:00"
+      },
+      "risk_pattern": {
+        "tags": [
+          "repeated_visit",
+          "escalating_behavior"
+        ],
+        "escalation_history": [
+          "observe",
+          "dwell",
+          "carry+observe_camera"
+        ],
+        "confidence": "cold_start"
+      },
+      "evidence_refs": [],
+      "previous_actions": [],
+      "conflicts": []
+    }
+  }
+]

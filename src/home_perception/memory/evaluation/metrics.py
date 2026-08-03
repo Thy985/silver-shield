@@ -267,11 +267,18 @@ class EarlyDetectionResult:
 
     @classmethod
     def computed(cls, lead_time_minutes: float, step_delta: int | None) -> EarlyDetectionResult:
+        """``lead_time_minutes`` 为**原始** Δts（= ts(B)−ts(M)，分钟，未 clamp）。
+
+        归一化 / 截断到窗口 W 发生在 term 层（``early_detection_term`` 中的
+        ``_clamp(lead_time_minutes / LEAD_TIME_WINDOW_MINUTES)``），而非此处——
+        故报告展示的 LeadTime 是真实时间差，term 计分时再归一化（B3 澄清：PR 描述
+        "clamp(Δts, W)" 的 clamp 在 term 层，不在本函数）。
+        """
         return cls(
             status="computed",
             lead_time_minutes=lead_time_minutes,
             step_delta=step_delta,
-            detail="lead_time>0 提前 / =0 持平 / <0 退化",
+            detail="lead_time>0 提前 / =0 持平 / <0 退化（原始 Δts，未 clamp）",
         )
 
     @classmethod
@@ -291,7 +298,10 @@ def compute_lead_time(
     baseline_step: int | None = None,
     memory_step: int | None = None,
 ) -> EarlyDetectionResult:
-    """§4.4 LeadTime = ts(B) − ts(M)；>0 表示 Memory 更早检测。
+    """§4.4 LeadTime = ts(B) − ts(M)（原始 Δ，分钟，未截断）；>0 表示 Memory 更早检测。
+
+    注意：本函数返回**未 clamp** 的原始时间差；窗口截断（clamp 到 W）在 ``early_detection_term``
+    的 term 层归一化完成，而非此处（B3）。报告展示的 LeadTime 因此是真实时间差。
 
     某臂缺失检测 → ``missing_detection``，并以 ``missing_arm`` 区分缺失的是哪一臂：
     ``"memory"`` / ``"baseline"`` / ``"both"``，供 ``early_detection_term`` 分别计分
@@ -336,22 +346,33 @@ def evaluate_case(
     result_m: ReasoningResult,
     result_b: ReasoningResult,
     gt: GroundTruthRecord,
+    early_detection: EarlyDetectionResult | None = None,
 ) -> CaseEvaluation:
-    """对一个 case 的两臂 ReasoningResult 计算 E-1A 四指标 + Hard Gate（§9）。"""
+    """对一个 case 的两臂 ReasoningResult 计算 E-1A 四指标 + Hard Gate（§9）。
+
+    ``early_detection``：E-1A 无时序数据 → 默认 ``na()``（不计入 Hard Gate 与 Score）；
+    E-1c 时序校准传入 ``run_temporal_ab_case`` 算出的 ``EarlyDetectionResult``。
+    """
     q1 = metric_q1_grounded_gain(result_m, result_b, gt)
     q2 = metric_q2_historical_reference(result_m)
     q3 = metric_q3_pattern_grounding(result_m)
     fp = metric_fp(result_m, result_b, gt)
     fn_m, fn_b = metric_fn(result_m, result_b, gt)
-    ed = EarlyDetectionResult.na()  # E-1A 无时序数据，Early Detection 不计入 Hard Gate
+    ed = early_detection if early_detection is not None else EarlyDetectionResult.na()
     hard_gate_pass = q1 and q2 and q3 and fp and (fn_m < fn_b)
+    if ed.status == "na":
+        ed_note = "EarlyDetection=N/A(data-gated → E-1B)"
+    elif ed.lead_time_minutes is not None:
+        ed_note = f"EarlyDetection={ed.status}({ed.lead_time_minutes:.1f}min)"
+    else:
+        ed_note = f"EarlyDetection={ed.status}"
     notes = (
         f"Q1(grounded_gain)={q1}",
         f"Q2(historical_ref)={q2}",
         f"Q3(pattern_grounding)={q3}",
         f"FP(≤acceptable)={fp}",
         f"FN: memory={fn_m} baseline={fn_b}",
-        "EarlyDetection=N/A(data-gated → E-1B)",
+        ed_note,
         f"HardGate={'PASS' if hard_gate_pass else 'FAIL'}",
     )
     return CaseEvaluation(
