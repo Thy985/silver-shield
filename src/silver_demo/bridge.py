@@ -20,6 +20,8 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+import structlog
+
 
 def encode_frame_to_base64_jpeg(
     frame: Any,
@@ -80,6 +82,10 @@ def frame_result_to_view(
           # —— 实时风险状态流（ADR-0021 Phase 1 · 演示层接入）——
           "behavior_states": [ {track_id, phase, dwell_seconds, ...}, ... ],  # 在场访客纯实时快照
           "risk_signals":   [ {signal_id, transition, category, ...}, ... ],  # RAISED/CLEARED 跃迁
+          # —— ADR-0025 C-4/C-6 Memory Context（区域⑥ · 只读 Shadow）——
+          "memory_profiles": [ {visitor_instance_id, memory_status, n_episodes, known_patterns,
+                                 baseline, current, deviation, evidence, with_memory,
+                                 suggested_action_hint}, ... ],
         }
         ```
 
@@ -129,6 +135,14 @@ def frame_result_to_view(
             if isinstance(_d, dict):
                 _d["created_at"] = demo_time
 
+    # —— ADR-0025 C-4/C-6 Memory Context（区域⑥ · 只读 Shadow）——
+    # 从 FrameResult 的 (ReasoningInput, ReasoningResult) 对派生 Visitor Memory Profile。
+    # 纯格式转换（与 warnings/commands 同款 to_dict 风格），不引入业务判定逻辑。
+    memory_profiles = build_memory_profiles(
+        getattr(frame_result, "memory_inputs", []),
+        getattr(frame_result, "reasoning_results", []),
+    )
+
     return {
         "frame_index": frame_index,
         "demo_time": demo_time,
@@ -140,6 +154,7 @@ def frame_result_to_view(
         "commands": commands,
         "behavior_states": behavior_states,
         "risk_signals": risk_signals,
+        "memory_profiles": memory_profiles,
     }
 
 
@@ -186,3 +201,157 @@ def route_commands(commands: list[dict[str, Any]]) -> dict[str, list[dict[str, A
         elif ct == "LOG_ONLY":
             log_only.append(c)
     return {"family": family, "community": community, "log_only": log_only}
+
+
+# ---------------------------------------------------------------------------
+# Memory Context（区域⑥ · ADR-0025 C-4/C-6 · 只读 Shadow 视图模型）
+# ---------------------------------------------------------------------------
+def build_memory_profiles(
+    memory_inputs: Any,
+    reasoning_results: Any,
+) -> list[dict[str, Any]]:
+    """从 FrameResult 的 (ReasoningInput, ReasoningResult) 对派生区域⑥ 只读画像（纯函数）。
+
+    与 ``reasoning_results`` 同 Shadow 语义：只读、不决策、不接决策（守 ADR-0010）。
+    入参与 ``FrameResult.memory_inputs`` / ``reasoning_results`` 一一对应（同一次
+    ``maybe_consume`` 产出的 ``ReasoningInput`` 与其 ``maybe_reason`` 产出的
+    ``ReasoningResult`` 同序）。任一对象缺失/异常时跳过该条（防御性，不崩溃网关）。
+
+    返回 list[dict]，每个 dict 结构（字段缺失时给合理默认，便于前端容错渲染）：
+        {
+          "visitor_instance_id": str,
+          "memory_status": str,          # active/deprecated/archived/invalid/none
+          "n_episodes": int,             # 历史上下文条数
+          "known_patterns": [str, ...],  # risk_pattern.tags + 重复访客标识
+          "baseline": {"enter_hours":[lo,hi], "avg_duration_s":float} | None,
+          "current": {"hour": int | None} | None,
+          "deviation": [str, ...],       # 当前到访 vs 基线的偏差描述
+          "evidence": [str, ...],        # source_refs(record_id) + source_event_ids 去重
+          "with_memory": {"findings":[...], "explanation":str} | None,  # ReasoningResult
+          "suggested_action_hint": str | None,
+        }
+    """
+    profiles: list[dict[str, Any]] = []
+    mis = memory_inputs or []
+    rrs = reasoning_results or []
+    for i, ri in enumerate(mis):
+        rr = rrs[i] if i < len(rrs) else None
+        try:
+            profiles.append(_build_one_memory_profile(ri, rr))
+        except Exception as exc:  # noqa: BLE001  # 单条坏数据不拖垮整帧展示
+            structlog.get_logger(__name__).warning(
+                "build_memory_profiles: 跳过坏记忆输入", error=str(exc)
+            )
+            continue
+    return profiles
+
+
+def _build_one_memory_profile(ri: Any, rr: Any | None) -> dict[str, Any]:
+    """派生单条 Visitor Memory Profile（纯函数；假定 ri 为 ReasoningInput 形状）。"""
+    # —— 历史上下文聚合 ——
+    hc = getattr(ri, "historical_context", ()) or ()
+    n_episodes = len(hc)
+    status_counts: dict[str, int] = {}
+    enter_hours: list[int] = []
+    durations: list[float] = []
+    source_event_ids: list[str] = []
+    for ep in hc:
+        st = getattr(ep, "memory_status", None)
+        key = getattr(st, "value", st) if st is not None else "unknown"
+        if isinstance(key, str):
+            status_counts[key] = status_counts.get(key, 0) + 1
+        et = getattr(ep, "enter_time", None)
+        if et is not None:
+            try:
+                enter_hours.append(int(et.hour))
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning(
+                    "build_memory_profile: enter_time 解析失败, 跳过", error=str(exc)
+                )
+        dur = getattr(ep, "duration_seconds", None)
+        if isinstance(dur, (int, float)):
+            durations.append(float(dur))
+        se = getattr(ep, "source_event_ids", None)
+        if se:
+            source_event_ids.extend(se)
+
+    if not status_counts:
+        memory_status = "none"
+    elif status_counts.get("active"):
+        memory_status = "active"
+    else:
+        # 无 active 时取出现最多的状态（如 deprecated×2）
+        memory_status = max(status_counts.items(), key=lambda kv: kv[1])[0]
+
+    # —— 已知模式 ——
+    rp = getattr(ri, "risk_pattern", None)
+    known_patterns = list(getattr(rp, "tags", ()) or ()) if rp is not None else []
+    if n_episodes > 0 and "repeat_visitor" not in known_patterns:
+        known_patterns.append("repeat_visitor")
+
+    # —— 行为基线（来自历史 enter/leave/duration）——
+    baseline: dict[str, Any] | None = None
+    if enter_hours and durations:
+        baseline = {
+            "enter_hours": [min(enter_hours), max(enter_hours)],
+            "avg_duration_s": round(sum(durations) / len(durations), 1),
+        }
+
+    # —— 当前到访 + 偏差 ——
+    ce = getattr(ri, "current_event", None)
+    current: dict[str, Any] | None = None
+    deviation: list[str] = []
+    if ce is not None:
+        occ = getattr(ce, "occurred_at", None)
+        cur_hour = None
+        if occ is not None:
+            try:
+                cur_hour = int(occ.hour)
+            except Exception:  # noqa: BLE001
+                cur_hour = None
+        current = {"hour": cur_hour}
+        if baseline and cur_hour is not None:
+            lo, hi = baseline["enter_hours"]
+            if cur_hour < lo or cur_hour > hi:
+                deviation.append(
+                    f"当前到访 {cur_hour:02d}:00 偏离典型时段 {lo:02d}:00–{hi:02d}:00"
+                )
+
+    # —— 记忆证据（source_refs 锚点 + 历史 source_event_ids 去重）——
+    evidence: list[str] = []
+    if rr is not None:
+        for sr in getattr(rr, "source_refs", ()) or ():
+            if getattr(sr, "source", None) == "historical_context":
+                ref = getattr(sr, "ref", None)
+                if ref and ref not in evidence:
+                    evidence.append(ref)
+    seen = set(evidence)
+    for sid in source_event_ids:
+        if sid not in seen:
+            seen.add(sid)
+            evidence.append(sid)
+    evidence = evidence[:8]
+
+    # —— 记忆增量叙事（ReasoningResult）——
+    with_memory: dict[str, Any] | None = None
+    hint = None
+    if rr is not None:
+        with_memory = {
+            "findings": list(getattr(rr, "findings", ()) or ()),
+            "explanation": getattr(rr, "explanation", "") or "",
+        }
+        hint = getattr(rr, "suggested_action_hint", None)
+
+    vid = getattr(ce, "visitor_instance_id", "") if ce is not None else ""
+    return {
+        "visitor_instance_id": vid,
+        "memory_status": memory_status,
+        "n_episodes": n_episodes,
+        "known_patterns": known_patterns,
+        "baseline": baseline,
+        "current": current,
+        "deviation": deviation,
+        "evidence": evidence,
+        "with_memory": with_memory,
+        "suggested_action_hint": hint,
+    }

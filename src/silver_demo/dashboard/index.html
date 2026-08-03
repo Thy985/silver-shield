@@ -67,6 +67,7 @@
     .realtime { grid-column: span 7; grid-row: 3; }   /* ADR-0021 Phase 1 · 实时风险信号区 */
     .closure { grid-column: span 12; grid-row: 4; }
     .arch { grid-column: span 12; grid-row: 5; }
+    .memory { grid-column: span 12; grid-row: 6; }   /* Region 6: Memory Context（ADR-0025 C-4/C-6） */
     @media (max-width: 900px) {
       .video, .timeline, .risk, .closure, .arch { grid-column: span 12; grid-row: auto; }
     }
@@ -170,6 +171,29 @@
     .rt-time { font-size: 11px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
     .rt-subj { font-size: 12.5px; font-weight: 600; margin-top: 6px; }
     .rt-feat { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+    /* ---------- Region 6: Memory Context（ADR-0025 C-4/C-6 · 只读 Shadow） ---------- */
+    .memory .body { max-height: 560px; }
+    .mem-card { border: 1px solid var(--line); border-left: 4px solid #7c3aed; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #faf6ff; }
+    .mem-card:last-child { margin-bottom: 0; }
+    .mem-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .mem-vid { font-size: 12px; font-weight: 700; }
+    .mem-status { font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+    .mem-status.active { color: #047857; background: #d1fae5; }
+    .mem-status.none { color: #64748b; background: #f1f5f9; }
+    .mem-status.deprecated, .mem-status.archived, .mem-status.invalid { color: #92400e; background: #fef3c7; }
+    .mem-n { font-size: 11px; color: var(--muted); }
+    .mem-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 7px; align-items: center; }
+    .mem-k { font-size: 11px; font-weight: 700; color: var(--muted); }
+    .mem-val { font-size: 12px; }
+    .mem-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid #c4b5fd; color: #6d28d9; background: #f3e8ff; }
+    .mem-dev { font-size: 11.5px; color: var(--danger); font-weight: 600; margin-top: 5px; }
+    .mem-narr { margin: 5px 0 0; padding-left: 16px; }
+    .mem-narr li { font-size: 12px; margin: 2px 0; }
+    .mem-exp { font-size: 11.5px; color: var(--ink); margin-top: 5px; line-height: 1.45; }
+    .mem-ev { margin-top: 2px; display: flex; gap: 5px; flex-wrap: wrap; }
+    .mem-tag { font-size: 10px; color: #475569; background: #f1f5f9; border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; font-family: ui-monospace, monospace; }
+
 
     /* ---------- Region 4 deepen: 三端任务卡联动 ---------- */
     .cl-reasons { font-size: 12px; color: var(--ink); margin: 6px 0; font-weight: 600; }
@@ -305,6 +329,7 @@
           <div class="ai-row"><span class="ck">✓</span> 轨迹跟踪（ReID 连续身份）</div>
           <div class="ai-row"><span class="ck">✓</span> 行为建模（停留 / 再现 / 升级）</div>
           <div class="ai-row"><span class="ck">✓</span> 风险解释（规则命中强度）</div>
+          <div class="ai-row"><span class="ck">✓</span> 记忆认知（Memory Context）</div>
           <div class="ai-model">模型版本：<code>Demo-YOLO11n</code> · 当前为<b>端到端链路验证</b>，模型采用基础检测器，后续经真实居家数据持续优化。</div>
         </aside>
       </div>
@@ -460,6 +485,14 @@
         </div>
       </section>
 
+      <!-- Region 6: Memory Context（ADR-0025 C-4/C-6 · 只读 Shadow 认知层） -->
+      <section class="region memory">
+        <h2>⑥ Memory Context <span class="tag">认知层 · 只读 Shadow</span></h2>
+        <div class="body" id="memory-body">
+          <div class="tl-empty">🧠 等待历史上下文…（认知层已启用）</div>
+        </div>
+      </section>
+
       <!-- P0-11.4 Tab ② 家属确认（focused view · hidden by default · 切 Tab 不重订 WS） -->
       <section class="region view-family" id="view-family" hidden>
         <h2>② 家属确认 <span class="tag">单按钮 · 防同效穿帮</span></h2>
@@ -593,6 +626,8 @@
       // paired_signal_id 配对移除（熄卡）；TTL 兜底：主体离场后 evaluator 未补发
       // CLEARED 时自动熄灭（工程方案 §4.3 volatile 语义，展示层兜底）。
       riskSignalMap: new Map(),
+      // ── ADR-0025 C-4/C-6 Memory Context（区域⑥ · 只读 Shadow 画像）──
+      memoryProfiles: [],        // 来自 view.memory_profiles（bridge 派生）
       // 活跃实时风险卡的 TTL 兜底（毫秒）。取值依据：服务端 RealTimeRiskEvaluator 的
       // "volatile" 语义 = 主体离场后约 1~2 个评估周期补发 CLEARED；单帧循环 + 5 帧在场
       // 即可续期（见 ingestRiskSignals）。20s 远大于最坏续期间隔，给正常在场主体充足续期窗口，
@@ -739,6 +774,7 @@
         mergeCommands(state.routed);   // 跨帧累积三端命令，供区域④按 warning_id 联动
         ingestBehavior(msg.view, activeNow);  // 累积访客行为里程碑（区域② 行为演化）
         ingestRiskSignals(msg.view);          // ADR-0021 Phase 1 · 实时风险信号（区域③.5）
+        state.memoryProfiles = (msg.view && msg.view.memory_profiles) || [];  // 区域⑥ Memory Context
         renderAll();
       } else if (msg.type === "snapshot") {
         applySnapshot(msg);            // P0-11.3.5 晚连恢复历史状态
@@ -942,6 +978,7 @@
       renderClosure();
       renderRouting();
       renderRealtimeRisk();      // ADR-0021 Phase 1 · 实时风险信号
+      renderMemory();            // ADR-0025 C-4/C-6 · Memory Context（区域⑥）
       renderStatus();           // P0-11.3.5 状态面板
     }
 
@@ -1292,6 +1329,73 @@
           + featHtml
           + '</div>';
       }).join('');
+    }
+
+    // ---------- ADR-0025 C-4/C-6 · Region 6: Memory Context（只读 Shadow 画像） ----------
+    // 渲染 bridge 已派生的 memory_profiles（visitor / 历史段数 / 已知模式 / 行为基线 /
+    // 当前偏差 / 记忆证据 / 记忆增量叙事）。纯展示，不引入任何判定逻辑。
+    function renderMemory() {
+      var body = $("memory-body");
+      if (!body) return;
+      var ps = state.memoryProfiles || [];
+      if (!ps.length) {
+        body.innerHTML = '<div class="tl-empty">🧠 等待历史上下文…（认知层已启用）</div>';
+        return;
+      }
+      body.innerHTML = ps.map(function (p) {
+        var who = friendlyVisitor(p.visitor_instance_id || "");
+        var st = p.memory_status || "none";
+        var stCls = (st === "active" || st === "none" || st === "deprecated" ||
+                     st === "archived" || st === "invalid") ? st : "";
+        var patterns = (p.known_patterns || []).map(function (t) {
+          return '<span class="mem-chip">' + esc(t) + '</span>';
+        }).join("");
+        var baseline = "";
+        if (p.baseline) {
+          var b = p.baseline;
+          baseline = '<div class="mem-row"><span class="mem-k">行为基线</span>'
+            + '<span class="mem-val">典型到访 ' + String(b.enter_hours[0]).padStart(2, "0") + ':00–'
+            + String(b.enter_hours[1]).padStart(2, "0") + ':00 · 平均停留 '
+            + (Math.round(b.avg_duration_s / 60 * 10) / 10) + ' 分</span></div>';
+        }
+        var cur = (p.current && p.current.hour != null)
+          ? '<div class="mem-row"><span class="mem-k">当前到访</span><span class="mem-val">'
+            + String(p.current.hour).padStart(2, "0") + ':00</span></div>'
+          : '';
+        var dev = (p.deviation || []).map(function (d) {
+          return '<div class="mem-dev">⚠ ' + esc(d) + '</div>';
+        }).join("");
+        var ev = (p.evidence || []).map(function (e) {
+          return '<span class="mem-tag">' + esc(shortId(e)) + '</span>';
+        }).join("");
+        var narr = "";
+        if (p.with_memory) {
+          var items = (p.with_memory.findings || []).map(function (f) {
+            return "<li>" + esc(f) + "</li>";
+          }).join("");
+          var exp = p.with_memory.explanation
+            ? '<div class="mem-exp">' + esc(p.with_memory.explanation) + '</div>' : "";
+          narr = '<div class="mem-row"><span class="mem-k">记忆增量</span></div>'
+            + (items ? '<ul class="mem-narr">' + items + '</ul>' : '')
+            + exp;
+        }
+        var hint = p.suggested_action_hint
+          ? '<span class="mem-k">建议</span><span class="mem-val">'
+            + esc(ACT[p.suggested_action_hint] || p.suggested_action_hint) + '</span>'
+          : '';
+        return '<div class="mem-card">'
+          + '<div class="mem-top">'
+          +   '<span class="mem-vid">' + esc(who) + '</span>'
+          +   '<span class="mem-status ' + stCls + '">' + esc(st.toUpperCase()) + '</span>'
+          +   '<span class="mem-n">历史 ' + (p.n_episodes || 0) + ' 段</span>'
+          + '</div>'
+          + (patterns ? '<div class="mem-row"><span class="mem-k">已知模式</span>' + patterns + '</div>' : '')
+          + baseline + cur + dev
+          + (ev ? '<div class="mem-row"><span class="mem-k">记忆证据</span><div class="mem-ev">' + ev + '</div></div>' : '')
+          + narr
+          + (hint ? '<div class="mem-row">' + hint + '</div>' : '')
+          + '</div>';
+      }).join("");
     }
 
     // ---------- P0-11.4 阶段叙事 Tab（切 Tab 不重订 WS；同一 state 多角色共享） ----------

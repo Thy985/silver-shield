@@ -77,6 +77,7 @@ from ..memory.consumer import (
     extract_behavior_markers,
     max_risk_level,
 )
+from ..memory.consumer.contracts import ReasoningInput
 from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
 from .config import build_dispatcher_config, build_threshold_config
 from .memory_consumer_hook import MemoryConsumerHook
@@ -160,6 +161,14 @@ class FrameResult:
     # 只进 FrameResult 供 Dashboard / 审计展示"记忆如何反哺理解"，**不接决策、不产 Warning**
     # （守 ADR-0010 单一决策中心）。接决策归 ADR-0025 Phase 2，本 PR 不实现。
     reasoning_results: list[ReasoningResult] = field(default_factory=list)
+    # —— ADR-0025 C-4/C-6 Memory Context 面板（与 reasoning_results 同 Shadow 语义）——
+    # memory_inputs 即驱动每条 reasoning_results 的 ReasoningInput（含 historical_context）：
+    # 区域⑥ "Memory Context" 需完整历史上下文才能渲染 Visitor Memory Profile
+    # （Historical Episodes / Known Pattern / Behavior Baseline / Current Deviation），
+    # 而 ReasoningResult 只含 findings/explanation/source_refs 锚点、不含完整历史。故此处
+    # 把被 process_frame 用完即弃的 ReasoningInput 一并留存，供 Dashboard 只读消费。
+    # 只读、不接决策（守 ADR-0010）；默认空列表 = 向后兼容。
+    memory_inputs: list[ReasoningInput] = field(default_factory=list)
 
 
 @dataclass
@@ -655,6 +664,9 @@ class PerceptionPipeline:
         commands: list[Any] = []
         # —— ADR-0025 C-6：Memory 消费侧参考推理结果（Shadow 观测，不接决策）——
         reasoning_results: list[ReasoningResult] = []
+        # memory_inputs：与 reasoning_results 一一对应（同一次 maybe_consume 产出的 ReasoningInput），
+        # 供区域⑥ Memory Context 渲染完整历史上下文（只读、不接决策）。
+        memory_inputs: list[ReasoningInput] = []
 
         for ev in events:
             self.metrics.visitor_events += 1
@@ -671,6 +683,10 @@ class PerceptionPipeline:
                 ri = self._memory_consumer_hook.maybe_consume(
                     self._to_current_event(ev, ev_warnings)
                 )
+                # 留存 ReasoningInput 供区域⑥ Memory Context 渲染（与 reasoning_results 同 Shadow
+                # 语义：只读、不接决策）；ri 为 None 时（门控未触发）不留存。
+                if ri is not None:
+                    memory_inputs.append(ri)
                 # C-6：把 ReasoningInput 推理为 ReasoningResult（无引擎时立即返回 None，
                 # 零开销）；产出仅汇入 reasoning_results 做 Shadow 观测，不接决策。
                 rr = self._memory_consumer_hook.maybe_reason(ri)
@@ -751,6 +767,7 @@ class PerceptionPipeline:
             behavior_states=behavior_states,
             risk_signals=risk_signals,
             reasoning_results=reasoning_results,
+            memory_inputs=memory_inputs,
         )
 
     def _act_on_event(

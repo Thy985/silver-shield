@@ -123,6 +123,8 @@ class DemoGateway:
         # RealTimeRiskEvaluator）。hp_settings 在 assemble / _rebuild_pipeline 复用同一对象，
         # 故只需 assemble 应用一次，循环重放 / 切换场景都会重新读取该对象。
         self._apply_scenario_realtime_overrides()
+        # Demo 默认开启 Memory 认知层（区域⑥ 运行时数据来源）；必须在 from_settings 之前
+        self._apply_demo_memory_overrides()
 
         # device_id 用场景 source 名（与 runtime/lifecycle.run_demo 一致）
         self.pipeline = PerceptionPipeline.from_settings(
@@ -342,6 +344,30 @@ class DemoGateway:
                 )
 
     # ------------------------------------------------------------------
+    # Demo 默认开启 Memory 认知层（ADR-0025 C-4/C-6 · Shadow 观测）
+    # ------------------------------------------------------------------
+
+    def _apply_demo_memory_overrides(self) -> None:
+        """Demo 默认开启 Memory 认知层，使区域⑥ Memory Context 有运行时数据。
+
+        把 ``hp_settings.memory`` 的四个开关置 True：
+        - ``enabled`` / ``episodic_shadow``：构造 ``InMemoryStore`` + 开启 Stage F 影子写入
+          （每次访客离场投影 ``EpisodicRecord``，为召回提供历史）；
+        - ``consumer_enabled`` / ``reasoning_enabled``：按模式 B 门控召回历史 → 组装
+          ``ReasoningInput`` → ``RuleBasedReasoningEngine`` 产出 ``ReasoningResult``，
+          经 ``FrameResult`` 做 Shadow 观测。
+
+        仅经 settings 覆盖，不触碰 pipeline 内部（守 ADR-0015）。消费侧只读、不决策、
+        不产 Warning（守 ADR-0010）；聚合出的记忆只增强理解，不回流决策。幂等（重复调用
+        结果一致），故在 ``assemble`` 与 ``_rebuild_pipeline`` 的 ``from_settings`` 前各调一次。
+        """
+        mem = self.hp_settings.memory
+        mem.enabled = True
+        mem.episodic_shadow = True
+        mem.consumer_enabled = True
+        mem.reasoning_enabled = True
+
+    # ------------------------------------------------------------------
     # 输入源热切换（P0-11.4 视频输入适配层）
     # ------------------------------------------------------------------
 
@@ -411,6 +437,8 @@ class DemoGateway:
         # 因实时组件是否构造取决于 hp_settings.realtime_risk。内部先复位基线再覆盖，
         # 切到「无 realtime_risk override」的场景时不会残留上一个场景的 True（防泄漏）。
         self._apply_scenario_realtime_overrides()
+        # Demo 默认开启 Memory 认知层（区域⑥ 运行时数据来源）；必须在 from_settings 之前
+        self._apply_demo_memory_overrides()
         self.pipeline = PerceptionPipeline.from_settings(
             self.hp_settings,
             detector=self.pipeline.detector,
