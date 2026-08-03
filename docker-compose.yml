@@ -10,7 +10,26 @@ services:
   home-perception:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # 演示 Dashboard 网关（M-V1 区域⑥ Memory Context Panel 的承载服务）。
+  # 绑定 0.0.0.0 对外暴露；默认跑 real_doorway 场景，需 data/demo 下有对应视频才能显示画面。
+  dashboard:
+    build: .
+    environment:
+      - DEMO_HOST=0.0.0.0
+      - DEMO_PORT=8765
+      - DEMO_SCENARIO=config/demo/scenarios/real_doorway.yaml
+    command: ["python", "-m", "silver_demo.gateway"]
+    ports:
+      - "8765:8765"
     volumes:
       - ./config:/app/config:ro
       - ./data:/app/data

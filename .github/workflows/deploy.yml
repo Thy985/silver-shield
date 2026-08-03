@@ -1,0 +1,82 @@
+name: CD
+
+# 持续部署（CD）：push 到 main 即部署到阿里云 ECS（Docker Compose over SSH）。
+#
+# 使用前请在仓库 Settings → Secrets and variables → Actions 配置以下 Secrets：
+#   ALIYUN_HOST        ECS 公网 IP 或域名
+#   ALIYUN_USERNAME    SSH 登录用户名（如 root / ecs-user）
+#   ALIYUN_SSH_KEY     私钥内容（PEM，含 -----BEGIN ... -----END 整段）
+#   ALIYUN_PORT        可选，SSH 端口，默认 22
+#   DEPLOY_PATH        可选，服务器部署目录，默认 /opt/silvershield
+#   DEMO_DATA_URL      可选，演示视频打包（tar.gz，内含 data/demo/*.mp4）的下载地址
+#                      （如阿里云 OSS 预签名 URL）。视频被 .gitignore 忽略不入库，
+#                       不配置则面板无画面——可在 Dashboard UI 上传或手动 scp 到服务器 data/demo。
+#
+# 服务器前置条件：已安装 git 与 Docker（含 compose v2）；安全组放行 8765（dashboard）/ 1883（mqtt）。
+#
+# 部署内容（docker-compose.yml 的 3 个 service）：
+#   mqtt          -> eclipse-mosquitto（本地 MQTT Broker）
+#   home-perception -> scripts/run.py（完整感知管线，按 .env 配置）
+#   dashboard     -> silver_demo.gateway（演示 Dashboard，含区域⑥ Memory Context Panel）
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEPLOY_PATH: /opt/silvershield
+
+jobs:
+  deploy:
+    name: Deploy to Aliyun ECS (Docker Compose SSH)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ALIYUN_HOST }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          key: ${{ secrets.ALIYUN_SSH_KEY }}
+          port: ${{ secrets.ALIYUN_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
+            REPO="https://github.com/${{ github.repository }}.git"
+
+            # 1) 拉取最新代码（首次 clone，之后硬重置到 origin/main，保证 CD 总是干净的最新主干）
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              git clone --depth 1 "$REPO" "$DEPLOY_PATH"
+            fi
+            cd "$DEPLOY_PATH"
+            git fetch --depth 1 origin main
+            git reset --hard origin/main
+
+            # 2) 演示视频（被 .gitignore 忽略，不入库）：可选经对象存储拉取后解包到 data/demo
+            if [ -n "${{ secrets.DEMO_DATA_URL }}" ]; then
+              echo "==> 拉取演示视频包 (DEMO_DATA_URL)"
+              mkdir -p data/demo
+              curl -fsSL "${{ secrets.DEMO_DATA_URL }}" -o /tmp/demo_videos.tar.gz
+              tar -xzf /tmp/demo_videos.tar.gz -C data/demo
+              rm -f /tmp/demo_videos.tar.gz
+            else
+              echo "==> 未配置 DEMO_DATA_URL：演示面板将无视频，请在 Dashboard UI 上传或手动 scp 到 $DEPLOY_PATH/data/demo"
+            fi
+
+            # 3) 服务器无 .env 时用模板生成（home-perception 需要；dashboard 有默认值）
+            if [ ! -f .env ] && [ -f .env.example ]; then
+              cp .env.example .env
+            fi
+
+            # 4) 部署前校验 compose 合法（失败则阻断，避免坏部署）
+            echo "==> 校验 docker-compose.yml"
+            docker compose config -q
+
+            # 5) 构建并启动全部 service（dashboard + home-perception + mqtt）
+            docker compose up -d --build
+            docker image prune -f
