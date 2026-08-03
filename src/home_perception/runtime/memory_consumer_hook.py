@@ -8,8 +8,9 @@
 
 硬边界（ADR-0025 §3.9）：
 
-- **不决策**：只产 ``ReasoningInput``，不写回 Memory、不改 Risk Score、不产 Warning
-  （守 ADR-0010 单一决策中心）；
+- **不决策**：只产 ``ReasoningInput`` → ``ReasoningResult``，不写回 Memory、不改
+  Risk Score、不产 Warning（守 ADR-0010 单一决策中心）；``maybe_reason`` 的产出仅
+  经 ``FrameResult.reasoning_results`` Shadow 观测，本阶段**不**喂回决策；
 - **非阻塞**：任何异常只计 ``consumer_errors`` + 日志，绝不中断实时风险主链路
   （AGENTS.md §2.5：记忆侧失败不崩溃主链路）；
 - **默认关闭**：``memory.consumer_enabled`` 默认 ``false``，关闭时 ``maybe_consume``
@@ -34,9 +35,9 @@ from dataclasses import dataclass
 
 from ..common.logging import get_logger
 from ..memory.consumer.config import ConsumerTriggerConfig
-from ..memory.consumer.contracts import CurrentEvent, ReasoningInput
-from ..memory.consumer.exceptions import ConsumerError
-from ..memory.consumer.interfaces import MemoryConsumer
+from ..memory.consumer.contracts import CurrentEvent, ReasoningInput, ReasoningResult
+from ..memory.consumer.exceptions import ConsumerError, ReasoningError
+from ..memory.consumer.interfaces import MemoryConsumer, ReasoningEngine
 from ..memory.store import MemoryStore
 
 log = get_logger(__name__)
@@ -47,6 +48,7 @@ CONSUMER_LOG_FIELDS: tuple[str, ...] = (
     "consumer_evaluated",
     "consumer_triggered",
     "consumer_produced",
+    "consumer_reasoned",
     "consumer_errors",
 )
 
@@ -58,7 +60,9 @@ class ConsumerMetrics:
     - ``consumer_evaluated``：开关开启且被调用的次数（门控判定前的分母）；
     - ``consumer_triggered``：通过模式 B 门控、真正进入消费的次数；
     - ``consumer_produced``：成功产出 ``ReasoningInput`` 的次数；
-    - ``consumer_errors``：消费失败次数（已隔离，不影响主链路）。
+    - ``consumer_reasoned``：成功把 ``ReasoningInput`` 推理为 ``ReasoningResult`` 的次数
+      （C-6 Reasoning Engine；无引擎时恒为 0）；
+    - ``consumer_errors``：消费 / 推理失败次数（已隔离，不影响主链路）。
 
     ``evaluated - triggered`` 即被门控挡下的量，是灰度期判断"模式 B 是否过窄/过宽"
     的直接观测口（ADR-0025 §3.10 修订动因）。
@@ -67,6 +71,7 @@ class ConsumerMetrics:
     consumer_evaluated: int = 0
     consumer_triggered: int = 0
     consumer_produced: int = 0
+    consumer_reasoned: int = 0
     consumer_errors: int = 0
 
     def as_log_fields(self) -> dict[str, int]:
@@ -92,25 +97,34 @@ class MemoryConsumerHook:
         enabled: bool,
         metrics: ConsumerMetrics | None = None,
         config: ConsumerTriggerConfig | None = None,
+        reasoning_engine: ReasoningEngine | None = None,
     ) -> None:
         self._consumer = consumer
         self._memory_store = memory_store
         self._enabled = bool(enabled)
         self.metrics = metrics or ConsumerMetrics()
         self._config = config or ConsumerTriggerConfig()
+        # C-6 Reasoning Engine：仅当消费侧已激活时才可能产出 ReasoningResult；
+        # 无引擎（``reasoning_enabled=false``）时 maybe_reason 立即返回 None，零开销。
+        self._reasoning_engine = reasoning_engine
 
     @property
     def enabled(self) -> bool:
         """运行期门控：``memory.consumer_enabled`` 是否激活。"""
         return self._enabled
 
+    @property
+    def reasoning_enabled(self) -> bool:
+        """运行期推理门控：``memory.reasoning_enabled`` 是否激活（引擎已注入）。"""
+        return self._reasoning_engine is not None
+
     def maybe_consume(self, current_event: CurrentEvent) -> ReasoningInput | None:
         """按模式 B 门控消费一次事件；未触发或失败均返回 ``None``。
 
-        返回值当前**无人消费**（Reasoning Engine 尚未落地，属 ADR-0025 后续阶段）：
-        本阶段等价于 Shadow Mode——只验证"能在正确时机拿到正确上下文"，产物经指标与
-        日志观测，不回流主链路。返回而非丢弃，是为了让 C-5 不变量测试与未来
-        Reasoning 接入可直接消费同一出口。
+        产出的 ``ReasoningInput`` 由 ``maybe_reason``（C-6）进一步推理为
+        ``ReasoningResult``，再经 ``FrameResult.reasoning_results`` 做 Shadow 观测
+        （不回流主链路、不接决策）。返回而非丢弃，是为了让 C-5 不变量测试与本阶段
+        Reasoning 接入直接消费同一出口。
 
         ⚠️ 次序契约（不变量级）：调用方 **必须** 在 ``MemoryHook.record`` 之前调用本方法。
         先写后读会把刚落库的"当下"当作"历史"召回（首次来访被判已知访客 +
@@ -149,6 +163,49 @@ class MemoryConsumerHook:
             )
             return None
         self.metrics.consumer_produced += 1
+        return result
+
+    def maybe_reason(self, input: ReasoningInput | None) -> ReasoningResult | None:
+        """把 ``maybe_consume`` 产出的 ``ReasoningInput`` 推理为 ``ReasoningResult``（C-6）。
+
+        返回 ``None`` 的三种情形（均为零开销 / 零副作用）：
+        - 未注入推理引擎（``reasoning_enabled=false``）；
+        - 输入为 ``None``（消费侧未触发 / 未产出）；
+        - 推理抛异常（隔离为 ``consumer_errors`` + 日志，不中断主链路，与 ``maybe_consume``
+          同款非阻塞语义）。
+
+        ⚠️ 硬边界（ADR-0010 单一决策中心 / ADR-0025 C1）：``ReasoningResult`` **不**被
+        喂回决策；本阶段只经 ``FrameResult.reasoning_results`` 做 Shadow 观测。推理引擎
+        只读 ``ReasoningInput``、只产参考结论，绝不改 Risk Score / 不产 Warning / 不写 Memory。
+
+        Args:
+            input: 由 ``maybe_consume`` 产出的 ``ReasoningInput``（可能为 ``None``）。
+
+        Returns:
+            推理成功时返回 ``ReasoningResult``；否则 ``None``。
+        """
+        if self._reasoning_engine is None or input is None:
+            return None
+        try:
+            result = self._reasoning_engine.infer(input)
+        except ReasoningError as exc:
+            # 已分类的推理失败：属预期内故障，warning 级 + 计数，不中断主链路
+            self.metrics.consumer_errors += 1
+            log.warning(
+                "memory_consumer.reason_failed",
+                visitor_instance_id=getattr(input.current_event, "visitor_instance_id", None),
+                error=str(exc),
+            )
+            return None
+        except Exception:
+            # 未分类异常：保留 traceback 便于定位，同样不中断主链路
+            self.metrics.consumer_errors += 1
+            log.exception(
+                "memory_consumer.reason_unexpected_error",
+                visitor_instance_id=getattr(input.current_event, "visitor_instance_id", None),
+            )
+            return None
+        self.metrics.consumer_reasoned += 1
         return result
 
     # -- 模式 B 门控 -----------------------------------------------------------

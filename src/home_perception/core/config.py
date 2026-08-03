@@ -365,6 +365,13 @@ class MemoryConfig(BaseModel):
       门控（MEDIUM+ 或已知访客再现）召回历史并组装 ``ReasoningInput``。消费侧
       **只读、不决策、不产 Warning**（守 ADR-0010）；依赖 ``episodic_shadow`` 是因为
       ``MemoryStore`` 仅在影子写入激活时才被构造——没有历史可读时消费无意义。
+    - ``reasoning_enabled``：ADR-0025 C-6 Reasoning Engine 接入开关（消费侧下游）。
+      默认 ``false``——**默认关闭，零行为变化**。仅当 ``consumer_enabled`` **且**
+      ``reasoning_enabled`` 同时为真时，流水线才在 ``maybe_consume`` 产出
+      ``ReasoningInput`` 后调用 ``RuleBasedReasoningEngine.infer`` 产出
+      ``ReasoningResult``，并经 ``FrameResult.reasoning_results`` 做 Shadow 观测。
+      **本开关刻意不接决策**（守 ADR-0010 单一决策中心）：``ReasoningResult`` 只暴露、
+      不回流 ``DecisionPolicy``；是否用其增强决策归 ADR-0025 Phase 2，不在此 PR 范围。
     - ``snapshot_path``：JSON 持久化路径（原子写：先 .tmp 再 os.replace）。
     - ``snapshot_interval_seconds``：周期快照间隔（默认 30s）；写入时机见工程方案 §5.3.6。
     - ``snapshot_fresh_threshold_seconds``：FRESH/STALE 分界（默认 30s）。
@@ -380,6 +387,8 @@ class MemoryConfig(BaseModel):
     episodic_shadow: bool = False
     # ADR-0025 C-4 Memory Consumer 接入开关；默认关闭（消费侧只读、不决策）。
     consumer_enabled: bool = False
+    # ADR-0025 C-6 Reasoning Engine 接入开关（消费侧下游，Shadow 观测）；默认关闭。
+    reasoning_enabled: bool = False
     snapshot_path: str = "data/memory/snapshot.json"
     snapshot_interval_seconds: float = 30.0
     snapshot_fresh_threshold_seconds: float = 30.0

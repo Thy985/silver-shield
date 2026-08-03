@@ -10,7 +10,6 @@ from __future__ import annotations
 class ConsumerError(Exception):
     """Consumer 层根异常。"""
 
-
 class RetrievalError(ConsumerError):
     """Retrieval 阶段失败（召回 / 窗口计算 / 排序）。"""
 
@@ -31,10 +30,19 @@ class BelowThresholdError(ConsumerError):
     """
 
 
+class ReasoningError(ConsumerError):
+    """Reasoning Engine 阶段失败（C-6 接入）。
+
+    与 Retrieval/Aggregation/ContextBuild 同族：属 Consumer 管道的下游阶段异常，
+    由 ``MemoryConsumerHook.maybe_reason`` 捕获后隔离（只计错误 + 日志，不中断主链路）。
+    """
+
+
 __all__ = [
     "AggregationError",
     "BelowThresholdError",
     "ConsumerError",
     "ContextBuildError",
+    "ReasoningError",
     "RetrievalError",
 ]

@@ -28,7 +28,9 @@ from home_perception.memory.consumer import (
     CurrentEvent,
     MemoryConsumer,
     ReasoningInput,
+    ReasoningResult,
     RuleBasedMemoryConsumer,
+    RuleBasedReasoningEngine,
 )
 from home_perception.runtime import PerceptionPipeline
 
@@ -110,12 +112,15 @@ def _run_visit(
     *,
     consumer_enabled: bool,
     consumer_factory=None,
+    reasoning_engine=None,
+    reasoning_enabled: bool = False,
     risky: bool = True,
 ):
     """跑一次完整访问，返回 (pipeline, store, frame_results, consumer)。
 
     ``risky=True``（默认）：TH_HIGH + 18 点 → 产 HIGH Warning，模式 B 必触发；
     ``risky=False``：默认阈值 + 10 点 → 无 Warning、访客无历史，模式 B 必不触发。
+    ``reasoning_enabled``：C-6 推理侧开关（需同时传 ``reasoning_engine``）。
     """
     clock = ManualClock(base=_RISKY_BASE if risky else _NORMAL_BASE)
     store = InMemoryStore()
@@ -130,6 +135,8 @@ def _run_visit(
         episodic_shadow=True,
         memory_consumer=consumer,
         consumer_enabled=consumer_enabled,
+        reasoning_engine=reasoning_engine,
+        reasoning_enabled=reasoning_enabled,
     )
     results = drive(pipeline, clock, plan, step_s=30.0)
     return pipeline, store, results, consumer
@@ -210,6 +217,33 @@ class TestFromSettings:
         p = _from_settings(memory=True, shadow=True, consumer=False)
         assert p._memory_hook.enabled is True
         assert p._memory_consumer_hook.enabled is False
+
+    def test_reasoning_engine_wired_when_enabled(self):
+        """consumer_enabled + reasoning_enabled 同真 → 注入 RuleBasedReasoningEngine。"""
+        p = _from_settings(memory=True, shadow=True, consumer=True)
+        # 默认 reasoning_enabled=false
+        assert p._memory_consumer_hook.reasoning_enabled is False
+        s = Settings()
+        s.memory.enabled = True
+        s.memory.episodic_shadow = True
+        s.memory.consumer_enabled = True
+        s.memory.reasoning_enabled = True
+        p = PerceptionPipeline.from_settings(s, detector=MagicMock())
+        assert p._memory_consumer_hook.reasoning_enabled is True
+        assert isinstance(
+            p._memory_consumer_hook._reasoning_engine, RuleBasedReasoningEngine
+        )
+
+    def test_reasoning_without_consumer_is_inactive(self):
+        """reasoning_enabled=true 但消费侧未激活 → 推理侧静默降级（不崩、不半开）。"""
+        s = Settings()
+        s.memory.enabled = True
+        s.memory.episodic_shadow = True
+        s.memory.consumer_enabled = False
+        s.memory.reasoning_enabled = True
+        p = PerceptionPipeline.from_settings(s, detector=MagicMock())
+        assert p._memory_consumer_hook.reasoning_enabled is False
+        assert p._memory_consumer_hook._reasoning_engine is None
 
 
 # ============================================================================
@@ -316,3 +350,61 @@ class TestProjection:
             ],
         )
         assert cur.markers == ("night", "observe_camera")
+
+
+# ============================================================================
+# 5. C-6 Reasoning Engine Shadow 接线（FrameResult.reasoning_results）
+# ============================================================================
+
+
+class TestReasoningShadow:
+    def test_reasoning_results_present_when_enabled(self):
+        """reasoning 开启且消费侧触发 → FrameResult 携带 ReasoningResult。"""
+        pipeline, _, results, _ = _run_visit(
+            consumer_enabled=True,
+            consumer_factory=_RecordingConsumer,
+            reasoning_engine=RuleBasedReasoningEngine(),
+            reasoning_enabled=True,
+        )
+        assert pipeline._memory_consumer_hook.reasoning_enabled is True
+        all_results = [r for fr in results for r in fr.reasoning_results]
+        assert all_results, "reasoning 开启时 FrameResult 应携带 ReasoningResult"
+        assert all(isinstance(r, ReasoningResult) for r in all_results)
+        assert pipeline._memory_consumer_hook.metrics.consumer_reasoned >= 1
+
+    def test_reasoning_results_absent_when_disabled(self):
+        """reasoning 关闭 → FrameResult.reasoning_results 恒为空（零开销）。"""
+        pipeline, _, results, _ = _run_visit(
+            consumer_enabled=True,
+            consumer_factory=_RecordingConsumer,
+            reasoning_engine=None,
+            reasoning_enabled=False,
+        )
+        assert pipeline._memory_consumer_hook.reasoning_enabled is False
+        all_results = [r for fr in results for r in fr.reasoning_results]
+        assert all_results == []
+
+    def test_reasoning_shadow_does_not_change_main_link(self):
+        """Shadow 推理不写 Memory、不产 Warning / command（零泄漏）。
+
+        开启推理侧与主链路输出（warnings / commands / episodes）逐字段一致。
+        """
+        base_pipeline, base_store, base_results, _ = _run_visit(
+            consumer_enabled=True, consumer_factory=_RecordingConsumer
+        )
+        pipeline, store, results, _ = _run_visit(
+            consumer_enabled=True,
+            consumer_factory=_RecordingConsumer,
+            reasoning_engine=RuleBasedReasoningEngine(),
+            reasoning_enabled=True,
+        )
+
+        def _fields(rs):
+            return [
+                (fr.frame_index, fr.n_visitor_events, len(fr.warnings), len(fr.commands))
+                for fr in rs
+            ]
+
+        assert _fields(results) == _fields(base_results)
+        assert pipeline.metrics.episodes_recorded == base_pipeline.metrics.episodes_recorded
+        assert len(store.snapshot()["episodic"]) == len(base_store.snapshot()["episodic"])

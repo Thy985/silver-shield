@@ -97,6 +97,8 @@ def build_full_pipeline(
     realtime_enabled: bool = True,
     memory_consumer: MemoryConsumer | None = None,
     consumer_enabled: bool = False,
+    reasoning_engine: "object | None" = None,
+    reasoning_enabled: bool = False,
 ):
     """构造完整 PerceptionPipeline（实时旁路 + 可选 Memory 影子写入 + 可选快照恢复）。
 
@@ -148,6 +150,8 @@ def build_full_pipeline(
         memory_config=memory_config,
         memory_consumer=memory_consumer,
         consumer_enabled=consumer_enabled,
+        reasoning_engine=reasoning_engine,
+        reasoning_enabled=reasoning_enabled,
     )
 
 

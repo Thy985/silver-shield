@@ -279,6 +279,39 @@ class ConflictFlag:
 
 
 # ---------------------------------------------------------------------------
+# SourceRef —— 溯源引用（ReasoningResult → ReasoningInput 字段锚定，C-6 新增）
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SourceRef:
+    """回溯引用：把 ``ReasoningResult`` 的一项发现锚定到 ``ReasoningInput`` 的具体字段/对象。
+
+    供 ADR-0024 I4 可解释性 / ADR-0025 C5 溯源：每条 finding 都能追到"它从 ReasoningInput
+    的哪个字段、哪个具体对象来"。纯描述，不携带任何判定（C1）。
+    """
+
+    source: str  # ReasoningInput 字段名（current_event / visitor_profile / risk_pattern /
+                 # conflicts / previous_actions / historical_context / evidence_refs）
+    ref: str | None = None  # 该字段内的具体 id/键（visitor_instance_id / conflict.type /
+                            # record_id / command_id），可选
+    detail: str | None = None  # 人类可读说明（如 "visit_count=5,night_visit_ratio=1.0"），可选
+
+    def __post_init__(self) -> None:
+        if not self.source or not self.source.strip():
+            raise ValueError("SourceRef.source 不能为空")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"source": self.source, "ref": self.ref, "detail": self.detail}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SourceRef:
+        return cls(
+            source=data["source"],
+            ref=data.get("ref"),
+            detail=data.get("detail"),
+        )
+
+
+# ---------------------------------------------------------------------------
 # ReasoningInput —— Consumer 输出（Context Builder 产物，C-0 契约）
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
@@ -333,11 +366,71 @@ class ReasoningInput:
         )
 
 
+# ---------------------------------------------------------------------------
+# ReasoningResult —— Reasoning Engine 产出（参考推理，C-6 新增；**非决策、非分数**）
+# ---------------------------------------------------------------------------
+# 推荐的 advisory action 词汇（与 WarningEvent.recommended_action / ActionCommand 路由一致，
+# 见 action/command.py / dispatcher.py）：仅为提示，最终是否采用由 ADR-0010 DecisionPolicy 决定。
+RECOMMENDED_ACTION_HINTS: tuple[str, ...] = ("MONITOR", "NOTIFY_FAMILY", "ESCALATE_COMMUNITY")
+
+
+@dataclass(frozen=True)
+class ReasoningResult:
+    """Reasoning Engine 产出（参考推理，**非决策、非分数**）。
+
+    硬约束（ADR-0010 单一决策中心 / ADR-0025 C1）：本 dataclass **不存在** ``risk_score`` /
+    ``decision`` / ``warning`` 字段；``test_reasoning`` 另以字段白名单断言兜底。
+    ``suggested_action_hint`` 仅是**非绑定**建议，仅供 Decision 参考，绝不替代决策。
+
+    确定性（C3）：``findings`` / ``source_refs`` 显式按固定顺序构造，同输入两次产出一致
+    （审计 / 回放一致）。
+    """
+
+    findings: tuple[str, ...]  # 推理发现（人类可读）
+    explanation: str  # 可解释说明（继承 ADR-0024 Trust Layer）
+    suggested_action_hint: str | None = None  # 非绑定建议（MONITOR/NOTIFY_FAMILY/ESCALATE_COMMUNITY）
+    source_refs: tuple[SourceRef, ...] = ()  # 回溯到 ReasoningInput 字段（C5 溯源）
+
+    def __post_init__(self) -> None:
+        if not self.findings:
+            raise ValueError("ReasoningResult.findings 不能为空")
+        if not self.explanation or not self.explanation.strip():
+            raise ValueError("ReasoningResult.explanation 不能为空")
+        if (
+            self.suggested_action_hint is not None
+            and self.suggested_action_hint not in RECOMMENDED_ACTION_HINTS
+        ):
+            raise ValueError(
+                f"suggested_action_hint 必须是 {RECOMMENDED_ACTION_HINTS} 之一或 None，"
+                f"收到 {self.suggested_action_hint!r}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "findings": list(self.findings),
+            "explanation": self.explanation,
+            "suggested_action_hint": self.suggested_action_hint,
+            "source_refs": [s.to_dict() for s in self.source_refs],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ReasoningResult:
+        return cls(
+            findings=tuple(data["findings"]),
+            explanation=data["explanation"],
+            suggested_action_hint=data.get("suggested_action_hint"),
+            source_refs=tuple(SourceRef.from_dict(s) for s in data.get("source_refs", [])),
+        )
+
+
 __all__ = [
     "ActionRecord",
     "ConflictFlag",
     "CurrentEvent",
+    "RECOMMENDED_ACTION_HINTS",
     "ReasoningInput",
+    "ReasoningResult",
     "RiskPattern",
+    "SourceRef",
     "VisitorProfile",
 ]

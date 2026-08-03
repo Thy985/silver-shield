@@ -67,9 +67,12 @@ from ..memory.cold_start import ColdStartCoordinator
 from ..memory.consumer import (
     CurrentEvent,
     MemoryConsumer,
+    ReasoningEngine,
+    ReasoningResult,
     RuleBasedAggregation,
     RuleBasedContextBuilder,
     RuleBasedMemoryConsumer,
+    RuleBasedReasoningEngine,
     RuleBasedRetrieval,
     extract_behavior_markers,
     max_risk_level,
@@ -152,6 +155,11 @@ class FrameResult:
     # Dashboard 展示"进行中风险"（RAISED 亮卡 / CLEARED 熄卡），**不接决策、不产 Warning**。
     # 接决策是 Stage D 的职责（经 signal_adapter 翻译为 PerceptionEvent 汇入 DecisionEngine）。
     risk_signals: list[RiskSignal] = field(default_factory=list)
+    # —— ADR-0025 C-6 新增（默认空列表 = 向后兼容，flag 关闭时与基线逐字段一致）——
+    # reasoning_results 即 Memory 消费侧的参考推理产出（ReasoningResult）：Shadow Mode
+    # 只进 FrameResult 供 Dashboard / 审计展示"记忆如何反哺理解"，**不接决策、不产 Warning**
+    # （守 ADR-0010 单一决策中心）。接决策归 ADR-0025 Phase 2，本 PR 不实现。
+    reasoning_results: list[ReasoningResult] = field(default_factory=list)
 
 
 @dataclass
@@ -251,6 +259,10 @@ class PerceptionPipeline:
         #    仅 memory.enabled + episodic_shadow + consumer_enabled 时激活）——
         memory_consumer: MemoryConsumer | None = None,
         consumer_enabled: bool = False,
+        # —— ADR-0025 C-6：Reasoning Engine 接线（可选；默认 None/false，
+        #    仅 consumer_enabled + reasoning_enabled 时激活，Shadow 观测，不接决策）——
+        reasoning_engine: ReasoningEngine | None = None,
+        reasoning_enabled: bool = False,
     ):
         self.detector = detector
         self.tracker = tracker
@@ -344,10 +356,21 @@ class PerceptionPipeline:
                 "pipeline.consumer_enabled_without_consumer",
                 note="consumer_enabled=true 但 memory_consumer 缺失，消费侧未激活",
             )
+        # C-6 Reasoning Engine：仅当消费侧已激活且推理开关开启时接线；
+        # 否则置 None（maybe_reason 立即返回 None，零运行时开销）。
+        self._reasoning_enabled = bool(
+            reasoning_enabled and reasoning_engine is not None
+        )
+        if reasoning_enabled and reasoning_engine is None:
+            log.warning(
+                "pipeline.reasoning_enabled_without_engine",
+                note="reasoning_enabled=true 但 reasoning_engine 缺失，推理侧未激活",
+            )
         self._memory_consumer_hook = MemoryConsumerHook(
             memory_consumer,
             self._memory_store,
             self._consumer_enabled,
+            reasoning_engine=reasoning_engine if self._reasoning_enabled else None,
         )
 
     # ------------------------------------------------------------------
@@ -477,6 +500,21 @@ class PerceptionPipeline:
                     "pipeline.consumer_requires_episodic_shadow",
                     note="consumer_enabled=true 但 memory_store 缺失（需 memory.enabled + episodic_shadow），消费侧未激活",
                 )
+        # —— ADR-0025 C-6：Reasoning Engine 装配（消费侧下游，默认关闭）——
+        # reasoning_enabled 依赖 memory_consumer 已就位（无 ReasoningInput 就无推理对象），
+        # 故它是 consumer_enabled 的下游子开关：仅当 consumer_enabled + memory_store
+        # 同时为真才构造 RuleBasedReasoningEngine。推理产出仅 Shadow 观测，不接决策。
+        reasoning_engine: ReasoningEngine | None = None
+        reasoning_enabled = False
+        if settings.memory.reasoning_enabled:
+            if consumer_enabled and memory_consumer is not None:
+                reasoning_engine = RuleBasedReasoningEngine()
+                reasoning_enabled = True
+            else:
+                log.warning(
+                    "pipeline.reasoning_requires_consumer",
+                    note="reasoning_enabled=true 但消费侧未激活（需 consumer_enabled + memory_store），推理侧未激活",
+                )
         return cls(
             detector=det,
             tracker=tracker,
@@ -500,6 +538,8 @@ class PerceptionPipeline:
             episodic_shadow=episodic_shadow,
             memory_consumer=memory_consumer,
             consumer_enabled=consumer_enabled,
+            reasoning_engine=reasoning_engine,
+            reasoning_enabled=reasoning_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -613,6 +653,8 @@ class PerceptionPipeline:
         perception_events: list[PerceptionEvent] = []
         warnings: list[WarningEvent] = []
         commands: list[Any] = []
+        # —— ADR-0025 C-6：Memory 消费侧参考推理结果（Shadow 观测，不接决策）——
+        reasoning_results: list[ReasoningResult] = []
 
         for ev in events:
             self.metrics.visitor_events += 1
@@ -621,12 +663,19 @@ class PerceptionPipeline:
             perception_events.extend(percs)
             warnings.extend(ev_warnings)
             commands.extend(cmds)
-            # —— ADR-0025 C-4：Memory Consumer 读侧（经 MemoryConsumerHook）——
+            # —— ADR-0025 C-4 + C-6：Memory Consumer 读侧（经 MemoryConsumerHook）——
             # ⚠️ 必须在 MemoryHook.record **之前**：先写后读会把刚落库的"当下"当作
             # "历史"召回（首次来访被判已知访客 + historical_context 被自身污染）。
             # 次序即语义，不可为了"看起来更顺"而调换（见 memory_consumer_hook 模块 docstring）。
             if self._memory_consumer_hook.enabled:
-                self._memory_consumer_hook.maybe_consume(self._to_current_event(ev, ev_warnings))
+                ri = self._memory_consumer_hook.maybe_consume(
+                    self._to_current_event(ev, ev_warnings)
+                )
+                # C-6：把 ReasoningInput 推理为 ReasoningResult（无引擎时立即返回 None，
+                # 零开销）；产出仅汇入 reasoning_results 做 Shadow 观测，不接决策。
+                rr = self._memory_consumer_hook.maybe_reason(ri)
+                if rr is not None:
+                    reasoning_results.append(rr)
             # —— ADR-0024 Slice 5：Stage F Episodic Memory 影子写入（经 MemoryHook）——
             # 仅记录本次访客离场的投影（含其已产出的 warning/action），
             # 不接决策、不产 Warning，开启影子开关不改变任何历史行为。
@@ -701,6 +750,7 @@ class PerceptionPipeline:
             commands=commands,
             behavior_states=behavior_states,
             risk_signals=risk_signals,
+            reasoning_results=reasoning_results,
         )
 
     def _act_on_event(
