@@ -125,6 +125,9 @@ class DemoGateway:
         self._apply_scenario_realtime_overrides()
         # Demo 默认开启 Memory 认知层（区域⑥ 运行时数据来源）；必须在 from_settings 之前
         self._apply_demo_memory_overrides()
+        # Demo 推理尺寸覆盖（降 CPU 推理耗时、提帧率）；必须在 from_settings 之前，
+        # 经 runtime.detector_imgsz 通道，不改动 config/default.yaml 的 detection.imgsz（生产不变）
+        self._apply_demo_detector_overrides()
 
         # device_id 用场景 source 名（与 runtime/lifecycle.run_demo 一致）
         self.pipeline = PerceptionPipeline.from_settings(
@@ -170,11 +173,12 @@ class DemoGateway:
             raise RuntimeError("gateway 未装配，请先调 assemble()")
 
         self._running = True
-        # 帧循环间隔：DemoSettings.frame_loop_interval_s 显式设置优先；
-        # 若为 0（不限速），回退到 scenario.fps_target（1.0 / fps）。
-        interval = self.demo_settings.frame_loop_interval_s
-        if interval <= 0 and self.scenario.fps_target > 0:
-            interval = 1.0 / self.scenario.fps_target
+        # 帧循环限速间隔：frame_loop_interval_s > 0 → 按设定间隔 sleep（模拟实时观感）；
+        # <= 0 → 不限速，尽快处理（见 DemoSettings / ScenarioConfig docstring "0 = 不限速"）。
+        # 注意：scenario.fps_target 仅由 sources.py 用于「抽帧」，与此处限速无关。
+        interval = self._resolve_frame_interval(
+            self.demo_settings.frame_loop_interval_s, self.scenario.fps_target
+        )
 
         # 迭代帧源抽象（P0-11.3：CAVIAR jpg 或 真实 MP4，均产出 (timestamp, frame) 流）
         frame_iter = iter(self.source)
@@ -202,8 +206,12 @@ class DemoGateway:
             # 展示进度请用 clock.now()（demo_time）或 self.n_frames。
             result: FrameResult = self.pipeline.process_frame(frame, frame_index=self._frame_index)
 
-            # bridge 翻译（只读 to_dict + base64）
-            frame_b64 = encode_frame_to_base64_jpeg(frame, quality=self.demo_settings.jpeg_quality)
+            # bridge 翻译（只读 to_dict + base64；预览帧缩图降体积）
+            frame_b64 = encode_frame_to_base64_jpeg(
+                frame,
+                quality=self.demo_settings.jpeg_quality,
+                max_width=self.demo_settings.preview_max_width,
+            )
             demo_time = self.clock.now().isoformat()
             view = frame_result_to_view(
                 result, frame_index=self._frame_index, frame_base64=frame_b64, demo_time=demo_time
@@ -366,6 +374,29 @@ class DemoGateway:
         mem.episodic_shadow = True
         mem.consumer_enabled = True
         mem.reasoning_enabled = True
+
+    def _apply_demo_detector_overrides(self) -> None:
+        """Demo 推理尺寸覆盖：经 ``runtime.detector_imgsz`` 通道降 CPU 推理耗时、提帧率。
+
+        - 仅 demo 网关生效，不触碰 ``config/default.yaml`` 的 ``detection.imgsz``（生产 480 不变）。
+        - ``DemoSettings.detector_imgsz`` 默认 416（= ``ImgszProfile.REALTIME``），专为无 GPU 机器；
+          ``None`` 表示不覆盖（退回 ``detection.imgsz``）。
+        - 幂等，故在 ``assemble`` 与 ``_rebuild_pipeline`` 的 ``from_settings`` 前各调一次。
+        """
+        if self.demo_settings.detector_imgsz is not None:
+            self.hp_settings.runtime.detector_imgsz = self.demo_settings.detector_imgsz
+
+    @staticmethod
+    def _resolve_frame_interval(demo_interval: float, fps_target: int) -> float:
+        """解析帧循环限速间隔（纯函数，便于单测）。
+
+        - ``demo_interval > 0`` → 返回该间隔（模拟实时观感）；
+        - ``<= 0`` → 返回 ``0.0``（不限速，尽快处理，见 docstring "0 = 不限速"）。
+
+        不再回退到 ``1.0 / fps_target``：``fps_target`` 仅由 ``sources.py`` 用于「抽帧」，
+        与此处限速是两件事，混用会让 ``frame_loop_interval_s=0`` 违背其文档语义。
+        """
+        return demo_interval if demo_interval > 0 else 0.0
 
     # ------------------------------------------------------------------
     # 输入源热切换（P0-11.4 视频输入适配层）

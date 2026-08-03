@@ -26,17 +26,20 @@ import structlog
 def encode_frame_to_base64_jpeg(
     frame: Any,
     quality: int = 50,
+    max_width: int | None = None,
 ) -> str | None:
     """把 BGR np.ndarray 编码为 base64 JPEG 字符串。
 
     Args:
         frame: ``process_frame`` 接收的同款帧对象（np.ndarray BGR）。None 或编码失败返回 None。
         quality: JPEG 质量 1-100（Demo 50 足够，降带宽）。
+        max_width: 编码前将帧宽度缩放到此值（保持比例）；None 或不满足 >0 则原尺寸编码。
+            用于降低推送给前端的预览帧体积（降 base64 与前端解码耗时）。
 
     Returns:
         base64 编码的 JPEG 字符串（无 data: 前缀），或 None。
 
-    边界：仅用 cv2 做编码，不触碰任何 home_perception 组件。
+    边界：仅用 cv2 做编码/缩放，不触碰任何 home_perception 组件。
     """
     if frame is None:
         return None
@@ -45,6 +48,13 @@ def encode_frame_to_base64_jpeg(
     except ImportError:  # pragma: no cover - 依赖缺失
         return None
     try:
+        if max_width and isinstance(max_width, int) and max_width > 0:
+            _, w = frame.shape[:2]
+            if w > max_width:
+                scale = max_width / float(w)
+                frame = cv2.resize(
+                    frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+                )
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
         if not ok:
             return None
