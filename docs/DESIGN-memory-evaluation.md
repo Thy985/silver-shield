@@ -368,8 +368,8 @@ Memory Value Score（仅报告/横向比较，不替代硬门槛）
 | Slice | 内容 | 依赖 | 状态 |
 |-------|------|------|------|
 | E-1a | `ab_runner` + `metrics` 纯函数（四指标可计算） | C-6 已合 | ✅ 已合（PR#111） |
-| E-1b | `test_e1_ab.py` + `report`（含 §8 统计占位） | E-1a | ✅ 已实现（本 slice） |
-| E-1c | 时序 step 展开 + `LeadTime` 时间戳；E-1A 3 case 校准 | E-1b | 可开发 |
+| E-1b | `test_e1_ab.py` + `report`（含 §8 统计占位） | E-1a | ✅ 已合（PR#112） |
+| E-1c | 时序 step 展开 + `LeadTime` 时间戳；E-1A 3 case 校准 | E-1b | ✅ 已实现（本 slice） |
 | E-1d | `ground_truth.py` + `GroundTruthRecord` 加载；E-1B 数据集采集/标注（独立数据治理任务） | E-1c | E-1B 待治理 |
 
 实现走分支 + `gh pr` + 文件集复核（仓库铁律）；`ab_runner`/`metrics` 纯函数进 CI。
@@ -440,4 +440,29 @@ E-1b（report.py + Memory Value Score）实现后的一轮代码评审，修正 
 | 1 | 中 | §4.4 / §8.2 `EarlyDetectionResult` / `early_detection_term` | `compute_lead_time(None, ts)` 生成 `missing_detection("baseline")`，但 `early_detection_term` 只检查统一 `status=="missing_detection"`，无论缺失哪一臂都记 0；而 Baseline 缺失 + Memory 检出是 Memory 的强正向收益（与 DESIGN §8.2「M 臂未检测→0」方向相反） | `EarlyDetectionResult` 增结构化 `missing_arm`（`memory`/`baseline`/`both`，不再解析自由文本 detail）；`compute_lead_time` 区分三臂；`early_detection_term` 分计：M 缺失→0 / B 缺失且 M 检出→1.0（正向）/ 两臂均缺失→N/A（排除，未测量≠0） |
 | 2 | 中 | §8.2 `compute_memory_value_score` / `MemoryValueScore` | 空数据集时 `fn_term`/`explanation_term`/`fp_term` 返回 0，仅 Early Detection 为 None；评分器把前三项当有效 term 重归一化得 `score=0.0`，与「真实样本全得 0」无法区分，违反「未测量 ≠ 0」原则 | `MemoryValueScore` 增 `valid` 标志；空数据集 → `valid=False`、`score=None`、四 term 全 None（区别于有效 0）；`build_report` 透传 `n_cases`；`render_markdown`/`main` 渲染为 N/A，JSON 写 `null` 而非零分 |
 | 3 | 中 | §5 `GroundTruthRecord.from_dict` / `acceptable_upper` / `metric_fp` | `from_dict` 对缺失字段默认空 tuple，`acceptable_upper` 把空标注静默解释为严重度上限 0 → 数据治理遗漏（忘记填 `acceptable_hint`）被误判为被评方案的 FP / Hard Gate 失败 | 加载/构造边界校验 `acceptable_hint` 非空且值合法（缺失/空/非法 → 抛 `ValueError`）；支持显式未标注标记 `ACCEPTABLE_HINT_NA`（`"__NA__"`），此时 `acceptable_upper` 返回 `None`、`metric_fp` 返回 `True`、`fp_severity_excess` 返回 0（FP 指标剔除，不默认 severity 0）；E-1A 注册表经 `get_ground_truth` 防御性校验 |
+
+## Appendix E. E-1c 实现（时序 step 展开 + LeadTime 时间戳校准 + 3 case 校准）
+
+E-1c 把 §4.4.1 时序 fixture 契约落地：新增 `temporal.py`（时序 harness），并为 E-1A 三 case
+各建一份设计派生（design-derived）时序校准 fixture（`tests/fixtures/memory_replay/temporal/<case_id>/steps.json`），
+使 Early Detection 从 E-1A 的 `N/A` 变为可计算。
+
+**校准策略（基于引擎实测行为，非凭空设计）**：`RuleBasedReasoningEngine._hint` 由
+`current_event.risk_level`（两臂一致 → LeadTime=0）**或** `risk_pattern.tags`/`conflicts`
+（Baseline 经 `build_baseline_input` 清零 → Memory 独有）驱动。故时序 fixture 用 LOW/None
+`current_event.risk_level`（呼应 §4.3 校准提示），使检测来自 Memory 揭示的模式，避免两臂塌缩：
+
+| case | 时序检测结果 | 说明 |
+|------|--------------|------|
+| `case_001_repeat_visitor` | `missing_detection(both)` → 排除（N/A） | `repeated_visit` → `MONITOR`，不跨 ESCALATE/NOTIFY 检测阈值；两臂均不检测，**诚实标记 N/A**（其 E-1a FN 价值仍由四指标捕获），不误记 0 |
+| `case_002_behavior_escalation` | `computed`（LeadTime = +45min） | Memory 在 step2（LOW + `escalating_behavior` 模式）检测；Baseline 在 step3（`risk_level` 升 HIGH）才检测 → 真实正向 LeadTime |
+| `case_003_conflict_transparency` | `missing_detection(baseline)` → +1.0 | Memory 在 step2（LOW + `behavior_shift` 冲突）检测；Baseline 始终 LOW 且无冲突 → 从未检测（评审 issue 1 的强正向场景） |
+
+**实测结论（E-1c 报告，`python -m home_perception.memory.evaluation --stage e1c`）**：
+Hard Gate 3/3 PASS（末 step 输入等价于 M0 单事件输入，四指标与 E-1a 一致）；
+Early Detection term = `(0.75 + 1.0) / 2 = 0.875`（case_001 的 `both-missing` 从均值剔除）；
+四 term 均存在 → `partial=False`；Memory Value Score = `0.963`（0.40·1 + 0.30·0.875 + 0.20·1 + 0.10·1）。
+
+**边界**：时序 fixture 与 M0 fixture 解耦——`MemoryReplayDataset.case_names()` 只扫顶层 `case_*` 目录，
+`temporal/` 子目录不被 E-1a 加载污染；GroundTruth 复用 E-1A 注册表（case_id 一致）。
 

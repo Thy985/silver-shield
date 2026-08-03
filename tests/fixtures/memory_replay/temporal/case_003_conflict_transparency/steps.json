@@ -1,0 +1,363 @@
+[
+  {
+    "step": 1,
+    "timestamp": "2026-07-17T21:00:00+00:00",
+    "current_event": {
+      "event_id": "cur-003-s1",
+      "event_type": "risk_signal",
+      "visitor_instance_id": "C003",
+      "occurred_at": "2026-07-17T21:00:00+00:00",
+      "risk_level": "LOW",
+      "markers": [
+        "night"
+      ]
+    },
+    "reasoning_input": {
+      "current_event": {
+        "event_id": "cur-003-s1",
+        "event_type": "risk_signal",
+        "visitor_instance_id": "C003",
+        "occurred_at": "2026-07-17T21:00:00+00:00",
+        "risk_level": "LOW",
+        "markers": [
+          "night"
+        ]
+      },
+      "historical_context": [
+        {
+          "record_id": "ep-c003-d1",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-14T09:00:00+00:00",
+          "leave_time": "2026-07-14T09:02:00+00:00",
+          "duration_seconds": 120.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d1"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-14T09:02:00+00:00"
+        }
+      ],
+      "visitor_profile": null,
+      "risk_pattern": null,
+      "evidence_refs": [],
+      "previous_actions": [],
+      "conflicts": []
+    }
+  },
+  {
+    "step": 2,
+    "timestamp": "2026-07-17T22:00:00+00:00",
+    "current_event": {
+      "event_id": "cur-003-s2",
+      "event_type": "risk_signal",
+      "visitor_instance_id": "C003",
+      "occurred_at": "2026-07-17T22:00:00+00:00",
+      "risk_level": "LOW",
+      "markers": [
+        "night",
+        "observe_camera"
+      ]
+    },
+    "reasoning_input": {
+      "current_event": {
+        "event_id": "cur-003-s2",
+        "event_type": "risk_signal",
+        "visitor_instance_id": "C003",
+        "occurred_at": "2026-07-17T22:00:00+00:00",
+        "risk_level": "LOW",
+        "markers": [
+          "night",
+          "observe_camera"
+        ]
+      },
+      "historical_context": [
+        {
+          "record_id": "ep-c003-d1",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-14T09:00:00+00:00",
+          "leave_time": "2026-07-14T09:02:00+00:00",
+          "duration_seconds": 120.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d1"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-14T09:02:00+00:00"
+        },
+        {
+          "record_id": "ep-c003-d2",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-15T10:00:00+00:00",
+          "leave_time": "2026-07-15T10:02:00+00:00",
+          "duration_seconds": 120.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d2"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-15T10:02:00+00:00"
+        },
+        {
+          "record_id": "ep-c003-d3",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-16T14:00:00+00:00",
+          "leave_time": "2026-07-16T14:01:40+00:00",
+          "duration_seconds": 100.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d3"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-16T14:01:40+00:00"
+        },
+        {
+          "record_id": "ep-c003-d4",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-17T11:00:00+00:00",
+          "leave_time": "2026-07-17T11:02:00+00:00",
+          "duration_seconds": 120.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d4"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-17T11:02:00+00:00"
+        }
+      ],
+      "visitor_profile": {
+        "visitor_instance_id": "C003",
+        "visit_count": 4,
+        "night_visit_ratio": 0.0,
+        "confidence": "cold_start",
+        "identity_confirmed": false,
+        "first_seen": "2026-07-14T09:00:00+00:00",
+        "last_seen": "2026-07-17T11:02:00+00:00"
+      },
+      "risk_pattern": {
+        "tags": [
+          "repeated_visit"
+        ],
+        "escalation_history": null,
+        "confidence": "cold_start"
+      },
+      "evidence_refs": [],
+      "previous_actions": [],
+      "conflicts": [
+        {
+          "type": "behavior_shift",
+          "historical": "normal",
+          "current": "abnormal",
+          "detail": "历史 4 次均为白天短时访客；当前事件为深夜 + 频繁观察摄像头，行为模式发生偏移"
+        }
+      ]
+    }
+  },
+  {
+    "step": 3,
+    "timestamp": "2026-07-17T23:00:00+00:00",
+    "current_event": {
+      "event_id": "cur-003-s3",
+      "event_type": "risk_signal",
+      "visitor_instance_id": "C003",
+      "occurred_at": "2026-07-17T23:00:00+00:00",
+      "risk_level": "LOW",
+      "markers": [
+        "night",
+        "observe_camera"
+      ]
+    },
+    "reasoning_input": {
+      "current_event": {
+        "event_id": "cur-003-s3",
+        "event_type": "risk_signal",
+        "visitor_instance_id": "C003",
+        "occurred_at": "2026-07-17T23:00:00+00:00",
+        "risk_level": "LOW",
+        "markers": [
+          "night",
+          "observe_camera"
+        ]
+      },
+      "historical_context": [
+        {
+          "record_id": "ep-c003-d1",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-14T09:00:00+00:00",
+          "leave_time": "2026-07-14T09:02:00+00:00",
+          "duration_seconds": 120.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d1"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-14T09:02:00+00:00"
+        },
+        {
+          "record_id": "ep-c003-d2",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-15T10:00:00+00:00",
+          "leave_time": "2026-07-15T10:02:00+00:00",
+          "duration_seconds": 120.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d2"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-15T10:02:00+00:00"
+        },
+        {
+          "record_id": "ep-c003-d3",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-16T14:00:00+00:00",
+          "leave_time": "2026-07-16T14:01:40+00:00",
+          "duration_seconds": 100.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d3"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-16T14:01:40+00:00"
+        },
+        {
+          "record_id": "ep-c003-d4",
+          "visitor_instance_id": "C003",
+          "person_identity_id": null,
+          "enter_time": "2026-07-17T11:00:00+00:00",
+          "leave_time": "2026-07-17T11:02:00+00:00",
+          "duration_seconds": 120.0,
+          "risk_level": null,
+          "recommended_action": null,
+          "reason_summary": [
+            "daytime_visit"
+          ],
+          "actions": [],
+          "evidence_refs": [],
+          "source_event_ids": [
+            "ev-c003-d4"
+          ],
+          "summary": "白天短时访客到访",
+          "model_version": "ep-builder-v1",
+          "memory_status": "active",
+          "corrections": [],
+          "schema_version": 1,
+          "created_at": "2026-07-17T11:02:00+00:00"
+        }
+      ],
+      "visitor_profile": {
+        "visitor_instance_id": "C003",
+        "visit_count": 4,
+        "night_visit_ratio": 0.0,
+        "confidence": "cold_start",
+        "identity_confirmed": false,
+        "first_seen": "2026-07-14T09:00:00+00:00",
+        "last_seen": "2026-07-17T11:02:00+00:00"
+      },
+      "risk_pattern": {
+        "tags": [
+          "repeated_visit"
+        ],
+        "escalation_history": null,
+        "confidence": "cold_start"
+      },
+      "evidence_refs": [],
+      "previous_actions": [],
+      "conflicts": [
+        {
+          "type": "behavior_shift",
+          "historical": "normal",
+          "current": "abnormal",
+          "detail": "历史 4 次均为白天短时访客；当前事件为深夜 + 频繁观察摄像头，行为模式发生偏移"
+        }
+      ]
+    }
+  }
+]

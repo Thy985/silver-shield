@@ -336,22 +336,33 @@ def evaluate_case(
     result_m: ReasoningResult,
     result_b: ReasoningResult,
     gt: GroundTruthRecord,
+    early_detection: EarlyDetectionResult | None = None,
 ) -> CaseEvaluation:
-    """对一个 case 的两臂 ReasoningResult 计算 E-1A 四指标 + Hard Gate（§9）。"""
+    """对一个 case 的两臂 ReasoningResult 计算 E-1A 四指标 + Hard Gate（§9）。
+
+    ``early_detection``：E-1A 无时序数据 → 默认 ``na()``（不计入 Hard Gate 与 Score）；
+    E-1c 时序校准传入 ``run_temporal_ab_case`` 算出的 ``EarlyDetectionResult``。
+    """
     q1 = metric_q1_grounded_gain(result_m, result_b, gt)
     q2 = metric_q2_historical_reference(result_m)
     q3 = metric_q3_pattern_grounding(result_m)
     fp = metric_fp(result_m, result_b, gt)
     fn_m, fn_b = metric_fn(result_m, result_b, gt)
-    ed = EarlyDetectionResult.na()  # E-1A 无时序数据，Early Detection 不计入 Hard Gate
+    ed = early_detection if early_detection is not None else EarlyDetectionResult.na()
     hard_gate_pass = q1 and q2 and q3 and fp and (fn_m < fn_b)
+    ed_note = (
+        f"EarlyDetection={ed.status}"
+        + (f"({ed.lead_time_minutes:.1f}min)" if ed.lead_time_minutes is not None else "")
+        if ed.status != "na"
+        else "EarlyDetection=N/A(data-gated → E-1B)"
+    )
     notes = (
         f"Q1(grounded_gain)={q1}",
         f"Q2(historical_ref)={q2}",
         f"Q3(pattern_grounding)={q3}",
         f"FP(≤acceptable)={fp}",
         f"FN: memory={fn_m} baseline={fn_b}",
-        "EarlyDetection=N/A(data-gated → E-1B)",
+        ed_note,
         f"HardGate={'PASS' if hard_gate_pass else 'FAIL'}",
     )
     return CaseEvaluation(

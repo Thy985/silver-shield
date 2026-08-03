@@ -33,6 +33,10 @@ from home_perception.memory.consumer.replay_dataset import MemoryReplayDataset
 from home_perception.memory.evaluation.ab_runner import run_ab_dataset
 from home_perception.memory.evaluation.ground_truth import get_ground_truth
 from home_perception.memory.evaluation.metrics import CaseEvaluation, evaluate_case
+from home_perception.memory.evaluation.temporal import (
+    evaluate_temporal_case,
+    load_temporal_dataset,
+)
 
 # ---------------------------------------------------------------------------
 # §8.1 统计汇总（t 区间，零依赖）
@@ -331,6 +335,7 @@ def build_report(
     stage: str = "E-1A",
     generated_at: str | None = None,
     stats_note: str = _E1A_STATS_NOTE,
+    extra_notes: Sequence[str] = (),
 ) -> E1Report:
     """从 case 评估集合构建报告（纯函数：``generated_at`` 可注入以保证可复现）。"""
     terms = compute_score_terms(evaluations)
@@ -347,6 +352,7 @@ def build_report(
     ]
     if terms.early_detection is None:
         notes.append("Early Detection：N/A（data-gated → E-1B），不计入 Hard Gate 与 Score。")
+    notes.extend(extra_notes)
     return E1Report(
         stage=stage,
         dataset_id=dataset_id,
@@ -400,7 +406,12 @@ def render_markdown(report: E1Report) -> str:
     mark = {True: "✅", False: "❌"}
     for ev in report.cases:
         ed = ev.early_detection
-        ed_text = "N/A" if ed.status == "na" else f"{ed.status}({_fmt(ed.lead_time_minutes, 1)}min)"
+        if ed.status == "na":
+            ed_text = "N/A"
+        elif ed.status == "missing_detection":
+            ed_text = f"missing_detection({ed.missing_arm})"
+        else:
+            ed_text = f"{ed.status}({_fmt(ed.lead_time_minutes, 1)}min)"
         lines.append(
             f"| `{ev.case_id}` | {mark[ev.q1]} | {mark[ev.q2]} | {mark[ev.q3]} | "
             f"{mark[ev.fp]} | {ev.fn_m} / {ev.fn_b} | {ed_text} | {mark[ev.hard_gate_pass]} |"
@@ -491,7 +502,10 @@ def run_e1a_report(
     fixture_root: str = DEFAULT_FIXTURE_ROOT,
     generated_at: str | None = None,
 ) -> E1Report:
-    """E-1A 端到端：加载 M0 fixtures → A/B → 四指标 → 报告对象（不落盘）。"""
+    """E-1A 端到端：加载 M0 fixtures → A/B → 四指标 → 报告对象（不落盘）。
+
+    Early Detection 为 ``na()``（E-1A 无时序 step 数据）。
+    """
     dataset = MemoryReplayDataset(fixture_root)
     return build_report(
         evaluate_dataset(dataset),
@@ -501,23 +515,63 @@ def run_e1a_report(
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """CLI 实现（入口见 ``__main__.py``）：生成 E-1A 报告并落盘。
+def evaluate_temporal_dataset(fixture_root: str) -> list[CaseEvaluation]:
+    """加载 ``<fixture_root>/temporal/*`` 时序校准 fixture → 逐 case A/B + 四指标 + Early Detection。"""
+    return [evaluate_temporal_case(case) for case in load_temporal_dataset(fixture_root)]
 
-    Hard Gate 失败 → 退出码 1，可直接作为 CI gate。
+
+def run_e1c_report(
+    fixture_root: str = DEFAULT_FIXTURE_ROOT,
+    generated_at: str | None = None,
+) -> E1Report:
+    """E-1c 端到端：加载时序校准 fixture → 时序 A/B → 四指标 + LeadTime → 报告对象。
+
+    Early Detection 由 ``run_temporal_ab_case`` 计算（computed / missing_detection），
+    不再为 N/A；Hard Gate 与 E-1a 一致（末 step 输入等价于 M0 单事件输入）。
+    """
+    evaluations = evaluate_temporal_dataset(fixture_root)
+    return build_report(
+        evaluations,
+        dataset_id=fixture_root,
+        stage="E-1A（含 E-1c 时序校准）",
+        generated_at=generated_at,
+        extra_notes=(
+            (
+                "Early Detection：已由 E-1c 时序 fixture 计算（LeadTime 时间戳校准），"
+                "非 N/A；na 表示该 case 两臂均未达 ESCALATE/NOTIFY 检测阈值（如 repeat_visitor→MONITOR）。"
+            ),
+        ),
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI 实现（入口见 ``__main__.py``）：生成 E-1 报告并落盘。
+
+    Hard Gate 失败 → 退出码 1，可直接作为 CI gate。``--stage e1c`` 改用时序校准 fixture。
     """
     parser = argparse.ArgumentParser(description="生成 E-1 Memory Value Evaluation 报告")
     parser.add_argument("--fixtures", default=DEFAULT_FIXTURE_ROOT, help="replay fixtures 根目录")
     parser.add_argument("--out", default=DEFAULT_OUT_DIR, help="报告输出目录")
+    parser.add_argument(
+        "--stage",
+        choices=("e1a", "e1c"),
+        default="e1a",
+        help="e1a=仅 M0 三 case（Early Detection N/A）；e1c=含时序校准（算 LeadTime）",
+    )
     args = parser.parse_args(argv)
 
-    report = run_e1a_report(args.fixtures)
+    if args.stage == "e1c":
+        report = run_e1c_report(args.fixtures)
+        stage_label = "E-1c"
+    else:
+        report = run_e1a_report(args.fixtures)
+        stage_label = "E-1A"
     json_path, md_path = write_report(report, args.out)
-    print(f"[E-1A] Hard Gate: {'PASS' if report.hard_gate.all_pass else 'FAIL'} "
+    print(f"[{stage_label}] Hard Gate: {'PASS' if report.hard_gate.all_pass else 'FAIL'} "
           f"({report.hard_gate.passed}/{report.hard_gate.total})")
     score_str = f"{report.score.score:.3f}" if report.score.valid else "N/A"
-    print(f"[E-1A] Memory Value Score: {score_str} (partial={report.score.partial})")
-    print(f"[E-1A] 报告: {json_path} / {md_path}")
+    print(f"[{stage_label}] Memory Value Score: {score_str} (partial={report.score.partial})")
+    print(f"[{stage_label}] 报告: {json_path} / {md_path}")
     return 0 if report.hard_gate.all_pass else 1
 
 
@@ -537,6 +591,7 @@ __all__ = [
     "compute_score_terms",
     "early_detection_term",
     "evaluate_dataset",
+    "evaluate_temporal_dataset",
     "explanation_pass_summary",
     "explanation_term",
     "fn_term",
@@ -546,6 +601,7 @@ __all__ = [
     "render_markdown",
     "report_to_dict",
     "run_e1a_report",
+    "run_e1c_report",
     "summarize",
     "summarize_hard_gate",
     "t_critical_95",
