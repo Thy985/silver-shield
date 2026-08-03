@@ -424,10 +424,10 @@ class ReasoningResult:
 
 
 __all__ = [
+    "RECOMMENDED_ACTION_HINTS",
     "ActionRecord",
     "ConflictFlag",
     "CurrentEvent",
-    "RECOMMENDED_ACTION_HINTS",
     "ReasoningInput",
     "ReasoningResult",
     "RiskPattern",

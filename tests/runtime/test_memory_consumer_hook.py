@@ -16,7 +16,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from home_perception.memory.consumer.config import ConsumerTriggerConfig
-from home_perception.memory.consumer.contracts import CurrentEvent, ReasoningInput, ReasoningResult, SourceRef
+from home_perception.memory.consumer.contracts import (
+    CurrentEvent,
+    ReasoningInput,
+    ReasoningResult,
+    SourceRef,
+)
 from home_perception.memory.consumer.exceptions import ConsumerError, ReasoningError, RetrievalError
 from home_perception.memory.consumer.interfaces import MemoryConsumer, ReasoningEngine
 from home_perception.memory.records import EpisodicRecord

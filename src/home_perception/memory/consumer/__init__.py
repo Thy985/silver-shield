@@ -32,10 +32,10 @@ from home_perception.memory.consumer.config import (
 )
 from home_perception.memory.consumer.context import RuleBasedContextBuilder
 from home_perception.memory.consumer.contracts import (
+    RECOMMENDED_ACTION_HINTS,
     ActionRecord,
     ConflictFlag,
     CurrentEvent,
-    RECOMMENDED_ACTION_HINTS,
     ReasoningInput,
     ReasoningResult,
     RiskPattern,
@@ -64,6 +64,7 @@ from home_perception.memory.consumer.interfaces import (
     Retrieval,
 )
 from home_perception.memory.consumer.orchestrator import RuleBasedMemoryConsumer
+from home_perception.memory.consumer.reasoning import RuleBasedReasoningEngine
 from home_perception.memory.consumer.replay_dataset import (
     MemoryReplayDataset,
     ReplayCase,
@@ -72,11 +73,11 @@ from home_perception.memory.consumer.replay_layer import (
     EpisodeReplayLayer,
     ProvisionalContextAssembler,
 )
-from home_perception.memory.consumer.reasoning import RuleBasedReasoningEngine
 from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
 
 __all__ = [
     "BEHAVIOR_MARKER_PREFIX",
+    "RECOMMENDED_ACTION_HINTS",
     "ActionRecord",
     "Aggregation",
     "AggregationConfig",
@@ -92,7 +93,6 @@ __all__ = [
     "MemoryConsumer",
     "MemoryReplayDataset",
     "ProvisionalContextAssembler",
-    "RECOMMENDED_ACTION_HINTS",
     "ReasoningEngine",
     "ReasoningError",
     "ReasoningInput",
