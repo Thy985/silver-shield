@@ -1,0 +1,13 @@
+# 构建上下文瘦身：避免把 GB 级视频 / 仓库元数据打进 docker build context
+# （Dockerfile 只用 src / config / scripts / pyproject.toml / requirements.txt）
+data/
+.git/
+.workbuddy/
+.github/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+tests/
+docs/
+*.md
