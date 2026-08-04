@@ -11,7 +11,7 @@ name: CD
 #   DEMO_DATA_URL      可选，演示视频打包（tar.gz，内含 data/demo/*.mp4）的下载地址
 #                      （如阿里云 OSS 预签名 URL）。视频被 .gitignore 忽略不入库，
 #                       不配置则面板无画面——可在 Dashboard UI 上传或手动 scp 到服务器 data/demo。
-#   GH_DEPLOY_KEY      只读 Deploy Key 私钥（PEM 全文）。私有仓库经 SSH 克隆必须；
+#   GH_DEPLOY_KEY      只读 Deploy Key 私钥的 base64 单行密文（本地 `base64 -w0 gh_deploy_key` 生成）。私有仓库经 SSH 克隆必须；
 #                       对应公钥已在仓库 Settings → Deploy keys 登记（read-only）。仅本次 SSH 会话使用，收尾即删。
 #
 # 服务器前置条件：已安装 git 与 Docker（含 compose v2）；安全组放行 8765（dashboard）/ 1883（mqtt）。
@@ -51,23 +51,25 @@ jobs:
             DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
             REPO="git@github.com:${{ github.repository }}.git"
 
-            # 0) 装配只读 Deploy Key（私有仓库经 SSH 克隆必须）。私钥来自 Secret GH_DEPLOY_KEY，
-            #    仅本次 SSH 会话内存活，收尾即删，不落盘。
-            #    写入时经 sed 规范化行尾（CRLF->LF）并去除首尾空白，
-            #    防止 Windows 粘贴引入的 CRLF / 多余空格导致 "Load key: invalid format"。
-            install -m 600 /dev/null /tmp/gh_deploy_key
-            printf '%s\n' "${{ secrets.GH_DEPLOY_KEY }}" | sed -e 's/\r$//' -e 's/[[:space:]]*$//' > /tmp/gh_deploy_key
+            # 0) 装配只读 Deploy Key（私有仓库经 SSH 克隆必须）。
+            #    私钥以 base64 单行形式存放在 Secret GH_DEPLOY_KEY，避免 Windows 多行粘贴
+            #    引入 CRLF / BOM / 首尾空白导致 "Load key: invalid format"。
+            #    本地生成：ssh-keygen -t ed25519 -f gh_deploy_key -N "" && base64 -w0 gh_deploy_key
+            #    （把 base64 单行输出粘进 Secret；工作流 base64 -d 还原，字节无损、对行尾免疫）。
+            umask 077
+            if ! echo "${{ secrets.GH_DEPLOY_KEY }}" | base64 -d > /tmp/gh_deploy_key 2>/dev/null; then
+              echo "ERROR: GH_DEPLOY_KEY 不是合法的 base64（请用 base64 -w0 gh_deploy_key 生成单行密文）。" >&2
+              exit 1
+            fi
             chmod 600 /tmp/gh_deploy_key
             mkdir -p ~/.ssh
             ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
             export GIT_SSH_COMMAND="ssh -i /tmp/gh_deploy_key -o StrictHostKeyChecking=no"
-            # 预校验：Secret 须为私钥（含 BEGIN/END PRIVATE KEY），否则给出可操作提示再退出
+            # 校验解码后确为私钥（含 BEGIN/END PRIVATE KEY），否则给出可操作提示
             if ! grep -q "BEGIN .*PRIVATE KEY" /tmp/gh_deploy_key || ! grep -q "END .*PRIVATE KEY" /tmp/gh_deploy_key; then
-              echo "ERROR: GH_DEPLOY_KEY 内容不是合法的私钥文件。" >&2
-              echo "  常见原因：1) 在 Secret 里粘贴了【公钥】(gh_deploy_key.pub) 而非私钥；" >&2
-              echo "  2) 粘贴内容缺头尾行 -----BEGIN/END ... PRIVATE KEY-----；3) 公钥/私钥不匹配。" >&2
-              echo "  正确做法：Secret 填 gh_deploy_key（无 .pub）全文，且对应 gh_deploy_key.pub 已登记到" >&2
-              echo "  仓库 Settings -> Deploy keys（read-only）。" >&2
+              echo "ERROR: GH_DEPLOY_KEY 解码后不是合法的私钥文件（请确认粘贴的是 base64(gh_deploy_key)）。" >&2
+              echo "  正确做法：本地 base64 -w0 gh_deploy_key，把【单行输出】粘进 Secret GH_DEPLOY_KEY。" >&2
+              echo "  且对应 gh_deploy_key.pub 已登记到仓库 Settings -> Deploy keys（read-only）。" >&2
               rm -f /tmp/gh_deploy_key
               exit 1
             fi
