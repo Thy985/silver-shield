@@ -1,0 +1,32 @@
+# 音频 fixture 预期事件声明（manifest 驱动测试，见 ADR-0026 §11.2）
+# kind: null 表示负向对照（不应产生风险事件）
+# score_min: 该 fixture 至少应达到的 score（校准后写入，见 PR 描述）
+
+normal_speech.wav:
+  expected:
+    kind: null
+    score_min: 0.0
+
+rapid_speech.wav:
+  expected:
+    kind: audio_speech_rapid
+    score_min: 0.59
+    labels: [speech, rapid]
+
+raised_voice.wav:
+  expected:
+    kind: audio_voice_raised
+    score_min: 0.53
+    labels: [speech, loud]
+
+telephone_conversation.wav:
+  expected:
+    kind: audio_telephone_persistent
+    score_min: 0.62
+    labels: [speech, telephone]
+
+crying_voice.wav:
+  expected:
+    kind: audio_distress_cry
+    score_min: 0.77
+    labels: [speech, distress]
