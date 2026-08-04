@@ -36,7 +36,7 @@ jobs:
     name: Deploy to Aliyun ECS (Docker Compose SSH)
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
+        - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.ALIYUN_HOST }}
@@ -47,9 +47,14 @@ jobs:
           script: |
             set -euo pipefail
             DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
-            REPO="https://github.com/${{ github.repository }}.git"
+            REPO="git@github.com:${{ github.repository }}.git"   # ← 改 SSH
 
-            # 1) 拉取最新代码（首次 clone，之后硬重置到 origin/main，保证 CD 总是干净的最新主干）
+            # 写入只读 deploy key 并信任 github.com（用完即删）
+            install -m 600 /dev/null /tmp/gh_deploy_key
+            printf '%s\n' "${{ secrets.GH_DEPLOY_KEY }}" > /tmp/gh_deploy_key
+            ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+            export GIT_SSH_COMMAND="ssh -i /tmp/gh_deploy_key -o StrictHostKeyChecking=no"
+
             if [ ! -d "$DEPLOY_PATH/.git" ]; then
               git clone --depth 1 "$REPO" "$DEPLOY_PATH"
             fi
@@ -80,3 +85,4 @@ jobs:
             # 5) 构建并启动全部 service（dashboard + home-perception + mqtt）
             docker compose up -d --build
             docker image prune -f
+            rm -f /tmp/gh_deploy_key 
