@@ -53,11 +53,24 @@ jobs:
 
             # 0) 装配只读 Deploy Key（私有仓库经 SSH 克隆必须）。私钥来自 Secret GH_DEPLOY_KEY，
             #    仅本次 SSH 会话内存活，收尾即删，不落盘。
+            #    写入时经 sed 规范化行尾（CRLF->LF）并去除首尾空白，
+            #    防止 Windows 粘贴引入的 CRLF / 多余空格导致 "Load key: invalid format"。
             install -m 600 /dev/null /tmp/gh_deploy_key
-            printf '%s\n' "${{ secrets.GH_DEPLOY_KEY }}" > /tmp/gh_deploy_key
+            printf '%s\n' "${{ secrets.GH_DEPLOY_KEY }}" | sed -e 's/\r$//' -e 's/[[:space:]]*$//' > /tmp/gh_deploy_key
+            chmod 600 /tmp/gh_deploy_key
             mkdir -p ~/.ssh
             ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
             export GIT_SSH_COMMAND="ssh -i /tmp/gh_deploy_key -o StrictHostKeyChecking=no"
+            # 预校验：Secret 须为私钥（含 BEGIN/END PRIVATE KEY），否则给出可操作提示再退出
+            if ! grep -q "BEGIN .*PRIVATE KEY" /tmp/gh_deploy_key || ! grep -q "END .*PRIVATE KEY" /tmp/gh_deploy_key; then
+              echo "ERROR: GH_DEPLOY_KEY 内容不是合法的私钥文件。" >&2
+              echo "  常见原因：1) 在 Secret 里粘贴了【公钥】(gh_deploy_key.pub) 而非私钥；" >&2
+              echo "  2) 粘贴内容缺头尾行 -----BEGIN/END ... PRIVATE KEY-----；3) 公钥/私钥不匹配。" >&2
+              echo "  正确做法：Secret 填 gh_deploy_key（无 .pub）全文，且对应 gh_deploy_key.pub 已登记到" >&2
+              echo "  仓库 Settings -> Deploy keys（read-only）。" >&2
+              rm -f /tmp/gh_deploy_key
+              exit 1
+            fi
 
             # 1) 拉取最新代码，保证 CD 总是干净的最新主干
             #    兼容三种情况：已是 git 仓库 / 目录存在但非 git 仓库（手动部署遗留）/ 目录不存在
