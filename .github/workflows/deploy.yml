@@ -54,6 +54,10 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           key: ${{ secrets.ALIYUN_SSH_KEY }}
           port: ${{ secrets.ALIYUN_PORT || 22 }}
+          # 首次 docker compose build 需在 ECS(纯 CPU)上重装 torch/ultralytics/opencv，
+          # 单次 pip install 常超 10 分钟。默认 command_timeout=10m 会误杀构建，放宽到 60m。
+          # 首次构建命中缓存后，后续 --build 仅重跑 COPY 层、秒级完成。
+          command_timeout: 60m
           envs: GH_TOKEN
           # 注意：不要开 script_stop。开启后 appboy 会在首个失败命令处立即切断 SSH，
           # 导致后续 echo / 报错输出被吞，CD 失败完全不可观测。这里靠 set -e 在失败时退出，
