@@ -35,6 +35,14 @@ demo = [
     "websockets>=12.0",
     "python-multipart>=0.0.9",  # P0-11.4 视频上传端点（UploadFile / multipart 表单）
 ]
+# 音频 fixture 生成基础设施（仅开发期重新生成 tests/fixtures/audio/*.wav 时需要，
+# 不进入运行时 / CI 默认依赖）。TTS 用 edge-tts（免费、无需密钥）；MP3→WAV 解码用 av（PyAV）。
+# 注意：音频运行时管道（src/home_perception/audio/*）零模型、纯 numpy + 标准库 wave，
+# 不依赖本 extra；本 extra 仅用于「生成 fixture」这一开发动作。
+audio-dev = [
+    "edge-tts>=6.1",
+    "av>=11.0",  # PyAV，MP3 字节解码为 numpy（仅生成期用，管道不依赖）
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

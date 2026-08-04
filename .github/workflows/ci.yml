@@ -76,7 +76,8 @@ jobs:
             tests/demo/test_dashboard_p0_11_4.py \
             tests/demo/test_dashboard_state_layer.py \
             tests/demo/test_dashboard_video_input.py \
-            tests/demo/test_freeze_boundary.py
+            tests/demo/test_freeze_boundary.py \
+            tests/test_audio_perception.py
 
   # 完整运行时测试：需要 AI 栈（torch/ultralytics/opencv），仅 main 合入或手动触发时运行，
   # 避免每 PR 强行安装整个 AI 栈（CI 不依赖 GPU 环境；PyPI torch 默认 CPU 构建）。
