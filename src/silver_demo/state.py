@@ -149,6 +149,12 @@ class DemoAggregateState:
         # 不在服务端长期保留（volatile 语义，见工程方案 §4.3）。展示层 TTL 为最终兜底。
         self.risk_signals: dict[str, dict[str, Any]] = {}
 
+        # 区域⑥ Memory Context（ADR-0025 C-4/C-6）· 服务端粘性权威态：
+        # Memory 画像仅在「门控触发的那帧」由 bridge 派生，绝大多帧为空。为避免面板随空帧
+        # 闪空，此处**粘性持有**最近一次非空画像——空帧不清空，仅非空帧覆盖。切换输入源
+        # （clear(reset_session=True)）时归零。
+        self.memory_profiles: list[dict[str, Any]] = []
+
         # 运行时元数据
         self.session_status: str = "RUNNING"
         self.frame_index: int = 0
@@ -362,6 +368,19 @@ class DemoAggregateState:
                 best = w
         self.last_warning = best
 
+    def ingest_memory(self, memory_profiles: list[dict[str, Any]]) -> None:
+        """粘性持有区域⑥ Memory Context 画像（方案1 修复面板闪空）。
+
+        仅当本帧 ``memory_profiles`` 非空时才覆盖权威态；空帧**保留**上一帧画像，
+        避免面板随绝大多数空帧闪空。触发频率为「门控命中帧」而非每帧，故粘性持有
+        是安全且必要的（详见 ADR-0025 C-4/C-6 说明）。
+
+        Args:
+            memory_profiles: ``view["memory_profiles"]``（bridge 派生，可能为空列表）。
+        """
+        if memory_profiles:  # 非空才更新；空帧不清空，保留粘性权威态
+            self.memory_profiles = list(memory_profiles)
+
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
@@ -379,6 +398,7 @@ class DemoAggregateState:
         self._visitor_n = 0
         self._behavior_n = 0
         self.risk_signals = {}
+        self.memory_profiles = []
         self.frame_index = 0
         self.loop_count = 0
         self.last_warning = None
@@ -402,6 +422,7 @@ class DemoAggregateState:
             "behaviors": list(self.behaviors),
             "commands": commands_out,
             "risk_signals": list(self.risk_signals.values()),
+            "memory_profiles": list(self.memory_profiles),
             "visitor_seq": dict(self._visitor_seq),
             "behavior_seen": list(self._behavior_seen.keys()),
             "visitor_first": list(self._visitor_first.keys()),
@@ -421,4 +442,6 @@ class DemoAggregateState:
             "n_frames": self.n_frames,
             # 实时风险活跃卡数（ADR-0021 Phase 1 · 状态面板展示）
             "active_risk_signals": len(self.risk_signals),
+            # 区域⑥ Memory Context 粘性画像（晚连恢复 / 状态面板展示）
+            "memory_profiles": list(self.memory_profiles),
         }
