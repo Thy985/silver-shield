@@ -33,9 +33,13 @@ data/models/
 
 # --- 评估产出物（可由 `python -m home_perception.memory.evaluation` 再生成，含时间戳，不入库）---
 artifacts/
+# Memory 运行时快照（data/memory/snapshot.json，运行期产物，可再生成，不入库）
+data/memory/
 
 # --- 设计思路草稿（团队研究稿，非模块交付；终稿已沉淀到 docs/）---
 .doc/
+# 设计评审草稿（.DESIGN-*.md，review 中间稿，非交付物）
+docs/.DESIGN-*.md
 data/evidence/**
 data/cache/**
 *.mp4
