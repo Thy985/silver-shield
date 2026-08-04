@@ -8,9 +8,10 @@ name: CD
 #   ALIYUN_SSH_KEY     私钥内容（PEM，含 -----BEGIN ... -----END 整段）
 #   ALIYUN_PORT        可选，SSH 端口，默认 22
 #   DEPLOY_PATH        可选，服务器部署目录，默认 /opt/silvershield
-#   DEMO_DATA_URL      可选，演示视频打包（tar.gz，内含 data/demo/*.mp4）的下载地址
-#                      （如阿里云 OSS 预签名 URL）。视频被 .gitignore 忽略不入库，
-#                       不配置则面板无画面——可在 Dashboard UI 上传或手动 scp 到服务器 data/demo。
+#   DEMO_DATA_URL      可选，演示视频打包（tar.gz，内含 data/demo/*.mp4）的下载【直链】，
+#                       须以 http:// 或 https:// 开头（如阿里云 OSS 预签名 URL）。
+#                       视频被 .gitignore 忽略不入库；不配置或拉取失败均只告警、不阻断部署，
+#                       此时面板无画面——可在 Dashboard UI 上传或手动 scp 到服务器 data/demo。
 #
 # 私有仓库拉取凭证：使用 Actions 自动注入的 GITHUB_TOKEN（见下方 permissions: contents: read），
 #   无需人工生成 / 复制 / 粘贴任何密钥，因此不再需要 GH_DEPLOY_KEY，
@@ -78,15 +79,30 @@ jobs:
             git reset --hard FETCH_HEAD
 
             # 2) 演示视频（被 .gitignore 忽略，不入库）：可选经对象存储拉取后解包到 data/demo
-            if [ -n "${{ secrets.DEMO_DATA_URL }}" ]; then
-              echo "==> 拉取演示视频包 (DEMO_DATA_URL)"
-              mkdir -p data/demo
-              curl -fsSL "${{ secrets.DEMO_DATA_URL }}" -o /tmp/demo_videos.tar.gz
-              tar -xzf /tmp/demo_videos.tar.gz -C data/demo
-              rm -f /tmp/demo_videos.tar.gz
-            else
-              echo "==> 未配置 DEMO_DATA_URL：演示面板将无视频，请在 Dashboard UI 上传或手动 scp 到 $DEPLOY_PATH/data/demo"
-            fi
+            #    演示视频是【可选】资源：URL 非法 / 下载失败 / 解包失败一律降级为 WARN，
+            #    绝不阻断部署——没有视频服务照常起，可事后在 Dashboard UI 上传或 scp 补齐。
+            DEMO_URL="${{ secrets.DEMO_DATA_URL }}"
+            case "$DEMO_URL" in
+              http://*|https://*)
+                echo "==> 拉取演示视频包 (DEMO_DATA_URL)"
+                mkdir -p data/demo
+                if curl -fsSL --connect-timeout 15 --max-time 600 "$DEMO_URL" -o /tmp/demo_videos.tar.gz \
+                   && tar -xzf /tmp/demo_videos.tar.gz -C data/demo; then
+                  echo "==> 演示视频包已解包到 data/demo"
+                else
+                  echo "WARN: 演示视频包拉取或解包失败，已跳过（不阻断部署）。" >&2
+                  echo "      请检查 DEMO_DATA_URL 是否为有效的 tar.gz 直链（OSS 预签名 URL 可能已过期）。" >&2
+                fi
+                rm -f /tmp/demo_videos.tar.gz
+                ;;
+              "")
+                echo "==> 未配置 DEMO_DATA_URL：演示面板将无视频，可在 Dashboard UI 上传或手动 scp 到 $DEPLOY_PATH/data/demo"
+                ;;
+              *)
+                echo "WARN: DEMO_DATA_URL 不是 http(s):// 开头的直链，已跳过（不阻断部署）。" >&2
+                echo "      若该 Secret 填的是说明文字而非下载地址，请到 Settings -> Secrets 清空它。" >&2
+                ;;
+            esac
 
             # 3) 服务器无 .env 时用模板生成（home-perception 需要；dashboard 有默认值）
             if [ ! -f .env ] && [ -f .env.example ]; then
