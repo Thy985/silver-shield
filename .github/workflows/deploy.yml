@@ -38,7 +38,7 @@ jobs:
     name: Deploy to Aliyun ECS (Docker Compose SSH)
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
+        - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.ALIYUN_HOST }}
@@ -59,7 +59,6 @@ jobs:
             ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
             export GIT_SSH_COMMAND="ssh -i /tmp/gh_deploy_key -o StrictHostKeyChecking=no"
 
-            # 1) 拉取最新代码（首次 clone，之后硬重置到 origin/main，保证 CD 总是干净的最新主干）
             if [ ! -d "$DEPLOY_PATH/.git" ]; then
               git clone --depth 1 "$REPO" "$DEPLOY_PATH"
             fi

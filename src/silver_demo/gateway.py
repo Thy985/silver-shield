@@ -217,6 +217,12 @@ class DemoGateway:
                 result, frame_index=self._frame_index, frame_base64=frame_b64, demo_time=demo_time
             )
 
+            # 区域⑥ Memory Context：粘性持有（方案1 修复面板随空帧闪空）。
+            # 仅非空帧覆盖权威态；空帧保留上一帧画像，回填进 view 供前端持续渲染。
+            self.aggregate_state.ingest_memory(view.get("memory_profiles") or [])
+            if not view.get("memory_profiles"):
+                view["memory_profiles"] = self.aggregate_state.memory_profiles
+
             # 广播（frame view + state 快照 + 衍生的三端聚合视图）
             # active_warnings / routed_commands 由 bridge 消费 view-model 产出（P0-11.2 区域 3/4 直接渲染），
             # 此处调用即"消费" collect_active_warnings / route_commands（消除孤儿代码），
