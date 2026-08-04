@@ -59,11 +59,20 @@ jobs:
             ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
             export GIT_SSH_COMMAND="ssh -i /tmp/gh_deploy_key -o StrictHostKeyChecking=no"
 
-            # 1) 拉取最新代码（首次 clone，之后硬重置到 origin/main，保证 CD 总是干净的最新主干）
-            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+            # 1) 拉取最新代码，保证 CD 总是干净的最新主干
+            #    兼容三种情况：已是 git 仓库 / 目录存在但非 git 仓库（手动部署遗留）/ 目录不存在
+            if [ -d "$DEPLOY_PATH/.git" ]; then
+              cd "$DEPLOY_PATH"
+            elif [ -d "$DEPLOY_PATH" ]; then
+              # 目录存在但非 git 仓库（多为手动 docker cp 部署遗留）：
+              # 就地初始化 git，保留 data/demo 等未纳入版本控制的演示视频，再硬重置到 origin/main
+              git -C "$DEPLOY_PATH" init -q
+              git -C "$DEPLOY_PATH" remote add origin "$REPO" 2>/dev/null || git -C "$DEPLOY_PATH" remote set-url origin "$REPO"
+              cd "$DEPLOY_PATH"
+            else
               git clone --depth 1 "$REPO" "$DEPLOY_PATH"
+              cd "$DEPLOY_PATH"
             fi
-            cd "$DEPLOY_PATH"
             git fetch --depth 1 origin main
             git reset --hard origin/main
 
