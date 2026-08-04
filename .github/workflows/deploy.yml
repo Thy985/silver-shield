@@ -11,8 +11,10 @@ name: CD
 #   DEMO_DATA_URL      可选，演示视频打包（tar.gz，内含 data/demo/*.mp4）的下载地址
 #                      （如阿里云 OSS 预签名 URL）。视频被 .gitignore 忽略不入库，
 #                       不配置则面板无画面——可在 Dashboard UI 上传或手动 scp 到服务器 data/demo。
-#   GH_DEPLOY_KEY      只读 Deploy Key 私钥的 base64 单行密文（本地 `base64 -w0 gh_deploy_key` 生成）。私有仓库经 SSH 克隆必须；
-#                       对应公钥已在仓库 Settings → Deploy keys 登记（read-only）。仅本次 SSH 会话使用，收尾即删。
+#
+# 私有仓库拉取凭证：使用 Actions 自动注入的 GITHUB_TOKEN（见下方 permissions: contents: read），
+#   无需人工生成 / 复制 / 粘贴任何密钥，因此不再需要 GH_DEPLOY_KEY，
+#   Settings → Deploy keys 亦无需登记公钥。该 token 随 workflow 运行签发、结束即失效。
 #
 # 服务器前置条件：已安装 git 与 Docker（含 compose v2）；安全组放行 8765（dashboard）/ 1883（mqtt）。
 #
@@ -37,59 +39,43 @@ jobs:
   deploy:
     name: Deploy to Aliyun ECS (Docker Compose SSH)
     runs-on: ubuntu-latest
+    # 仅授予本仓库只读权限：GITHUB_TOKEN 用于服务器侧 git fetch，最小权限原则
+    permissions:
+      contents: read
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          # 经 envs 传入远端 shell，避免 token 明文出现在 script 文本里
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.ALIYUN_HOST }}
           username: ${{ secrets.ALIYUN_USERNAME }}
           key: ${{ secrets.ALIYUN_SSH_KEY }}
           port: ${{ secrets.ALIYUN_PORT || 22 }}
+          envs: GH_TOKEN
           script_stop: true
           script: |
             set -euo pipefail
             DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
-            REPO="git@github.com:${{ github.repository }}.git"
-
-            # 0) 装配只读 Deploy Key（私有仓库经 SSH 克隆必须）。
-            #    私钥以 base64 单行形式存放在 Secret GH_DEPLOY_KEY，避免 Windows 多行粘贴
-            #    引入 CRLF / BOM / 首尾空白导致 "Load key: invalid format"。
-            #    本地生成：ssh-keygen -t ed25519 -f gh_deploy_key -N "" && base64 -w0 gh_deploy_key
-            #    （把 base64 单行输出粘进 Secret；工作流 base64 -d 还原，字节无损、对行尾免疫）。
-            umask 077
-            if ! echo "${{ secrets.GH_DEPLOY_KEY }}" | base64 -d > /tmp/gh_deploy_key 2>/dev/null; then
-              echo "ERROR: GH_DEPLOY_KEY 不是合法的 base64（请用 base64 -w0 gh_deploy_key 生成单行密文）。" >&2
-              exit 1
-            fi
-            chmod 600 /tmp/gh_deploy_key
-            mkdir -p ~/.ssh
-            ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
-            export GIT_SSH_COMMAND="ssh -i /tmp/gh_deploy_key -o StrictHostKeyChecking=no"
-            # 校验解码后确为私钥（含 BEGIN/END PRIVATE KEY），否则给出可操作提示
-            if ! grep -q "BEGIN .*PRIVATE KEY" /tmp/gh_deploy_key || ! grep -q "END .*PRIVATE KEY" /tmp/gh_deploy_key; then
-              echo "ERROR: GH_DEPLOY_KEY 解码后不是合法的私钥文件（请确认粘贴的是 base64(gh_deploy_key)）。" >&2
-              echo "  正确做法：本地 base64 -w0 gh_deploy_key，把【单行输出】粘进 Secret GH_DEPLOY_KEY。" >&2
-              echo "  且对应 gh_deploy_key.pub 已登记到仓库 Settings -> Deploy keys（read-only）。" >&2
-              rm -f /tmp/gh_deploy_key
-              exit 1
-            fi
+            # 无凭证 URL：写入 .git/config，确保服务器上不残留任何 token
+            REPO_URL="https://github.com/${{ github.repository }}.git"
+            # 带凭证 URL：仅本次 fetch 一次性使用，随 workflow 结束失效
+            AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
             # 1) 拉取最新代码，保证 CD 总是干净的最新主干
             #    兼容三种情况：已是 git 仓库 / 目录存在但非 git 仓库（手动部署遗留）/ 目录不存在
-            if [ -d "$DEPLOY_PATH/.git" ]; then
-              cd "$DEPLOY_PATH"
-            elif [ -d "$DEPLOY_PATH" ]; then
-              # 目录存在但非 git 仓库（多为手动 docker cp 部署遗留）：
-              # 就地初始化 git，保留 data/demo 等未纳入版本控制的演示视频，再硬重置到 origin/main
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              # 目录不存在则新建；目录存在但非 git 仓库（多为手动部署遗留）则就地 init，
+              # 保留 data/demo 等未纳入版本控制的演示视频，再硬重置到 origin/main
+              mkdir -p "$DEPLOY_PATH"
               git -C "$DEPLOY_PATH" init -q
-              git -C "$DEPLOY_PATH" remote add origin "$REPO" 2>/dev/null || git -C "$DEPLOY_PATH" remote set-url origin "$REPO"
-              cd "$DEPLOY_PATH"
-            else
-              git clone --depth 1 "$REPO" "$DEPLOY_PATH"
-              cd "$DEPLOY_PATH"
+              git -C "$DEPLOY_PATH" remote add origin "$REPO_URL"
             fi
-            git fetch --depth 1 origin main
-            git reset --hard origin/main
+            cd "$DEPLOY_PATH"
+            git remote set-url origin "$REPO_URL"
+            git fetch --depth 1 "$AUTH_URL" main
+            git reset --hard FETCH_HEAD
 
             # 2) 演示视频（被 .gitignore 忽略，不入库）：可选经对象存储拉取后解包到 data/demo
             if [ -n "${{ secrets.DEMO_DATA_URL }}" ]; then
@@ -114,6 +100,3 @@ jobs:
             # 5) 构建并启动全部 service（dashboard + home-perception + mqtt）
             docker compose up -d --build
             docker image prune -f
-
-            # 6) 清理临时 deploy key（不残留私钥到服务器）
-            rm -f /tmp/gh_deploy_key
