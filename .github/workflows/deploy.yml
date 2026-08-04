@@ -11,6 +11,8 @@ name: CD
 #   DEMO_DATA_URL      可选，演示视频打包（tar.gz，内含 data/demo/*.mp4）的下载地址
 #                      （如阿里云 OSS 预签名 URL）。视频被 .gitignore 忽略不入库，
 #                       不配置则面板无画面——可在 Dashboard UI 上传或手动 scp 到服务器 data/demo。
+#   GH_DEPLOY_KEY      只读 Deploy Key 私钥（PEM 全文）。私有仓库经 SSH 克隆必须；
+#                       对应公钥已在仓库 Settings → Deploy keys 登记（read-only）。仅本次 SSH 会话使用，收尾即删。
 #
 # 服务器前置条件：已安装 git 与 Docker（含 compose v2）；安全组放行 8765（dashboard）/ 1883（mqtt）。
 #
@@ -47,7 +49,15 @@ jobs:
           script: |
             set -euo pipefail
             DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
-            REPO="https://github.com/${{ github.repository }}.git"
+            REPO="git@github.com:${{ github.repository }}.git"
+
+            # 0) 装配只读 Deploy Key（私有仓库经 SSH 克隆必须）。私钥来自 Secret GH_DEPLOY_KEY，
+            #    仅本次 SSH 会话内存活，收尾即删，不落盘。
+            install -m 600 /dev/null /tmp/gh_deploy_key
+            printf '%s\n' "${{ secrets.GH_DEPLOY_KEY }}" > /tmp/gh_deploy_key
+            mkdir -p ~/.ssh
+            ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+            export GIT_SSH_COMMAND="ssh -i /tmp/gh_deploy_key -o StrictHostKeyChecking=no"
 
             # 1) 拉取最新代码（首次 clone，之后硬重置到 origin/main，保证 CD 总是干净的最新主干）
             if [ ! -d "$DEPLOY_PATH/.git" ]; then
@@ -80,3 +90,6 @@ jobs:
             # 5) 构建并启动全部 service（dashboard + home-perception + mqtt）
             docker compose up -d --build
             docker image prune -f
+
+            # 6) 清理临时 deploy key（不残留私钥到服务器）
+            rm -f /tmp/gh_deploy_key
