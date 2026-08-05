@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -71,7 +72,14 @@ def apply_speech_rate(
     """
     if factor <= 0:
         raise ValueError("factor 必须 > 0")
-    if abs(factor - 1.0) < 1e-3 or len(samples) < n_fft:
+    if len(samples) < n_fft:
+        warnings.warn(
+            f"apply_speech_rate: 信号长度 {len(samples)} < n_fft({n_fft})，相位声码器不可用，"
+            "静默返回原信号（语速不变）。请传入更长音频或减小 n_fft。",
+            stacklevel=2,
+        )
+        return samples.astype(np.float32)
+    if abs(factor - 1.0) < 1e-3:
         return samples.astype(np.float32)
 
     x = samples.astype(np.float32)
@@ -169,13 +177,15 @@ def apply_noise(
 
 
 def _make_rir(sr: int, rt60: float, seed: int) -> np.ndarray:
+    if rt60 <= 0.0:
+        # 无混响 → 单位脉冲（卷积恒等式），避免 length=1 退化数值路径
+        return np.array([1.0], dtype=np.float32)
     rng = _rng(seed)
     length = max(int(rt60 * sr), 1)
     decay = np.linspace(1.0, 0.0, length) ** 1.5  # 衰减包络
     rir = (rng.normal(0.0, 1.0, length) * decay).astype(np.float32)
-    if length:
-        rir = rir / (np.max(np.abs(rir)) + 1e-9)
-        rir[0] = 1.0  # 直达声
+    rir = rir / (np.max(np.abs(rir)) + 1e-9)
+    rir[0] = 1.0  # 直达声
     return rir
 
 
@@ -186,17 +196,23 @@ def apply_reverb(
     wet: float = 0.4,
     seed: int = 42,
 ) -> np.ndarray:
-    """混响：与合成房间脉冲响应(RIR)卷积。``rt60`` 混响时间(秒)，``wet`` 湿声比例。确定性 seed。"""
+    """混响：与合成房间脉冲响应(RIR)卷积。``rt60`` 混响时间(秒)，``wet`` 湿声比例。确定性 seed。
+
+    保留完整混响尾部：输出长度 = ``len(samples) + len(rir) - 1``。
+    直达声（干声）占前 ``len(samples)`` 样本，RIR 衰减尾部自然延伸其后，与物理一致。
+    """
     if not 0.0 <= wet <= 1.0:
         raise ValueError("wet 必须在 [0, 1]")
     rir = _make_rir(sr, rt60, seed)
-    wet_sig = np.convolve(samples.astype(np.float32), rir, mode="full")[: len(samples)]
-    # 湿声按干声 RMS 归一，避免能量失控
+    wet_full = np.convolve(samples.astype(np.float32), rir, mode="full")
+    # 湿声按干声 RMS 归一（含完整尾部能量），避免能量失控
     dry_rms = float(np.sqrt(np.mean(samples**2) + 1e-12))
-    wet_rms = float(np.sqrt(np.mean(wet_sig**2) + 1e-12))
+    wet_rms = float(np.sqrt(np.mean(wet_full**2) + 1e-12))
     if wet_rms > 1e-9:
-        wet_sig = wet_sig * (dry_rms / wet_rms)
-    out = (1.0 - wet) * samples + wet * wet_sig
+        wet_full = wet_full * (dry_rms / wet_rms)
+    out = np.zeros(len(wet_full), dtype=np.float64)
+    out[: len(samples)] += (1.0 - wet) * samples.astype(np.float64)
+    out += wet * wet_full
     return _clip(out)
 
 

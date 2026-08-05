@@ -136,21 +136,30 @@ def _write_wav(path: Path, samples: np.ndarray, sr: int) -> None:
 
 
 def _resolve_base(sc: Scenario, fixtures_root: Path) -> Path:
-    """解析 base 音频路径：绝对 / fixtures_root / 仓库根相对。"""
+    """解析 base 音频路径：绝对 / fixtures_root / 仓库根相对。
+
+    找不到时显式抛出 ``FileNotFoundError``（附带尝试过的路径），便于调试，
+    而非静默返回错误路径、等 ``_load_wav`` 才报晦涩的 I/O 错误。
+    """
     ref = sc.base_wav or sc.base_ref
     if ref is None:
         raise ValueError(f"scenario {sc.id!r} 无 base 引用")
     p = Path(ref)
     if p.is_absolute():
+        if not p.exists():
+            raise FileNotFoundError(f"scenario {sc.id!r} 的 base 文件未找到: {p}")
         return p
     cand = Path(fixtures_root) / ref
-    if cand.exists():
-        return cand
     root = _repo_root(fixtures_root)
     cand2 = root / ref
+    tried = [str(cand), str(cand2)]
+    if cand.exists():
+        return cand
     if cand2.exists():
         return cand2
-    return cand
+    raise FileNotFoundError(
+        f"scenario {sc.id!r} 的 base 文件未找到: {ref!r}；尝试路径: {tried}"
+    )
 
 
 def generate_scenario(
