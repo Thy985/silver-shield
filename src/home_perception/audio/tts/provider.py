@@ -1,15 +1,16 @@
-"""TTS Provider 抽象（ADR-0026 验证闭环 / ``docs/audio_fixture_generation.md``）。
+"""TTS Provider 抽象（Audio Synthetic Infrastructure / ``tts`` 包子模块）。
 
-> **本模块属 Testing / Evaluation Infrastructure，不是 Audio Perception Chain 的一环。**
+> 本模块属 Testing / Evaluation Infrastructure，不是 Audio Perception Chain 的一环。
 > 用于生成音频测试 fixture（TTS → WAV），与 Memory replay dataset / E-1 synthetic generator 同构。
 > 默认 ``EdgeTTSProvider``（免费、无密钥、CI 友好）；可替换为 Azure / 本地模型而不改 fixture 定义。
 >
-> 本模块**仅被 ``scripts/gen_audio_fixtures.py`` 使用**，不被 ``audio`` 包运行时 import
+> 本模块**仅被 ``tts`` 包与 ``scripts/gen_audio_fixtures.py`` 使用**，不被 ``audio`` 包运行时 import
 > （保持运行时零 TTS 依赖）。``edge_tts`` 为可选 dev 依赖，惰性 import。
 """
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -39,7 +40,7 @@ class TTSProvider(ABC):
 class EdgeTTSProvider(TTSProvider):
     """CI 默认实现：Microsoft Edge TTS，免费、无需密钥、可脚本化。
 
-    产出 MP3；由调用方（生成脚本）统一转 WAV 提交为 fixture。
+    产出 MP3；由调用方（生成器）统一转 WAV 提交为 fixture。
     """
 
     def synthesize(
@@ -51,8 +52,6 @@ class EdgeTTSProvider(TTSProvider):
         out_path: Path,
     ) -> Path:
         # 惰性 import：仅在使用时要求 edge-tts 已安装（dev 依赖）
-        import asyncio
-
         try:
             import edge_tts  # type: ignore
         except ImportError as exc:  # pragma: no cover
@@ -62,7 +61,7 @@ class EdgeTTSProvider(TTSProvider):
 
         # edge-tts 的 rate/pitch 格式：相对百分比，如 "+40%" / "+10Hz"
         rate_str = f"{'+' if rate >= 1 else ''}{round((rate - 1.0) * 100)}%"
-        # pitch 按半音近似：edge-ts 用 Hz，1 半音 ≈ 100 cents；这里简单映射 pitch 偏移到 Hz
+        # pitch 按半音近似：edge-tts 用 Hz，1 半音 ≈ 100 cents；这里简单映射 pitch 偏移到 Hz
         pitch_hz = round(pitch * 100)  # pitch=1.0 → 0Hz；pitch=1.2 → +20Hz
         pitch_str = f"{'+' if pitch_hz >= 0 else ''}{pitch_hz}Hz"
 
@@ -81,8 +80,6 @@ class EdgeTTSProvider(TTSProvider):
     def synthesize_bytes(
         self, text: str, voice: str, rate: float, pitch: float
     ) -> bytes:
-        import asyncio
-
         try:
             import edge_tts  # type: ignore
         except ImportError as exc:  # pragma: no cover
