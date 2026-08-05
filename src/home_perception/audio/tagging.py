@@ -286,7 +286,13 @@ class YamNetTagger(AcousticTagger):
         if len(wav) < frame:
             # 不足一帧则补零到整帧；补零后长度必 ≥ frame，无需二次判空（评审 2.1）。
             wav = np.pad(wav, (0, frame - len(wav)))
-        inp = sess.get_inputs()[0].name
+        inp = sess.get_inputs()[0]
+        # 输入 rank 自适应（真实权重验证发现）：不同 ONNX 导出对 waveform 的 rank 不一致——
+        # TF/官方导出常为 [batch, samples]（rank2），PINTO 等导出为 [samples]（rank1，声明 shape ["samples"]）。
+        # 喂错 rank 会触发 INVALID_ARGUMENT（Got: 2 Expected: 1），故按模型声明自适应；
+        # 无 shape 信息的替身 session（测试）回退到原 rank-2 行为。
+        _shape = getattr(inp, "shape", None)
+        expects_rank2 = _shape is None or len(_shape) == 2
         # 帧起点：标准 hop 步进 + 末尾补一帧覆盖尾部（评审 2.2：非 2×hop 整数倍时尾段会漏）
         starts = list(range(0, len(wav) - frame + 1, hop))
         last = len(wav) - frame
@@ -294,8 +300,9 @@ class YamNetTagger(AcousticTagger):
             starts.append(last)
         out: list[np.ndarray] = []
         for start in starts:
-            chunk = wav[start : start + frame]
-            res = sess.run(None, {inp: chunk[None, :].astype(np.float32)})
+            chunk = wav[start : start + frame].astype(np.float32)
+            feed = chunk[None, :] if expects_rank2 else chunk
+            res = sess.run(None, {inp.name: feed})
             # YAMNet 输出 scores 为 [frames, 521]；取该帧
             out.append(np.asarray(res[0]).reshape(-1, 521)[0])
         return np.stack(out) if out else np.empty((0, 521))
