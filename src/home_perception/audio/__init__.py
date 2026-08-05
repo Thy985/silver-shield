@@ -18,11 +18,24 @@ from .features import AudioFeatureExtractor, AudioFeatures
 from .pipeline import AudioPipeline
 from .rule import AudioRule, RuleThresholds
 from .source import AudioSource, FileAudioSource, LoadedAudio
+from .tagging import (
+    YAMNET_SEMANTIC_MAP,
+    AcousticTagger,
+    AudioTag,
+    EnergyStubAcousticTagger,
+    FixedStubAcousticTagger,
+    StubAcousticTagger,
+    YamNetTagger,
+    build_tagger,
+    tier1_trigger_of,
+)
 from .vad import EnergyVadBackend, VadBackend, WebRtcVadBackend, select_vad
 
 __all__ = [
     "AUDIO_PERCEPTION_KIND_VALUES",
     "FORBIDDEN_AUDIO_FIELDS",
+    "YAMNET_SEMANTIC_MAP",
+    "AcousticTagger",
     "AudioDetector",
     "AudioFeatureExtractor",
     "AudioFeatures",
@@ -32,13 +45,20 @@ __all__ = [
     "AudioRule",
     "AudioSegmentEvent",
     "AudioSource",
+    "AudioTag",
     "DetectionResult",
+    "EnergyStubAcousticTagger",
     "EnergyVadBackend",
     "FileAudioSource",
+    "FixedStubAcousticTagger",
     "LoadedAudio",
     "RuleThresholds",
+    "StubAcousticTagger",
     "VadBackend",
     "WebRtcVadBackend",
+    "YamNetTagger",
+    "build_tagger",
     "new_event_id",
     "select_vad",
+    "tier1_trigger_of",
 ]

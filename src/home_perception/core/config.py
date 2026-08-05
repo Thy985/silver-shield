@@ -429,6 +429,70 @@ class MemoryConfig(BaseModel):
         return v
 
 
+# Tier1 触发策略白名单（单一来源：pipeline 与 config 校验共用，避免两处手工同步——评审 2.6）
+TIER1_TRIGGERS: tuple[str, ...] = ("segment", "perception")
+
+
+class Tier1AudioConfig(BaseModel):
+    """Tier1 声学标签器配置（ADR-0026 §3 · YAMNet 可选增强）。
+
+    - ``enabled`` 默认 **False**：Tier1 不常驻，仅 config 显式开启才参与。
+    - ``model_path``：YAMNet .onnx 权重路径；**留空 = 缺权重**，此时即使 enabled 也回退
+      ``StubAcousticTagger``（保证开启即能用、不因缺权重崩；生产应配真实权重）。
+    - ``class_names``：521 条 AudioSet 类名列表（顺序对齐模型输出），随权重提供；
+      缺省时未命中 ``YAMNET_SEMANTIC_MAP`` 的类沿 ``class_N`` 透传（管道内嵌精选子集映射）。
+    - ``trigger``：``segment``（默认，每段 VAD 语音段都跑）/ ``perception``（仅 Tier0 产出
+      感知事件时跑）。
+    """
+
+    enabled: bool = False
+    model_path: str = ""  # YAMNet .onnx 权重路径（运维受控；YamNetTagger 会校验 .onnx 后缀并拒绝路径遍历）；留空 = 缺权重 → Stub 回退
+    class_map_path: str = ""  # 可选：521 类名映射文件（yaml/json），留空用内嵌精选子集
+    threshold: float = 0.1  # YAMNet 段级平均 score 阈值 [0,1]
+    top_k: int = 10  # 每段的标签上限
+    trigger: str = "segment"  # segment | perception
+    target_sr: int = 16000  # YAMNet 规范采样率
+
+    @field_validator("threshold")
+    @classmethod
+    def _threshold_unit_range(cls, v: float) -> float:
+        if isinstance(v, float) and math.isnan(v):
+            raise ValueError(f"threshold 不能是 NaN，收到 {v!r}")
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"threshold 必须在 [0, 1]，收到 {v!r}")
+        return v
+
+    @field_validator("top_k")
+    @classmethod
+    def _top_k_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"top_k 必须 >= 1，收到 {v!r}")
+        return v
+
+    @field_validator("trigger")
+    @classmethod
+    def _trigger_enum(cls, v: str) -> str:
+        if v not in TIER1_TRIGGERS:
+            raise ValueError(f"trigger 必须是 {TIER1_TRIGGERS}，收到 {v!r}")
+        return v
+
+    @field_validator("target_sr")
+    @classmethod
+    def _target_sr_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"target_sr 必须 > 0，收到 {v!r}")
+        return v
+
+
+class AudioConfig(BaseModel):
+    """音频管道配置（ADR-0026 · Phase 3.0）。
+
+    Tier0（VAD + Prosody）常驻、零模型；Tier1（YAMNet）可选增强，默认关闭。
+    """
+
+    tier1: Tier1AudioConfig = Tier1AudioConfig()
+
+
 class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     ingestion: IngestionConfig = IngestionConfig()
@@ -442,6 +506,7 @@ class Settings(BaseModel):
     runtime: RuntimeConfig = RuntimeConfig()
     realtime_risk: RealtimeRiskConfig = RealtimeRiskConfig()
     memory: MemoryConfig = MemoryConfig()
+    audio: AudioConfig = AudioConfig()
 
     @classmethod
     def load(cls, path: str | os.PathLike = "config/default.yaml") -> Settings:
