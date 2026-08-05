@@ -26,6 +26,7 @@ from home_perception.audio import (
     AudioPerceptionKind,
     AudioPipeline,
     AudioRule,
+    AudioTag,
     RuleThresholds,
     new_event_id,
 )
@@ -116,6 +117,26 @@ def test_event_roundtrip_and_no_forbidden_fields() -> None:
     back = AudioPerceptionEvent.from_dict(d)
     assert back == ev
     assert AudioPerceptionEvent.from_json(ev.to_json()) == ev
+
+
+def test_scored_labels_roundtrip_nonempty() -> None:
+    """非空 scored_labels 经 to_dict/from_dict 往返必须完整保留（评审 1.5 的序列化契约）。
+
+    上一例用默认空 list，空→空对称恒真，无法锁住非空场景；本例显式覆盖。
+    """
+    ev = AudioPerceptionEvent(
+        event_id=new_event_id(),
+        timestamp=1700000000.456,
+        kind=AudioPerceptionKind.AUDIO_DISTRESS_CRY,
+        score=0.9,
+        confidence=0.8,
+        source_segment_ids=["seg-9"],
+        labels=["alarm", "speech"],
+        scored_labels=[AudioTag("alarm", 0.92), AudioTag("telephone", 0.74)],
+    )
+    back = AudioPerceptionEvent.from_dict(ev.to_dict())
+    assert back.scored_labels == ev.scored_labels
+    assert AudioPerceptionEvent.from_json(ev.to_json()).scored_labels == ev.scored_labels
 
 
 def test_forbidden_field_constant_nonempty() -> None:
