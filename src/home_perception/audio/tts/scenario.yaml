@@ -1,0 +1,72 @@
+# Audio Synthetic Infrastructure - 场景定义
+# generator 读取本文件，对每个 scenario 生成一条合成音频写入 fixtures/（或 --out 指定目录）。
+#
+# base 来源（二选一，互斥）：
+#   base_ref: 引用已有 WAV（相对 base_dir 解析；默认推导到仓库 tests/fixtures/audio）。离线可用，无需网络。
+#   tts:      {text, voice, rate, pitch} 经 EdgeTTS 合成（需 pip install -e ".[audio-dev]" + 网络）。
+#
+# effects: 效果链，按声明顺序施加。支持：speech_rate / volume / noise / reverb / distance。
+# 每个效果为单键 dict：{ 效果名: { 参数 } }。全部效果确定性（固定 seed）。
+
+sample_rate: 16000
+base_dir: tests/fixtures/audio   # base_ref 相对本目录解析（生成时可用 --out 改变输出目录）
+
+scenarios:
+  # --- 语速扰动：在 normal 基线上加快 1.6x（保音高） ---
+  - id: normal_speech_fast
+    base_ref: normal_speech.wav
+    effects:
+      - speech_rate: { factor: 1.6 }
+    expected:
+      kind: audio_speech_rapid
+
+  # --- 音量扰动：在 normal 基线上提升 9.5dB（模拟高声） ---
+  - id: normal_speech_loud
+    base_ref: normal_speech.wav
+    effects:
+      - volume: { gain_db: 9.5 }
+    expected:
+      kind: audio_voice_raised
+
+  # --- 噪声：给电话场景叠加 SNR=12dB 白噪声 ---
+  - id: telephone_noisy
+    base_ref: telephone_conversation.wav
+    effects:
+      - noise: { snr_db: 12, color: white }
+
+  # --- 混响：给哭诉叠加 rt60=0.6s 房间混响 ---
+  - id: crying_reverberant
+    base_ref: crying_voice.wav
+    effects:
+      - reverb: { rt60: 0.6, wet: 0.5 }
+    expected:
+      kind: audio_distress_cry
+
+  # --- 距离衰减 + 组合：远场 3m（球面衰减 + 空气吸收）+ 轻微混响 ---
+  - id: raised_voice_far
+    base_ref: raised_voice.wav
+    effects:
+      - distance: { meters: 3.0, air_absorption: true }
+      - reverb: { rt60: 0.3, wet: 0.3 }
+    expected:
+      kind: audio_voice_raised
+
+  # --- 组合示例：远场电话 + 噪声 + 混响（复杂退化） ---
+  - id: telephone_far_noisy
+    base_ref: telephone_conversation.wav
+    effects:
+      - distance: { meters: 4.0 }
+      - noise: { snr_db: 10 }
+      - reverb: { rt60: 0.5, wet: 0.4 }
+
+  # --- TTS 示例（需 audio-dev + 网络；离线运行可注释掉该 scenario） ---
+  # - id: rapid_speech
+  #   tts:
+  #     text: "请立即处理这个问题，马上就好，别耽误"
+  #     voice: zh-CN-XiaoxiaoNeural
+  #     rate: 1.4
+  #     pitch: 1.1
+  #   effects:
+  #     - volume: { gain_db: 6 }
+  #   expected:
+  #     kind: audio_speech_rapid

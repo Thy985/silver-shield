@@ -300,3 +300,48 @@ def test_audio_fixture(wav_name, exp, build_audio_pipeline):
 ## 9. 修订记录（Changelog）
 
 - **2026-08-04（初版）**：作为 ADR-0026 的验证闭环补充而建。定义 TTS Provider ABC（Azure/Edge/Local）、围绕 `AudioPerceptionKind` 的 fixture 分类、TTS 参数矩阵、CI `manifest.yaml` 集成；明确其属 Testing Infrastructure 而非感知链，与 Memory E-1 replay dataset 方法论同构。
+- **2026-08-06**：新增场景驱动合成基础设施 `tts/` 包（见 §10）。将「可组合增强效果库 + 声明式 scenario.yaml」从 `scripts/gen_audio_fixtures.py` 的硬编码后处理中析出，补齐 5 类退化效果（语速 / 音量 / 噪声 / 混响 / 距离衰减），确定性、零额外运行时依赖（仅 numpy）。
+
+---
+
+## 10. 场景驱动合成基础设施（`tts/` 包）
+
+`scripts/gen_audio_fixtures.py` 的硬编码 `postprocess` 已析出为可复用、声明式的合成基础设施，位于 `src/home_perception/audio/tts/`：
+
+```
+src/home_perception/audio/tts/
+ ├── __init__.py        # 重导出 TTSProvider / EdgeTTSProvider / 效果注册表 / generator
+ ├── provider.py        # TTSProvider ABC + EdgeTTSProvider（沿用原 tts.py）
+ ├── effects.py         # 可组合增强效果库 + apply_effects 调度器
+ ├── generator.py       # 读 scenario.yaml，按 base + effects 链生成 WAV
+ ├── scenario.yaml      # 声明式场景（base_ref / tts + effects 链）
+ └── fixtures/          # 生成产物（可由 scenario.yaml 再生）
+```
+
+### 10.1 五类退化效果（全部 numpy、确定性）
+
+| 效果 | 键 | 关键参数 | 说明 |
+| --- | --- | --- | --- |
+| 语速扰动 | `speech_rate` | `factor`（>1 更快） | **保音高**时长伸缩（相位声码器），非朴素重采样 |
+| 音量扰动 | `volume` | `gain_db`、`jitter_db` | 线性增益（dB），可 ±抖动 |
+| 噪声 | `noise` | `snr_db`、`color`(white/pink) | 按 SNR 叠加背景噪声，固定 seed |
+| 混响 | `reverb` | `rt60`、`wet` | 与合成房间脉冲响应(RIR)卷积，湿声按干声 RMS 归一 |
+| 距离衰减 | `distance` | `meters`、`air_absorption` | 球面声传播衰减 + 可选空气吸收高频滚降 |
+
+效果以「单键 dict」声明：`{ 效果名: { 参数 } }`，由 `apply_effects(samples, sr, chain)` 按链顺序施加。新增效果只需在 `effects.EFFECTS` 注册表中登记一个 `(samples, sr, **params) -> samples` 纯函数。
+
+### 10.2 scenario.yaml 与离线生成
+
+- **base 来源**：`base_ref`（引用已有 WAV，默认推导到 `tests/fixtures/audio`，**离线可用，无需网络**）或 `tts:`（EdgeTTS 合成，需 `pip install -e ".[audio-dev]"` + 网络）。
+- **运行**：`python -m home_perception.audio.tts.generator`（默认读 `scenario.yaml`、写 `fixtures/`）。`--scenario` / `--out` 可覆盖。
+- **确定性**：所有随机性（噪声 / RIR）由固定 `seed` 控制，可复现。
+- **零额外运行时依赖**：`effects.py` 仅依赖 numpy（与音频包一致）；`generator` 仅需 pyyaml + 标准库 `wave`。
+
+### 10.3 与 `scripts/gen_audio_fixtures.py` 的关系
+
+两者**共存、职责不同**：
+
+- `tts/` 包是通用「合成 / 退化」工具箱 + 声明式场景引擎，不绑定任何感知结论；
+- `scripts/gen_audio_fixtures.py` 仍是围绕 `AudioPerceptionKind` 的**感知 fixture 生成器**（含自校准：跑管道取实际 `kind` / `score` 写 `manifest.yaml`），复用 `tts.provider.EdgeTTSProvider`。
+
+后续若要将感知 fixture 也迁移到声明式 `scenario.yaml`，可直接复用 `tts.effects` 的效果原语，避免效果代码重复。
