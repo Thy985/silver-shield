@@ -251,9 +251,152 @@ def test_rule_telephone_not_misclassified_as_crying() -> None:
     assert ev is not None and ev.kind == AudioPerceptionKind.AUDIO_TELEPHONE_PERSISTENT
 
 
-def test_rule_thresholds_are_calibrated_defaults() -> None:
-    """默认阈值对象可被实例化（防止误删字段导致 CI 全绿但行为漂移）。"""
+# ----------------------------------------------------------------------------
+# 5b) 阈值变异验证（测试有效性铁律：阈值断言必须做变异验证）
+#
+# 断言「t.raised_rms == 0.30」这类字面量相等是 change-detector：改常量就红，但完全不验证
+# 行为。下面改为**变异验证**——固定一组特征，只把某个阈值扰动一档，断言判定结果随之翻转。
+# 这证明该阈值真的驱动判定，而非死代码；也能抓出「阈值被改但分支早已不可达」的静默腐化。
+# ----------------------------------------------------------------------------
+
+
+def _rule_eval_with(thresholds: RuleThresholds, **kw: float) -> AudioPerceptionEvent | None:
+    feats = AudioFeatures(
+        duration=1.0,
+        rms=kw.get("rms", 0.1),
+        speech_rate=kw.get("speech_rate", 3.0),
+        highband_ratio=kw.get("hi", 0.5),
+        f0_mean=kw.get("f0", 200.0),
+        tremor=kw.get("tremor", 0.5),
+        am_rate=kw.get("am", 1.0),
+    )
+    return AudioRule(thresholds).evaluate(
+        feats, vad_ratio=1.0, timestamp=0.0, segment_id="seg-mut"
+    )
+
+
+_R = AudioPerceptionKind.AUDIO_VOICE_RAISED
+_T = AudioPerceptionKind.AUDIO_TELEPHONE_PERSISTENT
+_C = AudioPerceptionKind.AUDIO_DISTRESS_CRY
+_S = AudioPerceptionKind.AUDIO_SPEECH_RAPID
+
+# (阈值名, 特征, 默认阈值下的判定, 变异后的阈值值, 变异后的判定)
+_MUTATIONS = [
+    # 响度阈值抬高 → 同一段不再算「高声」
+    ("raised_rms", {"rms": 0.35, "hi": 0.5, "am": 1.0, "tremor": 0.5}, _R, 0.45, None),
+    # 窄带阈值收紧 → 电话段不再算窄带，电话/哭腔两个分支同时失效
+    (
+        "narrowband_hi",
+        {"rms": 0.10, "hi": 0.03, "speech_rate": 0.0, "am": 1.0, "tremor": 0.5},
+        _T, 0.01, None,
+    ),
+    # 电话音节率上限放宽 → 原本判哭腔的段被电话分支先截走（验证两分支的分隔点）
+    (
+        "telephone_rate",
+        {"rms": 0.10, "hi": 0.02, "speech_rate": 1.6, "tremor": 0.90, "am": 1.0},
+        _C, 2.0, _T,
+    ),
+    # 哭腔音节率下限抬高 → 不再算「有自然音节」
+    (
+        "cry_min_rate",
+        {"rms": 0.10, "hi": 0.02, "speech_rate": 1.6, "tremor": 0.90, "am": 1.0},
+        _C, 2.5, None,
+    ),
+    # 哭腔调制深度抬高 → 不再算哭腔
+    (
+        "cry_tremor",
+        {"rms": 0.10, "hi": 0.02, "speech_rate": 3.0, "tremor": 0.65, "am": 1.0},
+        _C, 0.80, None,
+    ),
+    # 急促 AM 速率下限抬高 → 不再算急促
+    (
+        "rapid_min_am_rate",
+        {"rms": 0.10, "hi": 0.50, "speech_rate": 3.5, "tremor": 0.90, "am": 6.0},
+        _S, 7.0, None,
+    ),
+    # 急促调制深度下限抬高 → 不再算急促
+    (
+        "rapid_tremor",
+        {"rms": 0.10, "hi": 0.50, "speech_rate": 3.5, "tremor": 0.55, "am": 6.0},
+        _S, 0.70, None,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("field", "feats", "kind_default", "mutated_value", "kind_mutated"),
+    _MUTATIONS,
+    ids=[m[0] for m in _MUTATIONS],
+)
+def test_rule_threshold_mutation_flips_verdict(
+    field: str,
+    feats: dict,
+    kind_default: AudioPerceptionKind,
+    mutated_value: float,
+    kind_mutated: AudioPerceptionKind | None,
+) -> None:
+    """每个阈值都必须真实驱动判定：扰动一档，结论随之翻转。"""
+    base = _rule_eval_with(RuleThresholds(), **feats)
+    assert base is not None, f"{field}: 默认阈值下应命中 {kind_default}，实际无事件"
+    assert base.kind is kind_default, f"{field}: 默认阈值下期望 {kind_default}，实际 {base.kind}"
+
+    mutated = _rule_eval_with(RuleThresholds(**{field: mutated_value}), **feats)
+    if kind_mutated is None:
+        assert mutated is None, (
+            f"{field}={mutated_value} 后应不再命中，实际仍产出 {mutated.kind if mutated else None}"
+        )
+    else:
+        assert mutated is not None and mutated.kind is kind_mutated, (
+            f"{field}={mutated_value} 后期望 {kind_mutated}，"
+            f"实际 {mutated.kind if mutated else None}"
+        )
+
+
+def test_rule_order_raised_precedes_telephone() -> None:
+    """有序判定：raised 先于 telephone —— 且两分支都真实可达。
+
+    只断言"同时满足时取 raised"不够：若 telephone 分支本就不可达，该断言恒真。
+    这里用变异把 raised 阈值抬到不命中，让底下的 telephone 分支显形，
+    证明优先级来自**判定顺序**而非另一分支失效。
+    """
+    feats = {"rms": 0.50, "hi": 0.02, "speech_rate": 0.0, "tremor": 0.5, "am": 1.0}
+
+    base = _rule_eval_with(RuleThresholds(), **feats)
+    assert base is not None and base.kind is _R
+
+    surfaced = _rule_eval_with(RuleThresholds(raised_rms=0.60), **feats)
+    assert surfaced is not None and surfaced.kind is _T
+
+
+def test_rule_raised_boundary_is_inclusive() -> None:
+    """``rms >= raised_rms`` 的边界语义：正好等于阈值应命中，略低于则不命中。"""
     t = RuleThresholds()
-    assert t.raised_rms == 0.30
-    assert t.narrowband_hi == 0.05
-    assert t.rapid_min_am_rate == 5.5
+    at = _rule_eval_with(t, rms=t.raised_rms, hi=0.5, am=1.0, tremor=0.5)
+    assert at is not None and at.kind is _R
+
+    below = _rule_eval_with(t, rms=t.raised_rms - 0.01, hi=0.5, am=1.0, tremor=0.5)
+    assert below is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "low", "high"),
+    [
+        (_R, {"rms": 0.35, "hi": 0.5, "am": 1.0}, {"rms": 0.50, "hi": 0.5, "am": 1.0}),
+        (
+            _S,
+            {"rms": 0.1, "hi": 0.5, "am": 6.0, "tremor": 0.9},
+            {"rms": 0.1, "hi": 0.5, "am": 7.5, "tremor": 0.9},
+        ),
+    ],
+    ids=["raised_by_rms", "rapid_by_am_rate"],
+)
+def test_rule_score_increases_with_driving_feature(
+    kind: AudioPerceptionKind, low: dict, high: dict
+) -> None:
+    """score 必须随驱动特征单调上升（否则 score 只是常量装饰，不承载强度信息）。"""
+    ev_low = _rule_eval_with(RuleThresholds(), **low)
+    ev_high = _rule_eval_with(RuleThresholds(), **high)
+    assert ev_low is not None and ev_low.kind is kind
+    assert ev_high is not None and ev_high.kind is kind
+    assert ev_high.score > ev_low.score
+    assert 0.0 <= ev_low.score <= 1.0 and 0.0 <= ev_high.score <= 1.0
