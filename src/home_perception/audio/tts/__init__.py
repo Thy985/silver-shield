@@ -9,15 +9,31 @@
 from .effects import EFFECTS, apply_effects
 from .generator import Scenario, generate_all, generate_scenario, load_scenarios
 from .provider import AzureTTSProvider, EdgeTTSProvider, TTSProvider
+from .scenario_runner import (
+    PerceptionScenario,
+    ValidationResult,
+    load_scenario,
+    load_scenarios_dir,
+    run_scenario,
+    synthesize,
+    validate_scenario,
+)
 
 __all__ = [
     "EFFECTS",
     "AzureTTSProvider",
     "EdgeTTSProvider",
+    "PerceptionScenario",
     "Scenario",
     "TTSProvider",
+    "ValidationResult",
     "apply_effects",
     "generate_all",
     "generate_scenario",
+    "load_scenario",
     "load_scenarios",
+    "load_scenarios_dir",
+    "run_scenario",
+    "synthesize",
+    "validate_scenario",
 ]

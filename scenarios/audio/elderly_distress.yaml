@@ -1,0 +1,17 @@
+# 复合退化场景（Phase A 新价值）：以「正常语音」黄金基线为基础，
+# 用 effects 组合出「 elderly distress（急促求助）」条件，无需新增 WAV 入库：
+#   - speech_rate 2.0x  → 快语速，AM 速率 ~8.3Hz（远超 rapid 阈值 5.5Hz），稳健命中 audio_speech_rapid
+#   - noise snr=8      → 强环境噪声（宽带），演示退化鲁棒性，不破坏高频 AM 调制
+# 说明：本场景刻意**不使用 distance**——实测 distance（即便 2m）的球面衰减 + 空气吸收低通
+# 会把 AM 调制压制到 5.5Hz 以下、RMS 压到 ~0.01，导致整段无法检出（events=0）。
+# 这是「远距离语音难检测」的真实属性，非缺陷；若要测「远距离仍检出」应改用 raised 基线 + 小距离 + 增益补偿。
+# 当前 Tier0 规则每条语音段只产一个 kind，故 expected 写单值 audio_speech_rapid。
+name: elderly_distress
+base:
+  file: normal_speech.wav
+effects:
+  - speech_rate: { factor: 2.0 }
+  - noise: { snr_db: 8 }
+expected:
+  perception:
+    - audio_speech_rapid

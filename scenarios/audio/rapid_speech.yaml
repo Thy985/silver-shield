@@ -1,0 +1,8 @@
+# 急促言语：复用黄金基线 rapid_speech.wav（已含快语速签名），无额外效果。
+name: rapid_speech
+base:
+  file: rapid_speech.wav
+effects: []
+expected:
+  perception:
+    - audio_speech_rapid

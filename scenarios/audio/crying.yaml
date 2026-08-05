@@ -1,0 +1,8 @@
+# 哭诉 / 求助：复用黄金基线 crying_voice.wav（已含窄带 + 高 tremor），无额外效果。
+name: crying
+base:
+  file: crying_voice.wav
+effects: []
+expected:
+  perception:
+    - audio_distress_cry
