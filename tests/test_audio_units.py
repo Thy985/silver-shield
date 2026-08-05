@@ -85,9 +85,13 @@ def test_rms_is_amplitude_monotonic() -> None:
     assert loud == pytest.approx(quiet * 2.0, rel=0.03)
 
 
-@pytest.mark.parametrize("freq", [120.0, 200.0, 300.0, 500.0])
+@pytest.mark.parametrize("freq", [80.0, 120.0, 200.0, 300.0, 500.0])
 def test_f0_tracks_carrier_pitch(freq: float) -> None:
-    """f0 估计须跟随真实基频（自相关法，在 f0_range 80~500Hz 内）。"""
+    """f0 估计须跟随真实基频（自相关法，在 f0_range 80~500Hz 内）。
+
+    含下界 80Hz：其基频峰恰好落在 lag=100（= hi_lag），旧 range(..hi_lag) 会漏检 → f0 失真；
+    此参数即该回归锁。
+    """
     f = EX.extract(tone(freq, 2.0, 0.5), SR)
     assert f.f0_mean == pytest.approx(freq, rel=0.05)
 
@@ -164,6 +168,21 @@ def test_f0_is_stable_across_signal_lengths(dur: float) -> None:
     f = EX.extract(tone(300, dur, 0.5), SR)
     assert f.f0_mean == pytest.approx(300.0, rel=0.05), (
         f"时长 {dur}s 时 f0 漂移到 {f.f0_mean}Hz"
+    )
+
+
+@pytest.mark.parametrize("n_samples", [8093, 16285, 4095, 9999])
+def test_autocorr_zero_padding_no_circular_leak(n_samples: int) -> None:
+    """_autocorr_upto 的零填充必须 >= n+max_lag，否则循环卷积会把尾部绕回污染低 lag。
+
+    取若干"临界长度"（n+max_lag 恰好跨过 2 的幂，是零填充余量最紧的点），f0 仍须等于
+    真实基频。若未来有人把 ``n_fft`` 改成 ``1 << n.bit_length()``（漏加 max_lag），这些长度会
+    因循环卷积污染而给出错误 f0 —— 此测试即是该回归锁。
+    """
+    sig = tone(300, n_samples / 8000.0, 0.5, sr=8000)
+    f = EX.extract(sig, 8000)
+    assert f.f0_mean == pytest.approx(300.0, rel=0.05), (
+        f"长度 {n_samples}（零填充边界）下 f0 漂移到 {f.f0_mean}Hz，疑似循环卷积污染"
     )
 
 
@@ -258,6 +277,17 @@ def test_energy_vad_relative_ratio_mutation_flips_detection() -> None:
     assert EnergyVadBackend(relative_ratio=1.5).detect(_audio(sig)) == []
 
 
+def test_energy_vad_floor_mutation_flips_detection() -> None:
+    """变异验证：``floor`` 绝对地板真的驱动分段——抬高地板即淹没弱语音段。
+
+    构造「长静音 + 低幅纯音」：相对阈值（中位数×ratio）被静音拉到≈0，分段完全由 floor
+    决定。floor 低于音幅 → 检出 1 段；floor 高于音幅 → 0 段。
+    """
+    sig = np.concatenate([silence(0.5), tone(300, 0.5, amp=0.005), silence(0.5)])
+    assert len(EnergyVadBackend(floor=0.001).detect(_audio(sig))) == 1
+    assert EnergyVadBackend(floor=0.01).detect(_audio(sig)) == []
+
+
 def test_energy_vad_rejects_segment_shorter_than_min() -> None:
     """短于 ``min_segment_ms`` 的瞬时噪声不成段（抑制误触发）。"""
     sig = np.concatenate([silence(0.5), tone(300, 0.05), silence(0.5)])
@@ -316,9 +346,15 @@ def test_webrtc_backend_degrades_without_raising() -> None:
 
 
 def test_select_vad_returns_usable_backend() -> None:
+    """select_vad 必须返回可用后端；其分段结果须结构合法（start < end、非负、≤1 段）。"""
     backend = select_vad()
     assert isinstance(backend, VadBackend)
-    assert isinstance(backend.detect(_audio(tone(300, 1.0, 0.5))), list)
+    segs = backend.detect(_audio(tone(300, 1.0, 0.5)))
+    assert isinstance(segs, list)
+    # 1s 纯音至多一段；若有段，必须结构合法（start < end、非负、不超音频边界）
+    assert len(segs) <= 1, f"1s 纯音不应切出多段，实际 {segs}"
+    for s, e in segs:
+        assert 0.0 <= s < e <= 1.0, f"分段结构非法：({s}, {e})"
 
 
 def test_detector_default_backend_is_energy_for_determinism() -> None:
@@ -329,6 +365,16 @@ def test_detector_default_backend_is_energy_for_determinism() -> None:
     """
     assert isinstance(AudioDetector().vad, EnergyVadBackend)
     assert AudioDetector().vad.name == "energy"
+
+
+def test_detector_uses_explicit_webrtc_when_provided() -> None:
+    """架构锁补充：显式传入 WebRTC 后端时必须真的用上它（opt-in 入口）。
+
+    与 ``test_detector_default_backend_is_energy_for_determinism`` 形成完整契约：
+    默认走能量后端保证确定性；只有显式 ``AudioDetector(vad=WebRtcVadBackend())`` 才切 WebRTC。
+    """
+    det = AudioDetector(vad=WebRtcVadBackend(aggressiveness=2))
+    assert det.vad.name.startswith("webrtc")
 
 
 # ============================================================================
@@ -374,17 +420,19 @@ def test_detector_merge_gap_mutation_flips_result() -> None:
     assert split.segments == [(0.0, 1.0), (1.2, 2.0)]
 
 
+# 顺序无关测试用的规范输入（避免参数矩阵里重复写两遍同一对段）
+_CASE_SEGMENTS = [(0.0, 1.0), (1.2, 2.0)]
+
+
 @pytest.mark.parametrize(
     "order",
-    [
-        [(0.0, 1.0), (1.2, 2.0)],
-        [(1.2, 2.0), (0.0, 1.0)],
-    ],
+    ["sorted", "reversed"],
     ids=["sorted", "reversed"],
 )
-def test_detector_merge_is_order_independent(order: list[tuple[float, float]]) -> None:
+def test_detector_merge_is_order_independent(order: str) -> None:
     """顺序无关：VAD 交付顺序不应影响合并结果（内部先排序）。"""
-    det = AudioDetector(vad=_FakeVad(order), merge_gap_ms=300)
+    segs = list(_CASE_SEGMENTS) if order == "sorted" else list(reversed(_CASE_SEGMENTS))
+    det = AudioDetector(vad=_FakeVad(segs), merge_gap_ms=300)
     assert det.detect(_AUDIO_2S).segments == [(0.0, 2.0)]
 
 
@@ -428,6 +476,13 @@ def test_detector_vad_ratio_clamped_to_one() -> None:
     """即使 VAD 交付越界段，占比也不得 > 1（下游按 0~1 消费）。"""
     det = AudioDetector(vad=_FakeVad([(0.0, 5.0)]), merge_gap_ms=300)
     assert det.detect(_AUDIO_2S).vad_ratio == 1.0
+
+
+def test_detector_vad_ratio_uses_actual_audio_duration() -> None:
+    """vad_ratio 分母必须是真实音频时长，而非硬编码 2s（防多通道/截断时长取错）。"""
+    audio = _audio(silence(4.0))
+    det = AudioDetector(vad=_FakeVad([(0.0, 2.0)]), merge_gap_ms=300)
+    assert det.detect(audio).vad_ratio == pytest.approx(0.5, abs=1e-6)
 
 
 def test_detector_reports_backend_name() -> None:

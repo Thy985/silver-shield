@@ -32,7 +32,9 @@ def _autocorr_upto(sig: np.ndarray, max_lag: int) -> np.ndarray:
     n_fft = 1 << (n + max_lag).bit_length()
     spec = np.fft.rfft(sig, n_fft)
     ac = np.fft.irfft(spec * np.conj(spec), n_fft)
-    # 复制而非返回视图：调用方会就地改写（屏蔽低 lag），且不必留住整个 n_fft 缓冲
+    # np.array(..., dtype=np.float64) 同时**强制 copy**：
+    # ① 调用方会就地改写（ac[:lo_lag] = -np.inf 屏蔽低 lag），不能写穿原 irfft 输出缓冲；
+    # ② 只留前 max_lag+1 个，不必留住整个 n_fft 缓冲。
     return np.array(ac[: max_lag + 1], dtype=np.float64)
 
 
@@ -165,11 +167,18 @@ class AudioFeatureExtractor:
             gmax = float(np.max(ac))
             threshold = 0.9 * gmax
             best = 0
-            for i in range(lo_lag, hi_lag):
-                # ac[:lo_lag] 已置 -inf，故 i=lo_lag 时 ac[i-1] 安全且必 < ac[i]
-                if ac[i] >= ac[i - 1] and ac[i] > ac[i + 1] and ac[i] >= threshold:
-                    best = i
-                    break
+            # 取 [lo_lag, hi_lag] 内**首个**显著局部峰：基频峰永远是最小 lag 的强峰，
+            # 故最小 lag 优先可规避全局 argmax 误选谐波的 octave/harmonic error。
+            # 范围**含 hi_lag**（默认 80Hz 的基频峰恰好落在 lag=100，旧代码 `range(..hi_lag)`
+            # 漏检）；i=hi_lag 是数组末位（ac 长 hi_lag+1），无右侧邻居，按「左高即峰」判定，
+            # 不越界访问 ac[hi_lag+1]。
+            for i in range(lo_lag, hi_lag + 1):
+                if ac[i] < ac[i - 1] or ac[i] < threshold:
+                    continue
+                if i < hi_lag and ac[i] <= ac[i + 1]:
+                    continue
+                best = i
+                break
             if best > 0:
                 f0 = target / best
 

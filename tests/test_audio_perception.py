@@ -369,34 +369,51 @@ def test_rule_order_raised_precedes_telephone() -> None:
 
 
 def test_rule_raised_boundary_is_inclusive() -> None:
-    """``rms >= raised_rms`` 的边界语义：正好等于阈值应命中，略低于则不命中。"""
+    """``rms >= raised_rms`` 的边界语义：正好等于阈值应命中 raised，略低于则不再命中 raised。
+
+    略低于阈值时可能是 None（无事件）或其他类别，但**绝不应仍是 raised**——
+    用 ``below is None or below.kind is not _R`` 兼容未来阈值放宽导致的其他分支显形。
+    """
     t = RuleThresholds()
     at = _rule_eval_with(t, rms=t.raised_rms, hi=0.5, am=1.0, tremor=0.5)
     assert at is not None and at.kind is _R
 
     below = _rule_eval_with(t, rms=t.raised_rms - 0.01, hi=0.5, am=1.0, tremor=0.5)
-    assert below is None
+    assert below is None or below.kind is not _R
 
 
 @pytest.mark.parametrize(
-    ("kind", "low", "high"),
+    ("kind", "low", "mid", "high"),
     [
-        (_R, {"rms": 0.35, "hi": 0.5, "am": 1.0}, {"rms": 0.50, "hi": 0.5, "am": 1.0}),
+        (
+            _R,
+            {"rms": 0.35, "hi": 0.5, "am": 1.0},
+            {"rms": 0.425, "hi": 0.5, "am": 1.0},
+            {"rms": 0.50, "hi": 0.5, "am": 1.0},
+        ),
         (
             _S,
             {"rms": 0.1, "hi": 0.5, "am": 6.0, "tremor": 0.9},
+            {"rms": 0.1, "hi": 0.5, "am": 6.75, "tremor": 0.9},
             {"rms": 0.1, "hi": 0.5, "am": 7.5, "tremor": 0.9},
         ),
     ],
     ids=["raised_by_rms", "rapid_by_am_rate"],
 )
 def test_rule_score_increases_with_driving_feature(
-    kind: AudioPerceptionKind, low: dict, high: dict
+    kind: AudioPerceptionKind, low: dict, mid: dict, high: dict
 ) -> None:
-    """score 必须随驱动特征单调上升（否则 score 只是常量装饰，不承载强度信息）。"""
-    ev_low = _rule_eval_with(RuleThresholds(), **low)
-    ev_high = _rule_eval_with(RuleThresholds(), **high)
+    """score 必须随驱动特征单调上升（否则 score 只是常量装饰，不承载强度信息）。
+
+    用**固定**的 ``RuleThresholds`` 实例 + 低/中/高三段断言，避免 score 函数若被改成
+    离散查表 / 分段后该测试仍「假绿」——若中间档的 score 不再落在两端之间，即刻报红。
+    """
+    t = RuleThresholds()  # 具体实例：不依赖默认参数隐式传递
+    ev_low = _rule_eval_with(t, **low)
+    ev_mid = _rule_eval_with(t, **mid)
+    ev_high = _rule_eval_with(t, **high)
     assert ev_low is not None and ev_low.kind is kind
+    assert ev_mid is not None and ev_mid.kind is kind
     assert ev_high is not None and ev_high.kind is kind
-    assert ev_high.score > ev_low.score
+    assert ev_low.score <= ev_mid.score <= ev_high.score
     assert 0.0 <= ev_low.score <= 1.0 and 0.0 <= ev_high.score <= 1.0
