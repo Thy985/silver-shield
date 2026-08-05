@@ -67,6 +67,13 @@ common/       横切（logging / timeutil）
 
 只输出 5 类标签事件（见 `EventType`）：`visit_normal` / `visit_pending_verify` / `abnormal_dwell` / `repeat_visit` / `high_risk_approach`。任何代码不得输出"诈骗人员 / fraud / suspect"类判定或字段。
 
+### 1.5 感知-事件边界（原始检测 vs 投影实体）
+
+- `Detection` 是**原始感知对象**（YOLO 多类白名单输出的裸事实：person / backpack / handbag / cell phone），**不携带任何业务语义**，更不是"访客"。
+- **架构原则（强制）**：业务事件构建器（如 `VisitorEventBuilder` / 其下的 `VisitorTracker`）**必须消费"投影后的领域实体"，不得直接消费原始 `Detection`**。非人目标（背包 / 手提包 / 手机）不应进入访客状态机、不应生成 `VisitorEvent`、不应计入停留时长与重复来访。
+- **临时收口（Phase 0）**：在 `VisitorTracker.update()` 入口以 `if d.class_id != PERSON_CLASS_ID: continue` 拦截非人目标（带 `TODO: replace with EntityProjection layer` 标注）。这是双保险的第二道边界，不是终态。
+- **正式方案（未来）**：在 `DetectionResult → VisitorTracker` 之间引入独立的 `EntityProjection`（人类实体投影）层，把多类 `Detection` 投影为 visitor 可消费的人类实体；届时该 guard 前移进投影层并移除。此层为纯投影、零风险语义，不需要新 ADR。
+
 ---
 
 ## 2. Python 编码规范

@@ -154,6 +154,42 @@ def test_detections_without_track_id_skipped():
     assert tr.active_tracks == {}
 
 
+def test_visitor_tracker_drops_non_person_detection():
+    # 回归锁死：当前检测器白名单含 backpack/handbag/cell phone（非人目标），
+    # 独立跟踪后不应生成访客事件（AGENTS.md §1.5 感知-事件边界原则）。
+    # 喂入一个带 track_id 的 backpack(24) 检测，VisitorTracker 必须丢弃它。
+    tr = VisitorTracker(
+        absence_gap_s=5.0, now_provider=_fixed_now([datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC)])
+    )
+    non_person = Detection(
+        class_id=24,  # backpack（COCO），非人
+        class_name="backpack",
+        confidence=0.9,
+        bbox=[0.0, 0.0, 10.0, 10.0],
+        timestamp=0.0,
+        track_id=2,
+    )
+    tr.update([non_person])
+    assert tr.active_tracks == {}, "非人检测（backpack）不应生成访客状态"
+
+
+def test_visitor_tracker_keeps_person_detection():
+    # 对照：person(0) 带 track_id 仍应正常生成访客状态（guard 不误伤人）。
+    tr = VisitorTracker(
+        absence_gap_s=5.0, now_provider=_fixed_now([datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC)])
+    )
+    person = Detection(
+        class_id=0,
+        class_name="person",
+        confidence=0.9,
+        bbox=[0.0, 0.0, 10.0, 10.0],
+        timestamp=0.0,
+        track_id=1,
+    )
+    tr.update([person])
+    assert set(tr.active_tracks.keys()) == {1}
+
+
 def test_absence_gap_must_be_positive():
     with pytest.raises(ValueError):
         VisitorTracker(absence_gap_s=0.0)

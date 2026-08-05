@@ -29,6 +29,10 @@ log = get_logger(__name__)
 # 用于容忍检测器/跟踪器偶发漏检造成的 ID 闪烁，避免把一次来访误计成多次。
 DEFAULT_ABSENCE_GAP_S: float = 3.0
 
+# COCO person 类 id。VisitorTracker 只应处理「人」实体。
+# 见 AGENTS.md §1.5（感知-事件边界原则）；当前为临时收口，未来前移到 EntityProjection 层。
+PERSON_CLASS_ID: int = 0
+
 
 class VisitorTracker:
     """跨帧访客状态维护器（包裹 Detector 之上的一层状态）。
@@ -67,6 +71,14 @@ class VisitorTracker:
         now = self._now()
         seen_now: set[int] = set()
         for d in detections:
+            # TODO(phase-0): 临时收口——本跟踪器只处理「人」实体。
+            # 当前检测器白名单含 backpack(24)/handbag(26)/cell phone(67)，这些非人目标
+            # 不应生成访客事件/计入停留与重复来访。
+            # 正式方案：在 DetectionResult → VisitorTracker 之间引入 EntityProjection
+            # （Human Entity Projection）层做业务实体投影，本 guard 届时前移并移除。
+            # 见 AGENTS.md §1.5（感知-事件边界原则）。
+            if d.class_id != PERSON_CLASS_ID:
+                continue
             if d.track_id is None:
                 # 未启用跟踪或跟踪器未给 ID：跳过，不污染访客状态
                 continue
