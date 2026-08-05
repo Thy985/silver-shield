@@ -46,9 +46,15 @@ audio-dev = [
 # Tier1 真实推理路径（ADR-0026 §3 · YAMNet）：仅当 audio.tier1.enabled=true 且配权重时需要，
 # 经 onnxruntime 惰性加载；核心管道（Tier0 + 触发接线）纯 numpy，不依赖本 extra。
 # 安装：pip install -e ".[audio]"
+#
+# 供应链安全（评审 3.2）：onnxruntime 含原生扩展，是已知投毒高风险包；此处将其上界锁定在 1.16.x，
+# 避免意外拉入 1.17+/2.x 引入行为/二进制差异。强化部署建议：进一步 pin 到精确版本
+# （==1.16.x）、走私有 index、并配合 --require-hashes。audio.tier1.enabled 默认 False
+# （feature flag），CI 不会主动安装本 extra——这是首要缓解。
+# scipy 在真实路径用于 signal.resample_poly（抗混叠重采样）；缺失时退化为 np.interp 近似。
 audio = [
-    "onnxruntime>=1.16",
-    "scipy>=1.11",  # YAMNet 重采样（真实推理路径；管道核心仍是 numpy）
+    "onnxruntime>=1.16,<1.17",
+    "scipy>=1.11",
 ]
 
 [tool.setuptools.packages.find]

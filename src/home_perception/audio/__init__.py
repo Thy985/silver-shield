@@ -22,9 +22,12 @@ from .tagging import (
     YAMNET_SEMANTIC_MAP,
     AcousticTagger,
     AudioTag,
+    EnergyStubAcousticTagger,
+    FixedStubAcousticTagger,
     StubAcousticTagger,
     YamNetTagger,
     build_tagger,
+    tier1_trigger_of,
 )
 from .vad import EnergyVadBackend, VadBackend, WebRtcVadBackend, select_vad
 
@@ -44,8 +47,10 @@ __all__ = [
     "AudioSource",
     "AudioTag",
     "DetectionResult",
+    "EnergyStubAcousticTagger",
     "EnergyVadBackend",
     "FileAudioSource",
+    "FixedStubAcousticTagger",
     "LoadedAudio",
     "RuleThresholds",
     "StubAcousticTagger",
@@ -55,4 +60,5 @@ __all__ = [
     "build_tagger",
     "new_event_id",
     "select_vad",
+    "tier1_trigger_of",
 ]

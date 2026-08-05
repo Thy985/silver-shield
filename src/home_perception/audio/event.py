@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
+from .tagging import AudioTag
+
 # ============================================================================
 # 枚举（严格白名单，禁止自由文本 —— 与视觉侧 EventType 同构）
 # ============================================================================
@@ -113,7 +115,9 @@ class AudioPerceptionEvent:
     - ``score``：规则强度（0~1）—— **不是诈骗概率**（类比视觉 ``PerceptionEvent.score``）
     - ``confidence``：检测可信度（0~1）：模型/特征对该 segment 判定的把握
     - ``source_segment_ids``：派生自哪些 ``AudioSegmentEvent``
-    - ``labels``：声学标签透传
+    - ``labels``：声学标签透传（去重 + 字母序排序的**集合**，顺序不具语义，评审 2.4）
+    - ``scored_labels``：Tier1 声学标签 + 置信分 ``list[AudioTag]``（保留 score 供下游阈值/审计，评审 1.5；
+      无 Tier1 时为空；属 MINOR 扩展，不破 ADR-0014 冻结）
 
     ``score`` vs ``confidence``（评审新增的语义区分）：
     - ``score`` = "这条声学风险有多强"（语速越快 score 越高）
@@ -128,6 +132,7 @@ class AudioPerceptionEvent:
     confidence: float
     source_segment_ids: list[str]
     labels: list[str] = field(default_factory=list)
+    scored_labels: list[AudioTag] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
@@ -160,6 +165,9 @@ class AudioPerceptionEvent:
             "confidence": round(self.confidence, 4),
             "source_segment_ids": list(self.source_segment_ids),
             "labels": list(self.labels),
+            "scored_labels": [
+                {"label": t.label, "score": round(t.score, 4)} for t in self.scored_labels
+            ],
             "created_at": self.created_at.isoformat(),
         }
 
@@ -178,6 +186,7 @@ class AudioPerceptionEvent:
             confidence=data["confidence"],
             source_segment_ids=list(data["source_segment_ids"]),
             labels=list(data.get("labels", [])),
+            scored_labels=[AudioTag(**d) for d in data.get("scored_labels", [])],
             created_at=datetime.fromisoformat(data["created_at"]),
         )
 

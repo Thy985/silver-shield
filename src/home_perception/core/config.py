@@ -429,6 +429,10 @@ class MemoryConfig(BaseModel):
         return v
 
 
+# Tier1 触发策略白名单（单一来源：pipeline 与 config 校验共用，避免两处手工同步——评审 2.6）
+TIER1_TRIGGERS: tuple[str, ...] = ("segment", "perception")
+
+
 class Tier1AudioConfig(BaseModel):
     """Tier1 声学标签器配置（ADR-0026 §3 · YAMNet 可选增强）。
 
@@ -442,7 +446,7 @@ class Tier1AudioConfig(BaseModel):
     """
 
     enabled: bool = False
-    model_path: str = ""
+    model_path: str = ""  # YAMNet .onnx 权重路径（运维受控；YamNetTagger 会校验 .onnx 后缀并拒绝路径遍历）；留空 = 缺权重 → Stub 回退
     class_map_path: str = ""  # 可选：521 类名映射文件（yaml/json），留空用内嵌精选子集
     threshold: float = 0.1  # YAMNet 段级平均 score 阈值 [0,1]
     top_k: int = 10  # 每段的标签上限
@@ -468,8 +472,8 @@ class Tier1AudioConfig(BaseModel):
     @field_validator("trigger")
     @classmethod
     def _trigger_enum(cls, v: str) -> str:
-        if v not in ("segment", "perception"):
-            raise ValueError(f"trigger 必须是 segment|perception，收到 {v!r}")
+        if v not in TIER1_TRIGGERS:
+            raise ValueError(f"trigger 必须是 {TIER1_TRIGGERS}，收到 {v!r}")
         return v
 
     @field_validator("target_sr")

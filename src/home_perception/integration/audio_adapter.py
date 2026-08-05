@@ -53,12 +53,18 @@ def adapt_audio_event(
         subject if isinstance(subject_id, UUID) or _looks_uuid(subject) else None
     )
 
+    max_tier1_score = max((t.score for t in event.scored_labels), default=0.0)
     features: dict[str, Any] = {
         "audio_kind": event.kind.value,
         "audio_score": round(event.score, 4),
         "audio_confidence": round(event.confidence, 4),
         "labels": list(event.labels),
         "source_segment_ids": list(event.source_segment_ids),
+        # Tier1 score 透传（评审 1.5）：下游可据 audio_tier1_max_score 设阈值告警
+        "audio_tier1_max_score": round(float(max_tier1_score), 4),
+        "audio_tier1_scored_labels": [
+            {"label": t.label, "score": round(t.score, 4)} for t in event.scored_labels
+        ],
     }
 
     return RiskSignal(
