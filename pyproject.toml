@@ -43,6 +43,13 @@ audio-dev = [
     "edge-tts>=6.1",
     "av>=11.0",  # PyAV，MP3 字节解码为 numpy（仅生成期用，管道不依赖）
 ]
+# Tier1 真实推理路径（ADR-0026 §3 · YAMNet）：仅当 audio.tier1.enabled=true 且配权重时需要，
+# 经 onnxruntime 惰性加载；核心管道（Tier0 + 触发接线）纯 numpy，不依赖本 extra。
+# 安装：pip install -e ".[audio]"
+audio = [
+    "onnxruntime>=1.16",
+    "scipy>=1.11",  # YAMNet 重采样（真实推理路径；管道核心仍是 numpy）
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
