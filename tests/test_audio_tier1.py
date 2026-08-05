@@ -330,6 +330,35 @@ def test_run_frames_multiple_frames() -> None:
     assert out.shape[0] >= 4  # 首帧 + 多个 hop 帧 + 尾帧
 
 
+class _FakeRank1OrtSession:
+    """模拟 PINTO YAMNet ONNX：输入为 rank-1（[samples]，声明 shape ['samples']）。"""
+
+    def __init__(self, scores: np.ndarray) -> None:
+        self._scores = scores.astype(np.float32)
+        self.last_feed_rank = None
+
+    def get_inputs(self):
+        return [SimpleNamespace(name="input.1", shape=["samples"])]
+
+    def run(self, _, feed):
+        arr = next(iter(feed.values()))
+        self.last_feed_rank = arr.ndim
+        return [self._scores[None, :]]
+
+
+def test_run_frames_feeds_rank1_for_rank1_model() -> None:
+    # 真实 PINTO 权重输入为 rank-1；_run_frames 必须喂 rank-1（验证发现的不兼容修复）。
+    sr = 16000
+    frame = int(0.96 * sr)
+    tagger = YamNetTagger(model_path="fake.onnx", class_names=[f"c{i}" for i in range(521)])
+    sess = _FakeRank1OrtSession(_fake_scores({0: 0.9}))
+    tagger._session = sess
+    wav = np.zeros(frame, dtype=np.float32)
+    out = tagger._run_frames(sess, wav, sr)
+    assert out.shape == (1, 521)
+    assert sess.last_feed_rank == 1  # 真实模型要求 rank-1 输入（非 rank-2）
+
+
 # ============================================================================
 # 1.2 class_names 缺失告警（不可静默吞掉）
 # ============================================================================
