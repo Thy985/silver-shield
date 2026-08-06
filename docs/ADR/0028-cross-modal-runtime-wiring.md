@@ -54,6 +54,8 @@
 ❌ 不做：跨设备关联（入户门摄像头 + 客厅麦克风分属不同设备）
 ```
 
+**范围铁律（review 修订）**：本 ADR 只做 **Memory Graph 运行时**——输入 `EpisodicRecord`，输出 `CrossModalLink`。**程序化视频 / 合成视频生成（Remotion / OpenCV / Synthetic Video Generator）明确不属于本 ADR**——那属于 **Perception Validation Infrastructure**（`Camera → YOLO → Tracker → Event` 层），与 Memory Graph 是两个不同问题。若一并纳入会导致 scope 爆炸（CrossModal Runtime Wiring + Synthetic Vision Generator + YOLO Validation + Tracker Validation），破坏工程节奏。D6 的 fixture 是**声明式 episode 数据**（直接构造 `EpisodicRecord`），不是视频生成。
+
 ---
 
 ## 1. 决策（Decision）
@@ -89,22 +91,26 @@ Memory Graph 出现跨模态边
 - **v1 兼容**：旧记录 `device_id=None`；`from_dict` 缺省 None；`EPISODIC_RECORD_DICT_KEYS` 增 `"device_id"`（契约测试同步）。`same_device` 判定对 `None` 不成立（不关联）→ 渐进可用，存量数据零破坏。
 - **隐私**：`device_id` 是安装标识（如 `home_entry_01`），非个人身份；与 ADR-0002 兼容（不进 Reason 判定，仅参与关联索引）。
 
-### D2：`CrossModalLinker` 同源判定扩展——`same_device` 与身份键并列
+**命名与语义（review 修订）**：v1 保留字段名 `device_id`——与既有术语一致（`PerceptionPipeline.device_id`、`AudioSessionRecorder.device_id`、pipeline 装配的 `device_id="home_entry_01"`），避免引入第三套命名。**字段语义明确为「部署源标识（deployment source）」，如 `home_entry_01` / `living_room_mic_01`，不是硬件 UUID**。已知局限（review 确认）：未来一个 episode 可能来自**多个来源**（`fall` 事件 = camera01 + mic02 + pose_model 融合），届时 `device_id: str` 演进为 `source_ids: list[str]`（或 `origin_device_ids`）——**本 ADR 不抢答**，v1 单值 + 文档明示演进路径即可。
 
-**问题**：现有 `_same_subject` 仅认「共享 `visitor_instance_id` 或共享 `audio_session_id`」——**纯视觉 episode（仅 visitor_id）+ 纯音频 episode（仅 audio_session_id）无共享键 → 永不关联**，正是本 ADR 要补的核心场景。
+### D2：`CrossModalLinker` 同源判定——`candidate_context`（身份键 或 设备键；**review 修订：audio_session_id 不参与跨模态身份**）
 
-**决策**：同源判定升级为「同一上下文」（身份键 **或** 设备键），两路并列：
+**问题**：现有 `_same_subject` 认「共享 `visitor_instance_id` **或** 共享 `audio_session_id`」——两处问题：
+
+1. **纯视觉 episode（仅 visitor_id）+ 纯音频 episode（仅 audio_session_id）无共享键 → 永不关联**（本 ADR 要补的核心场景）；
+2. **（review 修订）`audio_session_id` 不应作为跨模态关联依据**：它是**音频会话身份**（`AudioSession001: 18:00–18:30 客厅声音` 是音频管道的**时间窗标识**），**不是世界实体身份**。同会话可能覆盖多个独立事件（18:20 门口访客恰好落在会话窗内），用会话 id 关联会把「同一音频窗的不同事件」误判为同一上下文；且用会话 id 做跨模态身份会**削弱 D4 匿名设计**（音频 episode 的身份本应只由 `audio_session_id` 承载，绝不外溢为跨实体判定键）。`audio_session_id` 保留在音频域内（音频 episode 自身聚合 / I4 溯源），**不用于 CrossModal identity**。
+
+**决策**：同源判定命名为 `candidate_context`（候选上下文），两路并列：
 
 ```
-same_context(a, b) = 共享 visitor_instance_id            （既有：视觉身份）
-                  OR 共享 audio_session_id               （既有：音频原生身份，D4）
-                  OR (a.device_id == b.device_id          （新增：同设备）
-                      AND a.device_id is not None)
+candidate_context(a, b) = 共享 visitor_instance_id         （视觉身份，均非 None 且相等）
+                       OR (a.device_id == b.device_id        （新增：同设备，均非 None）
+                           AND a.device_id is not None)
 ```
 
+- **`audio_session_id` 从身份判定中移除**——**取代 Slice C `_same_subject` 的 audio_session 分支**（`CrossModalLinker._same_subject` 重写为 `candidate_context`，Slice C 测试与 `memory_baseline_cross_modal.json` 中「复合 VISION+AUDIO 与纯音频共享 audio_session_id → SUPPORTS」用例**同步更新**：该场景若不再建边，改为依赖 `device_id` 键）；
 - 关系语义不变：modalities 集合不同 → `SUPPORTS`（跨模态支撑）；相同 → `CO_OCCURS`；
-- `_same_subject` 更名为 `_same_context`（同名即改语义，测试同步）；
-- **时间窗重叠是硬 gate**（无论哪路同源判定，都必须 `min(leave) > max(enter)` 才建边）——`same_device` 只提供「同源候选」，不豁免时间 gate。
+- **时间窗重叠是硬 gate**（无论哪路同源判定，都必须 `min(leave) > max(enter)` 才建边）——`device_id` 只提供「同源候选」，不豁免时间 gate。
 
 ### D3：时间重叠阈值 `min_overlap_seconds`（可配，默认 0）
 
@@ -151,6 +157,17 @@ class CrossModalLinkRuntime:
 - `MemoryStore` 抽象接口新增 `all_episodic() -> list[EpisodicRecord]`（`InMemoryStore` 实现为 `list(self._episodic.values())`；现有实现若缺省则 fail loud `NotImplementedError`）；
 - **v1 全量扫描**：每次落库后 `linker.link(store.all_episodic())`——episode 数量级（百级）下 O(n²) 可接受；增量索引（按 device/时间桶）留待 §5 开放项；
 - 幂等：`link_id` 确定性 → `CrossModalLinkStore.add` 幂等 upsert（同内容返回 False，不重复建边）。
+
+**Performance Boundary（review 修订，写死防遗忘）**：
+
+```
+episode 数 < 10_000  →  O(n²) 全量扫描可接受（v1 现状，无需优化）
+episode 数 ≥ 10_000  →  必须迁移时间桶 / device 分桶索引（阻断性要求，非可选优化）
+```
+
+- 阈值 10_000 是**硬边界**：超过即触发索引迁移设计（时间桶 + device 桶，把扫描范围从全量收敛到邻域），不允许「先顶着 O(n²) 再观察」；
+- v1 阶段（百级 episode）O(n²) 是刻意取舍——`linker` 纯内存计算，单次扫描毫秒级，收益（Memory Graph）远大于成本；
+- 该边界写入验收：`all_episodic()` 返回量 ≥ 10_000 时，`CrossModalLinkRuntime` 必须告警提示索引迁移（或直接拒接全量扫描路径）。
 
 ### D6：最小 Synthetic Episode Fixture（声明式场景 → 直接验证 Memory Graph）
 
@@ -219,27 +236,32 @@ scenarios:
 
 - **身份归并权重**（何时"同设备 + 重叠"升级为"同一访客"）：归 `CrossModalEvidence.overlap_with_visitor`（ADR-0026 §10 开放项）；
 - **误关联抑制**：阈值自适应（如短 overlap 高置信惩罚）——需真实数据观测后定；
-- **跨设备关联**（入户门摄像头 + 客厅麦克风）：需要设备拓扑知识，超出设备级 v1。
+- **跨设备关联**（入户门摄像头 + 客厅麦克风）：需要设备拓扑知识，超出设备级 v1；
+- **`audio_session_id` 的正确归属（review 修订确认）**：只用于音频域内部——音频 episode 自身聚合（一段会话内的多个音频事件合并）与 I4 溯源（`source_event_ids`）；**不作为跨模态身份键**（D2 已移除）。若未来需要「复合 episode（VISION+AUDIO）与纯音频 episode 引用同一会话」的关联，走 `device_id` + 时间 gate（本 ADR 机制），或由融合层（ADR-0026 §6 `CrossModalEvidence`）显式产出——不恢复会话 id 作为隐式身份键；
+- **`device_id` 多源演进**：未来 `fall` 事件可能来自 camera01 + mic02 + pose_model 融合（多来源单 episode）——`device_id: str` 演进为 `source_ids: list[str]`，本 ADR v1 不抢答（D1 命名说明）。
 
 ---
 
 ## 6. 实施切片（实施顺序，冻结后执行）
 
-- **Slice A（本 ADR 核心）**：`EpisodicRecord.device_id`（D1）+ `MemoryStore.all_episodic()`（D5）+ `CrossModalLinker._same_context` 扩展与 `min_overlap_seconds`（D2/D3）+ `CrossModalLinkRuntime`（D4）+ `MemoryHook` 可选注入 + 两路 `device_id` 透传。
-- **Slice B（验证）**：最小 Synthetic Episode Fixture（D6）——声明式 scenario → 直接验证 `Episode → CrossModalLinker → CrossModalLink`；含正/负例对照（同设备重叠 / 同设备不重叠 / 异设备重叠 / 阈值未达）。
+- **Slice A（本 ADR 核心）**：`EpisodicRecord.device_id`（D1）+ `MemoryStore.all_episodic()`（D5）+ `CrossModalLinker.candidate_context` 重写（**移除 audio_session 分支**，D2）+ `min_overlap_seconds`（D3）+ `CrossModalLinkRuntime`（D4）+ `MemoryHook` 可选注入 + 两路 `device_id` 透传。
+- **Slice B（验证）**：最小 Synthetic Episode Fixture（D6）——声明式 scenario → 直接验证 `Episode → CrossModalLinker → CrossModalLink`；含正/负例对照（同设备重叠 / 同设备不重叠 / 异设备重叠 / 阈值未达）。**同步更新 Slice C 基线**（`memory_baseline_cross_modal.json` 中「复合 VISION+AUDIO 与纯音频共享 audio_session_id → SUPPORTS」用例改为依赖 device_id 键）。
 - **Slice C（契约）**：`EPISODIC_RECORD_DICT_KEYS` + `device_id` 序列化契约测试 + 回放基线更新（如 `memory_baseline_cross_modal.json` 增 device_id 字段）。
 
 ### 验收清单（Acceptance Criteria）
 
 1. 视觉 episode 落库 → 与同设备时间重叠的音频 episode 自动建 `SUPPORTS` 边（D4/D2）；
 2. 同设备但不重叠 / 异设备但重叠 → 不建边（D2/D3 负例，变异可检出）；
-3. `device_id=None` 旧记录不参与 `same_device` 判定（D1 向后兼容）；
-4. `MemoryHook` 未注入 runtime 时，落库行为与历史逐字段一致（D4 零行为变化）；
-5. 声明式 scenario fixture 全绿：`link: true/false` 断言与期望一致（D6）；
-6. `CrossModalLinkStore.add` 悬空引用校验继续生效（Slice C 契约不回退）。
+3. **共享 audio_session_id 但异设备 / 无 device 键 → 不建边**（D2 review 修订：会话 id 不参与跨模态身份）；
+4. `device_id=None` 旧记录不参与 `same_device` 判定（D1 向后兼容）；
+5. `MemoryHook` 未注入 runtime 时，落库行为与历史逐字段一致（D4 零行为变化）；
+6. 声明式 scenario fixture 全绿：`link: true/false` 断言与期望一致（D6）；
+7. `CrossModalLinkStore.add` 悬空引用校验继续生效（Slice C 契约不回退）；
+8. `all_episodic()` ≥ 10_000 时触发索引迁移告警（D5 Performance Boundary）。
 
 ---
 
 ## 7. 修订记录（Changelog）
 
 - **2026-08-06**：初稿（Proposed）。D1–D6 决策要点基于 Slice C（#145）与音频闭环（#148）已落地实现；第一版规则收敛为「same_device + time_overlap」，明确不做身份/语义判定。
+- **2026-08-06（review 修订）**：① D2 核心修正——`audio_session_id` **不再作为跨模态身份键**（会话身份≠世界实体身份，削弱 D4 匿名），同源判定收敛为 `candidate_context = visitor_instance_id OR device_id`，取代 Slice C `_same_subject` 的 audio_session 分支（基线测试同步更新）；② D5 增 **Performance Boundary**（episode < 10_000 O(n²) 可接受 / ≥ 10_000 必须迁移分桶索引，写死防遗忘）；③ D1 明确 `device_id`=部署源标识（非硬件 UUID）+ 未来 `source_ids` 多源演进路径；④ §0.2 范围铁律——**程序化视频/合成视频生成明确排除**（属 Perception Validation Infrastructure，非 Memory Graph），避免 scope 爆炸。
