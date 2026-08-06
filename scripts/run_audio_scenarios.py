@@ -22,6 +22,9 @@ from home_perception.audio.tts.scenario_runner import (
     load_scenarios_dir,
     validate_scenario,
 )
+from home_perception.common.logging import get_logger
+
+log = get_logger(__name__)
 
 
 def _repo_root() -> Path:
@@ -50,10 +53,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
     fixtures_root = Path(args.fixtures_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     scns = load_scenarios_dir(scenarios_dir)
-    print(f"[generate] {len(scns)} scenarios -> {out_dir}")
+    log.info("scenarios.generate", count=len(scns), out=str(out_dir))
     for scn in scns:
         path = synthesize(scn, out_dir, fixtures_root)
-        print(f"  -> {path.name}")
+        log.info("scenarios.generate.one", name=scn.name, file=path.name)
     return 0
 
 
@@ -63,12 +66,19 @@ def cmd_validate(args: argparse.Namespace) -> int:
     scns = load_scenarios_dir(scenarios_dir)
     results = [validate_scenario(scn, fixtures_root, strict=args.strict) for scn in scns]
     for r in results:
-        print(r)
+        log.info(
+            "scenarios.validate.result",
+            name=r.name,
+            status="PASS" if r.ok else "FAIL",
+            mode="strict" if r.strict else "subset",
+            observed=r.observed,
+            expected=r.expected,
+        )
     failed = [r for r in results if not r.ok]
     if failed:
-        print(f"\n[validate] {len(failed)}/{len(results)} FAILED")
+        log.error("scenarios.validate.failed", n=len(failed), total=len(results))
         return 1
-    print(f"\n[validate] {len(results)}/{len(results)} PASS")
+    log.info("scenarios.validate.ok", total=len(results))
     return 0
 
 

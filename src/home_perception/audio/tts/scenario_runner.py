@@ -112,7 +112,10 @@ def _observed_kinds(wav_path: Path) -> list[str]:
     """跑真实感知管道，返回 observed ``AudioPerceptionKind`` 字符串值列表。"""
     from ..pipeline import AudioPipeline  # 惰性 import：避免 import 期拉起感知链
 
-    events = AudioPipeline.from_defaults(str(wav_path)).run_path(str(wav_path))
+    # 仅构造一次 FileAudioSource（from_defaults 配置 pipeline.source），直接喂给 run，
+    # 避免 run_path 再建一个 source 造成的重复构造与意图不清（评审 B1）。
+    pipeline = AudioPipeline.from_defaults(str(wav_path))
+    events = pipeline.run(pipeline.source)
     return [e.kind.value for e in events]
 
 
@@ -121,21 +124,17 @@ def run_scenario(
     fixtures_root: Path,
     work_dir: Path | None = None,
 ) -> list[str]:
-    """合成场景到临时（或指定）目录，跑管道返回 observed kinds。"""
-    own_td = False
+    """合成场景到临时（或指定）目录，跑管道返回 observed kinds。
+
+    WAV 必须在临时目录清理前完整载入内存：``AudioPipeline.run`` 走离线 EnergyVAD，
+    一次性 ``source.load()`` 读完整 buffer（评审 B2；未来若扩展 streaming 须重审此处）。
+    """
     if work_dir is None:
-        td = tempfile.TemporaryDirectory()
-        work_dir = Path(td.name)
-        own_td = True
-    else:
-        td = None
-        work_dir = Path(work_dir)
-    try:
-        wav = synthesize(scn, work_dir, fixtures_root)
-        return _observed_kinds(wav)
-    finally:
-        if own_td:
-            td.cleanup()
+        with tempfile.TemporaryDirectory() as td:
+            wav = synthesize(scn, Path(td), fixtures_root)
+            return _observed_kinds(wav)
+    wav = synthesize(scn, Path(work_dir), fixtures_root)
+    return _observed_kinds(wav)
 
 
 def validate_scenario(
@@ -149,8 +148,13 @@ def validate_scenario(
     if strict:
         ok = sorted(observed) == sorted(exp)
     else:
-        # 子集语义：每个 observed 都必须在 expected 中；observed 为空当且仅当 expected 也为空。
-        ok = all(o in exp for o in observed) and (len(observed) > 0 or len(exp) == 0)
+        # 子集语义（评审 B3，等价但更易读）：
+        # - observed 为空 ⇔ expected 为空（避免「expected 漏配却 PASS」）；
+        # - 否则每个 observed 都必须在 expected 中，且 expected 必须非空。
+        if not observed:
+            ok = exp == []
+        else:
+            ok = all(o in exp for o in observed) and len(exp) > 0
     return ValidationResult(
         name=scn.name, observed=observed, expected=exp, ok=ok, strict=strict
     )

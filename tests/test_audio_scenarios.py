@@ -11,13 +11,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from home_perception.audio.event import AUDIO_PERCEPTION_KIND_VALUES
 from home_perception.audio.tts.scenario_runner import (
+    PerceptionScenario,
     ValidationResult,
     load_scenario,
     load_scenarios_dir,
+    run_scenario,
+    synthesize,
     validate_scenario,
 )
 
@@ -117,3 +121,42 @@ def test_strict_fails_when_expected_too_narrow():
     scn.expected = []  # 故意写窄
     res = validate_scenario(scn, FIXTURES, strict=True)
     assert not res.ok
+
+
+# ---------------------------------------------------------------------------
+# 桥接 / 失败路径（评审 T2 / T3）
+# ---------------------------------------------------------------------------
+
+
+def test_synthesize_writes_file(tmp_path):
+    """核心桥接函数 synthesize 直接写出 WAV 且含非零能量。"""
+    from home_perception.audio.source import FileAudioSource
+
+    scn = load_scenario(SCENARIOS_DIR / "elderly_distress.yaml")
+    out = synthesize(scn, tmp_path, FIXTURES)
+    assert out.exists()
+    assert out.suffix == ".wav"
+    audio = FileAudioSource(str(out)).load()
+    assert audio.samples.size > 0
+    assert float(np.max(np.abs(audio.samples))) > 0.0
+
+
+def test_unknown_effect_raises(tmp_path):
+    """声明未注册 effect 名应 fail-fast（KeyError），而非静默忽略。"""
+    scn = PerceptionScenario(
+        name="bad_effect",
+        base_file="normal_speech.wav",
+        effects=[{"speech_reate": {}}],  # 拼写错误：应为 speech_rate
+    )
+    with pytest.raises(KeyError):
+        run_scenario(scn, FIXTURES, work_dir=tmp_path)
+
+
+def test_apply_effects_rejects_unknown_key():
+    """底层 effects.apply_effects 对未知效果名显式 KeyError（反馈用户输入）。"""
+    from home_perception.audio.tts.effects import apply_effects
+
+    sr = 16000
+    x = np.zeros((sr,), dtype=np.float32)
+    with pytest.raises(KeyError):
+        apply_effects(x, sr, [{"speech_reate": {}}])
