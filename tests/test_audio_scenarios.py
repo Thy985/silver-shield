@@ -1,10 +1,13 @@
-"""感知场景测试（Phase A 验证闭环 + Phase B 测试语言种子）。
+"""感知场景测试（Phase B：场景即测试语言）。
 
 消费 ``scenarios/audio/*.yaml``：合成 WAV（base + effects）→ 跑 AudioPipeline → 对比 expected。
 
-- 每个场景文件即一条测试输入（Phase B「测试语言」雏形）。
-- 默认子集语义：``observed ⊆ expected``；``strict`` 精确相等用于单 kind 场景。
+Phase B 主测试形态：场景文件即规格（spec-as-test），测试直接写
+``assert run(scenario).events == scenario.expected``。``expected`` 在加载期已排序，
+``run`` 返回的 ``events`` 也已排序，故断言与 YAML 中书写顺序无关。
+
 - 跨包契约：场景声明的 expected 必须是合法 ``AudioPerceptionKind`` 值。
+- 桥接 / 失败路径：``synthesize`` 写出非零能量 WAV；未知 effect 名 fail-fast（KeyError）。
 """
 
 from __future__ import annotations
@@ -17,12 +20,11 @@ import pytest
 from home_perception.audio.event import AUDIO_PERCEPTION_KIND_VALUES
 from home_perception.audio.tts.scenario_runner import (
     PerceptionScenario,
-    ValidationResult,
+    ScenarioRun,
     load_scenario,
     load_scenarios_dir,
-    run_scenario,
+    run,
     synthesize,
-    validate_scenario,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -75,56 +77,42 @@ def test_negative_control_has_empty_expected():
 
 
 # ---------------------------------------------------------------------------
-# 验证闭环（Phase A）：scenario → wav → expected event
+# Phase B 核心：场景即测试语言（assert run(scenario).events == scenario.expected）
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "name",
-    [s.name for s in _scenarios()],
-    ids=[s.name for s in _scenarios()],
+    "scenario", load_scenarios_dir(SCENARIOS_DIR), ids=lambda s: s.name
 )
-def test_scenario_validates_subset(name: str):
-    """每个场景：observed ⊆ expected（当前 Tier0 每条段只产一个 kind）。"""
-    scn = next(s for s in _scenarios() if s.name == name)
-    res = validate_scenario(scn, FIXTURES)
-    assert isinstance(res, ValidationResult)
-    assert res.ok, str(res)
+def test_scenario_self_describing(scenario: PerceptionScenario):
+    """每个 scenario 文件即一条测试：observed kinds 精确等于其声明的 expected。
+
+    这是 Phase B 的主测试形态——scenario 文件是 spec，``run`` 是其执行器。
+    """
+    result = run(scenario, fixtures_root=FIXTURES)
+    assert isinstance(result, ScenarioRun)
+    assert result.events == scenario.expected
 
 
-def test_elderly_distress_emits_rapid():
-    """复合场景从 normal 基线 + effects 合成出 audio_speech_rapid。"""
+def test_run_normalizes_order_independent():
+    """expected 与 observed 均已排序，断言与 YAML 书写顺序无关。"""
     scn = load_scenario(SCENARIOS_DIR / "elderly_distress.yaml")
-    res = validate_scenario(scn, FIXTURES)
-    assert res.ok
-    assert res.observed == ["audio_speech_rapid"]
+    assert run(scn, fixtures_root=FIXTURES).events == ["audio_speech_rapid"]
+    # 即便 YAML 把 expected 写成乱序，加载期已排序，断言仍成立
+    scn.expected = ["audio_speech_rapid"]  # 单值；多值场景同理
+    assert run(scn, fixtures_root=FIXTURES).events == scn.expected
 
 
-def test_strict_equality_on_single_kind_scenario():
-    """strict 模式：单 kind 场景 observed 精确等于 expected。"""
+def test_contract_fails_when_expected_too_narrow():
+    """Phase B 契约 fail-fast：若 expected 漏写实际 kind，run().events != expected 必失败。"""
     scn = load_scenario(SCENARIOS_DIR / "rapid_speech.yaml")
-    res = validate_scenario(scn, FIXTURES, strict=True)
-    assert res.ok
-    assert res.observed == ["audio_speech_rapid"]
-
-
-def test_negative_control_produces_no_event():
-    scn = load_scenario(SCENARIOS_DIR / "normal_speech.yaml")
-    res = validate_scenario(scn, FIXTURES)
-    assert res.observed == []
-    assert res.ok
-
-
-def test_strict_fails_when_expected_too_narrow():
-    """strict 下若 expected 漏写实际 kind，应判 FAIL（演示 Phase B 精确语义）。"""
-    scn = load_scenario(SCENARIOS_DIR / "rapid_speech.yaml")
-    scn.expected = []  # 故意写窄
-    res = validate_scenario(scn, FIXTURES, strict=True)
-    assert not res.ok
+    assert run(scn, fixtures_root=FIXTURES).events == scn.expected  # 正确契约通过
+    scn.expected = []  # 故意写窄（漏配）
+    assert run(scn, fixtures_root=FIXTURES).events != scn.expected  # 漏配必失败
 
 
 # ---------------------------------------------------------------------------
-# 桥接 / 失败路径（评审 T2 / T3）
+# 桥接 / 失败路径
 # ---------------------------------------------------------------------------
 
 
@@ -149,7 +137,7 @@ def test_unknown_effect_raises(tmp_path):
         effects=[{"speech_reate": {}}],  # 拼写错误：应为 speech_rate
     )
     with pytest.raises(KeyError):
-        run_scenario(scn, FIXTURES, work_dir=tmp_path)
+        run(scn, FIXTURES, work_dir=tmp_path)
 
 
 def test_apply_effects_rejects_unknown_key():

@@ -11,9 +11,11 @@ from .generator import Scenario, generate_all, generate_scenario, load_scenarios
 from .provider import AzureTTSProvider, EdgeTTSProvider, TTSProvider
 from .scenario_runner import (
     PerceptionScenario,
+    ScenarioRun,
     ValidationResult,
     load_scenario,
     load_scenarios_dir,
+    run,
     run_scenario,
     synthesize,
     validate_scenario,
@@ -25,6 +27,7 @@ __all__ = [
     "EdgeTTSProvider",
     "PerceptionScenario",
     "Scenario",
+    "ScenarioRun",
     "TTSProvider",
     "ValidationResult",
     "apply_effects",
@@ -33,6 +36,7 @@ __all__ = [
     "load_scenario",
     "load_scenarios",
     "load_scenarios_dir",
+    "run",
     "run_scenario",
     "synthesize",
     "validate_scenario",

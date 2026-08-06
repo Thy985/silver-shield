@@ -1,16 +1,16 @@
 """感知场景 CLI（scenarios/audio → generated/audio → 管道校验）。
 
-> Phase A 验证闭环的命令行入口，复用 ``home_perception.audio.tts.scenario_runner``。
+> Phase B 测试语言闭环的命令行入口，复用 ``home_perception.audio.tts.scenario_runner``。
 >
 > 子命令：
 >   generate  把 scenarios/audio/*.yaml 合成为 generated/audio/<name>.wav（base + effects）
->   validate  对每个场景跑 AudioPipeline，对比 expected.perception（默认子集语义）
+>   validate  对每个场景跑 AudioPipeline，对比 expected.perception（精确相等契约）
 >
 > 依赖：仅 numpy + pyyaml（与 tts 包一致），不引入重解码依赖；管道为离线 EnergyVAD，无需权重。
 
 用法：
     python scripts/run_audio_scenarios.py generate
-    python scripts/run_audio_scenarios.py validate [--strict]
+    python scripts/run_audio_scenarios.py validate
 """
 
 from __future__ import annotations
@@ -64,7 +64,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
     scenarios_dir = Path(args.scenarios_dir)
     fixtures_root = Path(args.fixtures_root)
     scns = load_scenarios_dir(scenarios_dir)
-    results = [validate_scenario(scn, fixtures_root, strict=args.strict) for scn in scns]
+    # Phase B 契约：精确相等（run(scenario).events == scenario.expected）
+    results = [validate_scenario(scn, fixtures_root) for scn in scns]
     for r in results:
         log.info(
             "scenarios.validate.result",
@@ -92,10 +93,9 @@ def main() -> None:
     g.add_argument("--fixtures-root", default=str(_default_fixtures()))
     g.set_defaults(func=cmd_generate)
 
-    v = sub.add_parser("validate", help="校验 observed ⊆ expected（或 --strict 精确相等）")
+    v = sub.add_parser("validate", help="校验 observed == expected（Phase B 测试语言契约：精确相等）")
     v.add_argument("--scenarios-dir", default=str(_default_scenarios()))
     v.add_argument("--fixtures-root", default=str(_default_fixtures()))
-    v.add_argument("--strict", action="store_true", help="精确相等校验（Phase B 就绪）")
     v.set_defaults(func=cmd_validate)
 
     args = ap.parse_args()
