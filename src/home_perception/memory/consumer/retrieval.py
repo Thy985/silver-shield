@@ -58,9 +58,10 @@ class RuleBasedRetrieval(Retrieval):
         current_event: CurrentEvent,
         modalities: Iterable[EvidenceModality] | EvidenceModality,
     ) -> list[EpisodicRecord]:
-        """按证据模态召回（ADR-0027 D6，如"取所有含 AUDIO 的 episode"）。
+        """按证据模态召回（ADR-0027 D6，实现 ``Retrieval`` 接口的可选能力）。
 
-        **不是** ``Retrieval`` ABC 的抽象方法（零新组件，D6）：在 ``retrieve`` 的
+        ``Retrieval`` ABC 以**非抽象方法**声明该能力（替换实现不覆盖时 fail loud，
+        见 ``interfaces.py``）；本实现提供真实过滤语义：在 ``retrieve`` 的
         Recall → Filter → Rank → Cap 基础上，Filter 阶段额外要求记录 ``modalities``
         与请求模态**相交**（任一命中即保留）。
 

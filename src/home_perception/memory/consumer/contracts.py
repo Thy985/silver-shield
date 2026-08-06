@@ -226,8 +226,11 @@ class RiskPattern:
                 f"收到 {self.confidence!r}"
             )
         for label in self.audio_patterns:
-            if not label or not label.strip():
-                raise ValueError("RiskPattern.audio_patterns 元素不能为空字符串")
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(
+                    "RiskPattern.audio_patterns 元素必须是非空字符串（音频描述标签，"
+                    f"非分数）；收到 {label!r}"
+                )
         if self.audio_episode_ratio is not None and (
             # 必须先 isfinite 再范围检查：NaN 的比较恒为 False，会绕过 [0,1] 校验
             not math.isfinite(self.audio_episode_ratio)

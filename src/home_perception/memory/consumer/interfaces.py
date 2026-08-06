@@ -13,7 +13,9 @@ ContextBuilder → MemoryConsumer 编排），``ReasoningEngine`` 是管道的�
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 
+from home_perception.core.event import EvidenceModality
 from home_perception.memory.consumer.contracts import (
     ActionRecord,
     ConflictFlag,
@@ -37,6 +39,25 @@ class Retrieval(ABC):
     def retrieve(self, current_event: CurrentEvent) -> list[EpisodicRecord]:
         """召回与 current_event 相关的历史 EpisodicRecord 列表（确定性排序）。"""
         raise NotImplementedError
+
+    def retrieve_by_modality(
+        self,
+        current_event: CurrentEvent,
+        modalities: Iterable[EvidenceModality] | EvidenceModality,
+    ) -> list[EpisodicRecord]:
+        """按证据模态召回（ADR-0027 D6，可选能力）。
+
+        **非抽象方法**：接口声明能力存在，但各实现可自行决定是否支持——不支持时
+        **显式抛 ``NotImplementedError``**（fail loud，绝不静默退化为全量召回，
+        否则调用方会误以为拿到了模态过滤结果）。
+
+        默认实现即 fail loud；``RuleBasedRetrieval`` 覆盖为真实过滤实现
+        （模态过滤先于排序裁剪）。替换实现若支持，须与默认语义对齐：
+        过滤后仍按实现自身确定性排序（C3）。
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} 未提供按模态检索能力（retrieve_by_modality）"
+        )
 
 
 class Aggregation(ABC):

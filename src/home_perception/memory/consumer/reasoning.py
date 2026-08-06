@@ -95,9 +95,16 @@ class RuleBasedReasoningEngine(ReasoningEngine):
                 f"音频模式：{'、'.join(pattern.audio_patterns)}{ratio_desc}"
                 f"（纯描述已观测音频类型，非风险评分）"
             )
+            # SourceRef 语义（契约 review）：ref 保持稳定字段键（RiskPattern 字段名），
+            # 具体描述标签进 detail（"audio_pattern:<label>"）——ref 绝不混入自然语言
+            # 标签，证据回溯唯一入口仍是 evidence_refs（evidence_id）。
             for label in pattern.audio_patterns:
                 source_refs.append(
-                    SourceRef(source="risk_pattern", ref=label, detail="audio_pattern")
+                    SourceRef(
+                        source="risk_pattern",
+                        ref="audio_patterns",
+                        detail=f"audio_pattern:{label}",
+                    )
                 )
 
         # 4) 冲突（只标记，不解决；C4 透明）

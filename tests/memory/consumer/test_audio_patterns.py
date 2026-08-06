@@ -42,6 +42,8 @@ from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
 from home_perception.memory.records import EpisodicRecord, MemoryStatus
 from home_perception.memory.store import InMemoryStore
 
+from ._c1 import CONSUMER_FORBIDDEN_FIELDS
+
 VISITOR = "visitor-audio"
 AUDIO = EvidenceModality.AUDIO
 VISION = EvidenceModality.VISION
@@ -316,14 +318,20 @@ class TestAggregationAudioPatterns:
         assert pattern is None
 
     def test_order_independent_permutations(self) -> None:
-        """C3：记录输入顺序不影响 audio_patterns（穷举全排列）。"""
+        """C3：记录输入顺序不影响 audio_patterns（3 条记录穷举 6 种全排列）。
+
+        覆盖多记录去重与解析顺序无关性：含**跨记录重复 evidence ID**（a1 出现在
+        ep-1 与 ep-2，只解析一次）与**重复 audio_kind**（telephone 在 ep-1/ep-3）。
+        """
         records = [
             _make_record("ep-1", _H1, modalities=[AUDIO], evidence=["a1"]),
-            _make_record("ep-2", _H2, modalities=[AUDIO], evidence=["a2"]),
+            _make_record("ep-2", _H2, modalities=[AUDIO], evidence=["a2", "a1"]),
+            _make_record("ep-3", _H2 + timedelta(hours=1), modalities=[AUDIO], evidence=["a3"]),
         ]
         resolver = _resolver(
             _audio_item("a1", audio_kind="telephone"),
             _audio_item("a2", audio_kind="crying"),
+            _audio_item("a3", kind="audio_clip"),  # 无 audio_kind → 回退 kind
         )
         outputs = set()
         for perm in itertools.permutations(records):
@@ -332,7 +340,7 @@ class TestAggregationAudioPatterns:
             )[1]
             assert pattern is not None
             outputs.add(tuple(pattern.audio_patterns))
-        assert outputs == {("crying", "telephone")}
+        assert outputs == {("audio_clip", "crying", "telephone")}
 
     def test_resolver_exception_wrapped_as_aggregation_error(self) -> None:
         """解析器异常 → AggregationError（分层异常，不静默、不向上抛裸异常）。"""
@@ -352,8 +360,8 @@ class TestAggregationAudioPatterns:
         import dataclasses
 
         names = {f.name for f in dataclasses.fields(RiskPattern)}
-        forbidden = {"risk_score", "score", "decision", "warning"}
-        assert not (names & forbidden)
+        # 共享禁止集合（_c1.py，口径与 ReasoningInput / ReasoningResult 一致）
+        assert not (names & CONSUMER_FORBIDDEN_FIELDS)
         records = [
             _make_record("ep-1", _H1, modalities=[AUDIO], evidence=["a1"]),
             _make_record("ep-2", _H2, modalities=[AUDIO], evidence=["a2"]),
@@ -426,7 +434,9 @@ class TestReasoningInputModalities:
 
 class TestReasoningSurfacesAudio:
     def test_audio_patterns_in_findings_with_source_refs(self) -> None:
-        """infer 把 audio_patterns 写进 findings，并以 detail='audio_pattern' 溯源。"""
+        """infer 把 audio_patterns 写进 findings；SourceRef.ref 为稳定字段键、
+        detail 携带 "audio_pattern:<label>"（标签绝不混入 ref，证据回溯唯一入口
+        仍是 evidence_refs 的 evidence_id）。"""
         records = [
             _make_record("ep-1", _H1, modalities=[AUDIO], evidence=["a1"]),
             _make_record("ep-2", _H2, modalities=[AUDIO], evidence=["a2"]),
@@ -439,8 +449,14 @@ class TestReasoningSurfacesAudio:
         result = RuleBasedReasoningEngine().infer(out)
         joined = " ".join(result.findings)
         assert "crying" in joined and "telephone" in joined
-        audio_refs = [s for s in result.source_refs if s.detail == "audio_pattern"]
-        assert {s.ref for s in audio_refs} == {"crying", "telephone"}
+        audio_refs = [
+            s for s in result.source_refs if s.source == "risk_pattern"
+            and s.detail is not None and s.detail.startswith("audio_pattern:")
+        ]
+        assert len(audio_refs) == 2
+        # ref 保持稳定字段键（可审计、非自然语言标签）；标签只在 detail
+        assert {s.ref for s in audio_refs} == {"audio_patterns"}
+        assert {s.detail for s in audio_refs} == {"audio_pattern:crying", "audio_pattern:telephone"}
 
     def test_audio_modality_hint_surfaced_without_pattern(self) -> None:
         """仅 1 条音频记录（低于模式门控）仍经 modalities 提示暴露 AUDIO 事实。"""
@@ -506,3 +522,60 @@ class TestIntegrationInvariants:
         out = _consumer(records).consume(_make_event())
         assert "a1" in out.evidence_refs
         assert "a2" in out.evidence_refs
+
+
+# ============================================================================
+# 6. 审查修复回归（契约 review 2026-08-06）
+# ============================================================================
+
+
+class TestReviewFixes:
+    def test_retrieval_abc_declares_optional_capability(self) -> None:
+        """审查 1：``retrieve_by_modality`` 是 ``Retrieval`` 接口声明的可选能力
+        （非抽象，默认 fail loud），替换实现无法悄悄缺失该能力。"""
+        from home_perception.memory.consumer.interfaces import Retrieval
+
+        assert callable(Retrieval.retrieve_by_modality)
+
+    def test_unsupported_retrieval_fails_loud_not_silent(self) -> None:
+        """审查 1 负例：不覆盖可选能力的替换实现调用时显式抛 NotImplementedError
+        ——绝不静默退化为全量召回（否则调用方误以为拿到了模态过滤结果）。"""
+        from home_perception.memory.consumer.interfaces import Retrieval
+
+        class _MinimalRetrieval(Retrieval):
+            """仅实现抽象方法 retrieve；retrieve_by_modality 继承默认实现。"""
+
+            def retrieve(self, current_event):
+                return []
+
+        r = _MinimalRetrieval()
+        with pytest.raises(NotImplementedError, match="retrieve_by_modality"):
+            r.retrieve_by_modality(_make_event(), AUDIO)
+
+    def test_dirty_evidence_labels_skipped_not_raising(self) -> None:
+        """审查 3 回归：metadata['audio_kind'] 与 kind 均为脏数据（非 str）时
+        跳过该标签，绝不把单条坏标签升级为聚合失败。"""
+        records = [
+            _make_record("ep-1", _H1, modalities=[AUDIO], evidence=["a1"]),
+            _make_record("ep-2", _H2, modalities=[AUDIO], evidence=["a2"]),
+        ]
+        # 绕过 EvidenceItem 契约构造"脏历史证据"（kind 被强制改为非 str）
+        dirty = _audio_item("a1", kind="audio_clip", audio_kind=123)  # metadata 非 str
+        object.__setattr__(dirty, "kind", 456)  # kind 也非 str（模拟脏存储）
+        resolver = _resolver(
+            dirty,
+            _audio_item("a2", audio_kind="crying"),  # 正常标签不受牵连
+        )
+        pattern = RuleBasedAggregation(evidence_resolver=resolver).aggregate(records)[1]
+        assert pattern is not None
+        assert pattern.audio_patterns == ("crying",)  # 脏标签被跳过，好标签保留
+
+    def test_risk_pattern_rejects_non_string_label_with_value_error(self) -> None:
+        """审查 6：直接构造 RiskPattern 传非 str 标签 → 明确的 ValueError（带字段名），
+        而非 AttributeError。"""
+        with pytest.raises(ValueError, match="audio_patterns"):
+            RiskPattern(tags=("repeated_visit",), audio_patterns=(None,))
+        with pytest.raises(ValueError, match="audio_patterns"):
+            RiskPattern(tags=("repeated_visit",), audio_patterns=("",))
+        with pytest.raises(ValueError, match="audio_patterns"):
+            RiskPattern(tags=("repeated_visit",), audio_patterns=(123,))

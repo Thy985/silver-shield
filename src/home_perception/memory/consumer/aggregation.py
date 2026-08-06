@@ -175,10 +175,12 @@ class RuleBasedAggregation(Aggregation):
             if item is None or item.modality is not EvidenceModality.AUDIO:
                 continue
             label = item.metadata.get("audio_kind") if item.metadata else None
-            # 防御：异常元数据（非 str）回退到 kind，不因脏数据崩聚合
+            # 防御（契约 review）：metadata 与 kind 均可能为脏数据（非 str）——
+            # 逐层回退后仍非 str 则**跳过该标签**，绝不因单条坏标签阻断整个聚合
+            # （坏标签是可跳过的描述噪音，不应升级为 AggregationError）。
             if not isinstance(label, str):
                 label = item.kind
-            if label and label.strip():
+            if isinstance(label, str) and label.strip():
                 labels.add(label.strip())
         return tuple(sorted(labels)), ratio
 
