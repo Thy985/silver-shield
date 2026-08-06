@@ -1,21 +1,22 @@
 """感知场景运行器（Audio Synthetic Infrastructure / ``tts`` 包子模块）。
 
 将声明式感知场景（``scenarios/audio/*.yaml``）接驳到真实感知管道，完成
-**Phase A 验证闭环**：
+**Phase B 测试语言闭环**：
 
-    scenario.yaml  →  合成 WAV（base + effects）  →  AudioPipeline  →  observed kinds  →  对比 expected
+    scenario.yaml  →  合成 WAV（base + effects）  →  AudioPipeline  →  observed kinds  →  == expected
 
 设计要点：
-- 场景是「测试语言」的载体：``base.file`` 引用 ``tests/fixtures/audio/`` 黄金基线，
+- 场景即测试语言（spec-as-test）：``base.file`` 引用 ``tests/fixtures/audio/`` 黄金基线，
   ``effects`` 复用 :mod:`effects` 的增强原语，``expected.perception`` 声明期望的
-  ``AudioPerceptionKind`` 字符串列表。无需为每种退化条件新增 WAV 入库。
+  ``AudioPerceptionKind`` 字符串列表。测试直接写 ``assert run(scenario).events == scenario.expected``，
+  无需为每种退化条件新增 WAV 入库。
+- **精确相等是契约（strict）**：``run(scenario).events == scenario.expected`` 与 YAML 中
+  ``expected`` 的书写顺序无关（两侧均在加载 / 运行时排序，且 ``events`` 会去重合并多个 VAD 段
+  重复产出的同一 kind，成为「触发了哪些 kind」的集合视图）。这是 Phase B 的主测试形态。
 - 合成阶段完全复用 :mod:`generator`（含 ``base_ref`` 解析 / WAV 编解码 / ``apply_effects``），
-  本模块只负责「加载单文件场景」+「跑管道取 observed」+「校验」。
-- 校验语义：
-  - 默认（Phase A）：``observed ⊆ expected``（子集）。当前 Tier0 规则每条语音段只产一个 kind，
-    故 ``expected`` 写成多值列表表示「可能出现其中任意一个均算通过」，兼容用户 Phase B 示例。
-  - ``strict=True``（Phase B 就绪）：``observed == expected``（精确相等）。
-- 管道导入惰性化：``AudioPipeline`` 仅在 ``run_scenario`` 内 import，使本模块可被轻量单测导入，
+  本模块只负责「加载单文件场景」+「跑管道取 observed」+「以 ScenarioRun 返回」。``validate_scenario``
+  仅为 CLI / 旧调用者保留的薄封装。
+- 管道导入惰性化：``AudioPipeline`` 仅在 ``run`` 内 import，使本模块可被轻量单测导入，
   且不强制感知链在 import 期被拉起。
 """
 
@@ -68,6 +69,22 @@ class ValidationResult:
         )
 
 
+@dataclass
+class ScenarioRun:
+    """一次场景运行的结果（Phase B 测试语言的核心返回值）。
+
+    - ``events``：observed 的 ``AudioPerceptionKind`` 字符串**升序去重**列表，
+      即「本场景触发了哪些 kind」的集合视图（同一 kind 在多个 VAD 段重复出现会被合并）。
+      因此 ``run(scenario).events == scenario.expected`` 与 YAML 中 ``expected`` 的书写顺序无关，
+      也不受 VAD 分段数影响——spec 只需列出每种期望 kind 一次。
+    - ``wav``：本次合成产出的 WAV 路径。默认 ``run`` 在临时目录内合成，目录随 run 结束清理，
+      故不要在 run 外长期持有该路径（需持有时显式传入 ``work_dir``）。
+    """
+
+    events: list[str]
+    wav: Path
+
+
 def load_scenario(path: Path) -> PerceptionScenario:
     """解析单文件场景 yaml。"""
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
@@ -78,11 +95,13 @@ def load_scenario(path: Path) -> PerceptionScenario:
         raise ValueError(f"scenario {data['name']!r} 缺少 base.file")
     exp = data.get("expected") or {}
     perc = exp.get("perception") or []
+    # 归一化为升序列表：使 `run(scenario).events == scenario.expected` 与 YAML 书写顺序无关。
+    expected = sorted(str(k) for k in perc)
     return PerceptionScenario(
         name=data["name"],
         base_file=base["file"],
         effects=list(data.get("effects") or []),
-        expected=[str(k) for k in perc],
+        expected=expected,
     )
 
 
@@ -119,42 +138,59 @@ def _observed_kinds(wav_path: Path) -> list[str]:
     return [e.kind.value for e in events]
 
 
-def run_scenario(
-    scn: PerceptionScenario,
-    fixtures_root: Path,
-    work_dir: Path | None = None,
-) -> list[str]:
-    """合成场景到临时（或指定）目录，跑管道返回 observed kinds。
+def _default_fixtures_root() -> Path:
+    """从本模块位置推导 ``tests/fixtures/audio``（不依赖 cwd），使 ``run(scenario)`` 无需传 fixtures_root。"""
+    # src/home_perception/audio/tts/scenario_runner.py -> parents[4] = 仓库根
+    return Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "audio"
 
-    WAV 必须在临时目录清理前完整载入内存：``AudioPipeline.run`` 走离线 EnergyVAD，
-    一次性 ``source.load()`` 读完整 buffer（评审 B2；未来若扩展 streaming 须重审此处）。
+
+def run(
+    scn: PerceptionScenario,
+    fixtures_root: Path | None = None,
+    work_dir: Path | None = None,
+) -> ScenarioRun:
+    """合成场景并跑真实感知管道，返回 :class:`ScenarioRun`。
+
+    Phase B「场景即测试语言」的单一入口：测试直接写
+    ``assert run(scenario).events == scenario.expected``。
+
+    :param scn: 声明式场景（来自 ``scenarios/audio/*.yaml``）。
+    :param fixtures_root: 用于解析 ``base.file``（golden fixtures）。缺省时从模块位置推导。
+    :param work_dir: 指定合成输出目录（便于调试 / 复核 WAV）；缺省用临时目录，run 结束即清理。
     """
+    root = Path(fixtures_root) if fixtures_root is not None else _default_fixtures_root()
+
+    def _do(out_dir: Path) -> ScenarioRun:
+        wav = synthesize(scn, out_dir, root)
+        observed = _observed_kinds(wav)
+        # 升序去重：合并多个 VAD 段重复产出的同一 kind，使 events 成为「触发了哪些 kind」的集合视图。
+        return ScenarioRun(events=sorted(set(observed)), wav=wav)
+
     if work_dir is None:
+        # WAV 必须在临时目录清理前完整载入内存：AudioPipeline.run 走离线 EnergyVAD，
+        # 一次性 source.load() 读完整 buffer（评审 B2；未来若扩展 streaming 须重审此处）。
         with tempfile.TemporaryDirectory() as td:
-            wav = synthesize(scn, Path(td), fixtures_root)
-            return _observed_kinds(wav)
-    wav = synthesize(scn, Path(work_dir), fixtures_root)
-    return _observed_kinds(wav)
+            return _do(Path(td))
+    return _do(Path(work_dir))
+
+
+# 向后兼容别名：旧代码 / CLI 可能仍引用 run_scenario（位置参数 fixtures_root 仍支持）。
+run_scenario = run
 
 
 def validate_scenario(
     scn: PerceptionScenario,
-    fixtures_root: Path,
-    strict: bool = False,
+    fixtures_root: Path | None = None,
+    strict: bool = True,
 ) -> ValidationResult:
-    """校验单条场景：``observed ⊆ expected``（默认）或 ``observed == expected``（strict）。"""
-    observed = run_scenario(scn, fixtures_root)
+    """校验单条场景：精确相等（Phase B 契约 ``observed == expected``）。
+
+    ``strict`` 仅用于结果记录（CLI 展示），默认即精确相等——Phase B 不再提供子集语义，
+    因为场景即规格，``expected`` 必须精确对齐管道实际产出。
+    """
+    result = run(scn, fixtures_root)
     exp = list(scn.expected)
-    if strict:
-        ok = sorted(observed) == sorted(exp)
-    else:
-        # 子集语义（评审 B3，等价但更易读）：
-        # - observed 为空 ⇔ expected 为空（避免「expected 漏配却 PASS」）；
-        # - 否则每个 observed 都必须在 expected 中，且 expected 必须非空。
-        if not observed:
-            ok = exp == []
-        else:
-            ok = all(o in exp for o in observed) and len(exp) > 0
+    ok = result.events == exp
     return ValidationResult(
-        name=scn.name, observed=observed, expected=exp, ok=ok, strict=strict
+        name=scn.name, observed=result.events, expected=exp, ok=ok, strict=strict
     )

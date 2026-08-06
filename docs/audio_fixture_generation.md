@@ -385,21 +385,36 @@ expected:
 
 ```bash
 python scripts/run_audio_scenarios.py generate   # scenarios/audio → generated/audio/*.wav
-python scripts/run_audio_scenarios.py validate    # 逐场景校验 observed ⊆ expected
+python scripts/run_audio_scenarios.py validate    # 逐场景校验 observed == expected
 ```
 
 - `generated/audio/` 是派生产物（gitignored），随时可再生成。
-- 校验默认**子集语义** `observed ⊆ expected`：当前 Tier0 规则每条语音段只产一个 kind，
-  故 `expected` 写成多值列表表示「可能出现其中任意一个即算通过」。
-- `validate --strict` 启用**精确相等**语义，为 Phase B「`assert run(scenario).events == expected`」就绪。
+- 校验即 **精确相等契约**（`observed == expected`）：Phase B 已落地，场景即规格，
+  `expected` 必须精确对齐管道实际产出（当前 Tier0 每条语音段只产一个 kind）。
+
+### 11.1.1 测试语言（spec-as-test）
+
+`tests/test_audio_scenarios.py` 直接消费场景文件，主测试形态为一行断言：
+
+```python
+from home_perception.audio.tts.scenario_runner import load_scenario, run
+
+def test_elderly_distress():
+    scenario = load_scenario(SCENARIOS_DIR / "elderly_distress.yaml")
+    assert run(scenario).events == scenario.expected
+```
+
+`run(scenario)` 返回 `ScenarioRun.events`（observed kinds，已排序）；`scenario.expected` 在加载期
+也已排序，故断言与 YAML 中 `expected` 的书写顺序无关。全部场景由参数化 `test_scenario_self_describing`
+单点覆盖，新增场景无需改测试代码——只需在 `scenarios/audio/` 放一个 yaml。
 
 ### 11.2 两阶段路线
 
 - **Phase A（已落地）**：黄金基线保持不动；新增 `scenarios/audio/` 声明 + `generated/` 产物 +
-  校验闭环（`scenario → wav → expected event`）。`tests/test_audio_scenarios.py` 直接消费每个场景文件，
-  既是 Phase A 的验证，也是 Phase B 测试语言的种子。
-- **Phase B（待做）**：测试以场景为一级输入，`assert run(scenario).events == expected` 成为主测试形态；
-  场景即规格（spec-as-test）。届时 `expected` 需精确对齐管道实际产出，多 kind 场景须由多语音段真实产出。
+  校验闭环（`scenario → wav → expected event`）。
+- **Phase B（已落地）**：测试以场景为一级输入，`assert run(scenario).events == scenario.expected`
+  成为主测试形态；场景即规格（spec-as-test）。`expected` 精确对齐管道实际产出，单 kind 场景已全绿。
+  多 kind 场景须由多语音段真实产出（当前 Tier0 每条段只产一个 kind，单 wav 一般产单事件）。
 
 ### 11.3 已知属性（实测）
 
