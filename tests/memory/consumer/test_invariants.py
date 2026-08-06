@@ -130,7 +130,7 @@ class TestContractC1NoScoreField:
         assert not (field_names & forbidden), (
             f"ReasoningInput 含禁止字段: {field_names & forbidden}"
         )
-        # 字段集正是契约声明的 7 个，无漂移
+        # 字段集正是契约声明的 8 个，无漂移（含 ADR-0027 D6 新增 modalities 提示字段）
         assert field_names == {
             "current_event",
             "historical_context",
@@ -139,6 +139,7 @@ class TestContractC1NoScoreField:
             "evidence_refs",
             "previous_actions",
             "conflicts",
+            "modalities",
         }
 
 

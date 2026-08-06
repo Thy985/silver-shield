@@ -16,13 +16,19 @@ review #7）：本组件信任输入已按 ``max_records`` / ``lookback_days`` �
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 
+from home_perception.core.event import EvidenceItem, EvidenceModality
 from home_perception.memory.consumer.config import AggregationConfig
 from home_perception.memory.consumer.contracts import RiskPattern, VisitorProfile
 from home_perception.memory.consumer.exceptions import AggregationError
 from home_perception.memory.consumer.interfaces import Aggregation
 from home_perception.memory.records import EpisodicRecord
+
+# ADR-0027 D6：只读证据解析器（evidence_id → EvidenceItem 或 None）。
+# 与 Retrieval 持有的 MemoryStore 同为"注入的只读数据端口"；本层不持有、不写任何证据库。
+EvidenceResolver = Callable[[str], EvidenceItem | None]
 
 
 class RuleBasedAggregation(Aggregation):
@@ -33,12 +39,21 @@ class RuleBasedAggregation(Aggregation):
        first_seen / last_seen / confidence 分级）。
     2. build_pattern：发现风险模式标签（repeated_visit / escalating_behavior），
        低于 ``min_records_for_pattern`` 时不产出 RiskPattern（返回 None）。
+       音频模式（ADR-0027 D6）随 RiskPattern 一并产出：``audio_patterns`` 经
+       ``evidence_resolver`` 解析记录 ``evidence_refs`` 中的 AUDIO EvidenceItem
+       得到描述标签；``audio_episode_ratio`` 由记录 ``modalities`` 统计得出。
 
     空记录 → (None, None)（C2 无输入则无画像 / 模式）。
     """
 
-    def __init__(self, config: AggregationConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: AggregationConfig | None = None,
+        evidence_resolver: EvidenceResolver | None = None,
+    ) -> None:
         self._config = config or AggregationConfig()
+        # D6 只读证据解析端口：None 时音频模式恒为空（运行时尚无证据库，不阻塞）。
+        self._evidence_resolver = evidence_resolver
 
     def aggregate(
         self, records: list[EpisodicRecord]
@@ -107,11 +122,65 @@ class RuleBasedAggregation(Aggregation):
             escalation_history = unique_markers
         if not tags:
             return None
+        audio_patterns, audio_episode_ratio = self._audio_pattern_summary(records)
         return RiskPattern(
             tags=tuple(sorted(set(tags))),
             escalation_history=escalation_history,
             confidence=self._confidence_tier(n),
+            audio_patterns=audio_patterns,
+            audio_episode_ratio=audio_episode_ratio,
         )
+
+    # -- 音频模式（ADR-0027 D6，纯描述，非分数）---------------------------
+    def _audio_pattern_summary(
+        self, records: list[EpisodicRecord]
+    ) -> tuple[tuple[str, ...], float | None]:
+        """从召回记录收敛音频模式（描述标签 + 占比，均非分数）。
+
+        - ``audio_episode_ratio``：含 AUDIO 模态的 episode 数 / 总记录数（恒可算，
+          不依赖 resolver；n=0 时返回 None）。若**任一**记录 ``modalities`` 为空
+          （ADR-0027 D8：空列表表示"缺 modality 元数据"，非"无音频"），占比无法
+          精确计算 → 返回 None（不伪造）。
+        - ``audio_patterns``：经 ``evidence_resolver`` 解析记录 ``evidence_refs``
+          中 **modality=AUDIO** 的 EvidenceItem，取其 ``metadata['audio_kind']``
+          （与 ``DefaultEpisodeBuilder._audio_descriptor`` 同优先级），回退到
+          ``kind``；排序去重保证 C3 确定性。resolver 为 None 时恒 ``()``。
+
+        纯描述：标签只陈述"历史出现了什么音频类型"，绝不构成任何风险分（C1）。
+        """
+        n = len(records)
+        # D8 语义：空 modalities = 缺元数据（未知），占比无法计算 → None
+        if any(not (ep.modalities or []) for ep in records):
+            ratio: float | None = None
+        else:
+            n_audio = sum(
+                1 for ep in records if EvidenceModality.AUDIO in set(ep.modalities)
+            )
+            ratio = (n_audio / n) if n else None
+
+        if self._evidence_resolver is None:
+            return (), ratio
+
+        # 先收集全部 evidence_id 再统一解析一次（同 id 跨记录复用，确定性 + 高效）
+        ids: list[str] = []
+        seen_ids: set[str] = set()
+        for ep in records:
+            for ref in ep.evidence_refs or []:
+                if ref not in seen_ids:
+                    seen_ids.add(ref)
+                    ids.append(ref)
+        labels: set[str] = set()
+        for eid in ids:
+            item = self._evidence_resolver(eid)
+            if item is None or item.modality is not EvidenceModality.AUDIO:
+                continue
+            label = item.metadata.get("audio_kind") if item.metadata else None
+            # 防御：异常元数据（非 str）回退到 kind，不因脏数据崩聚合
+            if not isinstance(label, str):
+                label = item.kind
+            if label and label.strip():
+                labels.add(label.strip())
+        return tuple(sorted(labels)), ratio
 
     # -- 辅助（纯函数，确定性）---------------------------------------------
     @staticmethod
@@ -137,4 +206,4 @@ class RuleBasedAggregation(Aggregation):
         return "stable_pattern"
 
 
-__all__ = ["RuleBasedAggregation"]
+__all__ = ["EvidenceResolver", "RuleBasedAggregation"]

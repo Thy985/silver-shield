@@ -212,6 +212,7 @@ class TestC1NoDecision:
             "evidence_refs",
             "previous_actions",
             "conflicts",
+            "modalities",
         }
         forbidden = {"risk_score", "score", "decision", "warning", "recommended_action"}
         assert not (names & forbidden)

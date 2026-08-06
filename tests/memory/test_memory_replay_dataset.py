@@ -138,6 +138,7 @@ def test_c1_no_score_fields(dataset):
         "evidence_refs",
         "previous_actions",
         "conflicts",
+        "modalities",  # ADR-0027 D6：模态提示字段（纯提示，非分数）
     }
     assert set(ReasoningInput.__dataclass_fields__.keys()) == allowed
     layer = _load_layer(dataset, "case_001_repeat_visitor")
