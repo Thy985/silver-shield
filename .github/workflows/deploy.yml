@@ -1,6 +1,12 @@
 name: CD
 
-# 持续部署（CD）：push 到 main 即部署到阿里云 ECS（Docker Compose over SSH）。
+# 持续部署（CD）：手动触发，部署到阿里云 ECS（Docker Compose over SSH）。
+#
+# ⚠️ 触发方式变更（2026-08-06）：CD 不再随 push 到 main 自动运行——
+# 每次合并 main 都会触发 ECS 上的 Docker 构建（纯 CPU 首次装 torch/ultralytics/opencv 常超 10 分钟），
+# 太慢且多数合并不需要立即部署。现改为【仅手动触发】：
+#   到仓库 Actions 标签页 → 选择「CD」workflow → 点「Run workflow」即可部署到 ECS。
+# CI（lint+test，见 ci.yml）仍随 push/PR 自动运行，不在此列。
 #
 # 使用前请在仓库 Settings → Secrets and variables → Actions 配置以下 Secrets：
 #   ALIYUN_HOST        ECS 公网 IP 或域名
@@ -25,8 +31,8 @@ name: CD
 #   dashboard     -> silver_demo.gateway（演示 Dashboard，含区域⑥ Memory Context Panel）
 
 on:
-  push:
-    branches: [main]
+  # 仅手动触发：合并 main 后不再自动部署，避免每次合并都跑慢速 ECS 构建。
+  # 需要部署时，到仓库 Actions 标签页手动运行「CD」workflow。
   workflow_dispatch:
 
 concurrency:
