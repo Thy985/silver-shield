@@ -79,6 +79,7 @@ from ..memory.consumer import (
 )
 from ..memory.consumer.contracts import ReasoningInput
 from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
+from .audio_session_recorder import AudioSessionRecorder, AudioSessionSummary
 from .config import build_dispatcher_config, build_threshold_config
 from .memory_consumer_hook import MemoryConsumerHook
 from .memory_hook import MemoryHook
@@ -272,6 +273,14 @@ class PerceptionPipeline:
         #    仅 consumer_enabled + reasoning_enabled 时激活，Shadow 观测，不接决策）——
         reasoning_engine: ReasoningEngine | None = None,
         reasoning_enabled: bool = False,
+        # —— ADR-0027 运行时接线：音频会话收割器（可选；默认 None，零行为变化）——
+        # 独立 Audio Loop 设计（ADR-0026 §8）：音频不随视频帧同步调用，由调用方在
+        # 会话结束时经 ``process_audio_session`` 显式收割。装配条件见 from_settings。
+        audio_recorder: AudioSessionRecorder | None = None,
+        # —— ADR-0024 Integration Closure Slice A：MemoryHook 实例（可选）——
+        # from_settings 在构造 audio_recorder 前先建 hook 单例，两路（视觉/音频）
+        # 共享同一实例（写同一 store、同一 metrics）；缺省时本方法自建（向后兼容）。
+        memory_hook: MemoryHook | None = None,
     ):
         self.detector = detector
         self.tracker = tracker
@@ -348,7 +357,9 @@ class PerceptionPipeline:
         # metrics 语义与抽出前一致；process_frame 中每个 VisitorEvent 经
         # ``self._memory_hook.record`` 投影落库，不再内联。
         # 保留下方三个字段仅因既有 Stage F 测试直接断言它们（接口未变）。
-        self._memory_hook = MemoryHook(
+        # from_settings 场景由调用方注入共享实例（视觉/音频两路同写一 store），
+        # 缺省自建（向后兼容，行为与历史一致）。
+        self._memory_hook = memory_hook or MemoryHook(
             self._episode_builder,
             self._memory_store,
             self._episodic_shadow,
@@ -381,6 +392,10 @@ class PerceptionPipeline:
             self._consumer_enabled,
             reasoning_engine=reasoning_engine if self._reasoning_enabled else None,
         )
+
+        # —— ADR-0027 运行时接线：音频会话收割器（可选，默认 None）——
+        # 独立于视频帧循环：调用方在音频会话结束时显式调用 process_audio_session。
+        self._audio_recorder = audio_recorder
 
     # ------------------------------------------------------------------
     # 从配置装配
@@ -524,6 +539,32 @@ class PerceptionPipeline:
                     "pipeline.reasoning_requires_consumer",
                     note="reasoning_enabled=true 但消费侧未激活（需 consumer_enabled + memory_store），推理侧未激活",
                 )
+        # —— ADR-0027 运行时接线：音频会话收割器装配（默认关闭）——
+        # audio_recorder 依赖 Memory 影子写入已就位（无 memory_hook 就无处落库），
+        # 故它是 episodic_shadow 的下游子开关：仅当 audio.enabled + memory.enabled +
+        # episodic_shadow 三者同真才构造 AudioSessionRecorder（复用本管线已装配的
+        # decision_engine / executor；memory_hook 单例由本段先建，视觉/音频两路共享
+        # 同一实例与 metrics）。音频决策经既有 DecisionEngine（单一决策中心，D3
+        # 门槛），不新增音频记忆孤岛。
+        audio_recorder: AudioSessionRecorder | None = None
+        pipeline_memory_hook: MemoryHook | None = None
+        pipeline_metrics = PipelineMetrics()
+        if settings.audio.enabled:
+            if episodic_shadow and episode_builder is not None and memory_store is not None:
+                pipeline_memory_hook = MemoryHook(
+                    episode_builder, memory_store, True, pipeline_metrics
+                )
+                audio_recorder = AudioSessionRecorder(
+                    decision_engine,
+                    executor,
+                    pipeline_memory_hook,
+                    device_id=device_id,
+                )
+            else:
+                log.warning(
+                    "pipeline.audio_requires_episodic_shadow",
+                    note="audio.enabled=true 但 Memory 影子未激活（需 memory.enabled + episodic_shadow），音频闭环未装配",
+                )
         return cls(
             detector=det,
             tracker=tracker,
@@ -532,7 +573,7 @@ class PerceptionPipeline:
             rule_engine=rule_engine,
             decision_engine=decision_engine,
             executor=executor,
-            metrics=PipelineMetrics(),
+            metrics=pipeline_metrics,
             now_provider=now_provider,
             frame_interval_s=frame_interval_s,
             behavior_builder=behavior_builder,
@@ -549,6 +590,8 @@ class PerceptionPipeline:
             consumer_enabled=consumer_enabled,
             reasoning_engine=reasoning_engine,
             reasoning_enabled=reasoning_enabled,
+            audio_recorder=audio_recorder,
+            memory_hook=pipeline_memory_hook,
         )
 
     # ------------------------------------------------------------------
@@ -848,6 +891,31 @@ class PerceptionPipeline:
             for c in cmds:
                 self.metrics.record_command(c.command_type)
         return rt_percs, warnings, commands
+
+    def process_audio_session(
+        self,
+        events: list[object],
+        *,
+        audio_session_id: str | None = None,
+        source_path: str | None = None,
+    ) -> AudioSessionSummary | None:
+        """收割一次音频会话（ADR-0027 运行时接线，独立 Audio Loop 入口）。
+
+        仅当 ``audio.enabled`` + Memory 影子激活（``from_settings`` 装配了
+        ``AudioSessionRecorder``）时可用；未装配时返回 ``None``（零行为变化）。
+
+        音频不随视频帧同步调用（ADR-0026 §8）：调用方在音频会话结束时机（如一段
+        音频跑完 / 静默超时）喂入会话内 ``AudioPerceptionEvent`` 列表，本方法经
+        既有决策链（D3 门槛：无 WarningEvent 不记录）落库为纯音频
+        ``EpisodicRecord``（D4 匿名：``visitor_instance_id=None``）。
+        """
+        if self._audio_recorder is None:
+            return None
+        if not self._audio_recorder.enabled:
+            return None
+        return self._audio_recorder.record_session(
+            events, audio_session_id=audio_session_id, source_path=source_path
+        )
 
     def run(self, frames: list[object], scenario: str = "unknown") -> RunSummary:
         """处理一整个帧序列（单场景 / 单视频源），返回汇总。

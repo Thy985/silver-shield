@@ -488,9 +488,15 @@ class AudioConfig(BaseModel):
     """音频管道配置（ADR-0026 · Phase 3.0）。
 
     Tier0（VAD + Prosody）常驻、零模型；Tier1（YAMNet）可选增强，默认关闭。
+    ``enabled``：音频→Memory 运行时闭环开关（ADR-0027 运行时接线）。默认 ``false``
+    ——仅当 ``audio.enabled=true`` **且** ``memory.enabled`` **且**
+    ``memory.episodic_shadow=true`` 时，``PerceptionPipeline`` 才装配
+    ``AudioSessionRecorder`` 并暴露 ``process_audio_session`` 入口；音频会话经既有
+    决策链确认后落库为纯音频 ``EpisodicRecord``（D3 门槛：无 WarningEvent 不记录）。
     """
 
     tier1: Tier1AudioConfig = Tier1AudioConfig()
+    enabled: bool = False
 
 
 class Settings(BaseModel):
