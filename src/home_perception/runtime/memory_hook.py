@@ -23,6 +23,7 @@ from typing import Any
 from ..analysis.event import VisitorEvent
 from ..analysis.warning import WarningEvent
 from ..common.logging import get_logger
+from ..core.event import EvidenceItem
 from ..memory import DefaultEpisodeBuilder, InvariantViolationError, MemoryStore
 from .observability import PipelineMetrics
 
@@ -57,6 +58,9 @@ class MemoryHook:
         ev: VisitorEvent,
         warnings: list[WarningEvent],
         actions: list[Any],
+        *,
+        evidence: list[EvidenceItem] | None = None,
+        audio_session_id: str | None = None,
     ) -> None:
         """把一次访客离场投影为 EpisodicRecord 并写入 MemoryStore（Shadow Mode）。
 
@@ -71,7 +75,13 @@ class MemoryHook:
         if self._episode_builder is None or self._memory_store is None:
             return
         try:
-            record = self._episode_builder.project_episode(ev, warnings, actions)
+            record = self._episode_builder.project_episode(
+                ev,
+                warnings,
+                actions,
+                evidence=evidence or [],
+                audio_session_id=audio_session_id,
+            )
         except Exception:  # 投影失败（理论上 DefaultEpisodeBuilder 为纯函数不应抛）
             self._metrics.errors += 1
             log.exception(

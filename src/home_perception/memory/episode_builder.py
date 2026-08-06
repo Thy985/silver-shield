@@ -31,7 +31,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from ..analysis.event import VisitorEvent
     from ..analysis.warning import WarningEvent
 
+from ..common.timeutil import now_dt
+from ..core.event import EvidenceItem, EvidenceModality
 from .policy import MemoryPolicy
 from .records import ActionSummary, EpisodicRecord
 
@@ -70,6 +72,16 @@ _RECO_ACTION_PHRASE = {
 # command_type 在 summary 中的稳定展示顺序
 _ACTION_ORDER = ["SEND_FAMILY_MESSAGE", "CREATE_COMMUNITY_TASK", "LOG_ONLY"]
 
+# 音频 kind → 中文描述（确定性，无 LLM；用于 episode summary 的音频增强，ADR-0027 Slice B）
+_AUDIO_KIND_CN = {
+    "telephone": "长时间通话",
+    "crying": "哭腔",
+    "rapid": "急促语音",
+    "raised": "高声",
+    "audio_segment": "音频片段",
+    "audio_clip": "音频片段",
+}
+
 
 class DefaultEpisodeBuilder(MemoryPolicy):
     """v1 Episode Builder 实现（ADR-0024 Stage B / Slice 4）。
@@ -92,15 +104,27 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         visitor_event: VisitorEvent,
         warnings: list[WarningEvent],
         actions: list[ActionCommand],
+        *,
+        evidence: list[EvidenceItem] | None = None,
+        audio_session_id: str | None = None,
     ) -> EpisodicRecord | None:
         """投影一次访客离场为 EpisodicRecord。
 
         触发时机：VisitorEvent 生成（访客离场）。
-        幂等键：`record_id = f"ep-{visitor_event.event_id}"`（I1）。
-        返回 None 仅当 `visitor_event` 为 None（调用方错误处理）。
+        幂等键：视觉访客在场时 ``record_id = f"ep-{visitor_event.event_id}"``（I1）；
+               纯音频 episode（无视觉访客）``record_id = f"ep-{audio_session_id}"``。
+        返回 None 仅当 ``visitor_event`` 与 ``audio_session_id`` 均为 None（无溯源主体）。
+
+        音频增强（ADR-0027 Slice B）：传入 ``evidence``（EvidenceItem 列表，通常
+        ``modality=AUDIO``）与 ``audio_session_id`` 后，record 自动收敛 ``modalities``、
+        以 ID 填充 ``evidence_refs``、写入 ``audio_session_id``，并在 summary 追加音频描述。
         """
+        evidence = evidence or []
+        # 纯音频 episode（无视觉访客）：D4 放宽 visitor_instance_id 不变式
         if visitor_event is None:
-            return None
+            if audio_session_id is None:
+                return None
+            return self._project_audio_only(audio_session_id, warnings, actions, evidence)
 
         # 1. 关联 WarningEvent（visitor_instance_id + 时间窗）
         related_warnings = self._filter_warnings(visitor_event, warnings)
@@ -110,9 +134,15 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         risk_level, recommended_action = self._pick_max_risk(related_warnings)
         # 4. 合并 reason_summary（去重保序）
         reason_summary = self._merge_reasons(related_warnings)
-        # 5. 生成 human-interpretable summary（确定性，无 LLM）
+        # 5. 生成 human-interpretable summary（确定性，无 LLM）+ 音频增强
+        audio_clause = self._audio_descriptor(evidence) if evidence else None
         summary = self._build_summary(
-            visitor_event, risk_level, recommended_action, reason_summary, related_actions
+            visitor_event,
+            risk_level,
+            recommended_action,
+            reason_summary,
+            related_actions,
+            audio_clause=audio_clause,
         )
         # 6. 构造 record（__post_init__ 强制全部不变量）
         return EpisodicRecord(
@@ -126,7 +156,9 @@ class DefaultEpisodeBuilder(MemoryPolicy):
             recommended_action=recommended_action,
             reason_summary=reason_summary,
             actions=[self._to_action_summary(c) for c in related_actions],
-            evidence_refs=[],  # v1 空，ADR-0022 落地后接 EvidenceItem
+            evidence_refs=self._collect_evidence_ids(evidence),
+            modalities=self._infer_modalities(visitor_event, evidence),
+            audio_session_id=audio_session_id,
             source_event_ids=self._collect_source_ids(
                 visitor_event, related_warnings, related_actions
             ),
@@ -294,6 +326,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         recommended_action: str | None,
         reason_summary: list[str],
         related_actions: list[ActionCommand],
+        audio_clause: str | None = None,
     ) -> str:
         """生成 human-interpretable summary（确定性，无 LLM，见 DESIGN §5.2.3）。
 
@@ -308,6 +341,8 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         base = f"{enter}-{leave} 访问（停留 {minutes} 分钟）"
 
         if risk_level is None:
+            if audio_clause:
+                return base + f"，未触发风险，含音频异常：{audio_clause}。"
             return base + "，未触发风险。"
 
         risk_part = f"{base}，风险等级 {risk_level}"
@@ -316,6 +351,8 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         action_phrase = self._build_action_phrase(related_actions, recommended_action)
         if action_phrase:
             risk_part += f"，{action_phrase}"
+        if audio_clause:
+            risk_part += f"，含音频异常：{audio_clause}"
         return risk_part + "。"
 
     def _build_action_phrase(
@@ -338,3 +375,147 @@ class DefaultEpisodeBuilder(MemoryPolicy):
             if phrase:
                 phrases.append(phrase)
         return " + ".join(phrases)
+
+    # ------------------------------------------------------------------
+    # 音频增强（ADR-0027 Slice B）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _audio_descriptor(evidence: list[EvidenceItem]) -> str | None:
+        """从音频 EvidenceItem 收敛可读音频描述（确定性，无 LLM）。
+
+        优先用 ``metadata['audio_kind']``（telephone/crying/rapid/raised），回退到
+        ``kind``；去重保序。
+        """
+        if not evidence:
+            return None
+        seen: list[str] = []
+        for e in evidence:
+            kind = e.metadata.get("audio_kind") if e.metadata else None
+            if kind is None:
+                kind = e.kind
+            label = _AUDIO_KIND_CN.get(kind, kind)
+            if label and label not in seen:
+                seen.append(label)
+        return " / ".join(seen) if seen else None
+
+    @staticmethod
+    def _collect_evidence_ids(evidence: list[EvidenceItem]) -> list[str]:
+        """证据 ID 引用（去重保序，ADR-0027 D2 / ADR-0024 I2 单调性）。"""
+        seen: set[str] = set()
+        refs: list[str] = []
+        for e in evidence or []:
+            if e.evidence_id in seen:
+                continue
+            seen.add(e.evidence_id)
+            refs.append(e.evidence_id)
+        return refs
+
+    def _infer_modalities(
+        self,
+        visitor_event: VisitorEvent | None,
+        evidence: list[EvidenceItem],
+    ) -> list[EvidenceModality]:
+        """收敛 modalities（D1）：视觉访客在场 → VISION；证据各自 modality 追加。"""
+        mods: list[EvidenceModality] = []
+        if visitor_event is not None:
+            mods.append(EvidenceModality.VISION)
+        seen = set(mods)
+        for e in evidence or []:
+            if e.modality not in seen:
+                seen.add(e.modality)
+                mods.append(e.modality)
+        return mods
+
+    def _project_audio_only(
+        self,
+        audio_session_id: str,
+        warnings: list[WarningEvent],
+        actions: list[ActionCommand],
+        evidence: list[EvidenceItem],
+    ) -> EpisodicRecord | None:
+        """纯音频 episode 投影（无视觉访客，D4 匿名）。
+
+        仅当存在音频 WarningEvent 或音频 evidence 时才投影；否则无内容返回 None。
+        窗口由 evidence.captured_at / warning.created_at 派生（无则退化为单点）。
+        """
+        if not warnings and not evidence:
+            return None
+        related_warnings = list(warnings)
+        related_actions = self._filter_actions(related_warnings, actions)
+        risk_level, recommended_action = self._pick_max_risk(related_warnings)
+        reason_summary = self._merge_reasons(related_warnings)
+        audio_clause = self._audio_descriptor(evidence)
+        summary = self._build_audio_summary(
+            audio_session_id, risk_level, recommended_action,
+            reason_summary, related_actions, audio_clause,
+        )
+        enter, leave, duration = self._audio_window(related_warnings, evidence)
+        return EpisodicRecord(
+            record_id=f"ep-{audio_session_id}",
+            visitor_instance_id=None,  # 纯音频匿名，绝不反填 visitor（D4）
+            person_identity_id=None,
+            enter_time=enter,
+            leave_time=leave,
+            duration_seconds=duration,
+            risk_level=risk_level,
+            recommended_action=recommended_action,
+            reason_summary=reason_summary,
+            actions=[self._to_action_summary(c) for c in related_actions],
+            evidence_refs=self._collect_evidence_ids(evidence),
+            modalities=self._infer_modalities(None, evidence),
+            audio_session_id=audio_session_id,
+            source_event_ids=self._collect_audio_source_ids(
+                related_warnings, related_actions, evidence
+            ),
+            summary=summary,
+            model_version=self.MODEL_VERSION,
+        )
+
+    def _build_audio_summary(
+        self,
+        audio_session_id: str,
+        risk_level: str | None,
+        recommended_action: str | None,
+        reason_summary: list[str],
+        related_actions: list[ActionCommand],
+        audio_clause: str | None,
+    ) -> str:
+        """纯音频 episode summary（确定性，无 LLM）。"""
+        base = f"音频异常会话（会话 {audio_session_id}）"
+        if risk_level is not None:
+            base += f"，风险等级 {risk_level}"
+            if reason_summary:
+                base += f"（{' / '.join(reason_summary)}）"
+        action_phrase = self._build_action_phrase(related_actions, recommended_action)
+        if action_phrase:
+            base += f"，{action_phrase}"
+        if audio_clause:
+            base += f"，含音频异常：{audio_clause}"
+        return base + "。"
+
+    @staticmethod
+    def _collect_audio_source_ids(
+        warnings: list[WarningEvent],
+        actions: list[ActionCommand],
+        evidence: list[EvidenceItem],
+    ) -> list[str]:
+        """纯音频 episode 的 I4 溯源：warning_id + action_id + evidence_id。"""
+        ids: list[str] = [str(w.warning_id) for w in warnings]
+        ids += [str(a.command_id) for a in actions]
+        ids += [e.evidence_id for e in evidence]
+        return ids
+
+    @staticmethod
+    def _audio_window(
+        warnings: list[WarningEvent],
+        evidence: list[EvidenceItem],
+    ) -> tuple[datetime, datetime, float]:
+        """纯音频 episode 窗口：由 evidence.captured_at / warning.created_at 派生。"""
+        times: list[datetime] = [e.captured_at for e in evidence]
+        times += [w.created_at for w in warnings]
+        if not times:
+            now = now_dt()
+            return now, now, 0.0
+        enter = min(times)
+        leave = max(times)
+        return enter, leave, float((leave - enter).total_seconds())
