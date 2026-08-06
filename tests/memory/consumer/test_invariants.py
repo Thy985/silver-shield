@@ -39,7 +39,7 @@ from home_perception.memory.consumer.contracts import CurrentEvent, ReasoningInp
 from home_perception.memory.consumer.orchestrator import RuleBasedMemoryConsumer
 from home_perception.memory.consumer.replay_dataset import MemoryReplayDataset
 from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
-from home_perception.memory.records import ActionSummary, EpisodicRecord, EvidenceRef
+from home_perception.memory.records import ActionSummary, EpisodicRecord
 from home_perception.memory.store import InMemoryStore
 
 VISITOR = "visitor-c5"
@@ -58,7 +58,7 @@ def _make_record(
     risk_level: str | None = None,
     reasons: list[str] | None = None,
     actions: list[ActionSummary] | None = None,
-    evidence: list[EvidenceRef] | None = None,
+    evidence: list[str] | None = None,
 ) -> EpisodicRecord:
     leave = enter + timedelta(minutes=5)
     return EpisodicRecord(

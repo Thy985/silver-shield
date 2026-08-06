@@ -25,7 +25,6 @@ from home_perception.memory.consumer.contracts import (
     ActionRecord,
     ConflictFlag,
     CurrentEvent,
-    EvidenceRef,
     ReasoningInput,
     RiskPattern,
     VisitorProfile,
@@ -160,8 +159,8 @@ class ProvisionalContextAssembler:
                     )
         return list(seen.values())
 
-    def _evidence_refs(self, history: list[EpisodicRecord]) -> list[EvidenceRef]:
-        refs: list[EvidenceRef] = []
+    def _evidence_refs(self, history: list[EpisodicRecord]) -> list[str]:
+        refs: list[str] = []
         for ep in history:
             refs.extend(ep.evidence_refs)
         return refs

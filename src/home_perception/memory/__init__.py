@@ -2,7 +2,9 @@
 
 > 本模块按 ADR-0024 三类记忆模型 + Memory Policy 抽象组织：
 > - `records.py`：Memory 领域对象 dataclass（ShortTermRecord / EpisodicRecord /
->   SemanticAggregate）+ MemoryStatus 枚举 + ActionSummary / EvidenceRef 辅助类型
+>   SemanticAggregate）+ MemoryStatus 枚举 + ActionSummary 辅助类型
+> - 证据模型 `EvidenceItem` / `EvidenceModality` / `RetentionTier` 由 `core/event.py`
+>   统一提供（ADR-0027 Slice A），`EpisodicRecord.evidence_refs` 仅持 evidence_id 字符串
 > - `policy.py`：MemoryPolicy ABC（转换边界，ADR-0024 §3.2）
 > - `short_term_policy.py`：DefaultShortTermPolicy（transform_short_term 实现，Slice 2）
 >
@@ -24,6 +26,7 @@
 
 from __future__ import annotations
 
+from ..core.event import EvidenceItem, EvidenceModality, RetentionTier
 from .cold_start import ColdStartConfidence, ColdStartCoordinator, RecoveryResult
 from .episode_builder import DefaultEpisodeBuilder
 from .policy import MemoryPolicy
@@ -31,7 +34,6 @@ from .query import MemoryQuery
 from .records import (
     ActionSummary,
     EpisodicRecord,
-    EvidenceRef,
     MemoryStatus,
     RecordIdPrefix,
     SemanticAggregate,
@@ -54,13 +56,15 @@ __all__ = [
     "DefaultEpisodeBuilder",
     "DefaultShortTermPolicy",
     "EpisodicRecord",
-    "EvidenceRef",
+    "EvidenceItem",
+    "EvidenceModality",
     "MemoryPolicy",
     "MemoryQuery",
     "MemoryStatus",
     "RecentBehaviorSnapshot",
     "RecordIdPrefix",
     "RecoveryResult",
+    "RetentionTier",
     "RuntimeSnapshot",
     "SemanticAggregate",
     "ShortTermRecord",

@@ -33,7 +33,7 @@ from home_perception.memory.consumer.exceptions import (
 from home_perception.memory.consumer.interfaces import Aggregation, ContextBuilder, Retrieval
 from home_perception.memory.consumer.orchestrator import RuleBasedMemoryConsumer
 from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
-from home_perception.memory.records import ActionSummary, EpisodicRecord, EvidenceRef
+from home_perception.memory.records import ActionSummary, EpisodicRecord
 from home_perception.memory.store import InMemoryStore
 
 VISITOR = "visitor-c4"
@@ -51,7 +51,7 @@ def _make_record(
     risk_level: str | None = None,
     reasons: list[str] | None = None,
     actions: list[ActionSummary] | None = None,
-    evidence: list[EvidenceRef] | None = None,
+    evidence: list[str] | None = None,
 ) -> EpisodicRecord:
     leave = enter + timedelta(minutes=5)
     return EpisodicRecord(
@@ -395,8 +395,8 @@ class TestC3Determinism:
 # ============================================================================
 
 
-def _evidence(eid: str) -> EvidenceRef:
-    return EvidenceRef(evidence_id=eid, modality="vision", captured_at=_H1, uri=f"file://{eid}")
+def _evidence(eid: str) -> str:
+    return eid
 
 
 def _action(cid: str, ctype: str = "SEND_FAMILY_MESSAGE") -> ActionSummary:
@@ -439,7 +439,7 @@ class TestEvidenceAndActions:
             ]
         )
         out = consumer.consume(_make_event())
-        assert [e.evidence_id for e in out.evidence_refs] == ["ev-a", "ev-b"]
+        assert list(out.evidence_refs) == ["ev-a", "ev-b"]
 
     def test_evidence_empty_for_v1_records(self):
         """v1 Episode Builder 不填证据 → evidence_refs 为空（现状事实断言）。"""

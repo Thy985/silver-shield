@@ -15,7 +15,8 @@
 - 枚举闭合：MemoryStatus(4) 值不漂移
 - 字段闭合：to_dict 键集合恒定
 - v1 约束：EpisodicRecord.person_identity_id 恒 None
-- 辅助类型：ActionSummary / EvidenceRef 校验
+- 辅助类型：ActionSummary 校验
+- evidence_refs：ADR-0027 Slice A 起为 evidence_id 字符串列表（独立 EvidenceItem 以 ID 解析）
 """
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ from home_perception.memory.records import (
     SHORT_TERM_RECORD_DICT_KEYS,
     ActionSummary,
     EpisodicRecord,
-    EvidenceRef,
     MemoryStatus,
     RecordIdPrefix,
     SemanticAggregate,
@@ -322,7 +322,7 @@ class TestEpisodicRecord:
         assert records_equal(rec, revived)
 
     def test_roundtrip_with_actions_and_evidence(self):
-        """嵌套 ActionSummary / EvidenceRef 也能往返。"""
+        """嵌套 ActionSummary + evidence_refs（evidence_id 字符串列表）也能往返。"""
         rec = _make_episodic(
             actions=[
                 ActionSummary(
@@ -331,19 +331,12 @@ class TestEpisodicRecord:
                     status="CONFIRMED",
                 ),
             ],
-            evidence_refs=[
-                EvidenceRef(
-                    evidence_id="ev-001",
-                    modality="vision",
-                    captured_at=T1,
-                    uri="data/evidence/clip-001.mp4",
-                ),
-            ],
+            evidence_refs=["ev-001", "ev-002"],
         )
         revived = EpisodicRecord.from_dict(rec.to_dict())
         assert records_equal(rec, revived)
         assert revived.actions[0].command_type == "NOTIFY_FAMILY"
-        assert revived.evidence_refs[0].evidence_id == "ev-001"
+        assert revived.evidence_refs == ["ev-001", "ev-002"]
 
 
 # ============================================================================
@@ -456,42 +449,37 @@ class TestActionSummary:
 
 
 # ============================================================================
-# EvidenceRef
+# EpisodicRecord.evidence_refs（ADR-0027 Slice A：evidence_id 字符串列表）
 # ============================================================================
 
 
-class TestEvidenceRef:
-    def test_construct(self):
-        e = EvidenceRef(
-            evidence_id="ev-001",
-            modality="vision",
-            captured_at=T1,
-            uri="data/evidence/clip-001.mp4",
-        )
-        assert e.evidence_id == "ev-001"
-        assert e.uri.endswith("clip-001.mp4")
+class TestEpisodicEvidenceRefs:
+    """``evidence_refs`` 在 ADR-0027 Slice A 起为 evidence_id 字符串列表。
 
-    def test_evidence_id_empty_rejected(self):
-        with pytest.raises(ValueError, match="evidence_id 不能为空"):
-            EvidenceRef(evidence_id="", modality="vision", captured_at=T1)
+    独立 ``EvidenceItem`` 以 ID 解析（ADR-0024 I2 单调性）；episode 仅持引用，
+    不内联证据对象。v1 持久化可能是 ``EvidenceRef.to_dict()`` 字典列表，
+    ``from_dict`` 须向后兼容（D8）。
+    """
 
-    def test_modality_empty_rejected(self):
-        with pytest.raises(ValueError, match="modality 不能为空"):
-            EvidenceRef(evidence_id="ev", modality="", captured_at=T1)
+    def test_evidence_refs_is_str_list_roundtrip(self):
+        rec = _make_episodic(evidence_refs=["ev-001", "ev-002"])
+        revived = EpisodicRecord.from_dict(rec.to_dict())
+        assert records_equal(rec, revived)
+        assert revived.evidence_refs == ["ev-001", "ev-002"]
 
-    def test_naive_captured_at_rejected(self):
-        naive = datetime(2026, 7, 28, 18, 30, 0)  # noqa: DTZ001 (naive test)
-        with pytest.raises(ValueError, match="timezone-aware"):
-            EvidenceRef(evidence_id="ev", modality="vision", captured_at=naive)
-
-    def test_roundtrip(self):
-        e = EvidenceRef(
-            evidence_id="ev-001",
-            modality="audio",
-            captured_at=T1,
-        )
-        revived = EvidenceRef.from_dict(e.to_dict())
-        assert e == revived
+    def test_from_dict_coerces_v1_evidence_ref_dicts(self):
+        """D8 向后兼容：v1 字典格式的 evidence_refs 仅提取 evidence_id。"""
+        payload = _make_episodic(evidence_refs=[]).to_dict()
+        payload["evidence_refs"] = [
+            {
+                "evidence_id": "ev-001",
+                "modality": "vision",
+                "captured_at": T1.isoformat(),
+                "uri": "data/evidence/clip-001.mp4",
+            }
+        ]
+        revived = EpisodicRecord.from_dict(payload)
+        assert revived.evidence_refs == ["ev-001"]
 
 
 # ============================================================================

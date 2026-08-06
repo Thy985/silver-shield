@@ -75,7 +75,7 @@ class VisitorEvent:
     - `risk_level` / `score` —— P0-7 Rule Engine
     - `visit_type` / `is_suspicious` —— P0-7 Rule Engine
     - `repeat_count` —— P0-7 Feature Extraction
-    - `evidence` / `EvidenceRef` —— P0-8 取证
+    - `evidence` / `EvidenceItem` —— P0-8 取证
 
     关键边界（写入 __post_init__ 强制）：
     1. `duration_seconds` 必须 >= 0

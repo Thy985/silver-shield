@@ -21,7 +21,6 @@ from home_perception.memory.consumer.contracts import (
     ActionRecord,
     ConflictFlag,
     CurrentEvent,
-    EvidenceRef,
     ReasoningInput,
     RiskPattern,
     VisitorProfile,
@@ -44,7 +43,7 @@ class RuleBasedContextBuilder(ContextBuilder):
         records: list[EpisodicRecord],
         profile: VisitorProfile | None,
         pattern: RiskPattern | None,
-        evidence_refs: tuple[EvidenceRef, ...],
+        evidence_refs: tuple[str, ...],
         previous_actions: tuple[ActionRecord, ...],
         conflicts: tuple[ConflictFlag, ...],
     ) -> ReasoningInput:

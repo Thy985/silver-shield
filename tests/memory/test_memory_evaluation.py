@@ -196,12 +196,13 @@ def test_information_retention_all_required_fields():
     - 发生什么 → summary
     - 风险 → risk_level / reason_summary
     - 处理 → actions / recommended_action
-    - 证据 → source_event_ids（v1 必须非空；evidence_refs v1 恒空）
+    - 证据 → source_event_ids（v1 必须非空；evidence_refs v1 恒为空 list[str]，
+      ADR-0027 Slice A 起为 evidence_id 字符串列表，独立 EvidenceItem 以 ID 解析）
     - 模型版本 → model_version
     - 是否可信 → memory_status
 
-    ⚠️ v2 需更新：`evidence_refs` 的空断言锁定 v1 行为，ADR-0022 落地后应改为
-    断言证据项非空。
+    ⚠️ 演进提示：``evidence_refs`` 的空断言锁定 v1 行为；待 Slice B Episode Builder
+    接入 ``EvidenceItem`` 并填充 evidence_id 后，应改为断言证据 ID 非空。
     """
     builder = DefaultEpisodeBuilder()
     store = InMemoryStore()
@@ -232,7 +233,7 @@ def test_information_retention_all_required_fields():
     assert rec.recommended_action is not None
     # 证据（v1：source_event_ids 必须非空）
     assert rec.source_event_ids, "I4：source_event_ids 必须非空（可追溯）"
-    assert rec.evidence_refs == [], "v1 不做证据聚合（ADR-0022 未落地）"
+    assert rec.evidence_refs == [], "v1 不做证据聚合：evidence_refs 恒为空 list[str]（ADR-0027 Slice A）"
     # 模型版本
     assert rec.model_version and rec.model_version.strip()
     # 是否可信
