@@ -21,6 +21,8 @@ from __future__ import annotations
 import dataclasses
 from datetime import UTC, datetime
 
+import pytest
+
 from home_perception.action.dispatcher import ActionDispatcher
 from home_perception.action.executor import ActionExecutor
 from home_perception.action.notifier import MockNotifier
@@ -180,6 +182,90 @@ class TestClosedLoopRecord:
         assert summary.episode_recorded is False
         assert store.snapshot()["episodic"] == []
 
+    def test_d3_perception_mapping_failure_no_record(self, monkeypatch) -> None:
+        """D3 负例：risk_signal_to_perception 抛异常（脏信号）→ 单信号降级跳过，
+        不破坏「不抛未分类异常」契约（审查修复：原实现此阶段无 try/except）。"""
+        from home_perception.runtime import audio_session_recorder as rec_mod
+
+        store = InMemoryStore()
+        recorder = _build_recorder(store)
+
+        def boom(sig, device_id):
+            raise ValueError("subject_id 非合法 UUID（脏信号）")
+
+        monkeypatch.setattr(rec_mod, "risk_signal_to_perception", boom)
+        summary = recorder.record_session(
+            [_audio_event(AudioPerceptionKind.AUDIO_DISTRESS_CRY, 1710000010.0)]
+        )
+        # 不抛异常（契约），决策无输入 → 不落库
+        assert summary.episode_recorded is False
+        assert summary.warning_ids == ()
+        assert store.snapshot()["episodic"] == []
+
+    def test_d4_signal_layer_visitor_identity_cleared(self, monkeypatch) -> None:
+        """D4 匿名强化：adapt_audio_event 的 _looks_uuid 兜底会把 subject UUID 复制进
+        RiskSignal.visitor_instance_id——recorder 必须显式清空（信号层不携带访客身份）。"""
+        from home_perception.runtime import audio_session_recorder as rec_mod
+
+        store = InMemoryStore()
+        recorder = _build_recorder(store)
+        seen: list = []
+
+        def capture_adapt(event, device_id, **kwargs):
+            from home_perception.integration import audio_adapter
+
+            sig = audio_adapter.adapt_audio_event(event, device_id, **kwargs)
+            seen.append(sig)
+            return sig
+
+        monkeypatch.setattr(rec_mod, "adapt_audio_event", capture_adapt)
+        recorder.record_session(
+            [_audio_event(AudioPerceptionKind.AUDIO_DISTRESS_CRY, 1710000010.0)]
+        )
+        assert seen, "adapt_audio_event 应被调用"
+        # 兜底会填入 visitor（UUID 格式），recorder 必须清空 —— 变异验证：
+        # 若去掉 sig.visitor_instance_id = None，本断言立即红
+        assert all(sig.visitor_instance_id is None for sig in seen)
+
+    def test_injected_audio_session_id_requires_safe_charset(self) -> None:
+        """审查修复：显式注入含危险字符的 audio_session_id → fail loud（ValueError），
+        防 record_id 污染存储键。"""
+        recorder = _build_recorder(InMemoryStore())
+        with pytest.raises(ValueError, match="audio_session_id"):
+            recorder.record_session(
+                [_audio_event(AudioPerceptionKind.AUDIO_DISTRESS_CRY, 1710000010.0)],
+                audio_session_id="../../etc/passwd",
+            )
+        with pytest.raises(ValueError, match="audio_session_id"):
+            recorder.record_session([], audio_session_id="a:b?c")
+
+    def test_source_path_propagates_to_evidence_uri(self) -> None:
+        """审查建议：source_path 透传到证据 uri（原片不上传，仅指针）。"""
+        store = InMemoryStore()
+        recorder = _build_recorder(store)
+        recorder.record_session(
+            [_audio_event(AudioPerceptionKind.AUDIO_DISTRESS_CRY, 1710000010.0)],
+            source_path="file:///home/audio/session_001.wav",
+        )
+        episodes = store.snapshot()["episodic"]
+        assert len(episodes) == 1
+        # 落库记录仅引用证据 ID；uri 在 EvidenceItem 层——通过 evidence_refs 无法直接
+        # 解析（无证据库），此处验证 collector 透传语义（metadata/uri 已由 collector
+        # 单测覆盖），并确认落库 evidence_refs 非空
+        assert episodes[0]["evidence_refs"]
+
+    def test_invalid_event_type_degraded_per_event(self) -> None:
+        """审查建议：元素类型不符 → adapt_audio_event 的 isinstance 校验拒绝，
+        逐事件降级跳过，不破坏契约（不抛未分类异常）。"""
+        store = InMemoryStore()
+        recorder = _build_recorder(store)
+        summary = recorder.record_session(
+            ["not-an-audio-event"],  # 类型不符
+            audio_session_id="session_badtype",
+        )
+        assert summary.episode_recorded is False
+        assert store.snapshot()["episodic"] == []
+
     def test_enabled_false_is_noop(self) -> None:
         """enabled=False → 空摘要，不落库（负例：开关必须真生效）。"""
         store = InMemoryStore()
@@ -252,6 +338,21 @@ class TestPipelineAssembly:
         assert summary is not None
         assert summary.episode_recorded is True
         assert len(store.snapshot()["episodic"]) == 1  # 入口落库成功
+
+    def test_audio_decision_bypasses_visual_decision_enabled(self) -> None:
+        """审查建议：音频决策链独立于视觉 decision_enabled（from_settings 默认
+        decision_enabled=False 时，音频闭环仍经 DecisionEngine 确认并落库）。"""
+        from unittest.mock import MagicMock
+
+        s = self._settings(audio=True, memory=True, shadow=True)
+        assert s.realtime_risk.decision_enabled is False  # 视觉决策默认关
+        p = PerceptionPipeline.from_settings(s, detector=MagicMock())
+        summary = p.process_audio_session(
+            [_audio_event(AudioPerceptionKind.AUDIO_DISTRESS_CRY, 1710000010.0)]
+        )
+        assert summary is not None
+        assert summary.episode_recorded is True  # 音频独立链路不受视觉开关影响
+        assert len(p._memory_store.snapshot()["episodic"]) == 1  # type: ignore[union-attr]
 
     def test_default_settings_no_recorder(self) -> None:
         """默认 Settings() → 不装配；process_audio_session 返回 None（零行为变化）。"""

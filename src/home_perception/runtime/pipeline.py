@@ -54,6 +54,7 @@ from ..analysis.risk_signal import RiskSignal, SignalTransition
 from ..analysis.rule_engine import RuleEngine
 from ..analysis.signal_adapter import risk_signal_to_perception
 from ..analysis.warning import WarningEvent
+from ..audio.event import AudioPerceptionEvent
 from ..common.logging import get_logger
 from ..core.config import MemoryConfig, Settings
 from ..detection.detector import Detection, DetectionResult, YOLODetector
@@ -546,6 +547,12 @@ class PerceptionPipeline:
         # decision_engine / executor；memory_hook 单例由本段先建，视觉/音频两路共享
         # 同一实例与 metrics）。音频决策经既有 DecisionEngine（单一决策中心，D3
         # 门槛），不新增音频记忆孤岛。
+        #
+        # ⚠️ 共享单例的隐含假设（审查）：pipeline_metrics 同时作为 MemoryHook 构造
+        # 参数与 cls(metrics=...) 传入，视觉/音频两路共用同一 PipelineMetrics 实例
+        # （self.metrics is self._memory_hook._metrics 恒真）。**本段之后不得再
+        # 覆写 metrics**——若未来某处出现 `self.metrics = PipelineMetrics()` 会分裂
+        # 计数，测试 test_shared_memory_hook_single_instance 会立即红。
         audio_recorder: AudioSessionRecorder | None = None
         pipeline_memory_hook: MemoryHook | None = None
         pipeline_metrics = PipelineMetrics()
@@ -894,24 +901,36 @@ class PerceptionPipeline:
 
     def process_audio_session(
         self,
-        events: list[object],
+        events: list[AudioPerceptionEvent],
         *,
         audio_session_id: str | None = None,
         source_path: str | None = None,
     ) -> AudioSessionSummary | None:
         """收割一次音频会话（ADR-0027 运行时接线，独立 Audio Loop 入口）。
 
-        仅当 ``audio.enabled`` + Memory 影子激活（``from_settings`` 装配了
-        ``AudioSessionRecorder``）时可用；未装配时返回 ``None``（零行为变化）。
+        Args:
+            events: 会话内 ``AudioPerceptionEvent`` 列表（元素类型不符会在
+                ``AudioSessionRecorder.record_session`` 内经 ``adapt_audio_event``
+                的 ``isinstance`` 校验拒绝——与既有适配器契约一致，逐事件降级跳过）。
+            audio_session_id: 会话身份；缺省由 recorder 工厂生成。
+            source_path: 可选音频源路径，透传证据 ``uri``。
 
-        音频不随视频帧同步调用（ADR-0026 §8）：调用方在音频会话结束时机（如一段
-        音频跑完 / 静默超时）喂入会话内 ``AudioPerceptionEvent`` 列表，本方法经
-        既有决策链（D3 门槛：无 WarningEvent 不记录）落库为纯音频
+        Returns:
+            ``AudioSessionSummary``；未装配 / 禁用时返回 ``None``（零行为变化）。
+
+        仅当 ``audio.enabled`` + Memory 影子激活（``from_settings`` 装配了
+        ``AudioSessionRecorder``）时可用。音频不随视频帧同步调用（ADR-0026 §8）：
+        调用方在音频会话结束时机（如一段音频跑完 / 静默超时）喂入事件列表，本方法
+        经既有决策链（D3 门槛：无 WarningEvent 不记录）落库为纯音频
         ``EpisodicRecord``（D4 匿名：``visitor_instance_id=None``）。
+
+        门控真值表（两层检查语义不同，均返回 None）：
+        - ``audio_recorder is None``：未装配（``from_settings`` 中 audio.enabled /
+          memory 影子任一未激活）；
+        - ``audio_recorder.enabled is False``：装配但被禁用（仅手工构造 recorder
+          时可达；``from_settings`` 不构造 disabled recorder，故两路等价）。
         """
-        if self._audio_recorder is None:
-            return None
-        if not self._audio_recorder.enabled:
+        if self._audio_recorder is None or not self._audio_recorder.enabled:
             return None
         return self._audio_recorder.record_session(
             events, audio_session_id=audio_session_id, source_path=source_path

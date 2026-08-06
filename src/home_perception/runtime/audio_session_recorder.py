@@ -126,20 +126,31 @@ class AudioSessionRecorder:
         Args:
             events: 会话内的音频感知事件（可空）。
             audio_session_id: 会话身份；缺省由 ``session_id_factory`` 生成
-                （测试可注入固定值保证确定性）。
+                （测试可注入固定值保证确定性）。**显式注入时须为安全标识符**
+                （仅 ``[A-Za-z0-9_-]``）——它直接进入 ``record_id = f"ep-{...}"``，
+                含路径/分隔符等危险字符会污染存储键（fail loud，不静默放行）。
             source_path: 可选音频源路径，透传给证据 ``uri``（原片不上传，ADR-0002 §3.3）。
 
         Returns:
-            ``AudioSessionSummary``（非分数、非决策）。
+            ``AudioSessionSummary``（非分数、非决策）。字段语义：
+            - ``n_events`` = **输入**音频感知事件数（非证据数）；
+            - ``evidence_ids`` = **成功采集**的证据数（单事件采集失败会被跳过，
+              可能少于 ``n_events``）；
+            - ``warning_ids`` = 经决策确认的 WarningEvent id（空 = 未过 D3 门槛）。
 
         Raises:
-            不抛未分类异常：任何阶段失败降级为「空警告、不落库」并记日志（C2）。
+            ValueError: ``audio_session_id`` 显式注入且含非安全字符。
+            不抛其他未分类异常：任何阶段失败降级为「空警告、不落库」并记日志（C2）。
         """
         if not self._enabled:
+            # 开关关闭：不生成 session_id（零资源消耗）——与「业务空会话」刻意区分
             return self._empty_summary("")
         events = list(events)
         session_id = audio_session_id or self._session_id_factory()
+        if audio_session_id is not None:
+            self._validate_session_id(session_id)
         if not events:
+            # 业务空会话：session_id 已生成（可审计「有一次空收割尝试」）
             return self._empty_summary(session_id)
 
         # 1) 证据收集（每事件一个 AUDIO EvidenceItem；audio_kind 语义写入 metadata，
@@ -153,13 +164,26 @@ class AudioSessionRecorder:
                 evidence.append(item)
             except Exception as exc:  # noqa: BLE001  # 单事件证据失败：跳过该证据
                 log.warning(
-                    "audio.recorder.evidence_failed", event_id=ev.event_id, error=str(exc)
+                    "audio.recorder.evidence_failed",
+                    event_id=getattr(ev, "event_id", None),
+                    error=str(exc),
                 )
         if not evidence:
+            # 输入非空但全部采集失败：与「业务空会话」同形状（n_events=0 表示无有效
+            # 证据），但日志区分可观测性（输入数可见），调用方无需区分两类降级。
+            log.warning(
+                "audio.recorder.evidence_all_failed",
+                session_id=session_id,
+                n_inputs=len(events),
+            )
             return self._empty_summary(session_id)
 
         # 2) 信号翻译（AudioPerceptionEvent → RiskSignal；D3 门槛的入站契约）
-        #    会话级 subject UUID：仅作决策上下文，绝不写进 episode（D4 匿名）。
+        #    会话级 subject UUID：仅作决策上下文（risk_signal_to_perception 从
+        #    subject_id 派生 PerceptionEvent.visitor_id），**绝不写进 episode**
+        #    （D4 匿名）。adapt_audio_event 的 ``_looks_uuid`` 兜底会把 subject_id
+        #    复制进 ``visitor_instance_id``（便利冗余字段）——这里**显式清空**，
+        #    从信号源头杜绝未来 WarningEvent/ActionCommand 传导访客身份。
         subject_id = uuid4()
         signals = []
         for ev in events:
@@ -169,17 +193,32 @@ class AudioSessionRecorder:
                     self._device_id,
                     subject_id=subject_id,
                 )
+                sig.visitor_instance_id = None  # D4 匿名：信号层不携带访客身份
                 if sig.transition is SignalTransition.RAISED:
                     signals.append(sig)
             except Exception as exc:  # noqa: BLE001  # 单事件翻译失败：跳过
                 log.warning(
-                    "audio.recorder.adapt_failed", event_id=ev.event_id, error=str(exc)
+                    "audio.recorder.adapt_failed",
+                    event_id=getattr(ev, "event_id", None),
+                    error=str(exc),
                 )
 
         # 3) 感知映射 + 决策（复用既有 DecisionEngine，单一决策中心）
+        #    感知映射与决策同层降级：risk_signal_to_perception 可能抛 ValueError
+        #    （subject_id 非合法 UUID 等脏信号），单信号失败只跳过该信号，绝不
+        #    上抛破坏「不抛未分类异常」契约。
         percs: list[PerceptionEvent] = []
         for sig in signals:
-            perc = risk_signal_to_perception(sig, self._device_id)
+            try:
+                perc = risk_signal_to_perception(sig, self._device_id)
+            except Exception as exc:  # noqa: BLE001  # 单信号映射失败：跳过
+                log.warning(
+                    "audio.recorder.perception_failed",
+                    session_id=session_id,
+                    signal_id=getattr(sig, "signal_id", None),
+                    error=str(exc),
+                )
+                continue
             if perc is not None:
                 percs.append(perc)
         warning: WarningEvent | None = None
@@ -234,6 +273,21 @@ class AudioSessionRecorder:
         )
 
     # -- 内部 ---------------------------------------------------------------
+    @staticmethod
+    def _validate_session_id(session_id: str) -> None:
+        """校验显式注入的会话 ID 为安全标识符（fail loud，防 record_id 污染）。
+
+        ``record_id = f"ep-{audio_session_id}"`` 直接进入存储键（episode_builder），
+        含路径分隔符 / 冒号 / 引号等危险字符虽过 I1 非空校验，却可能污染存储层。
+        仅允许 ``[A-Za-z0-9_-]``（与默认工厂 ``uuid4().hex`` 同安全级别）。
+        """
+        import re
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+            raise ValueError(
+                f"audio_session_id 必须是安全标识符（仅 [A-Za-z0-9_-]），收到 {session_id!r}"
+            )
+
     def _empty_summary(self, session_id: str) -> AudioSessionSummary:
         return AudioSessionSummary(
             session_id=session_id,
