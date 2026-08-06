@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import Any
 
 
@@ -54,12 +57,17 @@ class RetentionTier(str, Enum):
     LONG = "long"
 
 
-@dataclass
+@dataclass(frozen=True)
 class EvidenceItem:
     """独立存储的不可变证据对象（ADR-0022 / ADR-0027 D2）。
 
     与 ``EpisodicRecord.evidence_refs`` 解耦：episode 仅以 ``evidence_id`` 字符串引用，
     本对象存于独立证据库，按 ID 解析（ADR-0024 I2 单调性：不可变事实，uri 永不被改写）。
+
+    **不可变契约（ADR-0024 I2）**：本类型以 ``@dataclass(frozen=True)`` 声明，构造后
+    任何字段赋值（``item.uri = ...``）均抛 ``FrozenInstanceError``；``metadata`` 以
+    ``MappingProxyType`` 封装，外部 ``item.metadata["x"] = ...`` 同样被拒绝，确保已
+    持久化的 episode 引用不会解析到被篡改内容。
 
     字段：
     - ``evidence_id``：全局唯一，被 ``EpisodicRecord.evidence_refs`` 引用
@@ -67,8 +75,8 @@ class EvidenceItem:
     - ``kind``：模态内类型（segment / clip / snapshot / pose_* / ...）
     - ``uri``：本地路径 / 片段 id（原片不上传，ADR-0002 §3.3）
     - ``captured_at``：采集时刻（UTC）
-    - ``confidence``：置信度 [0,1]，未知为 None（绝不伪造 1.0）
-    - ``metadata``：模态内附加（如 audio kind / score / duration）
+    - ``confidence``：置信度 [0,1] 且有限，未知为 None（绝不伪造 1.0；拒绝 NaN）
+    - ``metadata``：模态内附加（如 audio kind / score / duration），只读 Mapping
     - ``retention_tier``：留存层级（D9）
     - ``expires_at``：到期时刻（SHORT/MEDIUM 计算；LONG=None 永久）
     """
@@ -79,7 +87,7 @@ class EvidenceItem:
     uri: str | None = None
     captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     confidence: float | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
     retention_tier: RetentionTier = RetentionTier.SHORT
     expires_at: datetime | None = None
 
@@ -93,11 +101,14 @@ class EvidenceItem:
         if self.captured_at.tzinfo is None:
             raise ValueError("captured_at 必须是 timezone-aware（UTC）")
         if self.confidence is not None:
-            if not (0.0 <= float(self.confidence) <= 1.0):
-                raise ValueError(f"confidence 必须在 [0, 1] 或 None，收到 {self.confidence}")
-            self.confidence = float(self.confidence)
-        if not isinstance(self.metadata, dict):
-            raise TypeError(f"metadata 必须是 dict，收到 {type(self.metadata).__name__}")
+            # 必须先 isfinite 再范围检查：NaN 的比较恒为 False，会绕过 [0,1] 校验
+            if not math.isfinite(self.confidence) or not (0.0 <= self.confidence <= 1.0):
+                raise ValueError(f"confidence 必须是 [0, 1] 内有限值或 None，收到 {self.confidence}")
+            object.__setattr__(self, "confidence", float(self.confidence))
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError(f"metadata 必须是 Mapping，收到 {type(self.metadata).__name__}")
+        # 冻结为只读视图：外部对 dict 的后续修改不波及内部；字段本身因 frozen 不可重绑定
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
         if not isinstance(self.retention_tier, RetentionTier):
             raise TypeError(
                 f"retention_tier 必须是 RetentionTier，收到 {self.retention_tier!r}"

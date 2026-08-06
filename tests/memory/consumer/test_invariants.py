@@ -38,6 +38,7 @@ from home_perception.memory.consumer.context import RuleBasedContextBuilder
 from home_perception.memory.consumer.contracts import CurrentEvent, ReasoningInput
 from home_perception.memory.consumer.orchestrator import RuleBasedMemoryConsumer
 from home_perception.memory.consumer.replay_dataset import MemoryReplayDataset
+from home_perception.memory.consumer.replay_layer import ProvisionalContextAssembler
 from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
 from home_perception.memory.records import ActionSummary, EpisodicRecord
 from home_perception.memory.store import InMemoryStore
@@ -417,6 +418,19 @@ class TestReplayConsistency:
         assert out.visitor_profile is not None
         assert out.visitor_profile.visit_count == 5
         assert out.visitor_profile.night_visit_ratio == 1.0
+
+    def test_replay_evidence_refs_deduped_by_id(self):
+        """回放路径必须按 evidence_id 去重，与生产编排器行为一致（ADR-0027 Slice A 审查 P1）。
+
+        两条历史 Episode 都引用 ev-1 时，回放应返回 ["ev-1", "ev-2", "ev-3"]
+        （去重保序），而非 ["ev-1", "ev-2", "ev-1", "ev-3"] —— 否则与生产
+        ``MemoryOrchestrator._collect_evidence`` 不一致，会重复下游解析/展示。
+        """
+        h1 = _make_record("ep-1", datetime(2026, 8, 1, 9, 0, tzinfo=UTC), evidence=["ev-1", "ev-2"])
+        h2 = _make_record("ep-2", datetime(2026, 8, 1, 10, 0, tzinfo=UTC), evidence=["ev-1", "ev-3"])
+        refs = ProvisionalContextAssembler()._evidence_refs([h1, h2])
+        assert refs == ["ev-1", "ev-2", "ev-3"]
+        assert len(refs) == len(set(refs))  # 无重复
 
     def test_case_002_behavior_escalation_pattern(self):
         """单看当前得不到的行为升级模式被聚合出来（escalating_behavior）。"""

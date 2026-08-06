@@ -481,6 +481,35 @@ class TestEpisodicEvidenceRefs:
         revived = EpisodicRecord.from_dict(payload)
         assert revived.evidence_refs == ["ev-001"]
 
+    # ------------------------------------------------------------------
+    # ADR-0027 Slice A 审查（P2）：非法 ID 必须显式拒绝，禁止静默进入 v2
+    # ------------------------------------------------------------------
+    def test_direct_construct_rejects_non_str_id(self):
+        with pytest.raises(ValueError, match="evidence_refs"):
+            _make_episodic(evidence_refs=["ev-1", 123])  # type: ignore[list-item]
+
+    def test_direct_construct_rejects_empty_id(self):
+        with pytest.raises(ValueError, match="evidence_refs"):
+            _make_episodic(evidence_refs=["ev-1", ""])
+
+    def test_from_dict_rejects_non_str_dict_id(self):
+        payload = _make_episodic(evidence_refs=[]).to_dict()
+        payload["evidence_refs"] = [{"evidence_id": 123, "modality": "vision"}]
+        with pytest.raises(ValueError, match="evidence_refs"):
+            EpisodicRecord.from_dict(payload)
+
+    def test_from_dict_rejects_empty_str_dict_id(self):
+        payload = _make_episodic(evidence_refs=[]).to_dict()
+        payload["evidence_refs"] = [{"evidence_id": ""}]
+        with pytest.raises(ValueError, match="evidence_refs"):
+            EpisodicRecord.from_dict(payload)
+
+    def test_from_dict_rejects_non_list(self):
+        payload = _make_episodic(evidence_refs=[]).to_dict()
+        payload["evidence_refs"] = "ev-1"
+        with pytest.raises((TypeError, ValueError), match="evidence_refs"):
+            EpisodicRecord.from_dict(payload)
+
 
 # ============================================================================
 # records_equal 工具

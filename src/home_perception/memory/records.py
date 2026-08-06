@@ -143,25 +143,33 @@ class ActionSummary:
         )
 
 
-def _coerce_evidence_refs(raw: list[Any]) -> list[str]:
+def _coerce_evidence_refs(raw: list[Any] | None) -> list[str]:
     """证据引用向后兼容反序列化（ADR-0027 D8 schema evolution）。
 
     v1 持久化格式可能是 ``EvidenceRef.to_dict()`` 字典（``{evidence_id, modality,
     captured_at, uri}``）或空列表；v2 起统一为 ``evidence_id`` 字符串列表。
 
-    无论哪种来源，只提取并保留 ``evidence_id`` 字符串 —— 旧字典的其余字段
-    （modality / captured_at / uri）由独立 ``EvidenceItem`` 存储，episode 仅以
-    ID 引用（ADR-0024 I2 单调性：证据 ID 永不被改写）。语义字段不在此重建。
+    无论哪种来源，只提取并保留 **非空字符串** 的 ``evidence_id``。非法持久化数据
+    （空字符串 / 非字符串 / 旧字典 ``evidence_id`` 非字符串）**显式拒绝**，避免
+    静默进入 v2 模型、后续被编排器当作合法 ID（ADR-0024 I2 单调性：证据 ID 永不被改写）。
     """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise TypeError(f"evidence_refs 必须是 list[str]，收到 {type(raw).__name__}")
     refs: list[str] = []
     for e in raw:
         if isinstance(e, str):
-            refs.append(e)
+            eid = e
         elif isinstance(e, dict):
             eid = e.get("evidence_id")
-            if eid:
-                refs.append(str(eid))
-        # 其它类型（不应出现在持久化数据中）忽略
+        else:
+            eid = None
+        if not isinstance(eid, str) or not eid.strip():
+            raise ValueError(
+                f"evidence_refs 元素必须是非空字符串（evidence_id），收到 {e!r}"
+            )
+        refs.append(eid)
     return refs
 
 
@@ -454,6 +462,15 @@ class EpisodicRecord:
 
         # 3) I4 可解释性
         _validate_non_empty_str_list(self.source_event_ids, "source_event_ids")
+
+        # 3.1) evidence_refs 必须为非空字符串 ID 列表（ADR-0027 Slice A + ADR-0024 I2）
+        # 直接构造（绕过 from_dict）时同样拦截非法 ID，避免 evidence_refs=["", 123]
+        # 之类数据进入 v2 模型。
+        for eid in self.evidence_refs or []:
+            if not isinstance(eid, str) or not eid.strip():
+                raise ValueError(
+                    f"evidence_refs 元素必须是非空字符串（evidence_id），收到 {eid!r}"
+                )
 
         # 4) memory_status 归一
         self.memory_status = _coerce_memory_status(self.memory_status)

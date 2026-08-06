@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import math
 from datetime import UTC, datetime
 
 import pytest
@@ -123,8 +125,8 @@ class TestEvidenceItem:
                 confidence=1.5,
             )
 
-    def test_metadata_not_dict_rejected(self):
-        with pytest.raises(TypeError, match="dict"):
+    def test_metadata_not_mapping_rejected(self):
+        with pytest.raises(TypeError, match="Mapping"):
             EvidenceItem(
                 evidence_id="ev",
                 modality=EvidenceModality.AUDIO,
@@ -149,3 +151,55 @@ class TestEvidenceItem:
             confidence=1,
         )
         assert e.confidence == 1.0 and isinstance(e.confidence, float)
+
+    # ----------------------------------------------------------------------
+    # ADR-0027 Slice A 审查（P1/P2）：不可变契约 + NaN 拒绝
+    # ----------------------------------------------------------------------
+    def test_frozen_rejects_attribute_mutation(self):
+        """frozen=True：构造后改写字段必须抛 FrozenInstanceError（ADR-0024 I2）。"""
+        e = EvidenceItem(evidence_id="ev", modality=EvidenceModality.AUDIO, kind="audio_segment")
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            e.uri = "another-uri"
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            e.confidence = 0.9
+
+    def test_metadata_is_immutable_view(self):
+        """metadata 以 MappingProxyType 封装：外部就地修改被拒绝，且持有独立副本。"""
+        e = EvidenceItem(
+            evidence_id="ev",
+            modality=EvidenceModality.AUDIO,
+            kind="audio_segment",
+            metadata={"frame_id": "f-9"},
+        )
+        with pytest.raises((TypeError, AttributeError)):
+            e.metadata["frame_id"] = "mutated"
+
+        # 原传入 dict 的后续修改不波及内部（封装的是副本）
+        src: dict[str, str] = {"frame_id": "f-9"}
+        e2 = EvidenceItem(
+            evidence_id="ev2",
+            modality=EvidenceModality.AUDIO,
+            kind="audio_segment",
+            metadata=src,
+        )
+        src["frame_id"] = "tampered"
+        assert e2.metadata["frame_id"] == "f-9"
+
+    def test_confidence_nan_rejected(self):
+        """NaN 的比较恒为 False，会绕过 [0,1] 校验 —— 必须显式拒绝（P2）。"""
+        with pytest.raises(ValueError, match="confidence"):
+            EvidenceItem(
+                evidence_id="ev",
+                modality=EvidenceModality.AUDIO,
+                kind="audio_segment",
+                confidence=math.nan,
+            )
+
+    def test_confidence_inf_rejected(self):
+        with pytest.raises(ValueError, match="confidence"):
+            EvidenceItem(
+                evidence_id="ev",
+                modality=EvidenceModality.AUDIO,
+                kind="audio_segment",
+                confidence=float("inf"),
+            )
