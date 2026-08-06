@@ -3,6 +3,6 @@
 from __future__ import annotations
 
 from ..analysis.perception import PerceptionEvent
-from ..core.event import EventType, EvidenceRef
+from ..core.event import EventType, EvidenceItem
 
-__all__ = ["EventType", "EvidenceRef", "PerceptionEvent"]
+__all__ = ["EventType", "EvidenceItem", "PerceptionEvent"]

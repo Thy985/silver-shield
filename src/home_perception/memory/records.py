@@ -11,7 +11,7 @@
 **辅助类型**：
 - `MemoryStatus`：记忆生命周期状态（ACTIVE/DEPRECATED/ARCHIVED/INVALID，§5.7）
 - `ActionSummary`：ActionCommand 的 Memory 投影
-- `EvidenceRef`：证据引用（ADR-0022 落地后填充）
+- `evidence_refs`：``EvidenceItem.evidence_id`` 字符串引用列表（ADR-0027 Slice A）
 
 **契约不变式**（__post_init__ 强制）：
 1. `record_id` 前缀必须 ∈ {`st-`, `ep-`, `sem-`}（I1 幂等键派生约束）
@@ -143,42 +143,34 @@ class ActionSummary:
         )
 
 
-@dataclass
-class EvidenceRef:
-    """证据引用（ADR-0022 EvidenceItem 的 Memory 侧引用）。
+def _coerce_evidence_refs(raw: list[Any] | None) -> list[str]:
+    """证据引用向后兼容反序列化（ADR-0027 D8 schema evolution）。
 
-    v1：ADR-0022 未落地，EpisodicRecord.evidence_refs 暂为空 list。
-    v2：Episode Builder 接 EvidenceItem 后填充。
+    v1 持久化格式可能是 ``EvidenceRef.to_dict()`` 字典（``{evidence_id, modality,
+    captured_at, uri}``）或空列表；v2 起统一为 ``evidence_id`` 字符串列表。
+
+    无论哪种来源，只提取并保留 **非空字符串** 的 ``evidence_id``。非法持久化数据
+    （空字符串 / 非字符串 / 旧字典 ``evidence_id`` 非字符串）**显式拒绝**，避免
+    静默进入 v2 模型、后续被编排器当作合法 ID（ADR-0024 I2 单调性：证据 ID 永不被改写）。
     """
-
-    evidence_id: str  # EvidenceItem.evidence_id
-    modality: str  # EvidenceModality.value（vision / audio / sensor）
-    captured_at: datetime  # EvidenceItem.captured_at（UTC）
-    uri: str | None = None  # 本地路径 / 片段 id（不上传原视频，ADR §3.3）
-
-    def __post_init__(self) -> None:
-        if not self.evidence_id or not self.evidence_id.strip():
-            raise ValueError("evidence_id 不能为空")
-        if not self.modality or not self.modality.strip():
-            raise ValueError("modality 不能为空")
-        require_utc(self.captured_at, "captured_at")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "evidence_id": self.evidence_id,
-            "modality": self.modality,
-            "captured_at": self.captured_at.isoformat(),
-            "uri": self.uri,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> EvidenceRef:
-        return cls(
-            evidence_id=data["evidence_id"],
-            modality=data["modality"],
-            captured_at=datetime.fromisoformat(data["captured_at"]),
-            uri=data.get("uri"),
-        )
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise TypeError(f"evidence_refs 必须是 list[str]，收到 {type(raw).__name__}")
+    refs: list[str] = []
+    for e in raw:
+        if isinstance(e, str):
+            eid = e
+        elif isinstance(e, dict):
+            eid = e.get("evidence_id")
+        else:
+            eid = None
+        if not isinstance(eid, str) or not eid.strip():
+            raise ValueError(
+                f"evidence_refs 元素必须是非空字符串（evidence_id），收到 {e!r}"
+            )
+        refs.append(eid)
+    return refs
 
 
 # ============================================================================
@@ -424,7 +416,7 @@ class EpisodicRecord:
     - `recommended_action`：取 risk_level 最高那条的 action
     - `reason_summary`：WarningEvent.reason_summary 合并去重
     - `actions`：ActionCommand 投影为 ActionSummary 列表
-    - `evidence_refs`：v1 空列表（ADR-0022 未落地）
+    - `evidence_refs`：``EvidenceItem.evidence_id`` 字符串引用列表（ADR-0027 Slice A 统一）
     - `source_event_ids`：[visitor_event_id, warning_id, ...]
     - `summary`：human-interpretable summary（ADR-0024 §3.2.1 强制）
     - `model_version`：Episode Builder 版本（如 "ep-builder-v1"）
@@ -444,7 +436,7 @@ class EpisodicRecord:
     model_version: str
     reason_summary: list[str] = field(default_factory=list)
     actions: list[ActionSummary] = field(default_factory=list)
-    evidence_refs: list[EvidenceRef] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
     risk_level: str | None = None
     recommended_action: str | None = None
     person_identity_id: str | None = None  # v1 恒 None
@@ -470,6 +462,15 @@ class EpisodicRecord:
 
         # 3) I4 可解释性
         _validate_non_empty_str_list(self.source_event_ids, "source_event_ids")
+
+        # 3.1) evidence_refs 必须为非空字符串 ID 列表（ADR-0027 Slice A + ADR-0024 I2）
+        # 直接构造（绕过 from_dict）时同样拦截非法 ID，避免 evidence_refs=["", 123]
+        # 之类数据进入 v2 模型。
+        for eid in self.evidence_refs or []:
+            if not isinstance(eid, str) or not eid.strip():
+                raise ValueError(
+                    f"evidence_refs 元素必须是非空字符串（evidence_id），收到 {eid!r}"
+                )
 
         # 4) memory_status 归一
         self.memory_status = _coerce_memory_status(self.memory_status)
@@ -513,7 +514,7 @@ class EpisodicRecord:
             "recommended_action": self.recommended_action,
             "reason_summary": list(self.reason_summary),
             "actions": [a.to_dict() for a in self.actions],
-            "evidence_refs": [e.to_dict() for e in self.evidence_refs],
+            "evidence_refs": list(self.evidence_refs),
             "source_event_ids": list(self.source_event_ids),
             "summary": self.summary,
             "model_version": self.model_version,
@@ -539,7 +540,7 @@ class EpisodicRecord:
             model_version=data["model_version"],
             reason_summary=list(data.get("reason_summary", [])),
             actions=[ActionSummary.from_dict(a) for a in data.get("actions", [])],
-            evidence_refs=[EvidenceRef.from_dict(e) for e in data.get("evidence_refs", [])],
+            evidence_refs=_coerce_evidence_refs(data.get("evidence_refs", [])),
             risk_level=data.get("risk_level"),
             recommended_action=data.get("recommended_action"),
             person_identity_id=data.get("person_identity_id"),
@@ -705,8 +706,8 @@ def records_equal(a: Any, b: Any) -> bool:
     两次回放天然产生微秒级差异；Replay Test 关心的是**记忆内容**一致性，
     不是创建时刻，因此本函数显式跳过 `created_at` 字段。
 
-    其他字段（含嵌套 dataclass 如 ActionSummary / EvidenceRef）按 dataclass
-    生成的 `__eq__` 递归比较；datetime 精确比较；List[str] 逐元素比较。
+    其他字段（含嵌套 dataclass 如 ActionSummary）按 dataclass 生成的
+    `__eq__` 递归比较；datetime 精确比较；``evidence_refs``（List[str]）逐元素比较。
 
     保留 `type(a) is not type(b)` 前置检查以拒绝跨类型比较。
     """

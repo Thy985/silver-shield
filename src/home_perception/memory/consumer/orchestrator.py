@@ -44,7 +44,7 @@ from home_perception.memory.consumer.interfaces import (
     MemoryConsumer,
     Retrieval,
 )
-from home_perception.memory.records import EpisodicRecord, EvidenceRef
+from home_perception.memory.records import EpisodicRecord
 
 
 class RuleBasedMemoryConsumer(MemoryConsumer):
@@ -113,20 +113,20 @@ class RuleBasedMemoryConsumer(MemoryConsumer):
         return sorted(records or [], key=lambda ep: (ep.enter_time, ep.record_id))
 
     # -- 证据汇总（C5 溯源）----------------------------------------------------
-    def _collect_evidence(self, records: list[EpisodicRecord]) -> tuple[EvidenceRef, ...]:
+    def _collect_evidence(self, records: list[EpisodicRecord]) -> tuple[str, ...]:
         """扁平化召回记录的 ``evidence_refs``，按 ``evidence_id`` 去重保序。
 
-        v1 ``EpisodicRecord.evidence_refs`` 恒为空列表（ADR-0022 未落地），故本方法
-        当前恒返回 ``()``；保留完整实现是为 ADR-0022 落地后无需改编排器（届时
-        Episode Builder 填充证据即自动汇入 ReasoningInput）。
+        ADR-0027 Slice A 起 ``EpisodicRecord.evidence_refs`` 为 ``evidence_id``
+        字符串列表（独立 ``EvidenceItem`` 以 ID 解析，ADR-0024 I2 单调性）；本方法
+        直接扁平化字符串并去重，无需构造 ``EvidenceRef`` 对象。
         """
         seen: set[str] = set()
-        collected: list[EvidenceRef] = []
+        collected: list[str] = []
         for episode in self._ordered(records):
             for ref in episode.evidence_refs or []:
-                if ref.evidence_id in seen:
+                if ref in seen:
                     continue
-                seen.add(ref.evidence_id)
+                seen.add(ref)
                 collected.append(ref)
         return tuple(collected)
 

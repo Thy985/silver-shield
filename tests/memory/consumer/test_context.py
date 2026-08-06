@@ -16,7 +16,6 @@ from home_perception.memory.consumer.contracts import (
     ActionRecord,
     ConflictFlag,
     CurrentEvent,
-    EvidenceRef,
     ReasoningInput,
 )
 from home_perception.memory.consumer.exceptions import ContextBuildError
@@ -118,10 +117,10 @@ def test_conflicts_passthrough() -> None:
 
 
 def test_evidence_and_actions_passthrough() -> None:
-    ev = EvidenceRef(evidence_id="e1", modality="vision", captured_at=_utc(2026, 8, 1, 8))
+    ev = "e1"
     ac = ActionRecord(command_type="notify_family", command_id="a1", status="done")
     out = _builder().build(_make_current_event(), [], None, None, (ev,), (ac,), ())
-    assert out.evidence_refs == (ev,)
+    assert out.evidence_refs == ("e1",)
     assert out.previous_actions == (ac,)
 
 

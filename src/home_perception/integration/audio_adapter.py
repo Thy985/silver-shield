@@ -1,17 +1,18 @@
 """音频适配器（ADR-0026 §5.1 · Integration Layer）。
 
 > **职责**：``AudioPerceptionEvent → RiskSignal(source=AUDIO, category=COMMUNICATION)``；
-> ``AudioEvidenceCollector → EvidenceRef(modality=AUDIO)``。
+> ``AudioEvidenceCollector → EvidenceItem(modality=AUDIO)``。
 >
 > **边界铁律（冻结）**：``AudioRule`` 绝不直接产 ``RiskSignal``；所有"音频 → ``RiskSignal``"
 > 翻译必经本适配器。``DecisionPolicy`` 零改动（它只消费既有 ``RiskSignal``，不感知来源是视频还是音频）。
 >
-> 注：``EvidenceModality.AUDIO`` 枚举尚未在仓库定义（ADR-0026 §5.2 提及但未落地），
-> 此处复用通用 ``EvidenceRef``（kind 以 ``audio_*`` 前缀标识），待证据枚举落地后平滑替换。
+> ``EvidenceItem`` / ``EvidenceModality`` 已在 ADR-0027 Slice A 落地于 ``core/event.py``，
+> 音频证据直接构造 ``EvidenceItem(modality=AUDIO)``，不再依赖旧 ``EvidenceRef``（已删除）。
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -23,7 +24,7 @@ from ..analysis.risk_signal import (
     SubjectType,
 )
 from ..audio.event import AudioPerceptionEvent
-from ..core.event import EvidenceRef
+from ..core.event import EvidenceItem, EvidenceModality, RetentionTier
 
 
 def adapt_audio_event(
@@ -98,17 +99,32 @@ class AudioAdapter:
 class AudioEvidenceCollector:
     """音频证据采集（ADR-0026 §5.1）。
 
-    产出与音频感知事件对应的证据引用。当前复用通用 ``EvidenceRef``，
-    ``kind`` 以 ``audio_segment`` / ``audio_clip`` 标识（待 ``EvidenceModality.AUDIO`` 枚举落地替换）。
+    产出与音频感知事件对应的独立 ``EvidenceItem``（ADR-0027 Slice A），
+    ``modality=AUDIO``，``kind`` 以 ``audio_segment`` / ``audio_clip`` 标识；
+    episode 侧仅以 ``evidence_id`` 引用（ADR-0024 I2 单调性）。
     """
 
-    def collect_segment(self, event: AudioPerceptionEvent, uri: str) -> EvidenceRef:
-        """采集分段级证据引用。"""
-        return EvidenceRef(kind="audio_segment", uri=uri, timestamp=event.timestamp)
+    def collect_segment(self, event: AudioPerceptionEvent, uri: str) -> EvidenceItem:
+        """采集分段级证据对象。"""
+        return EvidenceItem(
+            evidence_id=str(uuid4()),
+            modality=EvidenceModality.AUDIO,
+            kind="audio_segment",
+            uri=uri,
+            captured_at=datetime.fromtimestamp(event.timestamp, tz=UTC),
+            retention_tier=RetentionTier.SHORT,
+        )
 
-    def collect_clip(self, event: AudioPerceptionEvent, uri: str) -> EvidenceRef:
-        """采集片段级证据引用（高风险的音频片段，本地留存 + 自动过期）。"""
-        return EvidenceRef(kind="audio_clip", uri=uri, timestamp=event.timestamp)
+    def collect_clip(self, event: AudioPerceptionEvent, uri: str) -> EvidenceItem:
+        """采集片段级证据对象（高风险的音频片段，本地留存 + 自动过期）。"""
+        return EvidenceItem(
+            evidence_id=str(uuid4()),
+            modality=EvidenceModality.AUDIO,
+            kind="audio_clip",
+            uri=uri,
+            captured_at=datetime.fromtimestamp(event.timestamp, tz=UTC),
+            retention_tier=RetentionTier.SHORT,
+        )
 
 
 def _looks_uuid(value: str) -> bool:

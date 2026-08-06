@@ -24,7 +24,7 @@ from datetime import datetime
 from typing import Any
 
 from home_perception.common.timeutil import require_utc
-from home_perception.memory.records import EpisodicRecord, EvidenceRef
+from home_perception.memory.records import EpisodicRecord
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +326,7 @@ class ReasoningInput:
     historical_context: tuple[EpisodicRecord, ...]
     visitor_profile: VisitorProfile | None
     risk_pattern: RiskPattern | None
-    evidence_refs: tuple[EvidenceRef, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
     previous_actions: tuple[ActionRecord, ...] = ()
     conflicts: tuple[ConflictFlag, ...] = ()
 
@@ -340,7 +340,7 @@ class ReasoningInput:
             "risk_pattern": self.risk_pattern.to_dict()
             if self.risk_pattern is not None
             else None,
-            "evidence_refs": [e.to_dict() for e in self.evidence_refs],
+            "evidence_refs": list(self.evidence_refs),
             "previous_actions": [a.to_dict() for a in self.previous_actions],
             "conflicts": [c.to_dict() for c in self.conflicts],
         }
@@ -358,7 +358,7 @@ class ReasoningInput:
             risk_pattern=RiskPattern.from_dict(data["risk_pattern"])
             if data.get("risk_pattern") is not None
             else None,
-            evidence_refs=tuple(EvidenceRef.from_dict(e) for e in data.get("evidence_refs", [])),
+            evidence_refs=tuple(data.get("evidence_refs", [])),
             previous_actions=tuple(
                 ActionRecord.from_dict(a) for a in data.get("previous_actions", [])
             ),

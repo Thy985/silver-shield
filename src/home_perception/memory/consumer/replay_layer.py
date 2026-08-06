@@ -25,7 +25,6 @@ from home_perception.memory.consumer.contracts import (
     ActionRecord,
     ConflictFlag,
     CurrentEvent,
-    EvidenceRef,
     ReasoningInput,
     RiskPattern,
     VisitorProfile,
@@ -160,10 +159,22 @@ class ProvisionalContextAssembler:
                     )
         return list(seen.values())
 
-    def _evidence_refs(self, history: list[EpisodicRecord]) -> list[EvidenceRef]:
-        refs: list[EvidenceRef] = []
+    def _evidence_refs(self, history: list[EpisodicRecord]) -> list[str]:
+        """按历史顺序汇总证据 ID，依 evidence_id 去重保序（与生产编排器一致）。
+
+        ADR-0027 Slice A 审查（P1）：生产 ``MemoryOrchestrator._collect_evidence``
+        已按 ``evidence_id`` 去重，回放路径必须行为一致 —— 否则同一 ``ev-1`` 被两条
+        历史 Episode 引用时，生产返回 ``("ev-1",)`` 而回放返回 ``("ev-1", "ev-1")``，
+        形成不一致并可能重复下游解析/展示。
+        """
+        seen: set[str] = set()
+        refs: list[str] = []
         for ep in history:
-            refs.extend(ep.evidence_refs)
+            for eid in ep.evidence_refs or []:
+                if eid in seen:
+                    continue
+                seen.add(eid)
+                refs.append(eid)
         return refs
 
 
