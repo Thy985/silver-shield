@@ -21,6 +21,7 @@ findings + 与 ``DecisionPolicy`` 同词汇的提示，便于 Shadow 观测与�
 
 from __future__ import annotations
 
+from home_perception.core.event import EvidenceModality
 from home_perception.memory.consumer.contracts import (
     RECOMMENDED_ACTION_HINTS,
     ReasoningInput,
@@ -83,6 +84,29 @@ class RuleBasedReasoningEngine(ReasoningEngine):
             if pattern.escalation_history:
                 findings.append("行为升级轨迹：" + " → ".join(pattern.escalation_history))
 
+        # 3.5) 音频模式（ADR-0027 D6，纯描述标签，非评分）
+        if pattern is not None and pattern.audio_patterns:
+            ratio_desc = (
+                f"，音频 episode 占比 {pattern.audio_episode_ratio:.0%}"
+                if pattern.audio_episode_ratio is not None
+                else ""
+            )
+            findings.append(
+                f"音频模式：{'、'.join(pattern.audio_patterns)}{ratio_desc}"
+                f"（纯描述已观测音频类型，非风险评分）"
+            )
+            # SourceRef 语义（契约 review）：ref 保持稳定字段键（RiskPattern 字段名），
+            # 具体描述标签进 detail（"audio_pattern:<label>"）——ref 绝不混入自然语言
+            # 标签，证据回溯唯一入口仍是 evidence_refs（evidence_id）。
+            for label in pattern.audio_patterns:
+                source_refs.append(
+                    SourceRef(
+                        source="risk_pattern",
+                        ref="audio_patterns",
+                        detail=f"audio_pattern:{label}",
+                    )
+                )
+
         # 4) 冲突（只标记，不解决；C4 透明）
         for c in ctx.conflicts:
             findings.append(
@@ -106,6 +130,13 @@ class RuleBasedReasoningEngine(ReasoningEngine):
                     detail=f"n={n_hist}",
                 )
             )
+
+        # 6.5) 模态提示（ADR-0027 D6）：仅当历史上下文含 AUDIO 时陈述——
+        #      让 Reasoning 感知"该上下文有音频事实"，即使样本不足未产出模式
+        #      （如仅 1 条音频记录低于 min_records_for_pattern）也不丢信息。
+        if EvidenceModality.AUDIO in ctx.modalities:
+            findings.append("历史上下文含音频 episode（模态提示 AUDIO，证据经 evidence_refs 可解析）")
+            source_refs.append(SourceRef(source="modalities", ref="AUDIO"))
 
         explanation = self._explain(ctx, has_profile=profile is not None)
         hint = self._hint(ctx)

@@ -72,6 +72,16 @@ class RuleBasedContextBuilder(ContextBuilder):
         # C3：确定性排序（进入时间升序，record_id 兜底），同输入两次产出顺序一致
         ordered = sorted(records, key=lambda ep: (ep.enter_time, ep.record_id))
 
+        # D6 模态提示（ADR-0027）：历史上下文中出现过的证据模态并集，按枚举值升序。
+        # 由本组件从被组装的 records 确定性推导（纯投影，不改签名、不调外部组件）；
+        # 旧 v1 记录无 modalities（空列表）→ 提示为空元组（对齐 D8 向后兼容）。
+        modalities = tuple(
+            sorted(
+                {m for ep in ordered for m in (ep.modalities or [])},
+                key=lambda m: m.value,
+            )
+        )
+
         return ReasoningInput(
             current_event=current_event,
             historical_context=tuple(ordered),
@@ -80,4 +90,5 @@ class RuleBasedContextBuilder(ContextBuilder):
             evidence_refs=evidence_refs,
             previous_actions=previous_actions,
             conflicts=conflicts,
+            modalities=modalities,
         )

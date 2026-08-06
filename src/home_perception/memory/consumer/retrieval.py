@@ -10,8 +10,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 
+from home_perception.core.event import EvidenceModality
 from home_perception.memory.consumer.config import RetrievalConfig
 from home_perception.memory.consumer.contracts import CurrentEvent
 from home_perception.memory.consumer.exceptions import RetrievalError
@@ -48,6 +50,49 @@ class RuleBasedRetrieval(Retrieval):
         self._device_id = device_id
 
     def retrieve(self, current_event: CurrentEvent) -> list[EpisodicRecord]:
+        """召回全部相关历史（Recall → Filter → Rank → Cap，见 ``_retrieve_filtered``）。"""
+        return self._retrieve_filtered(current_event)
+
+    def retrieve_by_modality(
+        self,
+        current_event: CurrentEvent,
+        modalities: Iterable[EvidenceModality] | EvidenceModality,
+    ) -> list[EpisodicRecord]:
+        """按证据模态召回（ADR-0027 D6，实现 ``Retrieval`` 接口的可选能力）。
+
+        ``Retrieval`` ABC 以**非抽象方法**声明该能力（替换实现不覆盖时 fail loud，
+        见 ``interfaces.py``）；本实现提供真实过滤语义：在 ``retrieve`` 的
+        Recall → Filter → Rank → Cap 基础上，Filter 阶段额外要求记录 ``modalities``
+        与请求模态**相交**（任一命中即保留）。
+
+        语义与 ``retrieve`` 一致：模态过滤先于排序裁剪（先取"窗口内所有含 AUDIO 的
+        episode"再按相关性排序 + 上限裁剪），与 ADR「取所有含 AUDIO 的 episode」一致。
+
+        Args:
+            current_event: 当前触发事件投影（召回窗口 / 排序锚点，与 ``retrieve`` 一致）。
+            modalities: 请求的证据模态（单个或可迭代；空可迭代等价于 ``retrieve`` 全量）。
+
+        Returns:
+            按同一确定性排序键（``_rank_key``）排序、上限裁剪后的记录列表（C3）。
+
+        Raises:
+            RetrievalError: 召回失败（与 ``retrieve`` 同口径）。
+        """
+        wanted = (
+            {modalities}
+            if isinstance(modalities, EvidenceModality)
+            else set(modalities)
+        )
+        return self._retrieve_filtered(current_event, modalities=wanted or None)
+
+    # -- 召回管道（Recall → Filter → Rank → Cap，C3 确定性）-------------------
+    def _retrieve_filtered(
+        self,
+        current_event: CurrentEvent,
+        *,
+        modalities: set[EvidenceModality] | None = None,
+    ) -> list[EpisodicRecord]:
+        """统一召回管道；``modalities`` 非空时在 Filter 阶段额外按模态交集过滤。"""
         try:
             raw = self._store.get_episodic_by_visitor(current_event.visitor_instance_id)
         except Exception as exc:  # 转译为分层异常，不静默、不向上抛未分类异常
@@ -61,6 +106,10 @@ class RuleBasedRetrieval(Retrieval):
             for r in raw
             if r.memory_status == MemoryStatus.ACTIVE and r.enter_time >= cutoff
         ]
+        if modalities:
+            filtered = [
+                r for r in filtered if set(r.modalities or []) & modalities
+            ]
         ranked = sorted(filtered, key=lambda r: self._rank_key(current_event, r))
         return ranked[: self._config.max_records]
 

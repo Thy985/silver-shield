@@ -43,6 +43,8 @@ from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
 from home_perception.memory.records import ActionSummary, EpisodicRecord
 from home_perception.memory.store import InMemoryStore
 
+from ._c1 import CONSUMER_FORBIDDEN_FIELDS, REASONING_INPUT_FIELD_WHITELIST
+
 VISITOR = "visitor-c5"
 REPLAY_ROOT = str(Path(__file__).resolve().parent.parent.parent / "fixtures" / "memory_replay")
 
@@ -126,20 +128,12 @@ class TestContractC1NoScoreField:
         import dataclasses
 
         field_names = {f.name for f in dataclasses.fields(ReasoningInput)}
-        forbidden = {"risk_score", "score", "decision", "warning", "recommended_action"}
-        assert not (field_names & forbidden), (
-            f"ReasoningInput 含禁止字段: {field_names & forbidden}"
+        # 共享禁止集合（_c1.py，与其余测试文件口径唯一）——绝不允许把判定字段加进契约
+        assert not (field_names & CONSUMER_FORBIDDEN_FIELDS), (
+            f"ReasoningInput 含禁止字段: {field_names & CONSUMER_FORBIDDEN_FIELDS}"
         )
-        # 字段集正是契约声明的 7 个，无漂移
-        assert field_names == {
-            "current_event",
-            "historical_context",
-            "visitor_profile",
-            "risk_pattern",
-            "evidence_refs",
-            "previous_actions",
-            "conflicts",
-        }
+        # 字段集正是契约声明的 8 个，无漂移（含 ADR-0027 D6 新增 modalities 提示字段）
+        assert field_names == REASONING_INPUT_FIELD_WHITELIST
 
 
 # ============================================================================

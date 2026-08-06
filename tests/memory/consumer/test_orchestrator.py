@@ -36,6 +36,8 @@ from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
 from home_perception.memory.records import ActionSummary, EpisodicRecord
 from home_perception.memory.store import InMemoryStore
 
+from ._c1 import CONSUMER_FORBIDDEN_FIELDS, REASONING_INPUT_FIELD_WHITELIST
+
 VISITOR = "visitor-c4"
 
 
@@ -204,17 +206,8 @@ class TestC1NoDecision:
         """产物字段白名单：不含任何 score / decision / warning 字段。"""
         out = _default_consumer([_make_record("ep-1", _H1)]).consume(_make_event(risk_level="HIGH"))
         names = set(out.to_dict().keys())
-        assert names == {
-            "current_event",
-            "historical_context",
-            "visitor_profile",
-            "risk_pattern",
-            "evidence_refs",
-            "previous_actions",
-            "conflicts",
-        }
-        forbidden = {"risk_score", "score", "decision", "warning", "recommended_action"}
-        assert not (names & forbidden)
+        assert names == REASONING_INPUT_FIELD_WHITELIST
+        assert not (names & CONSUMER_FORBIDDEN_FIELDS)
 
     def test_current_risk_level_is_passed_through_not_computed(self):
         """current_event.risk_level 原样透传（是输入事实，不是 Consumer 算出来的）。"""

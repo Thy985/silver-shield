@@ -19,11 +19,13 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from home_perception.common.timeutil import require_utc
+from home_perception.core.event import EvidenceModality
 from home_perception.memory.records import EpisodicRecord
 
 
@@ -202,17 +204,41 @@ class VisitorProfile:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class RiskPattern:
-    """风险模式描述（**非分数**，如 ``repeated_visit`` / ``escalating_behavior``）。"""
+    """风险模式描述（**非分数**，如 ``repeated_visit`` / ``escalating_behavior``）。
+
+    ADR-0027 D6（audio-aware）：``audio_patterns`` 是**纯描述性**音频模式标签
+    （如 ``"telephone"`` / ``"crying"``），只陈述"历史发生了什么"，**绝不**是风险分
+    （不变式：Consumer 不产出 / 不改 Risk Score，ADR-0025 C1）。``audio_episode_ratio``
+    为音频 episode 在召回记录中的占比，仅作**排序提示**，**不是决策输入**；
+    无法计算时（如记录缺 ``modalities`` 元数据）为 ``None``。
+    """
 
     tags: tuple[str, ...]  # 模式标签（非分数）
     escalation_history: tuple[str, ...] | None = None
     confidence: str = "weak_pattern"
+    audio_patterns: tuple[str, ...] = ()  # D6：音频模式描述标签（纯描述，非分数）
+    audio_episode_ratio: float | None = None  # D6：音频 episode 占比（排序提示，非决策输入）
 
     def __post_init__(self) -> None:
         if self.confidence not in ("cold_start", "weak_pattern", "stable_pattern"):
             raise ValueError(
                 f"RiskPattern.confidence 必须是 cold_start/weak_pattern/stable_pattern，"
                 f"收到 {self.confidence!r}"
+            )
+        for label in self.audio_patterns:
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(
+                    "RiskPattern.audio_patterns 元素必须是非空字符串（音频描述标签，"
+                    f"非分数）；收到 {label!r}"
+                )
+        if self.audio_episode_ratio is not None and (
+            # 必须先 isfinite 再范围检查：NaN 的比较恒为 False，会绕过 [0,1] 校验
+            not math.isfinite(self.audio_episode_ratio)
+            or not (0.0 <= self.audio_episode_ratio <= 1.0)
+        ):
+            raise ValueError(
+                f"RiskPattern.audio_episode_ratio 必须是 [0, 1] 内有限值或 None，"
+                f"收到 {self.audio_episode_ratio!r}"
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -222,6 +248,8 @@ class RiskPattern:
             if self.escalation_history is not None
             else None,
             "confidence": self.confidence,
+            "audio_patterns": list(self.audio_patterns),
+            "audio_episode_ratio": self.audio_episode_ratio,
         }
 
     @classmethod
@@ -231,6 +259,8 @@ class RiskPattern:
             tags=tuple(data["tags"]),
             escalation_history=tuple(esc) if esc is not None else None,
             confidence=data.get("confidence", "weak_pattern"),
+            audio_patterns=tuple(data.get("audio_patterns", [])),
+            audio_episode_ratio=data.get("audio_episode_ratio"),
         )
 
 
@@ -329,6 +359,10 @@ class ReasoningInput:
     evidence_refs: tuple[str, ...] = ()
     previous_actions: tuple[ActionRecord, ...] = ()
     conflicts: tuple[ConflictFlag, ...] = ()
+    # D6（ADR-0027）：历史上下文中出现的证据模态提示（如含 AUDIO 表示有音频 episode）。
+    # 纯提示字段：帮助 Reasoning 感知"该上下文中出现了哪些模态"，**不携带任何判定**；
+    # 音频 EvidenceItem 的实际消费仍经 ``evidence_refs``（evidence_id）解析。
+    modalities: tuple[EvidenceModality, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -343,6 +377,7 @@ class ReasoningInput:
             "evidence_refs": list(self.evidence_refs),
             "previous_actions": [a.to_dict() for a in self.previous_actions],
             "conflicts": [c.to_dict() for c in self.conflicts],
+            "modalities": [m.value for m in self.modalities],
         }
 
     @classmethod
@@ -363,6 +398,8 @@ class ReasoningInput:
                 ActionRecord.from_dict(a) for a in data.get("previous_actions", [])
             ),
             conflicts=tuple(ConflictFlag.from_dict(c) for c in data.get("conflicts", [])),
+            # D6 向后兼容：旧 v1 事件无 modalities 键 → 空元组（对齐 D8「旧事件 modalities=[]」）
+            modalities=tuple(EvidenceModality(m) for m in data.get("modalities", [])),
         )
 
 
