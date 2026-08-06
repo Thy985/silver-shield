@@ -1,0 +1,8 @@
+# 高声 / 争吵：复用黄金基线 raised_voice.wav（已含强增益），无额外效果。
+name: raised_voice
+base:
+  file: raised_voice.wav
+effects: []
+expected:
+  perception:
+    - audio_voice_raised

@@ -1,0 +1,8 @@
+# 持续通话：复用黄金基线 telephone_conversation.wav（已含砖墙带限 + AGC），无额外效果。
+name: telephone
+base:
+  file: telephone_conversation.wav
+effects: []
+expected:
+  perception:
+    - audio_telephone_persistent

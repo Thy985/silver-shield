@@ -1,0 +1,8 @@
+# 负向对照场景：正常语音不触发任何感知事件（kind=null）。
+# 复用黄金基线 tests/fixtures/audio/normal_speech.wav，无效果。
+name: normal_speech
+base:
+  file: normal_speech.wav
+effects: []
+expected:
+  perception: []

@@ -344,4 +344,67 @@ src/home_perception/audio/tts/
 - `tts/` 包是通用「合成 / 退化」工具箱 + 声明式场景引擎，不绑定任何感知结论；
 - `scripts/gen_audio_fixtures.py` 仍是围绕 `AudioPerceptionKind` 的**感知 fixture 生成器**（含自校准：跑管道取实际 `kind` / `score` 写 `manifest.yaml`），复用 `tts.provider.EdgeTTSProvider`。
 
-后续若要将感知 fixture 也迁移到声明式 `scenario.yaml`，可直接复用 `tts.effects` 的效果原语，避免效果代码重复。
+后续若要将感知 fixture 也迁移到声明式 `scenario.yaml`，可直接复用 `tts.effects` 的效果原语，避免效果代码重复（见 §11）。
+
+---
+
+## 11. 感知场景（scenarios/）—— 把 fixture 迁到声明式 scenario
+
+> 设计经评审确认分两阶段推进（owner 2026-08-06）。
+
+`tests/fixtures/audio/` 仍是**黄金基线**（5 条 TTS fixture + `manifest.yaml`，已入库、稳定）。
+`scenarios/audio/*.yaml` 在其之上叠加**声明式、可组合**的退化条件与期望感知，作为「测试语言」载体：
+
+```
+scenarios/audio/
+ ├── normal_speech.yaml     # 负向对照：正常语音不触发（expected: []）
+ ├── rapid_speech.yaml      # 直接复用黄金基线 rapid_speech.wav
+ ├── raised_voice.yaml      # 复用 raised_voice.wav
+ ├── telephone.yaml         # 复用 telephone_conversation.wav
+ ├── crying.yaml            # 复用 crying_voice.wav
+ └── elderly_distress.yaml  # 复合：normal_speech + speech_rate + noise → audio_speech_rapid
+```
+
+单文件 schema（每个文件一条场景）：
+
+```yaml
+name: elderly_distress
+base:
+  file: normal_speech.wav          # 引用 tests/fixtures/audio/ 黄金基线
+effects:                            # 可选；复用 §10.1 五类效果原语
+  - speech_rate: { factor: 2.0 }
+  - noise: { snr_db: 8 }
+expected:
+  perception:                      # AudioPerceptionKind 字符串值列表
+    - audio_speech_rapid
+```
+
+### 11.1 运行闭环
+
+复用 `src/home_perception/audio/tts/scenario_runner.py`（加载单文件场景 → 合成 WAV → 跑 `AudioPipeline` → 对比）：
+
+```bash
+python scripts/run_audio_scenarios.py generate   # scenarios/audio → generated/audio/*.wav
+python scripts/run_audio_scenarios.py validate    # 逐场景校验 observed ⊆ expected
+```
+
+- `generated/audio/` 是派生产物（gitignored），随时可再生成。
+- 校验默认**子集语义** `observed ⊆ expected`：当前 Tier0 规则每条语音段只产一个 kind，
+  故 `expected` 写成多值列表表示「可能出现其中任意一个即算通过」。
+- `validate --strict` 启用**精确相等**语义，为 Phase B「`assert run(scenario).events == expected`」就绪。
+
+### 11.2 两阶段路线
+
+- **Phase A（已落地）**：黄金基线保持不动；新增 `scenarios/audio/` 声明 + `generated/` 产物 +
+  校验闭环（`scenario → wav → expected event`）。`tests/test_audio_scenarios.py` 直接消费每个场景文件，
+  既是 Phase A 的验证，也是 Phase B 测试语言的种子。
+- **Phase B（待做）**：测试以场景为一级输入，`assert run(scenario).events == expected` 成为主测试形态；
+  场景即规格（spec-as-test）。届时 `expected` 需精确对齐管道实际产出，多 kind 场景须由多语音段真实产出。
+
+### 11.3 已知属性（实测）
+
+- **距离衰减抑制检测**：`distance`（即便 2m）的球面衰减 + 空气吸收低通，会把 AM 调制压到 5.5Hz 以下、
+  RMS 压到 ~0.01，导致整段无法检出（`events=0`）。这是「远距离语音难检测」的真实属性，非缺陷；
+  `elderly_distress` 因此**不使用 distance**，改用 `speech_rate 2.0` 稳健命中 `audio_speech_rapid`。
+- 黄金基线场景（rapid/raised/telephone/crying）经 `scenarios/` 重跑，产出与 `manifest.yaml` 声明一致，
+  验证了「声明式场景」与既有黄金基线的契约对齐。
