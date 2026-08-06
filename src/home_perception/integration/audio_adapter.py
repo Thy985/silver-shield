@@ -102,9 +102,19 @@ class AudioEvidenceCollector:
     产出与音频感知事件对应的独立 ``EvidenceItem``（ADR-0027 Slice A），
     ``modality=AUDIO``，``kind`` 以 ``audio_segment`` / ``audio_clip`` 标识；
     episode 侧仅以 ``evidence_id`` 引用（ADR-0024 I2 单调性）。
+
+    ``audio_kind``（可选，ADR-0026 §4.2 语义 kind）写入 ``EvidenceItem.metadata``，
+    供下游 Memory Consumer 的 ``audio_patterns``（ADR-0027 D6）解析真实描述标签；
+    不传时 metadata 为空（行为与历史一致，向后兼容）。
     """
 
-    def collect_segment(self, event: AudioPerceptionEvent, uri: str) -> EvidenceItem:
+    def collect_segment(
+        self,
+        event: AudioPerceptionEvent,
+        uri: str,
+        *,
+        audio_kind: str | None = None,
+    ) -> EvidenceItem:
         """采集分段级证据对象。"""
         return EvidenceItem(
             evidence_id=str(uuid4()),
@@ -113,9 +123,16 @@ class AudioEvidenceCollector:
             uri=uri,
             captured_at=datetime.fromtimestamp(event.timestamp, tz=UTC),
             retention_tier=RetentionTier.SHORT,
+            metadata={"audio_kind": audio_kind} if audio_kind else {},
         )
 
-    def collect_clip(self, event: AudioPerceptionEvent, uri: str) -> EvidenceItem:
+    def collect_clip(
+        self,
+        event: AudioPerceptionEvent,
+        uri: str,
+        *,
+        audio_kind: str | None = None,
+    ) -> EvidenceItem:
         """采集片段级证据对象（高风险的音频片段，本地留存 + 自动过期）。"""
         return EvidenceItem(
             evidence_id=str(uuid4()),
@@ -124,6 +141,7 @@ class AudioEvidenceCollector:
             uri=uri,
             captured_at=datetime.fromtimestamp(event.timestamp, tz=UTC),
             retention_tier=RetentionTier.SHORT,
+            metadata={"audio_kind": audio_kind} if audio_kind else {},
         )
 
 

@@ -101,7 +101,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
     # ------------------------------------------------------------------
     def project_episode(
         self,
-        visitor_event: VisitorEvent,
+        visitor_event: VisitorEvent | None,
         warnings: list[WarningEvent],
         actions: list[ActionCommand],
         *,

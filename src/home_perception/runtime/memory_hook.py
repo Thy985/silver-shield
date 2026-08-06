@@ -55,18 +55,24 @@ class MemoryHook:
 
     def record(
         self,
-        ev: VisitorEvent,
+        ev: VisitorEvent | None,
         warnings: list[WarningEvent],
         actions: list[Any],
         *,
         evidence: list[EvidenceItem] | None = None,
         audio_session_id: str | None = None,
     ) -> None:
-        """把一次访客离场投影为 EpisodicRecord 并写入 MemoryStore（Shadow Mode）。
+        """把一次访客离场（或纯音频会话结束）投影为 EpisodicRecord 并写入 MemoryStore。
 
-        触发时机：``process_frame`` 中每个 ``VisitorEvent`` 产出后立即调用（含其关联的
-        ``warnings`` / ``actions``）。影子写入**只记录、不接决策、不产 Warning**，
-        因此开启 ``episodic_shadow`` 不会改变流水线任何历史行为（工程方案 §8.3 合入门）。
+        触发时机：
+        - 视觉路径：``process_frame`` 中每个 ``VisitorEvent`` 产出后立即调用
+          （含其关联的 ``warnings`` / ``actions``）；
+        - 纯音频路径（ADR-0027 D4，经 ``AudioSessionRecorder``）：``ev=None`` +
+          非空 ``audio_session_id`` + 音频 ``evidence``，投影为匿名音频 episode
+          （``visitor_instance_id=None``，绝不反填访客）。
+
+        影子写入**只记录、不接决策、不产 Warning**，因此开启 ``episodic_shadow``
+        不会改变流水线任何历史行为（工程方案 §8.3 合入门）。
 
         容错（AGENTS.md §2.5：记忆写入失败不崩溃主链路）：
         - 投影异常 / 落库未知异常 → 计 ``errors`` + 记日志，跳过本 episode；
