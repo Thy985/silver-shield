@@ -155,6 +155,34 @@ class TestClosedLoopRecord:
         assert ep["risk_level"] == "LOW"  # 音频异常 → visit_pending_verify 弱信号
         assert ep["record_id"] == "ep-audio_session_test"
 
+    def test_all_evidence_failed_keeps_input_count(self, monkeypatch) -> None:
+        """审查修复：输入非空但证据全部采集失败 → n_events 保留输入计数（契约：
+        「n_events=输入事件数」），evidence_ids=()；可与「空输入」（n_events=0）
+        明确区分。不落库、不抛。"""
+        store = InMemoryStore()
+        recorder = _build_recorder(store)
+
+        def boom_collect(event, uri, **kwargs):
+            raise RuntimeError("collect down")
+
+        monkeypatch.setattr(recorder._evidence_collector, "collect_segment", boom_collect)
+        summary = recorder.record_session(
+            [
+                _audio_event(AudioPerceptionKind.AUDIO_DISTRESS_CRY, 1710000010.0),
+                _audio_event(AudioPerceptionKind.AUDIO_VOICE_RAISED, 1710000030.0),
+            ]
+        )
+        assert summary.n_events == 2  # 输入计数保留（区别于空输入）
+        assert summary.evidence_ids == ()
+        assert summary.warning_ids == ()
+        assert summary.episode_recorded is False
+        assert store.snapshot()["episodic"] == []
+
+        # 与空输入对照：n_events=0（调用方可区分两类降级）
+        empty = recorder.record_session([])
+        assert empty.n_events == 0
+        assert empty.evidence_ids == ()
+
     def test_d3_no_warning_no_record(self) -> None:
         """D3 负例：空会话（无事件）→ 无决策确认 → 不落库。"""
         store = InMemoryStore()

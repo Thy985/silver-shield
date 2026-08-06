@@ -169,14 +169,24 @@ class AudioSessionRecorder:
                     error=str(exc),
                 )
         if not evidence:
-            # 输入非空但全部采集失败：与「业务空会话」同形状（n_events=0 表示无有效
-            # 证据），但日志区分可观测性（输入数可见），调用方无需区分两类降级。
+            # 输入非空但全部采集失败：**单独构造摘要**——n_events 保留真实输入计数
+            # （与 docstring「n_events=输入事件数」契约一致），evidence_ids=() 表示
+            # 无有效证据。调用方可据此区分三类降级：
+            #   空输入        → n_events=0, evidence_ids=()
+            #   证据全失败    → n_events=len(events), evidence_ids=()
+            #   开关关闭      → n_events=0, session_id=""
             log.warning(
                 "audio.recorder.evidence_all_failed",
                 session_id=session_id,
                 n_inputs=len(events),
             )
-            return self._empty_summary(session_id)
+            return AudioSessionSummary(
+                session_id=session_id,
+                n_events=len(events),
+                warning_ids=(),
+                evidence_ids=(),
+                episode_recorded=False,
+            )
 
         # 2) 信号翻译（AudioPerceptionEvent → RiskSignal；D3 门槛的入站契约）
         #    会话级 subject UUID：仅作决策上下文（risk_signal_to_perception 从
