@@ -1,0 +1,73 @@
+[
+  {
+    "actions": [],
+    "audio_session_id": "audio_session_002",
+    "corrections": [],
+    "created_at": "1970-01-01T00:00:00+00:00",
+    "duration_seconds": 60.0,
+    "enter_time": "2026-07-28T23:04:00+00:00",
+    "evidence_refs": [
+      "ev-audio-e"
+    ],
+    "leave_time": "2026-07-28T23:05:00+00:00",
+    "memory_status": "active",
+    "modalities": [
+      "audio"
+    ],
+    "model_version": "ep-builder-v1",
+    "person_identity_id": null,
+    "reason_summary": [
+      "异常通话"
+    ],
+    "recommended_action": "MONITOR",
+    "record_id": "ep-audio_session_002",
+    "risk_level": "MEDIUM",
+    "schema_version": 1,
+    "source_event_ids": [
+      "eeeeeeee-2222-0000-0000-000000000000",
+      "ev-audio-e"
+    ],
+    "summary": "音频异常会话（会话 audio_session_002），风险等级 MEDIUM（异常通话），仅监控记录，含音频异常：哭腔。",
+    "visitor_instance_id": null
+  },
+  {
+    "actions": [
+      {
+        "command_id": "dddddddd-3333-0000-0000-000000000000",
+        "command_type": "SEND_FAMILY_MESSAGE",
+        "error": null,
+        "status": "DONE"
+      }
+    ],
+    "audio_session_id": "audio_session_d",
+    "corrections": [],
+    "created_at": "1970-01-01T00:00:00+00:00",
+    "duration_seconds": 180.0,
+    "enter_time": "2026-07-28T18:32:00+00:00",
+    "evidence_refs": [
+      "ev-audio-d"
+    ],
+    "leave_time": "2026-07-28T18:45:00+00:00",
+    "memory_status": "active",
+    "modalities": [
+      "vision",
+      "audio"
+    ],
+    "model_version": "ep-builder-v1",
+    "person_identity_id": null,
+    "reason_summary": [
+      "异常停留"
+    ],
+    "recommended_action": "NOTIFY_FAMILY",
+    "record_id": "ep-ev-visit-audio-d",
+    "risk_level": "HIGH",
+    "schema_version": 1,
+    "source_event_ids": [
+      "ev-visit-audio-d",
+      "dddddddd-2222-0000-0000-000000000000",
+      "dddddddd-3333-0000-0000-000000000000"
+    ],
+    "summary": "02:32-02:45 访问（停留 3 分钟），风险等级 HIGH（异常停留），已通知家属，含音频异常：长时间通话。",
+    "visitor_instance_id": "dddddddd-1111-0000-0000-000000000000"
+  }
+]
