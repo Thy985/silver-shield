@@ -14,6 +14,7 @@ from uuid import uuid4
 from home_perception.action.command import ActionCommand
 from home_perception.analysis.event import VisitorEvent
 from home_perception.analysis.warning import WarningEvent
+from home_perception.core.event import EvidenceItem, EvidenceModality, RetentionTier
 from home_perception.memory.episode_builder import DefaultEpisodeBuilder
 from home_perception.memory.records import EpisodicRecord, records_equal
 
@@ -274,3 +275,91 @@ def test_instantiable_full_abc():
     # 占位方法返回 None
     assert policy.transform_short_term(None, None) is None
     assert policy.aggregate_semantic([], "environment", "2026-07") is None
+
+
+# ---------------------------------------------------------------------------
+# ADR-0027 Slice B：EpisodeBuilder 接音频（audio-aware）
+# ---------------------------------------------------------------------------
+def _make_audio_evidence(audio_kind, evidence_id, captured_at):
+    """构造一段 AUDIO EvidenceItem（模拟 AudioEvidenceCollector 产出）。"""
+    return EvidenceItem(
+        evidence_id=evidence_id,
+        modality=EvidenceModality.AUDIO,
+        kind="audio_clip",
+        uri=f"data/evidence/{evidence_id}.wav",
+        captured_at=captured_at,
+        metadata={"audio_kind": audio_kind, "audio_score": 0.9},
+        retention_tier=RetentionTier.SHORT,
+    )
+
+
+def test_composite_visitor_audio_enrichment():
+    """视觉访客 + 音频证据 → modalities=[VISION,AUDIO]，evidence_refs 填真实 ID，
+    summary 含音频描述，audio_session_id 写入。"""
+    builder = DefaultEpisodeBuilder()
+    visitor = _make_visitor(enter=_utc(2026, 7, 28, 18, 32), leave=_utc(2026, 7, 28, 18, 44))
+    warning = _make_warning(
+        visitor.visitor_id, "HIGH", "NOTIFY_FAMILY", ["异常停留"], _utc(2026, 7, 28, 18, 40)
+    )
+    audio_ev = _make_audio_evidence("telephone", "ev-audio-001", _utc(2026, 7, 28, 18, 41))
+
+    rec = builder.project_episode(
+        visitor,
+        warnings=[warning],
+        actions=[],
+        evidence=[audio_ev],
+        audio_session_id="audio_session_001",
+    )
+
+    assert rec is not None
+    assert rec.modalities == [EvidenceModality.VISION, EvidenceModality.AUDIO]
+    assert rec.evidence_refs == ["ev-audio-001"]
+    assert rec.audio_session_id == "audio_session_001"
+    assert "含音频异常：长时间通话" in rec.summary
+
+
+def test_visitor_only_no_audio_modality_is_vision():
+    """无音频证据时 modalities=[VISION]，evidence_refs 空（向后兼容）。"""
+    builder = DefaultEpisodeBuilder()
+    visitor = _make_visitor()
+    rec = builder.project_episode(visitor, warnings=[], actions=[])
+    assert rec.modalities == [EvidenceModality.VISION]
+    assert rec.evidence_refs == []
+    assert rec.audio_session_id is None
+
+
+def test_audio_only_episode_no_visitor_binding():
+    """纯音频 episode：visitor_instance_id 为 None（D4 禁止反填），modalities=[AUDIO]，
+    record_id 由 audio_session_id 派生，summary 含音频异常描述。"""
+    builder = DefaultEpisodeBuilder()
+    audio_warning = _make_warning(
+        "audio_subject", "MEDIUM", "MONITOR", ["异常通话"], _utc(2026, 7, 28, 23, 5)
+    )
+    audio_ev = _make_audio_evidence("crying", "ev-audio-002", _utc(2026, 7, 28, 23, 4))
+
+    rec = builder.project_episode(
+        None,
+        warnings=[audio_warning],
+        actions=[],
+        evidence=[audio_ev],
+        audio_session_id="audio_session_001",
+    )
+
+    assert rec is not None
+    assert rec.visitor_instance_id is None  # 纯音频匿名，绝不反填
+    assert rec.audio_session_id == "audio_session_001"
+    assert rec.modalities == [EvidenceModality.AUDIO]
+    assert rec.record_id == "ep-audio_session_001"
+    assert "音频异常会话（会话 audio_session_001）" in rec.summary
+    assert "含音频异常：哭腔" in rec.summary
+    assert rec.evidence_refs == ["ev-audio-002"]
+
+
+def test_audio_evidence_dedup_in_refs():
+    """重复 evidence_id 在 evidence_refs 中去重保序（I2 单调性 / 幂等）。"""
+    builder = DefaultEpisodeBuilder()
+    visitor = _make_visitor()
+    ev1 = _make_audio_evidence("telephone", "ev-dup", _utc(2026, 7, 28, 18, 41))
+    ev2 = _make_audio_evidence("crying", "ev-dup", _utc(2026, 7, 28, 18, 42))
+    rec = builder.project_episode(visitor, warnings=[], actions=[], evidence=[ev1, ev2])
+    assert rec.evidence_refs == ["ev-dup"]

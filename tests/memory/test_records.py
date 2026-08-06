@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from home_perception.core.event import EvidenceModality
 from home_perception.memory.records import (
     EPISODIC_RECORD_DICT_KEYS,
     MEMORY_STATUS_VALUES,
@@ -509,6 +510,64 @@ class TestEpisodicEvidenceRefs:
         payload["evidence_refs"] = "ev-1"
         with pytest.raises((TypeError, ValueError), match="evidence_refs"):
             EpisodicRecord.from_dict(payload)
+
+
+# ============================================================================
+# EpisodicRecord 音频字段（ADR-0027 Slice B：modalities + audio_session_id）
+# ============================================================================
+
+
+class TestEpisodicAudioFields:
+    """EpisodicRecord 新增 ``modalities`` / ``audio_session_id``（D1 / D4）。
+
+    - ``modalities``: ``list[EvidenceModality]``（默认 ``[]``）
+    - ``audio_session_id``: ``str | None``（默认 ``None``）
+    - D4 松弛不变式：``visitor_instance_id`` 与 ``audio_session_id`` 至少其一必填
+    """
+
+    def test_modalities_default_empty(self):
+        rec = _make_episodic()
+        assert rec.modalities == []
+
+    def test_audio_session_id_default_none(self):
+        rec = _make_episodic()
+        assert rec.audio_session_id is None
+
+    def test_modalities_and_session_roundtrip(self):
+        rec = _make_episodic(
+            modalities=[EvidenceModality.VISION, EvidenceModality.AUDIO],
+            audio_session_id="audio_session_001",
+        )
+        revived = EpisodicRecord.from_dict(rec.to_dict())
+        assert revived.modalities == [EvidenceModality.VISION, EvidenceModality.AUDIO]
+        assert revived.audio_session_id == "audio_session_001"
+        assert set(revived.to_dict().keys()) == set(EPISODIC_RECORD_DICT_KEYS)
+
+    def test_pure_audio_episode_allowed(self):
+        """D4：纯音频 episode（visitor=None + audio_session_id）允许匿名写入。"""
+        rec = _make_episodic(
+            visitor_instance_id=None, audio_session_id="audio_session_001"
+        )
+        assert rec.visitor_instance_id is None
+        assert rec.audio_session_id == "audio_session_001"
+
+    def test_both_identity_none_rejected(self):
+        """D4 负例：visitor 与 audio_session 同时缺失 → 拒绝（I4 溯源链断裂）。"""
+        with pytest.raises(ValueError, match="至少其一必填"):
+            _make_episodic(visitor_instance_id=None, audio_session_id=None)
+
+    def test_audio_session_id_empty_rejected(self):
+        with pytest.raises(ValueError, match="audio_session_id"):
+            _make_episodic(audio_session_id="")
+
+    def test_audio_session_id_non_str_rejected(self):
+        with pytest.raises((TypeError, ValueError), match="audio_session_id"):
+            _make_episodic(audio_session_id=123)  # type: ignore[arg-type]
+
+    def test_modalities_element_must_be_enum(self):
+        """D7 闭合契约：modalities 元素必须是 EvidenceModality，禁止自由文本。"""
+        with pytest.raises(TypeError, match="modalities"):
+            _make_episodic(modalities=["audio"])  # type: ignore[list-item]
 
 
 # ============================================================================

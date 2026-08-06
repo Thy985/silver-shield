@@ -30,6 +30,7 @@ from enum import Enum
 from typing import Any
 
 from ..common.timeutil import now_dt, require_utc
+from ..core.event import EvidenceModality
 
 # ============================================================================
 # 枚举（严格白名单，禁止自由文本）
@@ -386,6 +387,8 @@ EPISODIC_RECORD_DICT_KEYS: tuple[str, ...] = (
     "reason_summary",
     "actions",
     "evidence_refs",
+    "modalities",
+    "audio_session_id",
     "source_event_ids",
     "summary",
     "model_version",
@@ -437,6 +440,8 @@ class EpisodicRecord:
     reason_summary: list[str] = field(default_factory=list)
     actions: list[ActionSummary] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
+    modalities: list[EvidenceModality] = field(default_factory=list)
+    audio_session_id: str | None = None
     risk_level: str | None = None
     recommended_action: str | None = None
     person_identity_id: str | None = None  # v1 恒 None
@@ -449,9 +454,19 @@ class EpisodicRecord:
         # 1) record_id 前缀校验（I1）
         _validate_record_id(self.record_id, RecordIdPrefix.EPISODIC)
 
-        # 2) 必填非空
-        if not self.visitor_instance_id or not self.visitor_instance_id.strip():
+        # 2) 身份溯源（I4 / D4）：visitor_instance_id 与 audio_session_id 至少其一必填
+        #    纯音频 episode 无视觉访客，仅持 audio_session_id（匿名，绝不反填 visitor）。
+        if self.visitor_instance_id is None:
+            if self.audio_session_id is None:
+                raise ValueError(
+                    "visitor_instance_id 与 audio_session_id 至少其一必填（I4 溯源链）"
+                )
+        elif not self.visitor_instance_id.strip():
             raise ValueError("visitor_instance_id 不能为空")
+        if self.audio_session_id is not None and (
+            not isinstance(self.audio_session_id, str) or not self.audio_session_id.strip()
+        ):
+            raise ValueError("audio_session_id 必须为非空字符串或 None")
         if not self.summary or not self.summary.strip():
             raise ValueError(
                 "summary 不能为空（ADR-0024 §3.2.1 强制：Memory Object 必须含 "
@@ -470,6 +485,13 @@ class EpisodicRecord:
             if not isinstance(eid, str) or not eid.strip():
                 raise ValueError(
                     f"evidence_refs 元素必须是非空字符串（evidence_id），收到 {eid!r}"
+                )
+
+        # 3.2) modalities 元素必须是 EvidenceModality 枚举（D7 闭合契约，禁止自由文本）
+        for m in self.modalities or []:
+            if not isinstance(m, EvidenceModality):
+                raise TypeError(
+                    f"modalities 元素必须是 EvidenceModality，收到 {m!r}"
                 )
 
         # 4) memory_status 归一
@@ -515,6 +537,8 @@ class EpisodicRecord:
             "reason_summary": list(self.reason_summary),
             "actions": [a.to_dict() for a in self.actions],
             "evidence_refs": list(self.evidence_refs),
+            "modalities": [m.value for m in self.modalities],
+            "audio_session_id": self.audio_session_id,
             "source_event_ids": list(self.source_event_ids),
             "summary": self.summary,
             "model_version": self.model_version,
@@ -541,6 +565,8 @@ class EpisodicRecord:
             reason_summary=list(data.get("reason_summary", [])),
             actions=[ActionSummary.from_dict(a) for a in data.get("actions", [])],
             evidence_refs=_coerce_evidence_refs(data.get("evidence_refs", [])),
+            modalities=[EvidenceModality(m) for m in data.get("modalities", [])],
+            audio_session_id=data.get("audio_session_id"),
             risk_level=data.get("risk_level"),
             recommended_action=data.get("recommended_action"),
             person_identity_id=data.get("person_identity_id"),
