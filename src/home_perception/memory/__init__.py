@@ -71,6 +71,24 @@ __all__ = [
     "SnapshotStore",
     "VisitorPresenceStatus",
 ]
+from .cross_modal_link import (
+    CROSS_MODAL_LINK_DICT_KEYS,
+    CROSS_MODAL_RELATIONSHIP_VALUES,
+    CrossModalLink,
+    CrossModalLinker,
+    CrossModalLinkStore,
+    CrossModalRelationship,
+    DanglingReferenceError,
+)
 from .store import InMemoryStore, InvariantViolationError, MemoryStore
 
 __all__ += ["InMemoryStore", "InvariantViolationError", "MemoryStore"]
+__all__ += [
+    "CROSS_MODAL_LINK_DICT_KEYS",
+    "CROSS_MODAL_RELATIONSHIP_VALUES",
+    "CrossModalLink",
+    "CrossModalLinkStore",
+    "CrossModalLinker",
+    "CrossModalRelationship",
+    "DanglingReferenceError",
+]
