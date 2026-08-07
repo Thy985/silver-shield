@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from home_perception.core.event import EvidenceModality
 from home_perception.memory.consumer.aggregation import RuleBasedAggregation
 from home_perception.memory.consumer.context import RuleBasedContextBuilder
 from home_perception.memory.consumer.contracts import CurrentEvent, ReasoningInput
@@ -33,6 +34,14 @@ from home_perception.memory.consumer.exceptions import (
 from home_perception.memory.consumer.interfaces import Aggregation, ContextBuilder, Retrieval
 from home_perception.memory.consumer.orchestrator import RuleBasedMemoryConsumer
 from home_perception.memory.consumer.retrieval import RuleBasedRetrieval
+from home_perception.memory.cross_modal_explainer import (
+    CrossModalExplainer,
+    CrossModalRetrieval,
+)
+from home_perception.memory.cross_modal_link import (
+    CrossModalLinker,
+    CrossModalLinkStore,
+)
 from home_perception.memory.records import ActionSummary, EpisodicRecord
 from home_perception.memory.store import InMemoryStore
 
@@ -480,3 +489,104 @@ class TestErrorLayering:
     def test_none_event_raises_consumer_error(self):
         with pytest.raises(ConsumerError):
             _default_consumer([]).consume(None)
+
+
+# ============================================================================
+# 8. ADR-0029 Slice C：跨模态解释可选注入（零行为变化 / 注入后正确附加）
+# ============================================================================
+
+
+def _cross_modal_episodes() -> tuple[EpisodicRecord, EpisodicRecord]:
+    """同设备重叠的视觉 + 纯音频 episode（SUPPORTS 边原料，ADR-0029 D4）。"""
+    vision = EpisodicRecord(
+        record_id="ep-vision",
+        visitor_instance_id=VISITOR,
+        device_id="dev-001",
+        enter_time=_utc(2026, 7, 20, 21, 0, 0),
+        leave_time=_utc(2026, 7, 20, 21, 5, 0),
+        duration_seconds=300,
+        source_event_ids=["ev-vision"],
+        summary="视觉：老人徘徊",
+        model_version="ep-builder-v1",
+        modalities=[EvidenceModality.VISION],
+    )
+    audio = EpisodicRecord(
+        record_id="ep-audio",
+        visitor_instance_id=None,
+        audio_session_id="sess-x",
+        device_id="dev-001",
+        enter_time=_utc(2026, 7, 20, 21, 1, 0),
+        leave_time=_utc(2026, 7, 20, 21, 4, 0),
+        duration_seconds=180,
+        source_event_ids=["ev-audio"],
+        summary="音频：撞击声",
+        model_version="ep-builder-v1",
+        modalities=[EvidenceModality.AUDIO],
+    )
+    return vision, audio
+
+
+def _injected_consumer() -> tuple[RuleBasedMemoryConsumer, CrossModalLinkStore]:
+    """注入跨模态解释三件套的 Consumer（store 复用，解析当前 episode → 取边 → 解释）。"""
+    store = InMemoryStore()
+    vision, audio = _cross_modal_episodes()
+    store.upsert_episodic(vision)
+    store.upsert_episodic(audio)
+    link = CrossModalLinker().link([vision, audio])[0]
+    link_store = CrossModalLinkStore()
+    link_store.add(link, {"ep-vision", "ep-audio"})
+    consumer = RuleBasedMemoryConsumer(
+        RuleBasedRetrieval(store),
+        RuleBasedAggregation(),
+        RuleBasedContextBuilder(),
+        cross_modal_retrieval=CrossModalRetrieval(link_store),
+        cross_modal_explainer=CrossModalExplainer(store),
+        memory_store=store,
+    )
+    return consumer, link_store
+
+
+class TestCrossModalConsumerInjection:
+    def test_consume_unchanged_without_cross_modal(self) -> None:
+        """D4 零行为变化：未注入时 cross_modal_contexts 为空，序列化形态稳定（向后兼容）。"""
+        store = InMemoryStore()
+        vision, _ = _cross_modal_episodes()
+        store.upsert_episodic(vision)
+        consumer = RuleBasedMemoryConsumer(
+            RuleBasedRetrieval(store), RuleBasedAggregation(), RuleBasedContextBuilder()
+        )
+        out = consumer.consume(_make_event())
+        assert out.cross_modal_contexts == ()
+        assert out.to_dict()["cross_modal_contexts"] == []  # 默认等价于历史，无新增键漂移
+
+    def test_injected_but_no_links_still_empty(self) -> None:
+        """D4：注入齐全但当前访客无跨模态边 → 仍为空（附加=有则附、无则不造）。"""
+        store = InMemoryStore()
+        vision, _ = _cross_modal_episodes()
+        store.upsert_episodic(vision)
+        consumer = RuleBasedMemoryConsumer(
+            RuleBasedRetrieval(store),
+            RuleBasedAggregation(),
+            RuleBasedContextBuilder(),
+            cross_modal_retrieval=CrossModalRetrieval(CrossModalLinkStore()),
+            cross_modal_explainer=CrossModalExplainer(store),
+            memory_store=store,
+        )
+        out = consumer.consume(_make_event())
+        assert out.cross_modal_contexts == ()
+
+    def test_cross_modal_contexts_attached_when_injected(self) -> None:
+        """D4：注入后正确附加当前访客相关 link 的解释（Context，非 Link），与既有字段独立。"""
+        consumer, link_store = _injected_consumer()
+        out = consumer.consume(_make_event())
+        assert len(out.cross_modal_contexts) == 1
+        ctx = out.cross_modal_contexts[0]
+        # 溯源到具体 link
+        assert ctx.source_link_id == link_store.all_links()[0].link_id
+        # 同设备 → 红化 True（无 device_id 泄漏）
+        assert ctx.shared_deployment_context is True
+        assert "device_id" not in ctx.to_dict()
+        # 与既有字段独立、不修改任何既有字段（C1/C2 不回退）
+        assert out.current_event.visitor_instance_id == VISITOR
+        assert out.historical_context  # 召回链正常
+        assert out.conflicts == ()  # 冲突逻辑未受影响

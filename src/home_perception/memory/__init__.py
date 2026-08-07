@@ -71,6 +71,15 @@ __all__ = [
     "SnapshotStore",
     "VisitorPresenceStatus",
 ]
+from .cross_modal_explainer import (
+    CROSS_MODAL_CONTEXT_FORBIDDEN_FIELDS,
+    CrossModalContext,
+    CrossModalEpisodeRef,
+    CrossModalExplainer,
+    CrossModalRetrieval,
+    CrossModalRetrievalError,
+    ExplanationRenderer,
+)
 from .cross_modal_link import (
     CROSS_MODAL_LINK_DICT_KEYS,
     CROSS_MODAL_RELATIONSHIP_VALUES,
@@ -91,4 +100,13 @@ __all__ += [
     "CrossModalLinker",
     "CrossModalRelationship",
     "DanglingReferenceError",
+]
+__all__ += [
+    "CROSS_MODAL_CONTEXT_FORBIDDEN_FIELDS",
+    "CrossModalContext",
+    "CrossModalEpisodeRef",
+    "CrossModalExplainer",
+    "CrossModalRetrieval",
+    "CrossModalRetrievalError",
+    "ExplanationRenderer",
 ]

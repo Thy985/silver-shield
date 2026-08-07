@@ -33,5 +33,6 @@ REASONING_INPUT_FIELD_WHITELIST: frozenset[str] = frozenset(
         "previous_actions",
         "conflicts",
         "modalities",
+        "cross_modal_contexts",  # ADR-0029 D4（Slice B）：纯描述性跨模态解释上下文
     }
 )
