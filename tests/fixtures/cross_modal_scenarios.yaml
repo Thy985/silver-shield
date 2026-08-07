@@ -1,0 +1,92 @@
+# Cross-Modal Runtime Wiring 声明式场景（ADR-0028 D6）
+#
+# 用法：测试工具把 scenario 翻译为 EpisodicRecord（vision → 带 visitor 的视觉
+# episode；audio → 纯音频 episode，audio_session_id 由 event 派生；均带 device_id），
+# 再经 CrossModalLinker 关联，断言 expected.link。
+#
+# 边界（与 ADR §0.2 闭环）：fixture **不生成 / 不消费任何视频或音频二进制**，
+# 仅构造领域对象（EpisodicRecord）——程序化视频/合成媒体不属于本 ADR。
+#
+# 时间语义：start/end 为会话内相对秒（同一时间轴）；翻译时映射为 UTC 基线偏移。
+scenarios:
+  # 正例：同设备 + 时间重叠（overlap=3s > 阈值 2s）
+  - name: vision_fall_audio_impact
+    device_id: home_entry_01
+    vision:
+      - start: 10.0
+        end: 20.0
+        event: fall
+        visitor: visitor_a
+    audio:
+      - start: 12.0
+        end: 15.0
+        event: impact
+    expected:
+      link: true
+      relationship: supports
+      min_overlap_seconds: 2.0
+
+  # 负例 1：同设备但时间不重叠
+  - name: same_device_no_overlap
+    device_id: home_entry_01
+    vision:
+      - start: 10.0
+        end: 12.0
+        event: visit
+        visitor: visitor_a
+    audio:
+      - start: 40.0
+        end: 45.0
+        event: impact
+    expected:
+      link: false
+
+  # 负例 2：时间重叠但异设备
+  - name: overlap_different_device
+    device_id: home_entry_01
+    vision:
+      - start: 10.0
+        end: 20.0
+        event: fall
+        visitor: visitor_a
+    audio_device_id: living_room_mic_01
+    audio:
+      - start: 12.0
+        end: 15.0
+        event: impact
+    expected:
+      link: false
+
+  # 负例 3：时间重叠但未达 min_overlap_seconds 阈值（overlap=1s < 2s）
+  - name: overlap_below_threshold
+    device_id: home_entry_01
+    vision:
+      - start: 10.0
+        end: 11.0
+        event: visit
+        visitor: visitor_a
+    audio:
+      - start: 11.0
+        end: 12.0
+        event: impact
+    expected:
+      link: false
+      min_overlap_seconds: 2.0
+
+  # 负例 4（D2 review 核心安全网）：共享 audio_session_id 但异设备 → 不建边
+  #（audio_session_id 不参与跨模态身份——会话身份≠世界实体身份）
+  - name: vision_audio_session_overlap_different_device
+    device_id: home_entry_01
+    vision:
+      - start: 10.0
+        end: 20.0
+        event: fall
+        visitor: visitor_a
+    audio_device_id: living_room_mic_01
+    audio:
+      - start: 12.0
+        end: 15.0
+        event: impact
+        audio_session: shared_session_001
+    expected:
+      link: false

@@ -79,6 +79,8 @@ from ..memory.consumer import (
     max_risk_level,
 )
 from ..memory.consumer.contracts import ReasoningInput
+from ..memory.cross_modal_link import CrossModalLinkStore
+from ..memory.cross_modal_runtime import CrossModalLinkRuntime
 from ..memory.snapshot import RuntimeSnapshot, SnapshotStore
 from .audio_session_recorder import AudioSessionRecorder, AudioSessionSummary
 from .config import build_dispatcher_config, build_threshold_config
@@ -544,23 +546,38 @@ class PerceptionPipeline:
         # audio_recorder 依赖 Memory 影子写入已就位（无 memory_hook 就无处落库），
         # 故它是 episodic_shadow 的下游子开关：仅当 audio.enabled + memory.enabled +
         # episodic_shadow 三者同真才构造 AudioSessionRecorder（复用本管线已装配的
-        # decision_engine / executor；memory_hook 单例由本段先建，视觉/音频两路共享
-        # 同一实例与 metrics）。音频决策经既有 DecisionEngine（单一决策中心，D3
-        # 门槛），不新增音频记忆孤岛。
+        # decision_engine / executor；memory_hook 单例由下方 episodic_shadow 段先建，
+        # 视觉/音频两路共享同一实例与 metrics）。音频决策经既有 DecisionEngine
+        # （单一决策中心，D3 门槛），不新增音频记忆孤岛。
         #
         # ⚠️ 共享单例的隐含假设（审查）：pipeline_metrics 同时作为 MemoryHook 构造
         # 参数与 cls(metrics=...) 传入，视觉/音频两路共用同一 PipelineMetrics 实例
         # （self.metrics is self._memory_hook._metrics 恒真）。**本段之后不得再
         # 覆写 metrics**——若未来某处出现 `self.metrics = PipelineMetrics()` 会分裂
         # 计数，测试 test_shared_memory_hook_single_instance 会立即红。
+        #
+        # —— ADR-0028 D4：CrossModalLinkRuntime 装配（episodic_shadow 激活即建边）——
+        # MemoryHook 单例在此构造（含可选 cross_modal_runtime 注入，ADR-0028 D4）；
+        # 视觉/音频两路共用该 hook → 两路落库都自动触发跨模态建边。runtime 失败
+        # 仅日志、不计 metrics.errors（D4 review）。未注入（episodic_shadow 关）→
+        # __init__ 自建 hook（无 runtime），落库行为与历史逐字段一致。
         audio_recorder: AudioSessionRecorder | None = None
         pipeline_memory_hook: MemoryHook | None = None
         pipeline_metrics = PipelineMetrics()
+        if episodic_shadow and episode_builder is not None and memory_store is not None:
+            link_store = CrossModalLinkStore()
+            cross_modal_runtime = CrossModalLinkRuntime(
+                memory_store, link_store, min_overlap_seconds=0.0
+            )
+            pipeline_memory_hook = MemoryHook(
+                episode_builder,
+                memory_store,
+                True,
+                pipeline_metrics,
+                cross_modal_runtime=cross_modal_runtime,
+            )
         if settings.audio.enabled:
-            if episodic_shadow and episode_builder is not None and memory_store is not None:
-                pipeline_memory_hook = MemoryHook(
-                    episode_builder, memory_store, True, pipeline_metrics
-                )
+            if pipeline_memory_hook is not None:
                 audio_recorder = AudioSessionRecorder(
                     decision_engine,
                     executor,
@@ -745,8 +762,13 @@ class PerceptionPipeline:
             # —— ADR-0024 Slice 5：Stage F Episodic Memory 影子写入（经 MemoryHook）——
             # 仅记录本次访客离场的投影（含其已产出的 warning/action），
             # 不接决策、不产 Warning，开启影子开关不改变任何历史行为。
+            # device_id（ADR-0028 D1）：部署源标识，取 RuleEngine 的 device_id
+            # （即 WarningEvent.device_id 的源头，signal_adapter 透传同一值），
+            # 供跨模态同设备关联。
             if self._memory_hook.enabled:
-                self._memory_hook.record(ev, ev_warnings, cmds)
+                self._memory_hook.record(
+                    ev, ev_warnings, cmds, device_id=self.rule_engine.device_id
+                )
 
         # —— Stage B/C 实时旁路（feature flag 控制；关闭时零开销，行为与基线逐字段一致）——
         # Stage B：BehaviorBuilder 纯函数 + RecentBehaviorStore 跨访问账本 → behavior_states（观察）

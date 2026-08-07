@@ -259,6 +259,7 @@ class AudioSessionRecorder:
 
         # 5) 落库：纯音频 episode（ev=None + audio_session_id，D4 匿名）
         #    落库计数由 MemoryHook 内部自增（episodes_recorded），本组件不重复计。
+        #    device_id（ADR-0028 D1）：部署源标识透传，供跨模态同设备关联。
         recorded = False
         if self._memory_hook is not None:
             try:
@@ -268,6 +269,7 @@ class AudioSessionRecorder:
                     actions,
                     evidence=evidence,
                     audio_session_id=session_id,
+                    device_id=self._device_id,
                 )
                 recorded = True
             except Exception as exc:  # noqa: BLE001  # 落库失败：摘要如实报告，不抛

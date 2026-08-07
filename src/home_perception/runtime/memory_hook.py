@@ -42,11 +42,15 @@ class MemoryHook:
         memory_store: MemoryStore | None,
         enabled: bool,
         metrics: PipelineMetrics,
+        cross_modal_runtime: Any | None = None,
     ) -> None:
         self._episode_builder = episode_builder
         self._memory_store = memory_store
         self._enabled = bool(enabled)
         self._metrics = metrics
+        # ADR-0028 D4：跨模态关联运行时（可选注入；None = 不触发，零行为变化）。
+        # 落库成功后触发建边；runtime 自身失败仅日志，不计入 metrics.errors。
+        self._cross_modal_runtime = cross_modal_runtime
 
     @property
     def enabled(self) -> bool:
@@ -61,6 +65,7 @@ class MemoryHook:
         *,
         evidence: list[EvidenceItem] | None = None,
         audio_session_id: str | None = None,
+        device_id: str | None = None,
     ) -> None:
         """把一次访客离场（或纯音频会话结束）投影为 EpisodicRecord 并写入 MemoryStore。
 
@@ -71,12 +76,17 @@ class MemoryHook:
           非空 ``audio_session_id`` + 音频 ``evidence``，投影为匿名音频 episode
           （``visitor_instance_id=None``，绝不反填访客）。
 
+        ``device_id``（ADR-0028 D1）：部署源标识（如 ``home_entry_01``），透传至
+        ``EpisodicRecord.device_id`` 供跨模态同设备关联；None 表示未知。
+
         影子写入**只记录、不接决策、不产 Warning**，因此开启 ``episodic_shadow``
         不会改变流水线任何历史行为（工程方案 §8.3 合入门）。
 
         容错（AGENTS.md §2.5：记忆写入失败不崩溃主链路）：
         - 投影异常 / 落库未知异常 → 计 ``errors`` + 记日志，跳过本 episode；
-        - ``InvariantViolationError``（I2 单调性：字段冲突）→ 防御性告警，不计入 errors。
+        - ``InvariantViolationError``（I2 单调性：字段冲突）→ 防御性告警，不计入 errors；
+        - 落库成功后触发 ``cross_modal_runtime.on_episode_recorded``（ADR-0028 D4，
+          可选注入；其自身失败仅日志，不计入 errors——errors 属落库通道契约）。
         """
         if self._episode_builder is None or self._memory_store is None:
             return
@@ -87,6 +97,7 @@ class MemoryHook:
                 actions,
                 evidence=evidence or [],
                 audio_session_id=audio_session_id,
+                device_id=device_id,
             )
         except Exception:  # 投影失败（理论上 DefaultEpisodeBuilder 为纯函数不应抛）
             self._metrics.errors += 1
@@ -108,3 +119,11 @@ class MemoryHook:
             log.exception("pipeline.episode_store_failed", record_id=record.record_id)
             return
         self._metrics.episodes_recorded += 1
+        # —— ADR-0028 D4：落库成功后触发跨模态建边（可选注入，失败仅日志）——
+        if self._cross_modal_runtime is not None:
+            try:
+                self._cross_modal_runtime.on_episode_recorded(record)
+            except Exception:  # 建边失败仅日志，不计 errors（D4 review）
+                log.exception(
+                    "pipeline.cross_modal_link_failed", record_id=record.record_id
+                )
