@@ -1,0 +1,45 @@
+# Runtime E2E Contract Test 声明式场景（ADR-0028 · Runtime Wiring 验证）
+#
+# 与 Slice C 的 cross_modal_scenarios.yaml（CrossModalLinker 单元级）不同，本 fixture
+# 验证**真实运行链**：Vision Runtime + Audio Runtime → MemoryHook →
+# CrossModalLinkRuntime → CrossModalLinkStore 中的**真实 Link**。
+#
+# **不生成 / 不消费任何视频或音频二进制**——仅驱动领域事件流
+# （用户/ADR §0.2 闭环：重点验证装配，程序化视频/合成媒体不属于本 ADR）。
+#
+# 翻译语义（tests/runtime/test_runtime_cross_modal_e2e.py）：
+# - vision.window [start, end]：视觉访问窗口（相对统一时钟基线的秒偏移）。
+#   驱动 detector 帧序列（person 在场 + 离场空帧）→ enter≈base+start、leave≈base+end。
+# - vision.event：场景语义标签（当前检测域仅 person，不驱动检测；驱动由 window）。
+# - audio.event：AudioPerceptionKind.value，驱动 AudioPerceptionEvent.kind。
+# - audio.at：音频事件时间（相对基线秒偏移）→ EvidenceItem.captured_at；
+#   收割发生在视觉驱动之后（warning.created_at ≈ 视觉 leave）。
+# - 断言：expected.cross_modal_link（真实 CrossModalLinkStore 里的边）。
+scenarios:
+  # 正例：同设备 camera01，音频事件 300s 落在视觉窗口 30~930s 内 → 恰好 1 条 SUPPORTS
+  - name: vision_fall_audio_distress_supports
+    device_id: camera01
+    vision:
+      event: fall
+      window: [30.0, 930.0]
+    audio:
+      event: audio_distress_cry
+      at: 300.0
+    expected:
+      cross_modal_link:
+        present: true
+        relationship: supports
+        n_links: 1
+
+  # 负例：同设备但音频事件 1200s 在视觉窗口 30~930s 外 → 不建边
+  - name: same_device_no_time_overlap
+    device_id: camera01
+    vision:
+      event: fall
+      window: [30.0, 930.0]
+    audio:
+      event: audio_distress_cry
+      at: 1200.0
+    expected:
+      cross_modal_link:
+        present: false

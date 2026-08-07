@@ -68,6 +68,18 @@ class CrossModalLinkRuntime:
     def link_count(self) -> int:
         return self._link_store.link_count()
 
+    def all_links(self) -> list[CrossModalLink]:
+        """全部关联边（按 link_id 排序，确定性）。
+
+        只读委托（可观测性/审计入口，与 ``CrossModalLinkStore.snapshot()`` 同构；
+        不触发扫描、不写任何状态）。
+        """
+        return self._link_store.all_links()
+
+    def get_links_by_episode(self, record_id: str) -> list[CrossModalLink]:
+        """返回所有引用了 ``record_id`` 的关联边（按 link_id 排序，确定性）。"""
+        return self._link_store.get_links_by_episode(record_id)
+
     def on_episode_recorded(self, record: EpisodicRecord) -> list[CrossModalLink]:
         """落库后触发：全量扫描 → linker → link_store.add（悬空校验）。
 
