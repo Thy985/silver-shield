@@ -57,6 +57,14 @@ class MemoryHook:
         """运行期门控：``episodic_shadow`` 是否激活。"""
         return self._enabled
 
+    @property
+    def cross_modal_runtime(self) -> Any | None:
+        """跨模态关联运行时（只读视图；未注入为 None，零行为变化）。
+
+        供审计 / Dashboard / E2E 断言经公开入口查询真实 Link，不暴露内部存储。
+        """
+        return self._cross_modal_runtime
+
     def record(
         self,
         ev: VisitorEvent | None,

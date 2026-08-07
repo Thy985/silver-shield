@@ -401,6 +401,20 @@ class PerceptionPipeline:
         self._audio_recorder = audio_recorder
 
     # ------------------------------------------------------------------
+    # ADR-0028 可观测性：跨模态关联边只读视图（审计 / Dashboard / E2E）
+    # ------------------------------------------------------------------
+    @property
+    def cross_modal_links(self) -> list[Any] | None:
+        """全部跨模态关联边（``CrossModalLink`` 列表，按 link_id 排序）。
+
+        只读视图（ADR-0028 可观测性）：未装配（``episodic_shadow`` 关）或
+        runtime 未注入时返回 ``None``——落库行为与历史逐字段一致，零行为变化。
+        """
+        if self._memory_hook is None or self._memory_hook.cross_modal_runtime is None:
+            return None
+        return self._memory_hook.cross_modal_runtime.all_links()
+
+    # ------------------------------------------------------------------
     # 从配置装配
     # ------------------------------------------------------------------
 
