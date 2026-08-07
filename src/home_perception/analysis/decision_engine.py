@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from ..common.logging import get_logger
 from ..common.timeutil import now_dt
+from .decision_contract import DecisionInput
 from .decision_policy import DecisionContext, DecisionPolicy, RuleBasedDecisionPolicy
 from .perception import PerceptionEvent
 from .warning import WarningEvent
@@ -71,7 +72,16 @@ class DecisionEngine:
         - 全部是 visit_normal 且无 is_odd_hour 叠加（普通访问）
         """
         ctx = DecisionContext(elder_id=self.elder_id, now=self._now())
-        warning = self.policy.decide(perception_events, ctx)
+        # Slice B：装配 DecisionInput（单入参契约）。本期记忆/推理/既往字段尚未接线，
+        # 一律显式 None —— 满足 ADR-0030 D2「Memory 可缺席」原则，零行为变化。
+        input = DecisionInput(
+            trigger_events=tuple(perception_events),
+            decision_context=ctx,
+            reasoning_input=None,
+            reasoning_result=None,
+            prior_warning=None,
+        )
+        warning = self.policy.decide(input)
         if warning is not None:
             log.info(
                 "decision.warning_emitted",
