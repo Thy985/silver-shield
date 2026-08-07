@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timezone
 
 import pytest
 
+from home_perception.analysis.decision_contract import DecisionInput
 from home_perception.analysis.decision_engine import DecisionEngine
 from home_perception.analysis.decision_policy import (
     DEFAULT_ROUTING_TABLE,
@@ -343,20 +344,20 @@ class TestRuleBasedDecisionPolicy:
     def test_empty_events_returns_none(self):
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="elder_001")
-        assert policy.decide([], ctx) is None
+        assert policy.decide(DecisionInput(trigger_events=(), decision_context=ctx)) is None
 
     def test_visit_normal_alone_returns_none(self):
         """单条 visit_normal（无 is_odd_hour）→ 不警告，避免噪音。"""
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="elder_001")
         events = [make_perception(event_type="visit_normal", is_odd_hour=False)]
-        assert policy.decide(events, ctx) is None
+        assert policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx)) is None
 
     def test_visit_normal_with_odd_hour_returns_low(self):
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="elder_001")
         events = [make_perception(event_type="visit_normal", is_odd_hour=True)]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "LOW"
         assert w.recommended_action == "MONITOR"
@@ -366,7 +367,7 @@ class TestRuleBasedDecisionPolicy:
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="elder_001")
         events = [make_perception(event_type="high_risk_approach", score=0.9)]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "HIGH"
         assert w.recommended_action == "ESCALATE_COMMUNITY"
@@ -376,7 +377,7 @@ class TestRuleBasedDecisionPolicy:
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="elder_001")
         events = [make_perception(event_type="abnormal_dwell", score=0.5)]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "LOW"
         assert w.recommended_action == "NOTIFY_FAMILY"
@@ -386,7 +387,7 @@ class TestRuleBasedDecisionPolicy:
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="elder_001")
         events = [make_perception(event_type="repeat_visit", score=0.3)]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "LOW"
         assert w.recommended_action == "NOTIFY_FAMILY"
@@ -396,7 +397,7 @@ class TestRuleBasedDecisionPolicy:
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="elder_001")
         events = [make_perception(event_type="visit_pending_verify", score=0.2)]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "LOW"
         assert w.recommended_action == "MONITOR"
@@ -410,7 +411,7 @@ class TestRuleBasedDecisionPolicy:
             make_perception(event_type="abnormal_dwell", score=0.5),
             make_perception(event_type="repeat_visit", score=0.3),
         ]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "HIGH"  # max wins
         assert w.recommended_action == "ESCALATE_COMMUNITY"
@@ -428,7 +429,7 @@ class TestRuleBasedDecisionPolicy:
             make_perception(event_type="abnormal_dwell", score=0.5),
             make_perception(event_type="repeat_visit", score=0.3),
         ]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "LOW"
         assert w.recommended_action == "NOTIFY_FAMILY"
@@ -441,7 +442,7 @@ class TestRuleBasedDecisionPolicy:
             make_perception(event_type="visit_normal", score=0.1),  # 单独不警告
             make_perception(event_type="abnormal_dwell", score=0.5),
         ]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w is not None
         assert w.risk_level == "LOW"
         # 触发事件只含 abnormal_dwell（visit_normal 被过滤）
@@ -453,21 +454,21 @@ class TestRuleBasedDecisionPolicy:
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="my_elder_42")
         events = [make_perception(event_type="abnormal_dwell")]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w.elder_id == "my_elder_42"
 
     def test_warning_event_device_id_from_perception(self):
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="e1")
         events = [make_perception(event_type="abnormal_dwell", device_id="front_door_v2")]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w.device_id == "front_door_v2"
 
     def test_warning_event_meta_contains_policy(self):
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="e1")
         events = [make_perception(event_type="abnormal_dwell")]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w.meta["policy"] == "RuleBasedDecisionPolicy"
         assert "decided_at" in w.meta
         assert "trigger_event_types" in w.meta
@@ -477,7 +478,7 @@ class TestRuleBasedDecisionPolicy:
         policy = RuleBasedDecisionPolicy()
         ctx = DecisionContext(elder_id="e1")
         events = [make_perception(event_type="abnormal_dwell")]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w.status == "CREATED"
 
     def test_warning_event_no_fraud_field(self):
@@ -488,7 +489,7 @@ class TestRuleBasedDecisionPolicy:
             make_perception(event_type="high_risk_approach", score=0.9),
             make_perception(event_type="abnormal_dwell", score=0.5),
         ]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         d = w.to_dict()
         # 关键黑名单检查（dict 顶层 + meta）
         for forbidden in FORBIDDEN_WARNING_FIELDS:
@@ -501,6 +502,34 @@ class TestRuleBasedDecisionPolicy:
 # ============================================================================
 
 
+    def test_decision_degrades_to_perception_only_without_memory(self):
+        """ADR-0030 D2 Memory 可缺席：memory 三字段全 None 时退化为纯感知决策且不报错。
+
+        Slice B 零行为变化——policy 不读 memory 字段；「缺席」= 中性，不得因无记忆
+        而抬升或降低风险。本测试断言带 None memory 的输入与纯感知输入逐字段一致。
+        """
+        policy = RuleBasedDecisionPolicy()
+        ctx = DecisionContext(elder_id="e1")
+        events = [make_perception(event_type="abnormal_dwell", score=0.5)]
+        di = DecisionInput(
+            trigger_events=tuple(events),
+            decision_context=ctx,
+            reasoning_input=None,
+            reasoning_result=None,
+            prior_warning=None,
+        )
+        w = policy.decide(di)
+        assert w is not None
+        assert w.risk_level == "LOW"
+        assert w.recommended_action == "NOTIFY_FAMILY"
+        # 与「不带任何 memory 字段」的纯感知输入逐字段一致（缺席=中性，非风险信号）
+        plain = policy.decide(
+            DecisionInput(trigger_events=tuple(events), decision_context=ctx)
+        )
+        assert w.risk_level == plain.risk_level
+        assert w.recommended_action == plain.recommended_action
+        assert w.perception_score == plain.perception_score
+
 class TestRuleBasedDecisionPolicyCustomization:
     def test_custom_routing_table(self):
         """家庭可定制路由表：把 abnormal_dwell 视为 MEDIUM 而非 LOW。"""
@@ -509,7 +538,7 @@ class TestRuleBasedDecisionPolicyCustomization:
         policy = RuleBasedDecisionPolicy(routing_table=custom_table)
         ctx = DecisionContext(elder_id="e1")
         events = [make_perception(event_type="abnormal_dwell")]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w.risk_level == "MEDIUM"
         assert w.recommended_action == "NOTIFY_FAMILY"
 
@@ -534,7 +563,7 @@ class TestRuleBasedDecisionPolicyCustomization:
         policy = RuleBasedDecisionPolicy(routing_table=custom_table)
         ctx = DecisionContext(elder_id="e1")
         events = [make_perception(event_type="high_risk_approach")]
-        w = policy.decide(events, ctx)
+        w = policy.decide(DecisionInput(trigger_events=tuple(events), decision_context=ctx))
         assert w.risk_level == "HIGH"
         assert w.recommended_action == "NOTIFY_FAMILY"
 
