@@ -286,3 +286,32 @@ class TestActionHintAdvisory:
     def test_single_visit_no_history_is_none(self):
         # 孤立事件（无风险 / 无模式 / 无冲突）→ 不强行提示
         assert self._hint_for(risk_level="LOW") is None
+
+
+# ============================================================================
+# 6. ADR-0029 Slice B 向后兼容：旧序列化（无 cross_modal_contexts）可反序列化
+# ============================================================================
+
+
+class TestReasoningInputBackwardCompat:
+    def test_reasoning_input_backward_compatible_without_cross_modal_field(self):
+        """ADR-0029 D4 / Slice B 向后兼容：旧 ReasoningInput JSON 不含
+        ``cross_modal_contexts`` 键时，``from_dict`` 应安全反序列化且
+        ``cross_modal_contexts`` 默认空元组——不破坏 checkpoint / cache / replay log /
+        historical trace 中的旧数据。
+
+        长期运行的 Agent 系统必然遇到 ADR-0029 之前落库的序列化结果，本测试锁定其可恢复性。
+        """
+        payload = _full_input().to_dict()
+        assert "cross_modal_contexts" in payload  # 新代码确实会写出该键
+        del payload["cross_modal_contexts"]  # 模拟 ADR-0029 之前的序列化
+
+        restored = ReasoningInput.from_dict(payload)
+        # 核心断言：旧数据反序列化后该字段为空，而非崩溃或缺失
+        assert restored.cross_modal_contexts == ()
+        # 既有字段不受影响
+        assert restored.current_event == _full_input().current_event
+        assert restored.historical_context  # 召回链正常
+        # 向前兼容：新代码重序列化会补出该键，且值等价于空列表；二次往返稳定
+        assert restored.to_dict()["cross_modal_contexts"] == []
+        assert ReasoningInput.from_dict(restored.to_dict()).cross_modal_contexts == ()
