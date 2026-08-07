@@ -11,6 +11,7 @@
   - ADR-0025（Memory Consumer 架构·C1 不决策 / C2 只读 / C3 确定性 / C5 溯源；C-6 ReasoningResult）
   - ADR-0027（音频记忆集成）/ ADR-0028（跨模态运行时接线）/ ADR-0029（跨模态检索与解释·`CrossModalContext` 进 `ReasoningInput`）
   - （规划）ADR-0031（Decision Audit Trace Contract，见 §5.1 路线图）
+  - （规划）ADR-0031（Decision Audit Trace Contract，见 §5.1 路线图）
 - **Phase**: v2 · Phase 3 → Memory 闭环 → 跨模态 Memory Graph → 跨模态可解释层 → **决策边界契约（Memory 首次进入决策的契约前提）**
 
 ---
@@ -85,6 +86,60 @@ ADR-0029 与 ADR-0030 一前一后，完成了 SilverShield 的一次架构跃�
 
 关键边界守恒：`Memory = context`、`Reasoning = suggestion`、`Decision = authority`。`DecisionInput` 是四段链路唯一收敛点（类比 Kubernetes API Server 是集群唯一控制入口、DB transaction boundary 是数据一致性入口）。
 
+### 0.4 Decision Memory Validation History（决策记忆价值验证沿革）
+
+ADR-0030 解决的是**架构问题**——"Memory 如何合法进入 Decision"；而"Memory 进入 Decision 后是否真的提升决策质量"是独立的**价值问题**（见 §6 切片 C）。为避免评审者产生"Memory 存在 → 所以应该影响决策"的不严谨推导，本节记录 SilverShield 已有的前置验证探索，作为本 ADR 的背景演进路线。
+
+> 为什么我们相信 Memory 值得进入 Decision？本 ADR **不预设答案**，只冻结"未来任何验证都必须经 `DecisionInput` 唯一入口"这一边界；收益问题交给受控验证（§6 切片 C / ADR-0031）回答。
+
+历史验证路线：
+
+```
+Phase A：视觉 Memory → Decision 可行性验证（已完成）
+
+PerceptionEvent
+        |
+        v
+Visual Memory
+        |
+        v
+Reasoning Context
+        |
+        v
+Decision Shadow Evaluation
+```
+
+目标：验证历史行为模式是否能够补充当前感知、Memory context 是否能够改变 Reasoning、Reasoning 是否具备进入 Decision 的工程价值。
+
+当前状态：
+- Phase A 已完成，证明 `Memory → Reasoning → Decision` 的技术路径可行；
+- 但**尚未完成长期统计意义上的收益验证**（误报 / 漏报 / escalation 准确率 / 用户价值）；
+- 后续因产品场景扩展与多模态方向调整，开发路线转向：
+
+```
+视觉 Memory
+        ↓
+跨模态 Memory Graph
+        ↓
+音频 Memory
+        ↓
+统一 Memory Context
+```
+
+因此 Decision Memory Validation 暂停在 A 阶段。本 ADR **不重新定义验证目标**，而冻结未来验证的唯一入口：
+
+```
+Memory / Reasoning
+        |
+        v
+DecisionInput
+        |
+        v
+DecisionPolicy
+```
+
+任何未来验证（视觉 Memory、音频 Memory、跨模态 Memory、LLM Reasoning）必须通过 `DecisionInput` 进入，避免各模块私接旁路决策路径——这正是本 ADR 作为 **Future Decision Experiment Boundary** 的核心价值。
+
 ---
 
 ## 1. 决策（Decision）
@@ -94,7 +149,7 @@ ADR-0029 与 ADR-0030 一前一后，完成了 SilverShield 的一次架构跃�
 1. **确认三已有契约的角色与边界**（不重新实现——它们已分别由 ADR-0021 / ADR-0025 / ADR-0029 冻结，本 ADR 仅确认其在决策链中的归属并补一处缺口）：`RiskSignal`（感知触发）、`ReasoningInput`（记忆上下文载体）、`ReasoningResult`（参考推理建议，当前孤儿）；
 2. **定义 `DecisionInput`（新）**：把"感知触发（`PerceptionEvent[]`）+ 记忆上下文（`ReasoningInput`）+ 参考建议（`ReasoningResult`）+ 策略状态（`DecisionContext`）+ 既往决策（`WarningEvent`，迟滞用）"收敛为一个不可变结构体，作为 `DecisionPolicy.decide` 的唯一入参；
 3. **演进 `DecisionPolicy.decide` 签名**：从 `decide(perception_events, ctx)` 演进为 `decide(input: DecisionInput)`——内部行为（路由表 / max-wins）逐字不变，保证向后兼容；
-4. **为"Memory 进入决策"预留受控通道**：`DecisionInput.reasoning_result` / `reasoning_input` 已就位，但**是否真正影响决策**由 §6 切片 C（门控，需 Owner 放行）决定——契约先冻结，行为分级开。
+4. **为"Memory 进入决策"预留受控验证通道（契约先行，价值后验）**：`DecisionInput.reasoning_result` / `reasoning_input` 已就位，但**Memory 是否真正影响决策、是否真有收益**由 §6 切片 C（Controlled Validation Gate，门控，需 Owner 放行）决定——契约先冻结，行为分级开；且 Memory 影响决策的**前提是验证证明统计收益，而非契约存在**（见 §0.4 / D5）。
 
 > 本 ADR **不实现任何模型 / 不写任何 dataclass 代码**——仅冻结契约形状与不变式，落地见 §6。
 
@@ -150,13 +205,13 @@ ADR-0029 与 ADR-0030 一前一后，完成了 SilverShield 的一次架构跃�
 - `DecisionEngine.evaluate(perception_events)` 适配层负责装配 `DecisionInput`（`trigger_events=perception_events`、`reasoning_input=None`、`reasoning_result=None`、`decision_context`、`prior_warning=None`），使既有调用方零改动。
 - 破坏性变更管理：`decide` 签名变化影响所有实现与测试；切片 B 必须同步更新 `RuleBasedDecisionPolicy` + `DecisionEngine` + 全部 decision 测试，验收要求"既有 decision 行为逐字段回归"。
 
-### D5：关闭「推理 → 决策」断点（Memory 首次进入决策，门控）
+### D5：Memory → Decision 受控验证门（Controlled Validation Gate，非上线能力）
 
-这是本 ADR 最具杠杆也最敏感的一步——把 `runtime/pipeline.py:547` 的「推理产出仅 Shadow 观测，不接决策」翻转为"可受控接入"。**门控原则**：
+这是本 ADR 最具杠杆也最敏感的一步——把 `runtime/pipeline.py:547` 的「推理产出仅 Shadow 观测，不接决策」翻转为"可受控验证接入"。**关键定位**：切片 C 是**验证能力，不是上线能力**；Memory 进入 Decision 的必要前提**不是契约存在，而是经过 Shadow Validation 证明具有统计收益**（见 §0.4）。**门控原则**：
 
-- **唯一、受控的 Memory 软信号使用（action lattice + max-only）**：定义动作偏序格（action lattice）`MONITOR < NOTIFY_FAMILY < ESCALATE_COMMUNITY`。`RuleBasedDecisionPolicy` 可读取 `reasoning_input.conflicts`（如含 `risk_escalation`：历史 LOW→当前 HIGH）与 `reasoning_result.suggested_action_hint`，但 Memory 软信号**只能对感知选定动作取偏序 max（`max(perception_action, memory_suggested_action)`），绝不能 replace / 降级 / 逆转**——即 Memory 信号**只升不降**。形式化：`final_action = max(lattice, perception_chosen_action, memory_suggested_action)`，其中 `max` 按上述偏序；感知已选 `NOTIFY_FAMILY` 而 Memory 历史正常时**不得降级为 `MONITOR`**；感知已选 `MONITOR` 且 Memory 显式 escalation 时可升 `NOTIFY_FAMILY`，但**不覆盖**路由表为 chosen perception event 选定的 `recommended_action` 语义（max 结果作为最终 action）。该格与 max-only 语义由 `test_decision_action_lattice_max_only` + `test_decision_never_lowers_below_perception` 钉死。
+- **（验证通过 + Owner 放行后生效）唯一、受控的 Memory 软信号使用（action lattice + max-only）**：定义动作偏序格（action lattice）`MONITOR < NOTIFY_FAMILY < ESCALATE_COMMUNITY`。`RuleBasedDecisionPolicy` 可读取 `reasoning_input.conflicts`（如含 `risk_escalation`：历史 LOW→当前 HIGH）与 `reasoning_result.suggested_action_hint`，但 Memory 软信号**只能对感知选定动作取偏序 max（`max(perception_action, memory_suggested_action)`），绝不能 replace / 降级 / 逆转**——即 Memory 信号**只升不降**。形式化：`final_action = max(lattice, perception_chosen_action, memory_suggested_action)`，其中 `max` 按上述偏序；感知已选 `NOTIFY_FAMILY` 而 Memory 历史正常时**不得降级为 `MONITOR`**；感知已选 `MONITOR` 且 Memory 显式 escalation 时可升 `NOTIFY_FAMILY`，但**不覆盖**路由表为 chosen perception event 选定的 `recommended_action` 语义（max 结果作为最终 action）。该格与 max-only 语义由 `test_decision_action_lattice_max_only` + `test_decision_never_lowers_below_perception` 钉死。
 - **不动权威性**：DecisionPolicy 仍是 ADR-0010 单一决策中心；上游 `ReasoningResult` 的 hint 永远只是"建议"，C1 守卫测试 `test_reasoning_hint_cannot_override_action` + `test_decision_never_lowers_below_perception` 钉死。
-- **显式 gate**：切片 C 单独成 PR + Owner 评审放行；本 ADR 冻结契约（D2 字段已就位），但**不默认开启** Memory→决策 的行为影响。
+- **显式 gate**：切片 C 单独成 PR + Owner 评审放行；本 ADR 冻结契约（D2 字段已就位），但**默认 Shadow Mode、不默认开启** Memory→决策 的线上影响——其上线前提是受控验证证明统计收益，而非契约存在。
 
 ### 2.1 硬约束（ADR-0030 Invariants，契约测试钉死）
 
@@ -200,7 +255,7 @@ ADR-0029 与 ADR-0030 一前一后，完成了 SilverShield 的一次架构跃�
 
 ### 必须承担的技术债 / 后续动作
 
-- 切片 C 行为接入（门控）；
+- 切片 C 受控验证门（默认 Shadow Mode；验证证明统计收益 + Owner 放行后才可能进入 action lattice max-only）；
 - `suggested_action_hint` 与 `WarningEvent.recommended_action` 同源词表的"建议 vs 决策"边界长期守护（防漂移成事实上的决策）；
 - `RiskSignal` 是否需 `correlation_id` 承载跨模态关联（归 ADR-0028 后续）；
 - 跨模态解释 enrich `WarningEvent.reason_summary`（切片 E，解释非判断）。
@@ -209,7 +264,7 @@ ADR-0029 与 ADR-0030 一前一后，完成了 SilverShield 的一次架构跃�
 
 ## 5. 开放问题（Open Questions，本 ADR 不抢答）
 
-- **切片 C 是否随本 ADR 直接门控放行，还是仅合契约（切片 A/B）后独立 PR 决定？** 建议 A/B 先合（零行为变化），C 单独 PR + Owner 评审——把"是否让 Memory 影响决策"单独决策；
+- **切片 C 是否随本 ADR 直接门控放行，还是仅合契约（切片 A/B）后独立 PR 决定？** 建议 A/B 先合（零行为变化），C 单独 PR + Owner 评审——把"Memory 是否值得 / 如何进入决策"作为独立**验证决策**（默认 Shadow，验证证明收益 + Owner 放行后才进入 max-only）；
 - **`RiskSignal` 是否需 `correlation_id`** 承载跨模态关联（当前 `CrossModalLink` 不回写 `RiskSignal`）——归 ADR-0028 后续；
 - **`DecisionInput` 是否需顶层 `visitor_instance_id` 快捷字段**（目前经 `reasoning_input.current_event.visitor_instance_id` 取）——归实现细节；
 - **`prior_warning` 迟滞窗口 / 策略归属**（配置 vs 硬编码）——v1 简单窗口，未来可配；
@@ -221,7 +276,7 @@ ADR-0029 与 ADR-0030 一前一后，完成了 SilverShield 的一次架构跃�
 
 ## 5.1 后续 ADR 路线图（Roadmap）
 
-ADR-0030 冻结的是"决策边界契约"。但"Memory 接入决策"会立刻引出"为什么这个决策发生"的可解释性需求——否则 Memory 接入后解释链断掉。建议时序（Owner 评审确认）：
+ADR-0030 冻结的是"决策边界契约"，但**契约存在 ≠ Memory 应该影响决策**——"Memory 是否值得进入 Decision"是独立的价值验证问题（见 §0.4）。本 ADR 的真正价值是建立 **Future Decision Experiment Boundary**：任何 Memory（视觉 / 音频 / 跨模态 / LLM Reasoning）要影响决策，都必须经 `DecisionInput` 唯一入口，杜绝各模块私接旁路。建议时序（Owner 评审确认）：
 
 ```
 ADR-0030 Accepted（决策边界契约）
@@ -231,13 +286,20 @@ Slice A：DecisionInput 契约定义（零行为变化）
 Slice B：DecisionPolicy 签名迁移（零行为变化）
       ↓
 新增 ADR-0031：Decision Audit Trace Contract（决策审计血缘）
+      ↓  ┌─────────────────────────────────────┐
+         │ 双轨比较需完整 trace 才能审计         │
+         │ baseline(perception-only) vs          │
+         │ candidate(perception+memory)          │
+         └─────────────────────────────────────┘
       ↓
-Slice C：Memory → Decision 门控接入（需 Owner 放行）
+Slice C：Memory → Decision Controlled Validation Gate
+         （默认 Shadow Mode，双轨比较；验证证明收益 +
+          Owner 放行后才进入 action lattice max-only 模式）
 ```
 
 - **ADR-0031（Decision Audit Trace Contract，建议后续独立起草）**：定义 `DecisionTrace`——
   `{ decision_id, trigger_events_refs, reasoning_context_refs, reasoning_result_ref, policy_version, chosen_action, rejected_actions, timestamp }`，
-  目标是把"为什么报警"钉死为可审计事实链：**哪个感知事件触发 → 哪些 Memory 被参考 → Reasoning 给了什么建议 → DecisionPolicy 为何选此 action**。它将把 ADR-0029「可解释 Memory」直接连到 ADR-0030「决策边界」，是 Slice C 的前置可观测性基础——在进入 Decision 前先解决"为什么"，否则 Memory 接入后解释链会断。
+  目标是把"为什么报警"钉死为可审计事实链：**哪个感知事件触发 → 哪些 Memory 被参考 → Reasoning 给了什么建议 → DecisionPolicy 为何选此 action**。它是 **Slice C 验证门的硬性前置**——没有完整 trace 就无法做 `baseline`（perception-only）vs `candidate`（perception+memory）的可审计双轨比较；同时也为将来任何 Memory 接入提供统一可观测基座。它将 ADR-0029「可解释 Memory」直接连到 ADR-0030「决策边界」。
 
 ---
 
@@ -247,7 +309,7 @@ Slice C：Memory → Decision 门控接入（需 Owner 放行）
 
 - **Slice A（契约定义，零行为变化）**：新增 `DecisionInput` frozen 契约（字段见 D2）+ `from_dict` / `to_dict`（与 `contracts.py` 同构）；新增 `DECISION_INPUT_FIELD_WHITELIST` + 契约测试 `test_decision_input_has_no_decision_fields`（C1）、`test_decision_input_roundtrip`（C3）、`test_decision_input_backward_compatible_without_reasoning_result`（`reasoning_result` 缺省 None，护旧序列化）。**不改变 `DecisionPolicy` 任何行为**。
 - **Slice B（签名演进，向后兼容）**：`DecisionPolicy.decide(input: DecisionInput)` 抽象签名演进；`RuleBasedDecisionPolicy.decide` 内部取 `trigger_events` / `ctx`，路由逻辑逐字不变；`DecisionEngine.evaluate` 装配 `DecisionInput`（`reasoning_input=None` / `reasoning_result=None` / `prior_warning=None`）保持 perception-only 决策，`WarningEvent` 输出与今日逐字段一致；同步更新全部 decision 测试。
-- **Slice C（关闭「推理 → 决策」断点，门控，需 Owner 放行）**：运行时把 `memory_consumer_hook` 已产出的 `ReasoningResult` 接入 `DecisionInput.reasoning_result`（翻 `pipeline.py:547` 的 Shadow 限制）；`RuleBasedDecisionPolicy` 引入**唯一受控** Memory 软信号——`conflicts` 含 `risk_escalation` 或 `hint` 等级高于感知触发时，**按 action lattice 只升不降、不改派（`max-only`）**；C1 守卫测试 `test_decision_never_lowers_below_perception` + `test_reasoning_hint_cannot_override_action` + `test_reasoning_hint_is_never_authoritative` + `test_decision_action_lattice_max_only`。**本切片动决策权威性，单 PR + Owner 评审**。
+- **Slice C（Memory → Decision Controlled Validation Gate，验证能力非上线能力，门控，需 Owner 放行）**：运行时把 `memory_consumer_hook` 已产出的 `ReasoningResult` 接入 `DecisionInput.reasoning_result`（翻 `pipeline.py:547` 的 Shadow 限制），但**默认 Shadow Mode**——不改变线上 `WarningEvent`，仅做双轨比较：`baseline`（perception-only）vs `candidate`（perception + memory），比较 false positive / false negative / escalation accuracy / explanation quality；**通过 Owner approval 后才允许进入 action lattice `max-only` 模式**（此时 `RuleBasedDecisionPolicy` 引入唯一受控 Memory 软信号——`conflicts` 含 `risk_escalation` 或 `hint` 等级高于感知触发时按 action lattice 只升不降、不改派 `max-only`）。C1 守卫测试 `test_decision_never_lowers_below_perception` + `test_reasoning_hint_cannot_override_action` + `test_reasoning_hint_is_never_authoritative` + `test_decision_action_lattice_max_only`。**本切片动决策权威性，单 PR + Owner 评审；其上线的前提是验证证明统计收益，而非契约存在**。
 - **Slice D（隐私 + 幂等加固）**：`prior_warning` 迟滞（同 action 窗口内抑制重复告警，可调）；C5 契约测试 `test_decision_invariant_to_device_id`（仅 device_id 不同的两 `DecisionInput` → 同 `WarningEvent`）；C4 契约测试 `test_decision_invariant_to_link_confidence`（`link_confidence` 变化不改变决策）。
 - **Slice E（跨模态解释进 reason，可选）**：`reasoning_input.cross_modal_contexts` enrich `WarningEvent.reason_summary`（仅解释，如追加"视觉：老人跌倒 与 音频：撞击声 相互支撑"），不新增判定；受 ADR-0029 C6 约束。
 
@@ -269,4 +331,5 @@ Slice C：Memory → Decision 门控接入（需 Owner 放行）
 > **修订权属（呼应 AGENTS.md §6.3「未授权改架构决策文件」）**：本 ADR 处于 Proposed 阶段由 Owner 评审；**冻结（Accepted）后的修订由 Owner 追加新条目，AI 不修改修订记录**。
 
 - **2026-08-07**：初稿（Proposed）。基于代码实情——`DecisionPolicy.decide` 只吃 `PerceptionEvent[]`，而 `ReasoningResult` 已产出却仅 Shadow 观测（`runtime/pipeline.py:547`「推理产出仅 Shadow 观测，不接决策」），冻结决策边界契约：确认 `RiskSignal` / `ReasoningInput` / `ReasoningResult` 三已有类型的角色与 C1 边界，定义新收敛载体 `DecisionInput`（触发 + 记忆 + 建议 + 状态 + 既往决策），演进 `decide` 签名为单入参，并以 C1–C6 不变式钉死"上游永远事实/建议、Decision 唯一决策中心"。开发方向按"契约先行、行为分级"分 Slice A–E（A/B 零行为变化先合；C 动决策权威性、门控 Owner 评审）。本 ADR 仅冻结契约，不实现模型。
+- **2026-08-07（修订，Proposed 阶段）**：吸收第二轮 Owner 评审——把定位从"让 Memory 决策"收敛为"建立可审计、可实验验证、可演进的 Memory-to-Decision 架构边界（**Future Decision Experiment Boundary**）"，区分架构问题（Memory 如何合法进入 Decision）与价值问题（Memory 是否值得进入 Decision）。(1) 新增 **§0.4 Decision Memory Validation History**：记录视觉 Memory Phase A 可行性验证（已完成但未完成长期收益验证）因多模态转向暂停；冻结未来验证唯一入口 = `DecisionInput`，杜绝各模块私接旁路。(2) **Slice C 重新定位**为 Memory → Decision Controlled Validation Gate：默认 Shadow Mode、不改线上 `WarningEvent`、做 `baseline`(perception-only) vs `candidate`(perception+memory) 双轨比较，验证证明统计收益 + Owner 放行后才进入 action lattice `max-only`；不再是"上线能力"。(3) **D5 补关键句**：Memory 进入 Decision 的必要前提是 Shadow Validation 证明统计收益，而非契约存在。(4) **§5.1 路线图修正**：ADR-0031（Decision Audit Trace）是 Slice C 验证门的硬性前置（无完整 trace 无法做可审计双轨比较），而非"Slice C 前置唯一条件"的误导表述；Related 头补 ADR-0031（规划）。(5) §1 点4 / Open Questions / 技术债同步"验证优先"措辞。注：前一轮评审吸收（C7 一级聚合 / C1 hint 仅排序 / action lattice max-only / §0.3 架构跃迁 / §5.1 初版）已含于 commit `4ae9035`。本 ADR 仍未实现任何模型。
 - **2026-08-07（修订，Proposed 阶段）**：吸收 Owner 评审反馈——(1) 新增 **C7 一级聚合约束（防 God Object）**：`DecisionInput` 禁止无约束横向堆字段，演进须走具名 Bundle；(2) **C1 强化**：`suggested_action_hint` 只能参与路由排序、不可直接赋值，新增契约测试 `test_reasoning_hint_is_never_authoritative`；(3) **D5「只升不降」形式化**为 action lattice（`MONITOR < NOTIFY_FAMILY < ESCALATE_COMMUNITY`）+ `max-only` 语义，新增 `test_decision_action_lattice_max_only`；(4) Open Questions 补 correlation lineage 标注（现在不加，归 ADR-0031）；(5) 新增 **§5.1 路线图**锚定后续 **ADR-0031 Decision Audit Trace Contract**（Slice C 前置可观测性）；(6) 补 §0.3 架构跃迁图。仍未实现任何模型。
