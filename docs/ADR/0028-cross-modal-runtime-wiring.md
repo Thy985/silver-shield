@@ -303,6 +303,7 @@ scenarios:
 - **`device_id` 多源演进**：未来 `fall` 事件可能来自 camera01 + mic02 + pose_model 融合（多来源单 episode）——`device_id: str` 演进为 `source_ids: list[str]`，本 ADR v1 不抢答（D1 命名说明）；
 - **`device_id` 透传点收敛（review 确认）**：视觉从 `WarningEvent.device_id` 拉取、音频从 `AudioSessionRecorder.device_id` 拉取，**不经由 `source_video`**（D1 已决策）；若未来 `WarningEvent.device_id` 语义变化（如多设备融合），透传点需重新收敛，归本开放项；
 - **link 进 ReasoningInput 的 device_id 拦截（review 确认）**：`CrossModalLink` 自身不存 `device_id`（D1 约束），但 `MemoryConsumer` 未来若把 link 引入 ReasoningInput（跨模态合证是 Agent 解释性推理核心），episode 侧 `device_id` 不得经 link 链路泄入 Reason——需在 Consumer 层显式剥离（ADR-0025 §3.1 隐私边界），机制归开放项。
+- **关系词汇语义收紧（`SUPPORTS` 偏强 + 关联发现 vs 语义支持判断，ADR-0029 审查 follow-up）**：当前 `CrossModalRelationship` 仅 `CO_OCCURS` / `SUPPORTS`，且 `SUPPORTS` 由“modalities 集合不同”机械判定（D2 决策），**本质是“关联发现（association discovery）”——只回答“两事件是否同上下文 + 时间重叠”，不回答“是否相互支持”**。审查指出 `SUPPORTS` 词面偏强（暗示“音频支撑视觉”的语义/因果支持），建议后续：① 收紧 `SUPPORTS` 生成条件（仅当跨模态合证满足更严阈值 / 无矛盾信号）；② 引入中间关系 `TEMPORALLY_ALIGNED`（“时间对齐但语义中立”）作为更弱的默认跨模态边；③ 在 `CrossModalLinker` 文档与注释中明确：**Link Runtime = 关联发现，不是语义支持判断**；语义裁决留给 Reasoning / Decision（ADR-0010）。此收紧**不改动 v1 已冻结实现行为**（baseline 契约锁定），仅约束后续 Link Runtime 演进，正面防止“Decision 逻辑提前泄漏进 Link”（ADR-0029 审查要点：若 `SUPPORTS` 太松，Link 已偷偷完成一部分语义判断）；该后续动作由 ADR-0029 解释层直接透传 relationship（不重新解释），故与解释层解耦。
 
 ---
 
