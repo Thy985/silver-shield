@@ -40,17 +40,97 @@
 
 **层 / 数据边界（消费侧只看 Context，不看 Link）**：
 
-| 层 | 数据 | 职责 |
-| - | - | - |
-| Memory Graph | `CrossModalLink` | 边的内部存储（link_id / episode_ids / relationship / overlap / confidence） |
-| Retrieval | Link 查询（以 episode 为主） | 取回相关 link |
-| Explanation | `CrossModalContext` | 把 link 投影为结构化、隐私安全、可解释的上下文 |
-| Reasoning | `CrossModalContext` | 作为 `ReasoningInput.cross_modal_contexts` 输入 |
-| Decision | `RiskSignal` | 唯一决策产物（ADR-0010 单一决策中心） |
+|   |
+| - |
+
+层
+
+|   |
+| - |
+
+数据
+
+|   |
+| - |
+
+职责
+
+|   |
+| - |
+
+Memory Graph
+
+|   |
+| - |
+
+`CrossModalLink`
+
+|   |
+| - |
+
+边的内部存储（link_id / episode_ids / relationship / overlap / confidence）
+
+|   |
+| - |
+
+Retrieval
+
+|   |
+| - |
+
+Link 查询（以 episode 为主）
+
+|   |
+| - |
+
+取回相关 link
+
+|   |
+| - |
+
+Explanation
+
+|   |
+| - |
+
+`CrossModalContext`
+
+|   |
+| - |
+
+把 link 投影为结构化、隐私安全、可解释的上下文
+
+|   |
+| - |
+
+Reasoning
+
+|   |
+| - |
+
+`CrossModalContext`
+
+|   |
+| - |
+
+作为 `ReasoningInput.cross_modal_contexts` 输入
+
+|   |
+| - |
+
+Decision
+
+|   |
+| - |
+
+`RiskSignal`
+
+|   |
+| - |
+
+唯一决策产物（ADR-0010 单一决策中心）
 
 > **关键边界**：`RuleBasedMemoryConsumer` 消费的是 **`CrossModalContext`**，不是 `CrossModalLink`。Link 是 Graph 内部结构，Context 才是 Reasoning 输入——两者不许混用（见 D4 / §2.1 C6）。
-
-
 
 ---
 
@@ -58,7 +138,7 @@
 
 新增一个**纯只读**的跨模态可解释层 `memory/cross_modal_explainer.py`，包含检索 / 解释 / 渲染组件：
 
-1. **`CrossModalRetrieval`**——图级只读检索：**以 `get_links_for_episode(episode_id)` 为主路径**（当前事件 → 相关 link → contexts），辅以 `get_links_for_visitor`（同访客相关边）/ `get_links_in_window`（时间窗相关边）作为内部能力；`get_links_for_device` **不在 v1 范围**（避免演变为"家庭全局知识查询系统"，归后续能力）；device_id 仅作 join key，绝不外泄；
+1. **`CrossModalRetrieval`**——图级只读检索：**v1 以** **`get_links_for_episode(episode_id)`** **为唯一对外主路径**（当前事件 → 相关 link → contexts），辅以 `get_links_in_window(start, end)` 作为**可选内部能力**；`get_links_for_visitor` **延期（不在 v1）**——visitor→episodes→links 的 join 属 `MemoryQuery` 职责（单访客视图本就由其投影），`CrossModalRetrieval` 只做"episode → links"，避免与 `MemoryQuery` 出现两个都能查 visitor 的查询系统；`get_links_for_device` **不在 v1 范围**（避免演变为"家庭全局知识查询系统"）；device_id 仅作 join key，绝不外泄；
 2. **`CrossModalExplainer`** **+ 契约** **`CrossModalContext`** **/** **`CrossModalEpisodeRef`**——把一条 `CrossModalLink`（连同其两端 episode）投影为**结构化、隐私安全、确定性**的 `CrossModalContext`（**仅结构化事实，不含自然语言**）；另设独立 **`ExplanationRenderer`** 负责把 `CrossModalContext` 渲染为自然语言（D3，i18n 友好 seam）；
 3. **`ReasoningInput.cross_modal_contexts`** **扩展（可选）**——`RuleBasedMemoryConsumer` 消费的是 `CrossModalContext`（**不是** `CrossModalLink`），把当前访客相关的跨模态解释作为描述性上下文附给 `ReasoningInput`（默认空、零行为变化、不破坏 C1/C2）。
 
@@ -69,15 +149,16 @@
 
 ## 2. 决策要点（D1–D5）
 
-### D1：`CrossModalRetrieval`——图级只读检索（episode 主路径 + 内部能力）
+### D1：`CrossModalRetrieval`——图级只读检索（v1 = episode 主路径 + window 可选；visitor/device 延期）
 
-**问题**：`CrossModalLinkStore` 现仅有 `get_links_by_episode(record_id)` / `all_links()`——没有"按访客 / 按时间窗"取边的视角；Agent 要理解"某访客相关的所有跨模态关系"还得自己 join。
+**问题**：`CrossModalLinkStore` 现仅有 `get_links_by_episode(record_id)` / `all_links()`——没有"按时间窗"取边的视角；而"某访客相关的跨模态关系"本可由 `MemoryQuery`（visitor → episodes → links）完成，不属本组件职责。
 
-**决策**：新增 `CrossModalRetrieval`（与 `MemoryQuery` 同层级的只读查询组件，不接 ABC——v1 单实现，避免与 `Retrieval` ABC 语义混淆；`Retrieval` ABC 是 episode 召回，本类是对 link 图的召回）。**v1 以 episode 为主路径，device 查询延期**：
+**决策**：新增 `CrossModalRetrieval`（与 `MemoryQuery` 同层级的只读查询组件，不接 ABC——v1 单实现，避免与 `Retrieval` ABC 语义混淆；`Retrieval` ABC 是 episode 召回，本类是对 link 图的召回）。**v1 以 episode 为主路径，visitor/device 查询延期（归 `MemoryQuery` / 后续能力）**：
 
-- **主路径 `get_links_for_episode(episode_id)`**：给定"当前事件"的 episode_id，从 `CrossModalLinkStore.get_links_by_episode` 取回所有相关 link——这是最自然、最常用的入口（当前事件 → 关联跨模态事件 → 解释）；
-- **内部能力 `get_links_for_visitor(visitor_instance_id)` / `get_links_in_window(start, end)`**：供未来"某访客全部跨模态关系""某时间窗全部跨模态关系"场景复用，v1 实现但**不作为对外主 API**（避免检索面过大、避免与"家庭全局知识查询"混淆）；
-- **`get_links_for_device(device_id)` 延期（不在 v1）**：按 device 查"家庭全局跨模态关系"容易演变成"家庭全局知识查询系统"，属于未来能力（需明确产品需求与拓扑建模），v1 不做；device_id 仅作为 `get_links_for_episode` 的底层 join key（读两端 episode 的 device_id 用于 `shared_deployment_context` 红化，D2），绝不外泄；
+- **主路径** **`get_links_for_episode(episode_id)`**：给定"当前事件"的 episode_id，从 `CrossModalLinkStore.get_links_by_episode` 取回所有相关 link——这是最自然、最常用的入口（当前事件 → 关联跨模态事件 → 解释）；
+- **可选内部能力** **`get_links_in_window(start, end)`**：供"某时间窗全部跨模态关系"场景复用，v1 实现但**不作为对外主 API**（检索面收敛）；
+- **`get_links_for_visitor(visitor_instance_id)`** **延期（不在 v1）**：visitor 是业务实体、link 是事件实体，二者 join（visitor → episode → link）属 `MemoryQuery` 职责（`MemoryQuery` 已按 `visitor_instance_id` 投影单访客视图），**不是** `CrossModalRetrieval` 的职责；v1 不做，避免与 `MemoryQuery` 出现两个都能查 visitor 的查询系统（C2 边界清晰）——`CrossModalContext` 经 `MemoryQuery` 取回后再映射到 link 即可；
+- **`get_links_for_device(device_id)`** **延期（不在 v1）**：按 device 查"家庭全局跨模态关系"容易演变成"家庭全局知识查询系统"，属于未来能力（需明确产品需求与拓扑建模），v1 不做；device_id 仅作为 `get_links_for_episode` 的底层 join key（读两端 episode 的 device_id 用于 `shared_deployment_context` 红化，D2），绝不外泄；
 - **确定性（C3）**：各轴返回均按 `link_id` 升序，join 去重用 `set` + 排序，同输入两次结果一致；
 - **复用既有基元**：`get_episodic_by_visitor` / `all_episodic()`（ADR-0028 D5 已落地）直接可用，无新存储 API。
 
@@ -88,22 +169,11 @@
 **决策**：新增 `CrossModalContext` / `CrossModalEpisodeRef` 两个 `frozen` 数据契约 + `CrossModalExplainer`。`CrossModalContext` 是**纯结构化事实**（`frozen`），**只承载可机器消费的事实字段，不含任何自然语言字符串**：
 
 ```
-CrossModalContext(
-    relationship: CrossModalRelationship,        # SUPPORTS / CO_OCCURS（描述性枚举，非结论）
-    source_episode: CrossModalEpisodeRef,          # 一端：modality + event 摘要 + episode_id
-    target_episode: CrossModalEpisodeRef,          # 另一端
-    overlap_seconds: float,                        # 时间窗重叠秒数
-    association_strength: float,                   # == link.confidence ∈[0,1]，语义是"关联强度"非"风险分"
-    shared_deployment_context: bool,               # 红化（见下），绝不暴露 device_id
-    source_link_id: str,                           # C5 溯源→具体 link
-    source_episode_ids: tuple[str, str],           # C5 溯源→两端 episode
-)
-CrossModalEpisodeRef(modality, event_summary, episode_id)
 ```
 
 - **`shared_deployment_context`** **红化（解决 ADR-0028 开放项 #5）**：解释器读两端 episode 的 `device_id`，**仅在两者均非 None 且相等时置 True**，绝不把原始 `device_id` 字符串写进 `CrossModalContext`——从数据结构上保证 `device_id` 不经 link 链路泄入 Reason（ADR-0025 §3.1）；
-- **`association_strength`** **语义重命名**：直接取 `link.confidence`，但契约字段名显式叫"关联强度"，与 `risk_score` / `decision` 在语义上划清（C1 友好）；值仍是 [0,1]，非风险分；
-- **`relationship`** **是描述性枚举**：`CrossModalRelationship`（SUPPORTS / CO_OCCURS）只陈述"关系类别"，不是"结论"——自然语言描述由 `ExplanationRenderer`（D3）据其生成；
+- **`link_confidence`** **（替代** **`association_strength`** **，更贴近来源、降低误用）**：直接取 `link.confidence`，语义是"**Link Runtime 对建立这条边的置信程度**"，**不是**"事件关联强度"——命名贴近来源，降低未来被误用作决策阈值的风险（如 `if ctx.link_confidence > 0.8: alert()` 仍属下游 Decision 层职责，本层不鼓励）；值 [0,1]，非风险分；字段名显式与 `risk_score` / `decision` 划清（C1 友好）；
+- **`relationship`** **是给定标签（不重新解释语义）**：`CrossModalContext` 直接透传 link 的 `relationship`（`CrossModalRelationship`：SUPPORTS / CO_OCCURS），**解释层不重新解释 / 升级语义**——关系词汇的语义收紧（如 `SUPPORTS` 严格化、可能新增 `TEMPORALLY_ALIGNED`）归 ADR-0028 后续（见 ADR-0028 §5 开放项）；解释层只陈述"关系类别"，不是"结论"；
 - **纯函数（C3）**：`explain` 不读墙钟、不随机、不写状态；同 `(link, memory_store 状态)` 两次产出逐字段一致（审计 / 回放一致）；
 - **溯源（C5）**：`source_link_id` + `source_episode_ids` 让每条解释可追到具体 link 与 episode（与 `SourceRef` 思路一致，但不引入 `ReasoningResult` 依赖）；
 - **C6（解释层禁止风险语义，硬约束）**：`CrossModalContext` **MUST NOT** 包含 `risk_score` / `risk_level` / `alert` / `warning` / `decision` / `recommendation` 任一字段（见 §2.1）；自然语言由 `ExplanationRenderer`（D3）产出，不进 Context。该约束由 `tests/memory/test_cross_modal_explainer.py::test_context_has_no_risk_semantics` 钉死，未来任何实现若向 Context 加风险语义将直接失败。
@@ -116,20 +186,60 @@ CrossModalEpisodeRef(modality, event_summary, episode_id)
 
 **关系词汇 → 描述映射（确定性，无模型）**：
 
-| `relationship` | 中文描述（中性陈述） | 句首锚定 |
-| - | - | - |
-| `SUPPORTS` | 跨模态支撑 | 视觉事件「…」与音频事件「…」在时间窗重叠约 Ns，在同一部署源上下文相互支撑 |
-| `CO_OCCURS` | 同主体合证 | 同一访客的两次事件在时间上相邻合证 |
+|   |
+| - |
+
+`relationship`
+
+|   |
+| - |
+
+中文描述（中性陈述）
+
+|   |
+| - |
+
+句首锚定
+
+|   |
+| - |
+
+`SUPPORTS`
+
+|   |
+| - |
+
+跨模态支撑
+
+|   |
+| - |
+
+视觉事件「…」与音频事件「…」在时间窗重叠约 Ns，在同一部署源上下文相互支撑
+
+|   |
+| - |
+
+`CO_OCCURS`
+
+|   |
+| - |
+
+同主体合证
+
+|   |
+| - |
+
+同一访客的两次事件在时间上相邻合证
 
 - **句法铁律（§0.2 / C6）**：模板只陈述**事实**（什么事件、何时、重叠多久、强度多少、是否同上下文），**不得**出现"疑似 / 可能 / 应当 / 建议"等判断词；渲染输出以句号闭合的**陈述句**收尾；
-- **`association_strength`** **显式标注"关联强度"**：文本含"关联强度 X.XX"，不复用"置信度/风险"措辞，避免与风险语义混淆；
+- **`link_confidence`** **显式标注"建边置信"**：文本含"建边置信 X.XX"，不复用"关联强度/风险"措辞，避免与风险语义混淆；
 - **i18n seam（解耦收益）**：`ExplanationRenderer` 是唯一的文本出处，未来多语言只需替换渲染器（或注入 locale），`CrossModalContext` 契约零改动——这正是把 `explanation` 抽离出 Context 的核心动机；
+- **关系词汇覆盖 + fail-closed**：`ExplanationRenderer` 映射表必须覆盖 `CrossModalRelationship` **全部枚举值**（契约测试 `test_renderer_covers_all_relationships`），对未知 / 新增关系值**抛** `ValueError`（不静默降级）——关系词汇集随 ADR-0028 后续收紧可能演进（如新增 `TEMPORALLY_ALIGNED`），渲染器不得默认可疑值；
 - **多跳排除（v1）**：`render` 只消费 `explain` 产出的直接边（两端 episode）；图多跳（A-B-C）不在此渲染，归 §5。
 
 **确定性生成示例**（输入 = ADR-0028 首条边，经 `explain` → `CrossModalContext` → `render`）：
 
 ```
-视觉事件「跌倒」与音频事件「撞击声」在时间窗重叠约 3.2s，在同一部署源上下文相互支撑（SUPPORTS），关联强度 0.91。
 ```
 
 （无 device_id 回显；无"疑似诈骗"之类结论；可溯源到 `source_link_id` + 两端 `episode_id`。）
@@ -145,7 +255,7 @@ CrossModalEpisodeRef(modality, event_summary, episode_id)
    ```
    - **C1 仍成立**：`CrossModalContext` 不含 `risk_score` / `decision` / `warning` / `recommended_action`（见 D2 字段集），故 `REASONING_INPUT_FIELD_WHITELIST` 增 `cross_modal_contexts` 后，`test_reasoning_input_has_no_decision_fields`（`test_invariants.py:122`）仍绿；`_c1.py` 白名单同步更新（Slice B 强制子任务）。
    - **C2 仍成立**：字段是 `CrossModalContext` 不可变投影，Consumer 不写 Memory。
-2. **Consumer 可选注入（零行为变化）**：`RuleBasedMemoryConsumer.__init__` 新增两个可选参数 `cross_modal_retrieval` / `cross_modal_explainer`（默认 `None`）；`consume` 在既有管道产 `ReasoningInput` 后，若两者均非 None，则（**注意：注入的解释器产出 `CrossModalContext` 而非 `CrossModalLink`；`ExplanationRenderer` 是展示侧 seam，由调用方在需要自然语言时单独调用，不进 Consumer**）：
+2. **Consumer 可选注入（零行为变化）**：`RuleBasedMemoryConsumer.__init__` 新增两个可选参数 `cross_modal_retrieval` / `cross_modal_explainer`（默认 `None`）；`consume` 在既有管道产 `ReasoningInput` 后，若两者均非 None，则（**注意：注入的解释器产出** **`CrossModalContext`** **而非** **`CrossModalLink`；\*\*\*\*`ExplanationRenderer`** **是展示侧 seam，由调用方在需要自然语言时单独调用，不进 Consumer**）：
    ```
    ```
    - **零行为变化**：未注入时 `cross_modal_contexts=()`，产出的 `ReasoningInput` 与历史**逐字段一致**（对应契约测试 `test_consume_unchanged_without_cross_modal`，Slice C 新增）；
@@ -165,9 +275,10 @@ CrossModalEpisodeRef(modality, event_summary, episode_id)
 为防止未来实现漂移（例如向 `explanation` 写"老人跌倒风险较高"），将 D2 的纪律提升为**正式不可变约束**：
 
 - `CrossModalContext` **MUST NOT** 携带任何风险 / 决策语义字段：`risk_score` / `risk_level` / `alert` / `warning` / `decision` / `recommendation`；
-- `ExplanationRenderer` 产出的自然语言**MUST NOT** 含"疑似 / 可能 / 应当 / 建议 / 风险"等判断词（句法铁律已在 D3 固化，渲染器复用同一模板纪律）；
-- 唯一合法的"判断"出口是 `RiskSignal` → `DecisionEngine`（ADR-0010 单一决策中心），解释层任何产物都不得越界；
-- 该约束由契约测试钉死：`test_context_has_no_risk_semantics`（Context 字段白名单断言）+ `test_renderer_output_has_no_judgment_words`（渲染器输出断言）；
+- `ExplanationRenderer` 产出的自然语言**MUST NOT** 含“疑似 / 可能 / 应当 / 建议 / 风险”等判断词（句法铁律已在 D3 固化，渲染器复用同一模板纪律）；
+- **C6（派生·因果不可暗示）**：`CrossModalContext` / `ExplanationRenderer` **MUST NOT** 暗示因果——`SUPPORTS` 是“两事件相互支撑的**事实陈述**”，**不表示**“音频事件**导致**视觉事件”。渲染模板不得出现“导致 / 引起 / 因为”等因果词；`support ≠ cause` 由契约测试 `test_context_does_not_imply_causality` 钉死——防止“撞击声支撑跌倒”被误读为“撞击声导致跌倒”（后者已是 Decision 层越界）；
+- 唯一合法的“判断”出口是 `RiskSignal` → `DecisionEngine`（ADR-0010 单一决策中心），解释层任何产物都不得越界；
+- 该约束由契约测试钉死：`test_context_has_no_risk_semantics`（Context 字段白名单断言）+ `test_renderer_output_has_no_judgment_words`（渲染器输出断言）+ `test_context_does_not_imply_causality`（因果不暗示）；
 - 这与 §0.2 层 / 数据边界表一致：Explanation 层产 `CrossModalContext`（事实），Decision 层产 `RiskSignal`（结论），两者在架构上物理隔离。
 
 ---
@@ -213,20 +324,21 @@ CrossModalEpisodeRef(modality, event_summary, episode_id)
 - **`MemoryQuery`** **嵌入跨模态**：单访客"为何报警"视图是否就地展示相关 `CrossModalContext`——v1 不做（避免与 Consumer 路径重复）；
 - **Consumer 对** **`MemoryStore`** **的耦合**：v1 经可选 `memory_store` 参数让解释器查 peer episode；更干净的做法是 `CrossModalRetrieval` 在构造时缓存 episode 投影（只读快照），使 Consumer 完全不持 store——机制与取舍归开放项；
 - **解释文本 i18n**：`ExplanationRenderer` 已是 i18n seam（D3），v1 仅中文实现；多语言只需新增 locale 渲染器，Context 契约零改动；
-- **跨设备关联的解释**：ADR-0028 明确 v1 不做跨设备关联，故 `shared_deployment_context` 仅覆盖同设备情形；未来若放开跨设备（需设备拓扑），解释层需新增"拓扑相关"维度，归 ADR-0028 对应开放项。
+- **跨设备关联的解释**：ADR-0028 明确 v1 不做跨设备关联，故 `shared_deployment_context` 仅覆盖同设备情形；未来若放开跨设备（需设备拓扑），解释层需新增“拓扑相关”维度，归 ADR-0028 对应开放项。
+- **Consumer 注入收敛（架构优化，非 v1 必须）**：v1 让 `RuleBasedMemoryConsumer` 直接持 `cross_modal_retrieval` + `cross_modal_explainer` + `memory_store` 三依赖（D4），略违反 ADR-0025 C2（Consumer 本应只经 `Retrieval` 间接访问 Memory，不直接感知 Graph 结构）。更干净的做法是引入 `CrossModalContextProvider`（或 `MemoryContextAssembler`）：`episode_id → retrieve → explain → CrossModalContext`，Consumer 只接受**可选** `context_provider`，完全不感知 CrossModal 内部结构。v1 不强制，归冻结节后重构（单独 PR）；本 ADR 仅记录该优化方向，不影响 v1 实现。
 
 ---
 
 ## 6. 实施切片（实施顺序，冻结后执行）
 
-- **Slice A（核心检索+解释）**：`memory/cross_modal_explainer.py` 实现 `CrossModalRetrieval`（D1：主路径 `get_links_for_episode` + 内部能力 `get_links_for_visitor` / `get_links_in_window`，device 延期）+ `CrossModalExplainer`（D2 结构化 Context）+ `ExplanationRenderer`（D3 渲染）+ `CrossModalContext` / `CrossModalEpisodeRef`（D5）；纯只读、确定性、隐私红化；附带 `tests/memory/test_cross_modal_explainer.py`（episode 主路径 + visitor/window 内部能力检索正确性 + explain 结构化确定性 + Renderer 关系映射 + `shared_deployment_context` 红化 + **C6 无风险语义断言** + 无 device_id 断言 + 负例：多跳不处理）。
+- **Slice A（核心检索+解释）**：`memory/cross_modal_explainer.py` 实现 `CrossModalRetrieval`（D1：主路径 `get_links_for_episode` + 可选内部能力 `get_links_in_window`；`get_links_for_visitor` / `get_links_for_device` **延期**——visitor join 属 `MemoryQuery`）+ `CrossModalExplainer`（D2 结构化 Context，`link_confidence` 替代 `association_strength`）+ `ExplanationRenderer`（D3 渲染 + 关系词汇覆盖 fail-closed）+ `CrossModalContext` / `CrossModalEpisodeRef`（D5）；纯只读、确定性、隐私红化；附带 `tests/memory/test_cross_modal_explainer.py`（episode 主路径 + window 内部能力检索正确性 + explain 结构化确定性 + Renderer 关系映射 + `shared_deployment_context` 红化 + **C6 无风险语义 / 无因果暗示断言** + 无 device_id 断言 + 负例：多跳不处理）。
 - **Slice B（契约扩展）**：`ReasoningInput.cross_modal_contexts` 字段 + `to_dict`/`from_dict` + `REASONING_INPUT_FIELD_WHITELIST`（`_c1.py`）增 `cross_modal_contexts` + docstring 同步；`tests/memory/consumer/test_invariants.py::test_reasoning_input_has_no_decision_fields` 仍绿（C1 不回退）。
 - **Slice C（Consumer 接线）**：`RuleBasedMemoryConsumer` 可选注入 `cross_modal_retrieval` / `cross_modal_explainer` / `memory_store`（D4）；`consume` 在注入时附加 `cross_modal_contexts`；`tests/memory/consumer/test_orchestrator.py` 新增 `test_consume_unchanged_without_cross_modal`（零行为变化锚点）+ `test_cross_modal_contexts_attached_when_injected`（注入后正确附加、且与既有字段独立）。
 
 ### 验收清单（Acceptance Criteria）
 
-1. **D1 episode 主路径**：`get_links_for_episode` 返回正确且按 `link_id` 确定性排序；`get_links_for_visitor` / `get_links_in_window` 作为内部能力返回正确；`get_links_for_device` 在 v1 **不存在**（延期，不实现）；
-2. **D2 结构化 Context**：`explain` 产出 `CrossModalContext` **仅结构化事实**（`relationship` / `source_episode` / `target_episode` / `overlap_seconds` / `association_strength` / `shared_deployment_context` / `source_link_id` / `source_episode_ids`），`association_strength == link.confidence`、`shared_deployment_context` 红化正确（同设备 True / 异设备 False / 无 device None→False）、**无 `explanation` 字段**；
+1. **D1 episode 主路径**：`get_links_for_episode` 返回正确且按 `link_id` 确定性排序；`get_links_in_window` 作为可选内部能力返回正确；`get_links_for_visitor` / `get_links_for_device` 在 v1 **不存在**（延期，不实现——visitor join 归 `MemoryQuery`）；
+2. **D2 结构化 Context**：`explain` 产出 `CrossModalContext` **仅结构化事实**（`relationship` / `source_episode` / `target_episode` / `overlap_seconds` / `link_confidence` / `shared_deployment_context` / `source_link_id` / `source_episode_ids`），`link_confidence == link.confidence`（语义=建边置信，非事件关联强度）、`shared_deployment_context` 红化正确（同设备 True / 异设备 False / 无 device None→False）、**无** **`explanation`** **字段**；
 3. **D3 Renderer 解耦**：`ExplanationRenderer.render(context)` 产出确定性自然语言，`SUPPORTS`/`CO_OCCURS` 描述正确、句法铁律（无判断词）、与 Context 解耦（i18n seam）；
 4. **C6 硬约束**：`CrossModalContext` 不含 `risk_score` / `risk_level` / `alert` / `warning` / `decision` / `recommendation` 任一；`ExplanationRenderer` 输出无判断词；`test_context_has_no_risk_semantics` + `test_renderer_output_has_no_judgment_words` 钉死（§2.1）；
 5. `CrossModalContext` **不含** `device_id` 字段、**不含** `CONSUMER_FORBIDDEN_FIELDS` 任一（C1 兼容性，D2）；
@@ -244,4 +356,5 @@ CrossModalEpisodeRef(modality, event_summary, episode_id)
 > **修订权属（呼应 AGENTS.md §6.3「未授权改架构决策文件」）**：本 ADR 处于 Proposed 阶段由 Owner 评审；**冻结（Accepted）后的修订由 Owner 追加新条目，AI 不修改修订记录**。
 
 - **2026-08-07**：初稿（Proposed）。基于 ADR-0028 已落地的 `CrossModalLink` / `CrossModalLinkStore` / `CrossModalLinkRuntime`（PR #150/#151），设计纯只读的**跨模态检索 + 解释层**：`CrossModalRetrieval`（四轴图检索）+ `CrossModalExplainer` / `CrossModalContext`（隐私安全、确定性、非判断解释）+ `ReasoningInput.cross_modal_contexts` 可选扩展。核心是"解释而非判断"——正面关闭 ADR-0028 开放项 #5（device_id 经 link 泄入 Reason），以红化 `shared_deployment_context: bool` 根治。这份文档怎么样？
-- **2026-08-07（审查修订）**：依据 Owner 架构审查收紧三点——(1) **D1 episode 主路径**：`get_links_for_episode` 升为主 API，`get_links_for_visitor` / `get_links_in_window` 降为内部能力，`get_links_for_device` 延期（避免演变为"家庭全局知识查询系统"）；(2) **D2/D3 抽取 `ExplanationRenderer`**：`CrossModalContext` 改为纯结构化事实（移除 `explanation` 自然语言字段），自然语言渲染独立为 `ExplanationRenderer`（i18n seam，关系词汇→描述映射迁入）；(3) **新增 C6 硬约束**：解释层禁止风险语义（`CrossModalContext` 不得含 `risk_score` / `risk_level` / `alert` / `warning` / `decision` / `recommendation`，渲染器输出不得含判断词），由契约测试钉死。同步吸收审查的层 / 数据边界表（Consumer 消费 Context 而非 Link）。
+- **2026-08-07（审查修订）**：依据 Owner 架构审查收紧三点——(1) **D1 episode 主路径**：`get_links_for_episode` 升为主 API，`get_links_for_visitor` / `get_links_in_window` 降为内部能力，`get_links_for_device` 延期（避免演变为“家庭全局知识查询系统”）；(2) **D2/D3 抽取** **`ExplanationRenderer`**：`CrossModalContext` 改为纯结构化事实（移除 `explanation` 自然语言字段），自然语言渲染独立为 `ExplanationRenderer`（i18n seam，关系词汇→描述映射迁入）；(3) **新增 C6 硬约束**：解释层禁止风险语义（`CrossModalContext` 不得含 `risk_score` / `risk_level` / `alert` / `warning` / `decision` / `recommendation`，渲染器输出不得含判断词），由契约测试钉死。同步吸收审查的层 / 数据边界表（Consumer 消费 Context 而非 Link）。
+- **2026-08-07（审查修订 2）**：依据 Owner 第二轮架构审查再收紧——(1) **`association_strength` → `link_confidence`**：字段名更贴近来源（“Link Runtime 对建边的置信程度”而非“事件关联强度”），降低未来被误用作决策阈值（`if ctx.link_confidence > 0.8: alert()`）的名字诱导风险；(2) **C6 新增因果不可暗示**：`support ≠ cause`，`SUPPORTS` 是事实陈述非因果，渲染器不得含“导致/引起”词，契约测试 `test_context_does_not_imply_causality` 钉死；(3) **visitor 查询延期**：`get_links_for_visitor` 从“内部能力”进一步降为**不在 v1**——visitor→episode→link 的 join 属 `MemoryQuery` 职责，避免与 `MemoryQuery` 出现两个查 visitor 的查询系统（C2 边界）；v1 仅 `get_links_for_episode` 主路径 + 可选 `get_links_in_window`；(4) **`relationship` 不重新解释语义**：解释层直接透传 link 的 relationship，词汇语义收紧（SUPPORTS 严格化 / 可能新增 `TEMPORALLY_ALIGNED`）归 ADR-0028 后续开放项；(5) **Consumer 注入收敛**记录为架构优化方向（引入 `CrossModalContextProvider`），v1 不强制；(6) `ExplanationRenderer` 关系词汇覆盖 + fail-closed（未知值抛 `ValueError`）。
