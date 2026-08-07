@@ -10,6 +10,7 @@
   - ADR-0024（Memory 架构·I4 可解释性 / I2 单调性）
   - ADR-0025（Memory Consumer 架构·C1 不决策 / C2 只读 / C3 确定性 / C5 溯源；C-6 ReasoningResult）
   - ADR-0027（音频记忆集成）/ ADR-0028（跨模态运行时接线）/ ADR-0029（跨模态检索与解释·`CrossModalContext` 进 `ReasoningInput`）
+  - （规划）ADR-0031（Decision Audit Trace Contract，见 §5.1 路线图）
 - **Phase**: v2 · Phase 3 → Memory 闭环 → 跨模态 Memory Graph → 跨模态可解释层 → **决策边界契约（Memory 首次进入决策的契约前提）**
 
 ---
@@ -46,6 +47,43 @@
 | Decision | `WarningEvent` | 决策产物（risk_level + recommended_action） | 产出（终端） |
 
 > **关键边界**：`RiskSignal` / `ReasoningInput` / `ReasoningResult` 不得含 `risk_score` / `decision` / `verdict` / `recommended_action`（上游守 C1）；即便 `ReasoningResult.suggested_action_hint` 与 `WarningEvent.recommended_action` 同源词表（MONITOR / NOTIFY_FAMILY / ESCALATE_COMMUNITY），它也**只是建议**，DecisionPolicy 可参考但**最终动作权威在 DecisionPolicy 自身的路由表**——hint 不能"下达"动作。
+
+---
+
+### 0.3 架构跃迁：从「感知系统」到「认知闭环系统」
+
+ADR-0029 与 ADR-0030 一前一后，完成了 SilverShield 的一次架构跃迁：
+
+- **ADR-0029** 解决「记忆如何被理解」——`Memory Graph → CrossModalLink → CrossModalContext → ReasoningInput`（解释而非判断）；
+- **ADR-0030** 解决「理解如何被约束地影响行动」——`Perception → RiskSignal → Memory → Reasoning → Decision → WarningEvent`。
+
+两者连起来，`ReasoningResult` 不再孤儿，四段链路首次闭环比：
+
+```
+             Perception
+                 |
+             RiskSignal
+                 |
+        +----------------+
+        | Memory System  |
+        +----------------+
+                 |
+        CrossModalContext
+                 |
+           ReasoningInput
+                 |
+          ReasoningResult
+                 |
+          DecisionInput
+                 |
+          DecisionPolicy
+                 |
+          WarningEvent
+                 |
+             Feedback
+```
+
+关键边界守恒：`Memory = context`、`Reasoning = suggestion`、`Decision = authority`。`DecisionInput` 是四段链路唯一收敛点（类比 Kubernetes API Server 是集群唯一控制入口、DB transaction boundary 是数据一致性入口）。
 
 ---
 
@@ -97,12 +135,13 @@
 
 沿用并强化既有纪律，把"决策边界"提升为可测不变式：
 
-- **C1（ADR-0010 单一决策中心）**：`RiskSignal` / `ReasoningInput` / `ReasoningResult` **不含**任何决策语义字段（`risk_score` / `decision` / `verdict` / `recommended_action` / `warning`）。`ReasoningResult.suggested_action_hint` 是**非绑定建议**，DecisionPolicy 可参考但**不得**将其当作决策；最终动作权威在 `DecisionPolicy` 路由表（见 D4/D5）。`DecisionInput` 自身也**不内嵌决策**——它是"喂给决策的输入"，`risk_level` / `action` 是其**输出** `WarningEvent` 的属性，不在本结构体。
+- **C1（ADR-0010 单一决策中心）**：`RiskSignal` / `ReasoningInput` / `ReasoningResult` **不含**任何决策语义字段（`risk_score` / `decision` / `verdict` / `recommended_action` / `warning`）。`ReasoningResult.suggested_action_hint` 是**非绑定建议**：DecisionPolicy **可参考但不得将其当作决策**，且 hint **只能参与路由排序（ranking / tie-breaker），绝不能被直接赋值为 `WarningEvent.recommended_action`**——最终动作权威在 `DecisionPolicy` 路由表（见 D4/D5）。`DecisionInput` 自身也**不内嵌决策**——它是"喂给决策的输入"，`risk_level` / `action` 是其**输出** `WarningEvent` 的属性，不在本结构体。该纪律由 `test_reasoning_hint_is_never_authoritative` 钉死：在 `RuleBasedDecisionPolicy` 内部，hint 只能改变候选排序、不能替代路由表选定动作（见 D5 / Slice C）。
 - **C2（DecisionInput = 收敛边界）**：四类型均为 frozen；容器用 tuple。`DecisionInput` 是**唯一**把感知 + 记忆 + 状态 + 既往决策组合起来的结构体；上游组件（Consumer / Reasoning / Perception）不得各自向 Decision 私送字段。
 - **C3（确定性）**：同 `DecisionInput` → 同 `WarningEvent`（审计 / 回放一致）；`from_dict`↔`to_dict` 往返稳定；`trigger_events` 固定排序。
 - **C4（跨模态不判断泄漏）**：`CrossModalContext` 仅经 `reasoning_input.cross_modal_contexts` 作为**解释上下文**进入 `DecisionInput`；`link_confidence` 是"建边置信"**非**风险分，DecisionPolicy **不得**拿它当阈值（如 `if link_confidence > 0.8: alert()`）——该禁令由契约测试钉死（§6 验收 4）。
 - **C5（隐私，ADR-0002 / ADR-0025 §3.1）**：`device_id` **不得**成为决策特征。`reasoning_input.historical_context` 内的 `EpisodicRecord` 可能带 `device_id`（ADR-0025 已知张力），但 `DecisionPolicy` **必须忽略**它；决策对"部署源身份"不变——契约测试 `test_decision_invariant_to_device_id` 钉死（两 `DecisionInput` 仅 `device_id` 不同 → 同 `WarningEvent`）。
 - **C6（迟滞 / 幂等 seam）**：`prior_warning` 仅用于迟滞（同 `recommended_action` 在窗口内抑制重复告警），**不是决策真相来源**——`DecisionPolicy` 仍按 `trigger_events` + `reasoning_*` 独立决策，`prior_warning` 只能"压"不能"抬"也不能"替代"。
+- **C7（一级聚合约束，防 God Object）**：`DecisionInput` **只允许一级聚合**——当前 v1 直接展平 `trigger_events` / `reasoning_input` / `reasoning_result` / `decision_context` / `prior_warning` 五个字段是受控的（字段数固定、语义正交）。本 ADR **显式禁止**未来无约束地横向堆字段（如 `environment_context` / `user_preferences` / `policy_override` / `external_signal` / `model_output` 等直接挂到 `DecisionInput` 顶层）。演进路径：若字段持续增长，须先抽象为具名 Bundle（`PerceptionBundle` / `CognitionBundle` / `StateBundle`），再让 `DecisionInput(perception=..., cognition=..., state=...)` 聚合——**不允许出现 20+ 扁平字段的 God Object**。v1 不强制改结构，仅在此立防膨胀约束，供后续 ADR / 评审拦截。
 
 ### D4：`DecisionPolicy.decide` 签名演进（向后兼容）
 
@@ -115,7 +154,7 @@
 
 这是本 ADR 最具杠杆也最敏感的一步——把 `runtime/pipeline.py:547` 的「推理产出仅 Shadow 观测，不接决策」翻转为"可受控接入"。**门控原则**：
 
-- **唯一、受控的 Memory 软信号使用**：`RuleBasedDecisionPolicy` 可读取 `reasoning_input.conflicts`（如含 `risk_escalation`：历史 LOW→当前 HIGH）与 `reasoning_result.suggested_action_hint`，但**只能使告警更强、不能降级 / 逆转 / 改派**——即 Memory 信号**只升不降**，且**不覆盖**路由表为 chosen perception event 选定的 `recommended_action`。
+- **唯一、受控的 Memory 软信号使用（action lattice + max-only）**：定义动作偏序格（action lattice）`MONITOR < NOTIFY_FAMILY < ESCALATE_COMMUNITY`。`RuleBasedDecisionPolicy` 可读取 `reasoning_input.conflicts`（如含 `risk_escalation`：历史 LOW→当前 HIGH）与 `reasoning_result.suggested_action_hint`，但 Memory 软信号**只能对感知选定动作取偏序 max（`max(perception_action, memory_suggested_action)`），绝不能 replace / 降级 / 逆转**——即 Memory 信号**只升不降**。形式化：`final_action = max(lattice, perception_chosen_action, memory_suggested_action)`，其中 `max` 按上述偏序；感知已选 `NOTIFY_FAMILY` 而 Memory 历史正常时**不得降级为 `MONITOR`**；感知已选 `MONITOR` 且 Memory 显式 escalation 时可升 `NOTIFY_FAMILY`，但**不覆盖**路由表为 chosen perception event 选定的 `recommended_action` 语义（max 结果作为最终 action）。该格与 max-only 语义由 `test_decision_action_lattice_max_only` + `test_decision_never_lowers_below_perception` 钉死。
 - **不动权威性**：DecisionPolicy 仍是 ADR-0010 单一决策中心；上游 `ReasoningResult` 的 hint 永远只是"建议"，C1 守卫测试 `test_reasoning_hint_cannot_override_action` + `test_decision_never_lowers_below_perception` 钉死。
 - **显式 gate**：切片 C 单独成 PR + Owner 评审放行；本 ADR 冻结契约（D2 字段已就位），但**不默认开启** Memory→决策 的行为影响。
 
@@ -126,7 +165,9 @@
 - `CrossModalContext` 经 `DecisionInput` 进入时**只作解释上下文**，`link_confidence` **MUST NOT** 被 DecisionPolicy 用作风险阈值（C4）；
 - 决策对 `device_id` **MUST** 不变（C5，`test_decision_invariant_to_device_id`）；
 - 同 `DecisionInput` → 同 `WarningEvent`（C3），回放 / 审计一致；
+- Memory 软信号（经 `reasoning_input` / `reasoning_result`）**MUST** 按 action lattice `max-only` 影响决策（仅升不降、不改派），`suggested_action_hint` **MUST NOT** 被直接赋值为 `recommended_action`（D5 / C1）；
 - `prior_warning` **MUST NOT** 替代独立决策（C6）；
+- `DecisionInput` **MUST** 保持一级聚合、禁止无约束横向堆字段（C7，防膨胀）；
 - 唯一合法的"判断"出口仍是 `DecisionPolicy` → `WarningEvent`（ADR-0010），其余一切产物都不得越界。
 
 ---
@@ -174,6 +215,29 @@
 - **`prior_warning` 迟滞窗口 / 策略归属**（配置 vs 硬编码）——v1 简单窗口，未来可配；
 - **`ReasoningResult.findings` 自然语言是否适合直接进 `reason_summary`**（可能需结构化提取）——归切片 E；
 - **Decision 失败 / `reasoning_result=None` 的降级语义**：推理不可用时决策是否退化为纯感知——默认退化为纯感知（与今日一致），由切片 B 保证。
+- **`DecisionInput` 是否需 `correlation_id` 承载审计血缘（correlation lineage）**：本 ADR 明确**现在不加**。但记录其必要性——未来「为什么这个 Decision 发生」的可解释审计链（感知 → Memory → Reasoning → Decision → Warning 全链路 `correlation_id` 串联）将依赖 correlation lineage；该契约归后续 **ADR-0031 Decision Audit Trace Contract**（见 §5.1），本 ADR 不抢答其形状。
+
+---
+
+## 5.1 后续 ADR 路线图（Roadmap）
+
+ADR-0030 冻结的是"决策边界契约"。但"Memory 接入决策"会立刻引出"为什么这个决策发生"的可解释性需求——否则 Memory 接入后解释链断掉。建议时序（Owner 评审确认）：
+
+```
+ADR-0030 Accepted（决策边界契约）
+      ↓
+Slice A：DecisionInput 契约定义（零行为变化）
+      ↓
+Slice B：DecisionPolicy 签名迁移（零行为变化）
+      ↓
+新增 ADR-0031：Decision Audit Trace Contract（决策审计血缘）
+      ↓
+Slice C：Memory → Decision 门控接入（需 Owner 放行）
+```
+
+- **ADR-0031（Decision Audit Trace Contract，建议后续独立起草）**：定义 `DecisionTrace`——
+  `{ decision_id, trigger_events_refs, reasoning_context_refs, reasoning_result_ref, policy_version, chosen_action, rejected_actions, timestamp }`，
+  目标是把"为什么报警"钉死为可审计事实链：**哪个感知事件触发 → 哪些 Memory 被参考 → Reasoning 给了什么建议 → DecisionPolicy 为何选此 action**。它将把 ADR-0029「可解释 Memory」直接连到 ADR-0030「决策边界」，是 Slice C 的前置可观测性基础——在进入 Decision 前先解决"为什么"，否则 Memory 接入后解释链会断。
 
 ---
 
@@ -183,7 +247,7 @@
 
 - **Slice A（契约定义，零行为变化）**：新增 `DecisionInput` frozen 契约（字段见 D2）+ `from_dict` / `to_dict`（与 `contracts.py` 同构）；新增 `DECISION_INPUT_FIELD_WHITELIST` + 契约测试 `test_decision_input_has_no_decision_fields`（C1）、`test_decision_input_roundtrip`（C3）、`test_decision_input_backward_compatible_without_reasoning_result`（`reasoning_result` 缺省 None，护旧序列化）。**不改变 `DecisionPolicy` 任何行为**。
 - **Slice B（签名演进，向后兼容）**：`DecisionPolicy.decide(input: DecisionInput)` 抽象签名演进；`RuleBasedDecisionPolicy.decide` 内部取 `trigger_events` / `ctx`，路由逻辑逐字不变；`DecisionEngine.evaluate` 装配 `DecisionInput`（`reasoning_input=None` / `reasoning_result=None` / `prior_warning=None`）保持 perception-only 决策，`WarningEvent` 输出与今日逐字段一致；同步更新全部 decision 测试。
-- **Slice C（关闭「推理 → 决策」断点，门控，需 Owner 放行）**：运行时把 `memory_consumer_hook` 已产出的 `ReasoningResult` 接入 `DecisionInput.reasoning_result`（翻 `pipeline.py:547` 的 Shadow 限制）；`RuleBasedDecisionPolicy` 引入**唯一受控** Memory 软信号——`conflicts` 含 `risk_escalation` 或 `hint` 等级高于感知触发时，**只升不降、不改派**；C1 守卫测试 `test_decision_never_lowers_below_perception` + `test_reasoning_hint_cannot_override_action`。**本切片动决策权威性，单 PR + Owner 评审**。
+- **Slice C（关闭「推理 → 决策」断点，门控，需 Owner 放行）**：运行时把 `memory_consumer_hook` 已产出的 `ReasoningResult` 接入 `DecisionInput.reasoning_result`（翻 `pipeline.py:547` 的 Shadow 限制）；`RuleBasedDecisionPolicy` 引入**唯一受控** Memory 软信号——`conflicts` 含 `risk_escalation` 或 `hint` 等级高于感知触发时，**按 action lattice 只升不降、不改派（`max-only`）**；C1 守卫测试 `test_decision_never_lowers_below_perception` + `test_reasoning_hint_cannot_override_action` + `test_reasoning_hint_is_never_authoritative` + `test_decision_action_lattice_max_only`。**本切片动决策权威性，单 PR + Owner 评审**。
 - **Slice D（隐私 + 幂等加固）**：`prior_warning` 迟滞（同 action 窗口内抑制重复告警，可调）；C5 契约测试 `test_decision_invariant_to_device_id`（仅 device_id 不同的两 `DecisionInput` → 同 `WarningEvent`）；C4 契约测试 `test_decision_invariant_to_link_confidence`（`link_confidence` 变化不改变决策）。
 - **Slice E（跨模态解释进 reason，可选）**：`reasoning_input.cross_modal_contexts` enrich `WarningEvent.reason_summary`（仅解释，如追加"视觉：老人跌倒 与 音频：撞击声 相互支撑"），不新增判定；受 ADR-0029 C6 约束。
 
@@ -194,7 +258,7 @@
 3. **D3 不变式契约测试**：C1（无决策字段）/ C2（frozen + tuple）/ C3（`from_dict`↔`to_dict` 往返 + 同输入同输出）/ C5（`test_decision_invariant_to_device_id`）/ C6（`prior_warning` 不替代独立决策）全部钉死；
 4. **C4 跨模态不判断**：`test_decision_invariant_to_link_confidence` 钉死 `link_confidence` 不成为决策阈值；
 5. **D4 向后兼容**：`RuleBasedDecisionPolicy.decide(input: DecisionInput)` 路由逻辑与今日逐字一致；`DecisionEngine.evaluate(perception_events)` 装配 `DecisionInput` 后输出 `WarningEvent` 与今日逐字段相同（既有 decision 测试全绿）；
-6. **D5 门控**：切片 C 未开启时 `reasoning_result` 被忽略、决策退化为纯感知（与今日一致）；切片 C 开启后仅"只升不降、不改派"，C1 守卫测试通过；
+6. **D5 门控 + action lattice**：切片 C 未开启时 `reasoning_result` 被忽略、决策退化为纯感知（与今日一致）；切片 C 开启后按 action lattice `max-only`（仅升不降、不改派），C1 守卫测试 `test_decision_never_lowers_below_perception` / `test_reasoning_hint_cannot_override_action` / `test_reasoning_hint_is_never_authoritative` / `test_decision_action_lattice_max_only` 通过；
 7. `DecisionInput` **不含** `device_id` 作为决策维度（C5）；`reasoning_input.historical_context` 内 `EpisodicRecord.device_id` 存在但 `DecisionPolicy` 不读取（契约测试覆盖）；
 8. 全量 pytest + ruff 全绿（AGENTS.md 基线，不允许回归）。
 
@@ -205,3 +269,4 @@
 > **修订权属（呼应 AGENTS.md §6.3「未授权改架构决策文件」）**：本 ADR 处于 Proposed 阶段由 Owner 评审；**冻结（Accepted）后的修订由 Owner 追加新条目，AI 不修改修订记录**。
 
 - **2026-08-07**：初稿（Proposed）。基于代码实情——`DecisionPolicy.decide` 只吃 `PerceptionEvent[]`，而 `ReasoningResult` 已产出却仅 Shadow 观测（`runtime/pipeline.py:547`「推理产出仅 Shadow 观测，不接决策」），冻结决策边界契约：确认 `RiskSignal` / `ReasoningInput` / `ReasoningResult` 三已有类型的角色与 C1 边界，定义新收敛载体 `DecisionInput`（触发 + 记忆 + 建议 + 状态 + 既往决策），演进 `decide` 签名为单入参，并以 C1–C6 不变式钉死"上游永远事实/建议、Decision 唯一决策中心"。开发方向按"契约先行、行为分级"分 Slice A–E（A/B 零行为变化先合；C 动决策权威性、门控 Owner 评审）。本 ADR 仅冻结契约，不实现模型。
+- **2026-08-07（修订，Proposed 阶段）**：吸收 Owner 评审反馈——(1) 新增 **C7 一级聚合约束（防 God Object）**：`DecisionInput` 禁止无约束横向堆字段，演进须走具名 Bundle；(2) **C1 强化**：`suggested_action_hint` 只能参与路由排序、不可直接赋值，新增契约测试 `test_reasoning_hint_is_never_authoritative`；(3) **D5「只升不降」形式化**为 action lattice（`MONITOR < NOTIFY_FAMILY < ESCALATE_COMMUNITY`）+ `max-only` 语义，新增 `test_decision_action_lattice_max_only`；(4) Open Questions 补 correlation lineage 标注（现在不加，归 ADR-0031）；(5) 新增 **§5.1 路线图**锚定后续 **ADR-0031 Decision Audit Trace Contract**（Slice C 前置可观测性）；(6) 补 §0.3 架构跃迁图。仍未实现任何模型。
