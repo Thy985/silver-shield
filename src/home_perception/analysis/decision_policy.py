@@ -13,7 +13,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型注解；运行期不导入 decision_contract，避免 analysis 内循环
+    from .decision_contract import DecisionInput
 
 from .perception import PerceptionEvent
 from .warning import (
@@ -58,10 +61,11 @@ class DecisionContext:
 
 
 class DecisionPolicy(ABC):
-    """决策策略抽象基类。所有具体策略必须实现 `decide(perception_events, ctx)`。
+    """决策策略抽象基类。所有具体策略必须实现 `decide(input: DecisionInput)`。
 
     设计原则（ADR-0010 Decision 4）：
-    - 输入：`List[PerceptionEvent]`（一次评估周期内的所有事件）
+    - 输入：`DecisionInput`（ADR-0030 D2 收敛载体；含本周期 `trigger_events` + `decision_context`
+      + 可选记忆/推理/既往字段）
     - 输出：`Optional[WarningEvent]`（None 表示无需发警告，例如全部是普通访问）
     - **不**复算 Feature（Feature 是 P0-7a 数值信号层）
     - **不**重新组合 Rule（Rule 组合已在 P0-7b CompositeRule 完成，输出 high_risk_approach）
@@ -71,15 +75,16 @@ class DecisionPolicy(ABC):
     name: str = "DecisionPolicy"
 
     @abstractmethod
-    def decide(
-        self,
-        perception_events: list[PerceptionEvent],
-        ctx: DecisionContext,
-    ) -> WarningEvent | None:
-        """消费 PerceptionEvent 列表，输出 WarningEvent 或 None。
+    def decide(self, input: DecisionInput) -> WarningEvent | None:
+        """消费 `DecisionInput`（ADR-0030 D2 收敛载体），输出 WarningEvent 或 None。
+
+        输入 `DecisionInput` 内含 `trigger_events`（本周期感知触发）+ `decision_context`
+        + 可选记忆/推理/既往决策字段；本抽象方法的**默认实现契约**只读取
+        `trigger_events` 与 `decision_context`（Slice B 零行为变化，记忆字段的语义消费
+        留待 ADR-0030 Slice C）。
 
         返回 None 的典型情况：
-        - 空列表
+        - `trigger_events` 为空
         - 全部是 visit_normal 且无 is_odd_hour 叠加（普通访问，不警告）
         """
         raise NotImplementedError
@@ -156,11 +161,12 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
                     f"收到 {action!r}"
                 )
 
-    def decide(
-        self,
-        perception_events: list[PerceptionEvent],
-        ctx: DecisionContext,
-    ) -> WarningEvent | None:
+    def decide(self, input: DecisionInput) -> WarningEvent | None:
+        # Slice B：入参收敛为单 `DecisionInput`。路由逻辑与迁移前逐字一致，仅在此解包；
+        # 不读 memory / reasoning / prior_warning 字段 → 内存缺席时退化为纯感知决策
+        # （满足 ADR-0030 D2「Memory 可缺席」）。
+        perception_events = input.trigger_events
+        ctx = input.decision_context
         if not perception_events:
             return None
 

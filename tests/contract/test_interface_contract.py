@@ -71,7 +71,7 @@ def test_rule_engine_interface():
 
 
 def test_decision_policy_interface():
-    _assert_method(DecisionPolicy, "decide", ["perception_events", "ctx"])
+    _assert_method(DecisionPolicy, "decide", ["input"])
     assert issubclass(RuleBasedDecisionPolicy, DecisionPolicy)
 
 
