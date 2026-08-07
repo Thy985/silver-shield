@@ -291,15 +291,17 @@ class CrossModalLinkStore:
 
 
 class CrossModalLinker:
-    """跨模态关联器（ADR-0027 D5，确定性强、无随机 id）。
+    """跨模态关联器（ADR-0027 D5 + ADR-0028 D2 修订，确定性强、无随机 id）。
 
     规则（v1 启发式，权重归约细节归融合 ADR ADR-0026 §10 开放项）：
-    1. **同主体**：两个 episode 共享 ``visitor_instance_id``（均非 None 且相等）或
-       共享 ``audio_session_id``（均非 None 且相等）→ 视为同一观察主体。
-       （纯音频 episode 无 ``visitor_instance_id``，仅持 ``audio_session_id``，可通过
-       共享 audio_session_id 与复合 episode 关联——这正是"视觉紧张翻找 + 音频哭腔/通话"
-       的诈骗风险解释性关联。）
-    2. **时间窗重叠**：``min(leave) > max(enter)`` 才关联（严格重叠）。
+    1. **候选上下文（candidate_context）**：两个 episode 共享 ``visitor_instance_id``
+       （均非 None 且相等）**或**共享 ``device_id``（均非 None 且相等，ADR-0028 D1
+       部署源标识）→ 视为同一观察上下文。
+       （ADR-0028 D2 修订：**``audio_session_id`` 不再参与跨模态身份**——它是音频
+       会话身份（时间窗标识）非世界实体身份，参与关联会削弱 D4 匿名；只留在音频
+       域内部聚合/溯源。）
+    2. **时间窗重叠**：``min(leave) > max(enter)`` 才关联（严格重叠；受
+       ``overlap_tolerance`` 与 ``min_overlap_seconds`` 门控，D3）。
     3. **relationship**：两 episode 的 ``modalities`` 集合不同 → ``SUPPORTS``（跨模态支撑）；
        相同 → ``CO_OCCURS``（同主体合证）。
     4. **confidence**：``overlap_seconds / min(duration_a, duration_b)``，clamp [0,1]
@@ -310,13 +312,24 @@ class CrossModalLinker:
     边索引。
     """
 
-    def __init__(self, overlap_tolerance: timedelta = timedelta(0)) -> None:
-        """``overlap_tolerance``：允许的时间窗邻接容差（v1 默认 0，未来可放宽近邻窗口）。"""
+    def __init__(
+        self,
+        overlap_tolerance: timedelta = timedelta(0),
+        min_overlap_seconds: float = 0.0,
+    ) -> None:
+        """``overlap_tolerance``：允许的时间窗邻接容差（v1 默认 0，未来可放宽近邻窗口）。
+
+        ``min_overlap_seconds``（ADR-0028 D3）：重叠秒数必须 **> 阈值** 才建边
+        （默认 0 = 严格重叠即关联，与 Slice C 行为一致；灰度期可收紧过滤瞬时噪音）。
+        """
         if not isinstance(overlap_tolerance, timedelta):
             raise TypeError("overlap_tolerance 必须是 timedelta")
         if overlap_tolerance < timedelta(0):
             raise ValueError("overlap_tolerance 必须 >= 0")
+        if not isinstance(min_overlap_seconds, (int, float)) or min_overlap_seconds < 0:
+            raise ValueError("min_overlap_seconds 必须 >= 0")
         self.overlap_tolerance = overlap_tolerance
+        self.min_overlap_seconds = float(min_overlap_seconds)
 
     def link(self, episodes: list[EpisodicRecord]) -> list[CrossModalLink]:
         """扫描 episode 集合，产出所有符合条件的跨模态关联边（按 link_id 升序）。"""
@@ -326,11 +339,13 @@ class CrossModalLinker:
         for i in range(len(valid)):
             for j in range(i + 1, len(valid)):
                 a, b = valid[i], valid[j]
-                if not self._same_subject(a, b):
+                if not self._candidate_context(a, b):
                     continue
                 overlap = self._overlap_window(a, b)
                 if overlap is None:
                     continue
+                if (overlap[1] - overlap[0]).total_seconds() <= self.min_overlap_seconds:
+                    continue  # D3 阈值门控：重叠不足（含等于阈值）不建边
                 links.append(self._build_link(a, b, overlap))
         links.sort(key=lambda l: l.link_id)
         return links
@@ -346,8 +361,12 @@ class CrossModalLinker:
         return ep.enter_time is not None and ep.leave_time is not None
 
     @staticmethod
-    def _same_subject(a: EpisodicRecord, b: EpisodicRecord) -> bool:
-        """同主体判定：共享 visitor_instance_id 或共享 audio_session_id（均非 None 且相等）。"""
+    def _candidate_context(a: EpisodicRecord, b: EpisodicRecord) -> bool:
+        """候选上下文判定（ADR-0028 D2）：共享 visitor_instance_id 或共享 device_id。
+
+        **audio_session_id 不参与**（会话身份≠世界实体身份，参与会削弱 D4 匿名）；
+        device_id=None（旧记录/未知）不成立 → 不关联（渐进可用）。
+        """
         if a.record_id == b.record_id:
             return False
         shared_visitor = (
@@ -355,12 +374,12 @@ class CrossModalLinker:
             and b.visitor_instance_id is not None
             and a.visitor_instance_id == b.visitor_instance_id
         )
-        shared_audio = (
-            a.audio_session_id is not None
-            and b.audio_session_id is not None
-            and a.audio_session_id == b.audio_session_id
+        shared_device = (
+            a.device_id is not None
+            and b.device_id is not None
+            and a.device_id == b.device_id
         )
-        return bool(shared_visitor or shared_audio)
+        return bool(shared_visitor or shared_device)
 
     def _overlap_window(
         self, a: EpisodicRecord, b: EpisodicRecord

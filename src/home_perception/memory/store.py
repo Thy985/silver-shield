@@ -42,6 +42,15 @@ class MemoryStore:
     def get_active_episodic(self) -> list[EpisodicRecord]:
         raise NotImplementedError
 
+    def all_episodic(self) -> list[EpisodicRecord]:
+        """全部 EpisodicRecord（ADR-0028 D5，跨模态关联扫描用）。
+
+        供 ``CrossModalLinkRuntime`` 全量扫描建边；v1 内存实现返回全部，未来
+        SQLite/远程后端须提供 LIMIT + 游标化扫描（避免 N+1 全表扫描，ADR-0028 §D5
+        Performance Boundary）。episode ≥ 10_000 时须响应缩放告警契约。
+        """
+        raise NotImplementedError
+
     def short_term_count(self) -> int:
         """当前保留的 ShortTermRecord 条数（工作记忆规模）。
 
@@ -87,6 +96,9 @@ class InMemoryStore(MemoryStore):
 
     def get_active_episodic(self) -> list[EpisodicRecord]:
         return [ep for ep in self._episodic.values() if ep.memory_status == MemoryStatus.ACTIVE]
+
+    def all_episodic(self) -> list[EpisodicRecord]:
+        return list(self._episodic.values())
 
     def short_term_count(self) -> int:
         return len(self._short_term)

@@ -33,11 +33,12 @@ from home_perception.memory.records import EpisodicRecord
 # ---------------------------------------------------------------------------
 # 夹具：直接构造 EpisodicRecord（不依赖完整事件链，聚焦关联语义）
 # ---------------------------------------------------------------------------
-def _mk_episode(rid, vid, asid, enter, leave, mods, dur=None):
+def _mk_episode(rid, vid, asid, enter, leave, mods, dur=None, device=None):
     return EpisodicRecord(
         record_id=rid,
         visitor_instance_id=vid,
         audio_session_id=asid,
+        device_id=device,
         enter_time=enter,
         leave_time=leave,
         duration_seconds=dur if dur is not None else (leave - enter).total_seconds(),
@@ -300,19 +301,24 @@ class TestCrossModalLinker:
         # 重叠 19:05-19:10 = 300s；min dur = 600s → 0.5
         assert math.isclose(links[0].confidence, 0.5, rel_tol=1e-9)
 
-    def test_shared_audio_session_cross_modal_supports(self):
-        """D5 经典场景：复合(VISION+AUDIO) 与 纯音频(AUDIO) 共享 audio_session_id 重叠 → SUPPORTS。"""
-        comp = _mk_episode(
-            "ep-xcm", "V1", "xcm1",
+    def test_shared_device_cross_modal_supports(self):
+        """ADR-0028 D2 修订：同 device + 时间重叠 → SUPPORTS（跨模态合证）。
+
+        取代 Slice C 的 audio_session 键：纯视觉（仅 visitor）与纯音频（仅
+        audio_session）无共享身份键，但共享 device_id + 重叠 → 关联（本 ADR 核心
+        场景：vision fall 10-20s + audio impact 12-15s）。
+        """
+        vision = _mk_episode(
+            "ep-vis", "V1", None,
             _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 45),
-            [EvidenceModality.VISION, EvidenceModality.AUDIO],
+            [EvidenceModality.VISION], device="home_entry_01",
         )
-        pure = _mk_episode(
-            "ep-audio-xcm", None, "xcm1",
+        audio = _mk_episode(
+            "ep-audio", None, "sess-x",
             _dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 46),
-            [EvidenceModality.AUDIO],
+            [EvidenceModality.AUDIO], device="home_entry_01",
         )
-        links = CrossModalLinker().link([comp, pure])
+        links = CrossModalLinker().link([vision, audio])
         assert len(links) == 1
         lk = links[0]
         assert lk.relationship == CrossModalRelationship.SUPPORTS
@@ -320,6 +326,38 @@ class TestCrossModalLinker:
         assert math.isclose(lk.confidence, 0.875, rel_tol=1e-9)
         assert lk.time_overlap == (_dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 45))
         assert lk.created_at == _dt(2026, 7, 28, 18, 46)
+
+    def test_shared_audio_session_different_device_no_link(self):
+        """D2 review 安全网：共享 audio_session_id 但异 device → **不建边**
+        （audio_session_id 不参与跨模态身份；会话身份≠世界实体身份）。"""
+        comp = _mk_episode(
+            "ep-xcm", "V1", "sessA",
+            _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 45),
+            [EvidenceModality.VISION, EvidenceModality.AUDIO], device="home_entry_01",
+        )
+        pure = _mk_episode(
+            "ep-audio-xcm", None, "sessA",
+            _dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 46),
+            [EvidenceModality.AUDIO], device="living_room_mic_01",
+        )
+        assert CrossModalLinker().link([comp, pure]) == []
+
+    def test_shared_audio_session_same_device_links(self):
+        """共享 audio_session_id **且** 同 device + 重叠 → 建边（device 键生效，
+        audio_session 不作为依据但也不妨碍）。"""
+        comp = _mk_episode(
+            "ep-xcm", "V1", "sessA",
+            _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 45),
+            [EvidenceModality.VISION, EvidenceModality.AUDIO], device="home_entry_01",
+        )
+        pure = _mk_episode(
+            "ep-audio-xcm", None, "sessA",
+            _dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 46),
+            [EvidenceModality.AUDIO], device="home_entry_01",
+        )
+        links = CrossModalLinker().link([comp, pure])
+        assert len(links) == 1
+        assert links[0].relationship == CrossModalRelationship.SUPPORTS
 
     def test_no_link_when_no_time_overlap(self):
         v1 = _mk_episode("ep-va", "V1", None, _dt(2026, 7, 28, 19, 0), _dt(2026, 7, 28, 19, 10), [EvidenceModality.VISION])
@@ -332,24 +370,49 @@ class TestCrossModalLinker:
         v2 = _mk_episode("ep-vb", "V2", None, _dt(2026, 7, 28, 19, 0), _dt(2026, 7, 28, 19, 10), [EvidenceModality.VISION])
         assert CrossModalLinker().link([v1, v2]) == []
 
-    def test_pure_audio_links_via_audio_session_not_visitor(self):
-        # 纯音频没有 visitor，仅靠 audio_session_id 关联；与不同 visitor 的复合 episode 关联
-        comp = _mk_episode("ep-x", "V9", "sessA", _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 50), [EvidenceModality.VISION, EvidenceModality.AUDIO])
-        pure = _mk_episode("ep-ax", None, "sessA", _dt(2026, 7, 28, 18, 40), _dt(2026, 7, 28, 18, 55), [EvidenceModality.AUDIO])
+    def test_pure_audio_links_via_shared_device_not_visitor(self):
+        """ADR-0028 D2 修订：纯音频无 visitor，仅靠同 device + 重叠关联；
+        与不同 visitor 的复合 episode 关联（不靠 audio_session）。"""
+        comp = _mk_episode("ep-x", "V9", "sessA", _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 50), [EvidenceModality.VISION, EvidenceModality.AUDIO], device="home_entry_01")
+        pure = _mk_episode("ep-ax", None, "sessA", _dt(2026, 7, 28, 18, 40), _dt(2026, 7, 28, 18, 55), [EvidenceModality.AUDIO], device="home_entry_01")
         links = CrossModalLinker().link([comp, pure])
         assert len(links) == 1
         assert links[0].relationship == CrossModalRelationship.SUPPORTS
 
+    def test_same_device_no_time_overlap_no_link(self):
+        """D2 负例：同 device 但时间不重叠 → 不建边（时间 gate 是硬 gate）。"""
+        v1 = _mk_episode("ep-va", "V1", None, _dt(2026, 7, 28, 19, 0), _dt(2026, 7, 28, 19, 10), [EvidenceModality.VISION], device="home_entry_01")
+        a1 = _mk_episode("ep-a1", None, "s", _dt(2026, 7, 28, 19, 40), _dt(2026, 7, 28, 19, 45), [EvidenceModality.AUDIO], device="home_entry_01")
+        assert CrossModalLinker().link([v1, a1]) == []
+
+    def test_overlap_different_device_no_link(self):
+        """D2 负例：时间重叠但异 device → 不建边（设备键不成立）。"""
+        v1 = _mk_episode("ep-va", "V1", None, _dt(2026, 7, 28, 19, 0), _dt(2026, 7, 28, 19, 10), [EvidenceModality.VISION], device="home_entry_01")
+        a1 = _mk_episode("ep-a1", None, "s", _dt(2026, 7, 28, 19, 2), _dt(2026, 7, 28, 19, 8), [EvidenceModality.AUDIO], device="living_room_mic_01")
+        assert CrossModalLinker().link([v1, a1]) == []
+
+    def test_min_overlap_threshold_gates(self):
+        """D3：重叠秒数必须 > min_overlap_seconds 才建边（等于阈值不建）。"""
+        v1 = _mk_episode("ep-va", "V1", None, _dt(2026, 7, 28, 19, 0), _dt(2026, 7, 28, 19, 11), [EvidenceModality.VISION], device="d")
+        a1 = _mk_episode("ep-a1", None, "s", _dt(2026, 7, 28, 19, 9), _dt(2026, 7, 28, 19, 12), [EvidenceModality.AUDIO], device="d")
+        # 重叠 19:09-19:11 = 120s > 60s → 建边
+        links = CrossModalLinker(min_overlap_seconds=60).link([v1, a1])
+        assert len(links) == 1
+        # 重叠 120s <= 120s → 不建边（等于阈值，`>` 语义）
+        assert CrossModalLinker(min_overlap_seconds=120).link([v1, a1]) == []
+        # 重叠 120s > 100s → 建边
+        assert len(CrossModalLinker(min_overlap_seconds=100).link([v1, a1])) == 1
+
     def test_link_id_deterministic_and_sorted(self):
-        comp = _mk_episode("ep-x", "V1", "s", _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 45), [EvidenceModality.AUDIO])
-        pure = _mk_episode("ep-ax", None, "s", _dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 46), [EvidenceModality.AUDIO])
+        comp = _mk_episode("ep-x", "V1", "s", _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 45), [EvidenceModality.AUDIO], device="d")
+        pure = _mk_episode("ep-ax", None, "s", _dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 46), [EvidenceModality.AUDIO], device="d")
         links1 = CrossModalLinker().link([comp, pure])
         links2 = CrossModalLinker().link([pure, comp])  # 顺序颠倒
         assert links1[0].link_id == links2[0].link_id == "link-ep-ax-ep-x"
 
     def test_linker_idempotent(self):
-        comp = _mk_episode("ep-x", "V1", "s", _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 45), [EvidenceModality.AUDIO])
-        pure = _mk_episode("ep-ax", None, "s", _dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 46), [EvidenceModality.AUDIO])
+        comp = _mk_episode("ep-x", "V1", "s", _dt(2026, 7, 28, 18, 30), _dt(2026, 7, 28, 18, 45), [EvidenceModality.AUDIO], device="d")
+        pure = _mk_episode("ep-ax", None, "s", _dt(2026, 7, 28, 18, 38), _dt(2026, 7, 28, 18, 46), [EvidenceModality.AUDIO], device="d")
         a = CrossModalLinker().link([comp, pure])
         b = CrossModalLinker().link([comp, pure])
         assert [l.link_id for l in a] == [l.link_id for l in b]
@@ -361,6 +424,8 @@ class TestCrossModalLinker:
         v1 = _mk_episode("ep-va", "V1", None, _dt(2026, 7, 28, 19, 0), _dt(2026, 7, 28, 19, 10), [EvidenceModality.VISION])
         v2 = _mk_episode("ep-vb", "V1", None, _dt(2026, 7, 28, 19, 10), _dt(2026, 7, 28, 19, 20), [EvidenceModality.VISION])
         assert CrossModalLinker().link([v1, v2]) == []
-        # 放宽 tolerance 1 分钟 → 视为重叠
-        links = CrossModalLinker(overlap_tolerance=timedelta(minutes=1)).link([v1, v2])
-        assert len(links) == 1
+        # 放宽 tolerance 1 分钟：near-miss 进入候选，但 D3 最小重叠门控
+        # （overlap_seconds > min_overlap_seconds，默认 0）拦截零重叠边——
+        # 相切（0s 重叠）不建边。tolerance 参数保留向后兼容，当前仅放宽候选
+        # 判定、最终被 D3 拦截（近邻窗口语义重新设计时再启用）。
+        assert CrossModalLinker(overlap_tolerance=timedelta(minutes=1)).link([v1, v2]) == []

@@ -96,12 +96,17 @@ def _make_action(command_type, warning_id: UUID, command_id: UUID, status="DONE"
 
 
 def _build_cross_modal_event_log():
-    """确定性跨模态事件日志：复合(VISION+AUDIO) + 纯音频(AUDIO) 共享 audio_session_id 且时间重叠。
+    """确定性跨模态事件日志：复合(VISION+AUDIO) + 纯音频(AUDIO) 共享 **device_id** 且时间重叠。
 
-    返回 list of (visitor_event, [warnings], [actions], [evidence], audio_session_id)。
-    - 复合：视觉访客 dddd + audio_session "xcm"，18:30–18:45，telephone 证据 18:41
-    - 纯音频：无视觉访客，audio_session "xcm"（同），crying 18:38 + 警告 18:49
-      → 两 episode 共享 audio_session 且窗口重叠（18:38–18:45）→ 1 条 SUPPORTS 关联
+    （ADR-0028 D2 修订：audio_session_id 不再作为跨模态身份键——关联依据收敛为
+    visitor_instance_id OR device_id。）
+
+    返回 list of (visitor_event, [warnings], [actions], [evidence], audio_session_id, device_id)。
+    - 复合：视觉访客 dddd + audio_session "xcm"，18:30–18:45，telephone 证据 18:41，
+      device "dev-001"
+    - 纯音频：无视觉访客，audio_session "xcm"，crying 18:38 + 警告 18:49，
+      device "dev-001"（与复合同设备）
+      → 两 episode 同 device 且窗口重叠（18:38–18:45）→ 1 条 SUPPORTS 关联
     固定 ID 保证 link_id / confidence / created_at 跨运行复现。
     """
     # 复合
@@ -113,14 +118,14 @@ def _build_cross_modal_event_log():
     act_c = _make_action("SEND_FAMILY_MESSAGE", wc, ac)
     ev_c = _make_audio_evidence("telephone", "ev-cmp-xcm", _utc(2026, 7, 28, 18, 41))
 
-    # 纯音频（共享 audio_session "xcm"）
+    # 纯音频（同 device "dev-001"；audio_session "xcm" 仅作音频域身份，不参与关联判定）
     wp = _vid("aaaaaaaa2222")
     ev_p = _make_audio_evidence("crying", "ev-pure-xcm", _utc(2026, 7, 28, 18, 38))
     warn_p = _make_warning("audio_subject", wp, "MEDIUM", "MONITOR", ["异常通话"], _utc(2026, 7, 28, 18, 49))
 
     return [
-        (visitor_c, [warn_c], [act_c], [ev_c], "xcm"),
-        (None, [warn_p], [], [ev_p], "xcm"),
+        (visitor_c, [warn_c], [act_c], [ev_c], "xcm", "dev-001"),
+        (None, [warn_p], [], [ev_p], "xcm", "dev-001"),
     ]
 
 
@@ -129,13 +134,14 @@ def _run_and_link(log):
     builder = DefaultEpisodeBuilder()
     store = InMemoryStore()
     episode_ids: set[str] = set()
-    for visitor, warnings, actions, evidence, audio_session_id in log:
+    for visitor, warnings, actions, evidence, audio_session_id, device_id in log:
         rec = builder.project_episode(
             visitor,
             warnings=warnings,
             actions=actions,
             evidence=evidence,
             audio_session_id=audio_session_id,
+            device_id=device_id,
         )
         if rec is not None:
             store.upsert_episodic(rec)

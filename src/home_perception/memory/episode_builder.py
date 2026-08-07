@@ -107,10 +107,11 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         *,
         evidence: list[EvidenceItem] | None = None,
         audio_session_id: str | None = None,
+        device_id: str | None = None,
     ) -> EpisodicRecord | None:
         """投影一次访客离场为 EpisodicRecord。
 
-        触发时机：VisitorEvent 生成（访客离场）。
+        触发时机：VisitorEvent 生成（访客离场）或纯音频会话结束（PR #148）。
         幂等键：视觉访客在场时 ``record_id = f"ep-{visitor_event.event_id}"``（I1）；
                纯音频 episode（无视觉访客）``record_id = f"ep-{audio_session_id}"``。
         返回 None 仅当 ``visitor_event`` 与 ``audio_session_id`` 均为 None（无溯源主体）。
@@ -118,13 +119,18 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         音频增强（ADR-0027 Slice B）：传入 ``evidence``（EvidenceItem 列表，通常
         ``modality=AUDIO``）与 ``audio_session_id`` 后，record 自动收敛 ``modalities``、
         以 ID 填充 ``evidence_refs``、写入 ``audio_session_id``，并在 summary 追加音频描述。
+
+        ``device_id``（ADR-0028 D1）：部署源标识（如 ``home_entry_01``），供跨模态
+        同设备关联；None 表示未知（不参与同设备判定，渐进可用）。
         """
         evidence = evidence or []
         # 纯音频 episode（无视觉访客）：D4 放宽 visitor_instance_id 不变式
         if visitor_event is None:
             if audio_session_id is None:
                 return None
-            return self._project_audio_only(audio_session_id, warnings, actions, evidence)
+            return self._project_audio_only(
+                audio_session_id, warnings, actions, evidence, device_id=device_id
+            )
 
         # 1. 关联 WarningEvent（visitor_instance_id + 时间窗）
         related_warnings = self._filter_warnings(visitor_event, warnings)
@@ -159,6 +165,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
             evidence_refs=self._collect_evidence_ids(evidence),
             modalities=self._infer_modalities(visitor_event, evidence),
             audio_session_id=audio_session_id,
+            device_id=device_id,
             source_event_ids=self._collect_source_ids(
                 visitor_event, related_warnings, related_actions
             ),
@@ -432,11 +439,13 @@ class DefaultEpisodeBuilder(MemoryPolicy):
         warnings: list[WarningEvent],
         actions: list[ActionCommand],
         evidence: list[EvidenceItem],
+        device_id: str | None = None,
     ) -> EpisodicRecord | None:
         """纯音频 episode 投影（无视觉访客，D4 匿名）。
 
         仅当存在音频 WarningEvent 或音频 evidence 时才投影；否则无内容返回 None。
         窗口由 evidence.captured_at / warning.created_at 派生（无则退化为单点）。
+        ``device_id``（ADR-0028 D1）：部署源标识，供跨模态同设备关联。
         """
         if not warnings and not evidence:
             return None
@@ -464,6 +473,7 @@ class DefaultEpisodeBuilder(MemoryPolicy):
             evidence_refs=self._collect_evidence_ids(evidence),
             modalities=self._infer_modalities(None, evidence),
             audio_session_id=audio_session_id,
+            device_id=device_id,
             source_event_ids=self._collect_audio_source_ids(
                 related_warnings, related_actions, evidence
             ),

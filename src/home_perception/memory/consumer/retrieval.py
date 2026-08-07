@@ -32,10 +32,11 @@ class RuleBasedRetrieval(Retrieval):
     3. Rank：确定性排序键（见 ``_rank_key``）。
     4. Cap：取前 ``max_records`` 条。
 
-    ``device_id``：保留参数（ADR-0025 隐私边界 / DESIGN §3.1）。v1 的
-    ``EpisodicRecord`` 无 ``device_id`` 字段，故该排序键在 v1 物理上不可实现；保留为
-    未来检索策略（如 O1 VectorRetrieval / 同设备优先）扩展点，**当前 no-op**，且永不
-    进入 ``ReasoningInput``（C1 隐私边界）。
+    ``device_id``：保留参数（ADR-0025 隐私边界 / DESIGN §3.1）。ADR-0028 D1 起
+    ``EpisodicRecord`` 已含可选 ``device_id`` 字段，但本排序键仍**物理不使用**它——
+    排序锚点是当前事件的时间与访客，device 维度留作未来检索策略（如 O1
+    VectorRetrieval / 同设备优先）扩展点，**当前 no-op**，且永不进入
+    ``ReasoningInput``（C1 隐私边界）。
     """
 
     def __init__(
@@ -46,7 +47,8 @@ class RuleBasedRetrieval(Retrieval):
     ) -> None:
         self._store = store
         self._config = config or RetrievalConfig()
-        # 保留参数：v1 记录无 device_id 字段，本实现不使用，仅占位供未来策略。
+        # 保留参数（ADR-0025）：本实现不使用，仅占位供未来策略（ADR-0028 起记录
+        # 已含 device_id 字段，但检索排序仍不消费它——隐私边界优先）。
         self._device_id = device_id
 
     def retrieve(self, current_event: CurrentEvent) -> list[EpisodicRecord]:

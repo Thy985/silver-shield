@@ -389,6 +389,7 @@ EPISODIC_RECORD_DICT_KEYS: tuple[str, ...] = (
     "evidence_refs",
     "modalities",
     "audio_session_id",
+    "device_id",
     "source_event_ids",
     "summary",
     "model_version",
@@ -420,6 +421,10 @@ class EpisodicRecord:
     - `reason_summary`：WarningEvent.reason_summary 合并去重
     - `actions`：ActionCommand 投影为 ActionSummary 列表
     - `evidence_refs`：``EvidenceItem.evidence_id`` 字符串引用列表（ADR-0027 Slice A 统一）
+    - `modalities`：证据模态标记（VISION / AUDIO，ADR-0027 D1）
+    - `audio_session_id`：音频原生身份（纯音频 episode 唯一身份，ADR-0027 D4）
+    - `device_id`：部署源标识（ADR-0028 D1，如 `home_entry_01` / `living_room_mic_01`，
+      非硬件 UUID；供跨模态同设备关联；None 表示未知/旧记录，不参与同设备判定）
     - `source_event_ids`：[visitor_event_id, warning_id, ...]
     - `summary`：human-interpretable summary（ADR-0024 §3.2.1 强制）
     - `model_version`：Episode Builder 版本（如 "ep-builder-v1"）
@@ -442,6 +447,7 @@ class EpisodicRecord:
     evidence_refs: list[str] = field(default_factory=list)
     modalities: list[EvidenceModality] = field(default_factory=list)
     audio_session_id: str | None = None
+    device_id: str | None = None  # ADR-0028 D1：部署源标识（非硬件 UUID）
     risk_level: str | None = None
     recommended_action: str | None = None
     person_identity_id: str | None = None  # v1 恒 None
@@ -467,6 +473,11 @@ class EpisodicRecord:
             not isinstance(self.audio_session_id, str) or not self.audio_session_id.strip()
         ):
             raise ValueError("audio_session_id 必须为非空字符串或 None")
+        # ADR-0028 D1：device_id 为 None 或非空字符串（部署源标识，非硬件 UUID）
+        if self.device_id is not None and (
+            not isinstance(self.device_id, str) or not self.device_id.strip()
+        ):
+            raise ValueError("device_id 必须为非空字符串或 None")
         if not self.summary or not self.summary.strip():
             raise ValueError(
                 "summary 不能为空（ADR-0024 §3.2.1 强制：Memory Object 必须含 "
@@ -539,6 +550,7 @@ class EpisodicRecord:
             "evidence_refs": list(self.evidence_refs),
             "modalities": [m.value for m in self.modalities],
             "audio_session_id": self.audio_session_id,
+            "device_id": self.device_id,
             "source_event_ids": list(self.source_event_ids),
             "summary": self.summary,
             "model_version": self.model_version,
@@ -567,6 +579,7 @@ class EpisodicRecord:
             evidence_refs=_coerce_evidence_refs(data.get("evidence_refs", [])),
             modalities=[EvidenceModality(m) for m in data.get("modalities", [])],
             audio_session_id=data.get("audio_session_id"),
+            device_id=data.get("device_id"),
             risk_level=data.get("risk_level"),
             recommended_action=data.get("recommended_action"),
             person_identity_id=data.get("person_identity_id"),
