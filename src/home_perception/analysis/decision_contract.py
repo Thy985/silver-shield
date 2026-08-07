@@ -179,9 +179,23 @@ class DecisionInput:
     推论：读取 Memory 字段前 **MUST** 做 ``None`` 守卫；**禁止**把「Memory 缺席」当作
     风险信号（缺席即中性，不得因无记忆而抬升或降低风险）。
 
-    确定性（C3）：``trigger_events`` 在构造时按 ``timestamp`` 升序**规范化**（稳定排序，
-    同 timestamp 保留传入相对次序），保证「同一组事件的不同排列 → 同一 DecisionInput
-    → 同一 WarningEvent」，供回放 / 审计一致。
+    确定性（C3，有意的契约级规范化）：``trigger_events`` 在构造时按 ``timestamp`` 升序
+    **规范化**（稳定排序，同 timestamp 保留传入相对次序），保证「同一组事件的不同排列
+    → 同一 DecisionInput → 同一 WarningEvent」，供回放 / 审计一致。
+
+    ⚠️ 这与旧 ``decide(perception_events, ctx)`` **保留调用方顺序** 不同：本规范化是
+    ADR-0030 C3 要求的**契约级**行为，**不是** Slice B 的路由回归——`RuleBasedDecisionPolicy`
+    的路由逻辑与迁移前逐字一致，仅输入顺序在构造期被规范。下游 ``reason_summary`` /
+    ``WarningEvent.device_id`` / ``trigger_events`` 摘要顺序由此由 timestamp 决定，并由
+    回归测试钉死（见 ``tests/test_warning.py`` 的 ``TestRuleBasedDecisionPolicy``）。
+    **调用方不得依赖 ``trigger_events`` 的传入顺序在构造后存活。**
+
+    不可变性（C2，**浅层 frozen**）：``DecisionInput`` 是**浅层**不可变容器——
+    ``frozen=True`` 禁止字段重绑（``di.trigger_events = ...`` 抛 ``FrozenInstanceError``），
+    ``trigger_events`` 为 ``tuple``（C2）。但其中的 ``PerceptionEvent`` / ``DecisionContext``
+    是**调用方所有、结构上未冻结**的可变对象（其可变性是既有设计，本契约不深拷贝/冻结）。
+    契约保证的是**消费者只读**：``RuleBasedDecisionPolicy`` 等 MUST 把输入当只读、构造后
+    不得改动嵌套对象；需要深回放确定性时，依赖 ``to_dict()`` 的规范化序列化而非改动嵌套对象。
     """
 
     trigger_events: tuple[PerceptionEvent, ...]
@@ -210,6 +224,31 @@ class DecisionInput:
             raise TypeError(
                 "DecisionInput.decision_context 必须是 DecisionContext，"
                 f"收到 {type(self.decision_context).__name__}"
+            )
+
+        # 可选字段类型守卫（仅当非空才惰性导入 memory 契约，避免热路径 import 开销；
+        # Slice B 的「全 None」装配路径不触发 import）。
+        if self.reasoning_input is not None or self.reasoning_result is not None:
+            from ..memory.consumer.contracts import ReasoningInput, ReasoningResult
+
+            if self.reasoning_input is not None and not isinstance(
+                self.reasoning_input, ReasoningInput
+            ):
+                raise TypeError(
+                    "DecisionInput.reasoning_input 必须是 ReasoningInput 或 None，"
+                    f"收到 {type(self.reasoning_input).__name__}"
+                )
+            if self.reasoning_result is not None and not isinstance(
+                self.reasoning_result, ReasoningResult
+            ):
+                raise TypeError(
+                    "DecisionInput.reasoning_result 必须是 ReasoningResult 或 None，"
+                    f"收到 {type(self.reasoning_result).__name__}"
+                )
+        if self.prior_warning is not None and not isinstance(self.prior_warning, WarningEvent):
+            raise TypeError(
+                "DecisionInput.prior_warning 必须是 WarningEvent 或 None，"
+                f"收到 {type(self.prior_warning).__name__}"
             )
 
         # C3 规范化：按 timestamp 升序（稳定排序 —— 同 timestamp 保留传入相对次序）

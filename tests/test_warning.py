@@ -496,12 +496,6 @@ class TestRuleBasedDecisionPolicy:
             assert forbidden not in d, f"WarningEvent.to_dict() 含禁止字段 {forbidden!r}"
             assert forbidden not in d["meta"], f"WarningEvent.meta 含禁止字段 {forbidden!r}"
 
-
-# ============================================================================
-# RuleBasedDecisionPolicy 路由表定制
-# ============================================================================
-
-
     def test_decision_degrades_to_perception_only_without_memory(self):
         """ADR-0030 D2 Memory 可缺席：memory 三字段全 None 时退化为纯感知决策且不报错。
 
@@ -529,6 +523,69 @@ class TestRuleBasedDecisionPolicy:
         assert w.risk_level == plain.risk_level
         assert w.recommended_action == plain.recommended_action
         assert w.perception_score == plain.perception_score
+
+    def test_shuffled_input_yields_deterministic_warning(self):
+        """C3（ADR-0030）：乱序传入 → 同一 WarningEvent（reason_summary / device_id / trigger 确定）。
+
+        `DecisionInput` 在构造期按 timestamp 规范化（C3）；下游 `reason_summary` /
+        `WarningEvent.device_id` / `trigger_events` 摘要顺序由此确定。本测试固定这些
+        可观察输出，防止排序变更悄悄改变行为。
+
+        注意：这与旧 `decide(perception_events, ctx)` 保留调用方顺序不同——这是有意的
+        契约级规范化（满足 C3 回放/审计确定性），**不是** Slice B 的路由逻辑回归
+        （`RuleBasedDecisionPolicy` 路由逻辑与迁移前逐字一致）。
+        """
+        policy = RuleBasedDecisionPolicy()
+        ctx = DecisionContext(elder_id="e1")
+        ev_early = make_perception(
+            event_type="abnormal_dwell", device_id="cam-A", score=0.5, timestamp=10.0
+        )
+        ev_late = make_perception(
+            event_type="high_risk_approach", device_id="cam-B", score=0.9, timestamp=20.0
+        )
+        w_shuffled = policy.decide(
+            DecisionInput(trigger_events=(ev_late, ev_early), decision_context=ctx)
+        )
+        w_ordered = policy.decide(
+            DecisionInput(trigger_events=(ev_early, ev_late), decision_context=ctx)
+        )
+        # 乱序 vs 正序：可观察输出完全一致
+        assert w_shuffled.risk_level == w_ordered.risk_level == "HIGH"
+        assert w_shuffled.recommended_action == w_ordered.recommended_action == "ESCALATE_COMMUNITY"
+        # device_id = 最早 timestamp 的 significant candidate（ev_early / cam-A）
+        assert w_shuffled.device_id == w_ordered.device_id == "cam-A"
+        # reason_summary 顺序按 timestamp：abnormal_dwell 在前
+        assert w_shuffled.reason_summary == w_ordered.reason_summary == [
+            "异常停留",
+            "多风险规则同时命中",
+        ]
+        # trigger 摘要顺序按 timestamp
+        assert [t["event_type"] for t in w_shuffled.trigger_events] == [
+            t["event_type"] for t in w_ordered.trigger_events
+        ] == ["abnormal_dwell", "high_risk_approach"]
+        assert w_shuffled.perception_score == w_ordered.perception_score == 0.9
+
+    def test_device_id_resolves_to_earliest_timestamp_candidate(self):
+        """溯源字段 device_id 取最早 timestamp 的候选事件（与传入顺序无关，C3 规范化）。"""
+        policy = RuleBasedDecisionPolicy()
+        ctx = DecisionContext(elder_id="e1")
+        early = make_perception(
+            event_type="abnormal_dwell", device_id="cam-A", timestamp=10.0
+        )
+        late = make_perception(
+            event_type="repeat_visit", device_id="cam-B", timestamp=20.0
+        )
+        w = policy.decide(
+            DecisionInput(trigger_events=(late, early), decision_context=ctx)
+        )
+        assert w.device_id == "cam-A"
+        assert w.reason_summary == ["异常停留", "重复访问"]
+
+
+# ============================================================================
+# RuleBasedDecisionPolicy 路由表定制
+# ============================================================================
+
 
 class TestRuleBasedDecisionPolicyCustomization:
     def test_custom_routing_table(self):

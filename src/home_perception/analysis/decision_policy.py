@@ -230,6 +230,7 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
 
         return WarningEvent(
             elder_id=ctx.elder_id,
+            # device_id = 最早 timestamp 的候选事件设备（C3 规范化后确定，与传入顺序无关）
             device_id=candidates[0].device_id,
             risk_level=final_level,
             recommended_action=final_action,
