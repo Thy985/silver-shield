@@ -26,6 +26,9 @@ ContextBuilder 明确不负责的三项派生数据（见 ``context.py``：「�
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+from home_perception.common.logging import get_logger
 from home_perception.memory.consumer.contracts import (
     ActionRecord,
     ConflictFlag,
@@ -44,7 +47,15 @@ from home_perception.memory.consumer.interfaces import (
     MemoryConsumer,
     Retrieval,
 )
+from home_perception.memory.cross_modal_explainer import (
+    CrossModalExplainer,
+    CrossModalRetrieval,
+    CrossModalRetrievalError,
+)
 from home_perception.memory.records import EpisodicRecord
+from home_perception.memory.store import MemoryStore
+
+log = get_logger(__name__)
 
 
 class RuleBasedMemoryConsumer(MemoryConsumer):
@@ -60,10 +71,20 @@ class RuleBasedMemoryConsumer(MemoryConsumer):
         retrieval: Retrieval,
         aggregation: Aggregation,
         context_builder: ContextBuilder,
+        *,
+        cross_modal_retrieval: CrossModalRetrieval | None = None,
+        cross_modal_explainer: CrossModalExplainer | None = None,
+        memory_store: MemoryStore | None = None,
     ) -> None:
         self._retrieval = retrieval
         self._aggregation = aggregation
         self._context_builder = context_builder
+        # ADR-0029 D4（Slice C）：跨模态解释可选注入——三者齐全才生效，否则零行为变化。
+        # 注入的解释器产出 ``CrossModalContext``（非 ``CrossModalLink``）；``memory_store``
+        # 仅用于解释查 peer episode 与解析当前 episode（C2 只读，不写）。
+        self._cross_modal_retrieval = cross_modal_retrieval
+        self._cross_modal_explainer = cross_modal_explainer
+        self._memory_store = memory_store
 
     def consume(self, current_event: CurrentEvent) -> ReasoningInput:
         """消费一次 ``current_event``，产出 ``ReasoningInput``。
@@ -86,7 +107,7 @@ class RuleBasedMemoryConsumer(MemoryConsumer):
         try:
             records = self._retrieval.retrieve(current_event)
             profile, pattern = self._aggregation.aggregate(records)
-            return self._context_builder.build(
+            result = self._context_builder.build(
                 current_event,
                 records,
                 profile,
@@ -95,12 +116,69 @@ class RuleBasedMemoryConsumer(MemoryConsumer):
                 self._collect_actions(records),
                 self._detect_conflicts(current_event, records),
             )
+            # ADR-0029 D4（Slice C）：可选注入时附加跨模态解释上下文（零行为变化；
+            # 失败隔离——增强路径异常仅日志，不影响主链路 ReasoningInput 交付）。
+            result = self._maybe_attach_cross_modal(result, current_event)
+            return result
         except ConsumerError:  # 子层已分类异常原样上抛，保留失败阶段信息
             raise
         except Exception as exc:  # 未分类异常统一转译，绝不向上抛裸异常
             raise ConsumerError(
                 f"Consumer 编排失败 visitor={current_event.visitor_instance_id!r}: {exc}"
             ) from exc
+
+    # -- 跨模态解释附加（ADR-0029 D4，可选注入，零行为变化）--------------------
+    def _maybe_attach_cross_modal(
+        self, result: ReasoningInput, current_event: CurrentEvent
+    ) -> ReasoningInput:
+        """若三者均注入，解析当前 episode → 取跨模态边 → 投影为 ``CrossModalContext`` 附加。
+
+        - 仅当 retrieval + explainer + memory_store 三者均非 None 才生效；
+        - 解析当前 episode 用 ``MemoryStore.get_episodic_by_visitor``（取最新离场那条），
+          再经 ``CrossModalRetrieval.get_links_for_episode``（v1 主路径，**不**走延期的
+          ``get_links_for_visitor``）；
+        - 失败隔离：任何异常仅日志跳过，返回原 ``result``（主链路不受影响）。
+        """
+        if (
+            self._cross_modal_retrieval is None
+            or self._cross_modal_explainer is None
+            or self._memory_store is None
+        ):
+            return result
+        try:
+            current_ep_id = self._resolve_current_episode_id(current_event)
+            if current_ep_id is None:
+                return result
+            links = self._cross_modal_retrieval.get_links_for_episode(current_ep_id)
+            if not links:
+                return result
+            contexts = tuple(
+                self._cross_modal_explainer.explain(lk, self._memory_store) for lk in links
+            )
+            if not contexts:
+                return result
+            # 附加而非裁决：只挂描述性 context，不修改任何既有字段
+            return replace(result, cross_modal_contexts=contexts)
+        except (CrossModalRetrievalError, ValueError) as exc:  # 可选增强隔离：不影响主链路
+            log.warning(
+                "cross_modal.attach_failed",
+                error=str(exc),
+                visitor=current_event.visitor_instance_id,
+            )
+            return result
+
+    def _resolve_current_episode_id(self, current_event: CurrentEvent) -> str | None:
+        """解析"当前访问"对应的 episode record_id（内部 lookup，非延期 API）。
+
+        经 ``MemoryStore.get_episodic_by_visitor`` 取该访客全部 episode，取离场时刻最新
+        那条（确定性 tie-break：record_id 升序）作为当前 episode。纯内部解析，不暴露为
+        ``get_links_for_visitor`` 公共查询（该 API 归 ``MemoryQuery``，ADR-0029 D1）。
+        """
+        episodes = self._memory_store.get_episodic_by_visitor(current_event.visitor_instance_id)
+        if not episodes:
+            return None
+        current = max(episodes, key=lambda ep: (ep.leave_time, ep.record_id))
+        return current.record_id
 
     # -- 确定性序（C3）---------------------------------------------------------
     @staticmethod

@@ -26,6 +26,7 @@ from typing import Any
 
 from home_perception.common.timeutil import require_utc
 from home_perception.core.event import EvidenceModality
+from home_perception.memory.cross_modal_explainer import CrossModalContext
 from home_perception.memory.records import EpisodicRecord
 
 
@@ -363,6 +364,11 @@ class ReasoningInput:
     # 纯提示字段：帮助 Reasoning 感知"该上下文中出现了哪些模态"，**不携带任何判定**；
     # 音频 EvidenceItem 的实际消费仍经 ``evidence_refs``（evidence_id）解析。
     modalities: tuple[EvidenceModality, ...] = ()
+    # ADR-0029 D4（CrossModal Memory Retrieval & Explanation）：当前访客相关的跨模态
+    # 解释**上下文**列表（``CrossModalContext``，非 ``CrossModalLink``）。纯描述性、
+    # 可溯源、零判定——Consumer 只附加，不修改任何既有字段、不产结论。默认空元组，
+    # 不影响 C1/C2/C3；与白名单 ``REASONING_INPUT_FIELD_WHITELIST`` 同步（Slice B）。
+    cross_modal_contexts: tuple[CrossModalContext, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -378,6 +384,7 @@ class ReasoningInput:
             "previous_actions": [a.to_dict() for a in self.previous_actions],
             "conflicts": [c.to_dict() for c in self.conflicts],
             "modalities": [m.value for m in self.modalities],
+            "cross_modal_contexts": [c.to_dict() for c in self.cross_modal_contexts],
         }
 
     @classmethod
@@ -400,6 +407,10 @@ class ReasoningInput:
             conflicts=tuple(ConflictFlag.from_dict(c) for c in data.get("conflicts", [])),
             # D6 向后兼容：旧 v1 事件无 modalities 键 → 空元组（对齐 D8「旧事件 modalities=[]」）
             modalities=tuple(EvidenceModality(m) for m in data.get("modalities", [])),
+            # ADR-0029 D4 向后兼容：旧事件无 cross_modal_contexts 键 → 空元组
+            cross_modal_contexts=tuple(
+                CrossModalContext.from_dict(c) for c in data.get("cross_modal_contexts", [])
+            ),
         )
 
 
