@@ -233,6 +233,16 @@ DecisionPolicy
 - **破坏性变更管理（对实现方）**：`decide` 签名变化影响**所有 `DecisionPolicy` 子类与直接调用 `decide` 的测试**；切片 B 必须在**同一 PR 内原子完成** `RuleBasedDecisionPolicy` + `DecisionEngine` + 全部 decision 测试的同步更新（不可分批合并，否则中间态 CI 必红）。验收要求"既有 decision **行为**逐字段回归"——即**行为兼容、接口破坏**。
 - **迁移成本定性**：本仓 `DecisionPolicy` 实现者数量有限（主要为 `RuleBasedDecisionPolicy` + 测试替身），故破坏性可控；但**不得**因"仓内可控"而在文档上淡化为"向后兼容"——外部若已有第三方策略实现，属 MAJOR 级接口变更（ADR-0014 冻结治理口径）。
 
+### D4.1 Slice B 迁移说明：`trigger_events` 构造期规范化（C3 契约级，非路由回归）
+
+> **为何要单独说清**：D4 承诺"路由逻辑逐字不变、输出与今日逐字段一致"，但 `DecisionInput` 在构造期对 `trigger_events` 按 `timestamp` 做了**稳定升序规范化**（C3）。这与旧 `decide(perception_events, ctx)` **保留调用方传入顺序** 不同，属于**有意的契约级行为**，不是 Slice B 的路由回归——两者必须分开陈述，否则读者会误以为排序是回归或误以为旧顺序被保留。
+
+- **旧接口语义**：`RuleBasedDecisionPolicy.decide(perception_events, ctx)` 直接消费调用方传入的 `perception_events` 顺序；该顺序会沿 `candidates = significant + odd_hour_events` 影响 `reason_summary` 合并次序、`WarningEvent.device_id`（`candidates[0].device_id`）以及 `trigger_events` 摘要次序。
+- **新接口语义（C3）**：`DecisionInput.__post_init__` 在构造期按 `timestamp` 稳定升序重排 `trigger_events`，**与传入次序无关**。因此下游 `reason_summary` / `device_id` / `trigger` 摘要顺序由 `timestamp` 决定，**不再依赖调用方顺序**。
+- **这是 C3 的契约要求，不是 Slice B 行为回归**：ADR-0030 C3 要求"同 `DecisionInput` → 同 `WarningEvent`（回放 / 审计一致）"。若保留调用方顺序，同一组事件的不同排列会产生不同 `WarningEvent`，违反 C3。`RuleBasedDecisionPolicy` 的**路由逻辑（优先级 / max-wins / reason 合并 / 阈值）逐字不变**，仅输入顺序在构造期被规范。
+- **影响面与防护**：仅当调用方传入**非 timestamp 有序**的 `trigger_events` 时，新旧路径的 `reason_summary` / `device_id` 顺序可能不同；既有测试（`DecisionEngine.evaluate` 装配路径、仓内单测）传入的事件在构造期即被规范，故**既有决策测试全绿**。为固定这一可观察行为、防止排序逻辑后续被悄悄改动，新增回归测试钉死：乱序 / 多设备 / 多事件输入经 `RuleBasedDecisionPolicy.decide` 后产出**确定**的 `risk_level` / `recommended_action` / `device_id` / `reason_summary` / `trigger` 顺序（见 `tests/test_warning.py` 的 `TestRuleBasedDecisionPolicy`：`test_shuffled_input_yields_deterministic_warning` / `test_device_id_resolves_to_earliest_timestamp_candidate`）。
+- **调用方约束**：**不得依赖 `trigger_events` 的传入顺序在构造后存活**——构造即规范。
+
 ### D5：Memory → Decision 受控验证门（Controlled Validation Gate，非上线能力）
 
 这是本 ADR 最具杠杆也最敏感的一步——把 `runtime/pipeline.py` 中 `reasoning_results` 的「Shadow 观测，不接决策」限制翻转为"可受控验证接入"。**关键定位**：切片 C 是**验证能力，不是上线能力**；Memory 进入 Decision 的必要前提**不是契约存在，而是经过 Shadow Validation 证明具有统计收益**（见 §0.4）。**门控原则**：

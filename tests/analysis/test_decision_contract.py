@@ -25,7 +25,7 @@ from home_perception.analysis.decision_contract import (
     DECISION_INPUT_FORBIDDEN_FIELDS,
     DecisionInput,
 )
-from home_perception.analysis.decision_policy import DecisionContext
+from home_perception.analysis.decision_policy import DecisionContext, RuleBasedDecisionPolicy
 from home_perception.analysis.perception import PerceptionEvent
 from home_perception.analysis.warning import WarningEvent
 from home_perception.memory.consumer.contracts import (
@@ -342,3 +342,49 @@ class TestD2MemoryMayBeAbsent:
         di = DecisionInput(trigger_events=(), decision_context=make_ctx())
         assert di.trigger_events == ()
         assert DecisionInput.from_dict(di.to_dict()).trigger_events == ()
+
+
+# ============================================================================
+# C2（浅层）/ 可选字段校验 / 消费者只读 —— 来自评审反馈 #3 / #5
+# ============================================================================
+
+
+class TestShallowImmutabilityAndValidation:
+    def test_container_rebinding_is_forbidden(self):
+        """C2 浅层 frozen：字段重绑被拒（嵌套对象可变是 caller-owned，不在此层冻结）。"""
+        di = DecisionInput(trigger_events=(make_perception(),), decision_context=make_ctx())
+        with pytest.raises(FrozenInstanceError):
+            di.trigger_events = ()  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            di.decision_context = make_ctx("other")  # type: ignore[misc]
+
+    def test_optional_fields_reject_wrong_type(self):
+        """#5：可选字段传错类型应在构造处明确报错，而非在 to_dict 才 AttributeError。"""
+        ctx = make_ctx()
+        events = (make_perception(),)
+        with pytest.raises(TypeError, match="reasoning_input"):
+            DecisionInput(trigger_events=events, decision_context=ctx, reasoning_input="bad")
+        with pytest.raises(TypeError, match="reasoning_result"):
+            DecisionInput(trigger_events=events, decision_context=ctx, reasoning_result=123)
+        with pytest.raises(TypeError, match="prior_warning"):
+            DecisionInput(trigger_events=events, decision_context=ctx, prior_warning={"x": 1})
+
+    def test_policy_does_not_mutate_inputs(self):
+        """#3：消费者只读——构造后修改输入不影响决策输出（实践层不可变保证）。
+
+        `DecisionInput` 是浅层 frozen：嵌套 `PerceptionEvent` / `DecisionContext` 由调用方
+        所有、未结构冻结。本测试验证 `RuleBasedDecisionPolicy` 确实不改它们，使「浅层
+        frozen 容器 + 消费者只读」足以支撑回放确定性（无需深拷贝/冻结嵌套对象）。
+        """
+        policy = RuleBasedDecisionPolicy()
+        ctx = make_ctx()
+        ev = make_perception(event_type="abnormal_dwell", score=0.5)
+        di = DecisionInput(trigger_events=(ev,), decision_context=ctx)
+
+        snapshot_score = ev.score
+        snapshot_extra = dict(ctx.extra)
+        w = policy.decide(di)
+
+        assert w is not None
+        assert ev.score == snapshot_score  # 未被策略改动
+        assert dict(ctx.extra) == snapshot_extra  # 未被策略改动
