@@ -15,15 +15,19 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:  # pragma: no cover - 仅供类型注解；运行期不导入 decision_contract，避免 analysis 内循环
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型注解；运行期不导入，避免 analysis 内循环
     from .decision_contract import DecisionInput
+    from .decision_trace import CandidateRecord, SuppressReason
 
+from ..common.logging import get_logger
 from .perception import PerceptionEvent
 from .warning import (
     RECOMMENDED_ACTIONS,
     RISK_LEVELS,
     WarningEvent,
 )
+
+log = get_logger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -73,6 +77,22 @@ class DecisionPolicy(ABC):
     """
 
     name: str = "DecisionPolicy"
+
+    def __init__(self) -> None:
+        # Slice C（ADR-0031 D6.1）：trace 生命周期 span 由 engine 注入；默认 None
+        # （recorder 关闭态，零行为变化）。策略只写 partial，不拥有 span 生命周期。
+        # 类型用 `Any` 以规避 analysis 内循环导入（真实类型见
+        # `decision_trace.DecisionTraceSpan`，运行期以鸭子类型访问）。
+        self._trace_span: Any = None
+
+    def bind_trace_span(self, span: Any) -> None:
+        """（可选）绑定 engine 创建的 trace span，供策略在抑制路径写入 partial。
+
+        `span` 为 `None` 表示本周期不采集（recorder 关闭）；`decide` 在写入前判空，
+        保证零行为变化（T2）。单一写主（D6.1）：策略仅经本 span 写 `suppress_reason` /
+        `considered_candidates`，**禁止**写 `identity` 或覆盖 `outcome` 封口字段。
+        """
+        self._trace_span = span
 
     @abstractmethod
     def decide(self, input: DecisionInput) -> WarningEvent | None:
@@ -139,6 +159,7 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
         self,
         routing_table: dict[str, tuple[str, str, str]] | None = None,
     ):
+        super().__init__()  # 初始化基类 span 状态（Slice C，零行为变化）
         """路由表：per-event (level, action, reason) 三元组。
 
         Owner P0-8 决策哲学：per-event action 是源（不同 event 触发不同 action），
@@ -165,9 +186,14 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
         # Slice B：入参收敛为单 `DecisionInput`。路由逻辑与迁移前逐字一致，仅在此解包；
         # 不读 memory / reasoning / prior_warning 字段 → 内存缺席时退化为纯感知决策
         # （满足 ADR-0030 D2「Memory 可缺席」）。
+        # Slice C：惰性 import 规避 analysis 内循环（decision_trace → decision_policy）。
+        # 运行期两模块均已加载，惰性导入安全（与 decision_contract 对 memory 契约同范式）。
+        from .decision_trace import SuppressReason, build_rationale
+
         perception_events = input.trigger_events
         ctx = input.decision_context
         if not perception_events:
+            self._emit_suppress(SuppressReason.NO_TRIGGER_EVENTS, ())
             return None
 
         # 1) 过滤 visit_normal：单独 visit_normal → 抑制；is_odd_hour 叠加 → LOW
@@ -183,7 +209,9 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
 
         candidates = significant + odd_hour_events
         if not candidates:
-            return None  # 全部是普通访问，无警告
+            # 全部是普通访问，无警告（Slice C：写抑制 partial，漏报首次可观测）
+            self._emit_suppress(SuppressReason.ALL_SUPPRESSED_NORMAL, ())
+            return None
 
         # 2) 取最高优先级的 event_type（max risk level wins）
         chosen = max(candidates, key=lambda ev: self._event_priority(ev))
@@ -192,6 +220,9 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
         decision = self.routing_table.get(chosen.event_type)
         if decision is None:
             # 路由表里没这个 event_type（理论上不该发生 —— PerceptionEvent 已枚举）
+            # Slice C：写抑制 partial，considered_candidates 反映「在场但无路由」的候选
+            considered = build_rationale(input.trigger_events, self.routing_table).considered_candidates
+            self._emit_suppress(SuppressReason.UNROUTABLE_EVENT_TYPE, considered)
             return None
         chosen_level, _chosen_action, _chosen_reason = decision
 
@@ -244,6 +275,30 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
             # Episode Builder 的 [enter, leave+60s] 窗口）失败。
             created_at=ctx.now,
         )
+
+    # --------------------------------------------------------------------
+    # Slice C（ADR-0031 D6.1）：抑制 partial 写入
+    # --------------------------------------------------------------------
+
+    def _emit_suppress(
+        self,
+        reason: SuppressReason,
+        considered_candidates: tuple[CandidateRecord, ...],
+    ) -> None:
+        """在三条 `return None` 前写入抑制 partial（D6.1 COLLECTING 阶段）。
+
+        仅当引擎已绑定 span（recorder 注入）时生效；`self._trace_span is None` 时零操作，
+        保证 recorder=None 时决策逐字不变（T2）。写入异常被隔离（T3）：策略只写不读，
+        写 partial 抛错绝不反向破坏 `decide` 返回值（失败隔离，承 ADR-0028 D4）。
+        """
+        span = getattr(self, "_trace_span", None)
+        if span is None:
+            return
+        try:
+            span.suppress_reason = reason
+            span.considered_candidates = considered_candidates
+        except Exception:  # 失败隔离（T3）：写 partial 故障不得破坏决策
+            log.exception("decision.trace_span_write_failed", reason=reason.value)
 
     # --------------------------------------------------------------------
     # 内部辅助

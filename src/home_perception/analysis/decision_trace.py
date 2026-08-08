@@ -703,6 +703,76 @@ def build_warning_trace(
 
 
 # ============================================================================
+# Slice C（抑制留痕 · D6.1）：生命周期 span + SUPPRESS 装配工厂
+# ============================================================================
+
+
+@dataclass
+class DecisionTraceSpan:
+    """决策 trace 的**可变**中间态（ADR-0031 D6.1 COLLECTING 阶段载体）。
+
+    `DecisionEngine.evaluate` 拥有 trace 生命周期：在 `CREATED` 阶段开 span（分配本可变
+    容器），`RuleBasedDecisionPolicy.decide` 在三条 `return None` 前经本对象**写入**它
+    独有的 partial——`suppress_reason` + `considered_candidates`；engine 在 `FINALIZED`
+    阶段读取 partial、封口 `identity` / `outcome` 并转为不可变 `DecisionTrace`。
+
+    单一写主铁律（D6.1）：策略**只写** `suppress_reason` / `considered_candidates`，
+    **禁止**写 `identity` 或覆盖 `outcome` 封口字段——封口归 engine。本对象是可变
+    dataclass（非 frozen），仅作中间态；最终落盘 / 回放的是不可变 `DecisionTrace`。
+    """
+
+    suppress_reason: SuppressReason | None = None
+    considered_candidates: tuple[CandidateRecord, ...] = ()
+
+    def reset(self) -> None:
+        """清空 partial（供 engine 跨调用复用同一 policy 实例前重置）。"""
+        self.suppress_reason = None
+        self.considered_candidates = ()
+
+
+def build_suppress_trace(
+    input: DecisionInput,
+    suppress_reason: SuppressReason,
+    considered_candidates: Sequence[CandidateRecord],
+    policy_name: str,
+    routing_table: Mapping[str, tuple[str, str, str]],
+    *,
+    arm: str = "production",
+    correlation_id: str = "",
+) -> DecisionTrace:
+    """装配一条 SUPPRESS trace（Slice C 核心价值：漏报首次可观测，D1）。
+
+    - `outcome`：SUPPRESS + `suppress_reason`，`suppress_reason` 严格派生自三条真实
+      返回点之一（`no_trigger_events` / `all_suppressed_normal` / `unroutable_event_type`）。
+    - `rationale.considered_candidates`：来自策略在 COLLECTING 阶段写入的 partial（D3，
+      事实候选、闭集）；`chosen_index` 在 SUPPRESS 时恒为 `None`（本就被抑制，无胜出者）。
+    - `identity` / `provenance` / `policy`：与 WARN 路径同源（D2 / D4 / D5），保证两臂
+      仅 `outcome` 不同、其余 Bundle 可机器比对（Slice D 双轨守恒前提）。
+    """
+    return DecisionTrace(
+        identity=TraceIdentity.new(arm=arm, correlation_id=correlation_id),
+        provenance=TraceProvenance(
+            input_digest=compute_input_digest(input),
+            trigger_digest=compute_trigger_digest(input.trigger_events),
+            trigger_refs=build_trigger_refs(input.trigger_events),
+            memory_refs=MemoryRefs(),
+        ),
+        policy=TracePolicy(
+            name=policy_name,
+            fingerprint=compute_policy_fingerprint(routing_table),
+        ),
+        rationale=TraceRationale(
+            considered_candidates=tuple(considered_candidates),
+            chosen_index=None,
+        ),
+        outcome=TraceOutcome(
+            kind=TraceOutcomeKind.SUPPRESS,
+            suppress_reason=suppress_reason,
+        ),
+    )
+
+
+# ============================================================================
 # 导入期 fail-closed 契约守卫（D2 + T4）
 # ============================================================================
 
@@ -743,6 +813,7 @@ __all__ = [
     "CandidateRecord",
     "DecisionTrace",
     "DecisionTraceRecorder",
+    "DecisionTraceSpan",
     "InMemoryRecorder",
     "MemoryRefs",
     "NullRecorder",
@@ -755,6 +826,7 @@ __all__ = [
     "TraceRationale",
     "TriggerRef",
     "build_rationale",
+    "build_suppress_trace",
     "build_trigger_refs",
     "build_warning_trace",
     "candidate_records_from_events",
