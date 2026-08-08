@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -33,6 +34,8 @@ from home_perception.analysis.decision_policy import (
 from home_perception.analysis.decision_trace import (
     DECISION_TRACE_FIELD_WHITELIST,
     DECISION_TRACE_FORBIDDEN_FIELDS,
+    ABRunConservationError,
+    DecisionABRun,
     DecisionTrace,
     MemoryRefs,
     SuppressReason,
@@ -560,3 +563,201 @@ class TestSuppressReasonClosedEnum:
         # 封闭枚举：未登记的值构造即失败 —— 策略无法「悄悄」新增未登记抑制原因
         with pytest.raises(ValueError):
             SuppressReason("fourth_path_unregistered")
+
+
+# ============================================================================
+# Slice D（双轨载体 · D7）：DecisionABRun + 唯一变量守恒
+# ============================================================================
+
+
+def _make_ab_trace(
+    arm: str,
+    kind: TraceOutcomeKind,
+    *,
+    correlation_id: str = "cid-1",
+    trigger_digest: str = "td-1",
+    fingerprint: str = "fp-1",
+    reasoning_input_present: bool = False,
+    **outcome: object,
+) -> DecisionTrace:
+    """构造一条受控的 `DecisionTrace`，供双轨守恒测试精确设参（非运行时接线）。"""
+    identity = TraceIdentity.new(arm=arm, correlation_id=correlation_id)
+    provenance = TraceProvenance(
+        input_digest="id-1",
+        trigger_digest=trigger_digest,
+        memory_refs=MemoryRefs(reasoning_input_present=reasoning_input_present),
+    )
+    policy = TracePolicy(name="RuleBasedDecisionPolicy", fingerprint=fingerprint)
+    rationale = TraceRationale()
+    if kind == TraceOutcomeKind.WARN:
+        outcome_b = TraceOutcome(
+            kind=kind,
+            risk_level=outcome.get("risk_level", "LOW"),
+            recommended_action=outcome.get("recommended_action", "NOTIFY_FAMILY"),
+            warning_id=outcome.get("warning_id", "w-1"),
+        )
+    else:
+        outcome_b = TraceOutcome(
+            kind=kind,
+            suppress_reason=outcome.get("suppress_reason", SuppressReason.ALL_SUPPRESSED_NORMAL),
+        )
+    return DecisionTrace(
+        identity=identity,
+        provenance=provenance,
+        policy=policy,
+        rationale=rationale,
+        outcome=outcome_b,
+    )
+
+
+def _make_ab_run(
+    baseline_kind: TraceOutcomeKind,
+    candidate_kind: TraceOutcomeKind,
+    **kwargs: object,
+) -> DecisionABRun:
+    """构造一个守恒通过的双轨运行（默认唯一变量 = Memory）。
+
+    baseline = perception-only（reasoning_input_present=False），candidate = 含 Memory
+    （reasoning_input_present=True）；两臂 correlation_id / trigger_digest / fingerprint 一致。
+    """
+    baseline = _make_ab_trace(
+        "baseline", baseline_kind, reasoning_input_present=False, **kwargs  # type: ignore[arg-type]
+    )
+    candidate = _make_ab_trace(
+        "candidate", candidate_kind, reasoning_input_present=True, **kwargs  # type: ignore[arg-type]
+    )
+    return DecisionABRun(
+        correlation_id=kwargs.get("correlation_id", "cid-1"),  # type: ignore[arg-type]
+        trace_baseline=baseline,
+        trace_candidate=candidate,
+    )
+
+
+def _break_conservation(
+    run: DecisionABRun,
+    *,
+    correlation_id: str | None = None,
+    trigger_digest: str | None = None,
+    fingerprint: str | None = None,
+    baseline_reasoning_present: bool | None = None,
+) -> DecisionABRun:
+    """复制 run 并只破坏**一条**守恒不变量，返回新 run（用于逐条验证断言会触发）。"""
+    cand = run.trace_candidate
+    base = run.trace_baseline
+    if correlation_id is not None:
+        cand = replace(
+            cand, identity=replace(cand.identity, correlation_id=correlation_id)
+        )
+    if trigger_digest is not None:
+        cand = replace(cand, provenance=replace(cand.provenance, trigger_digest=trigger_digest))
+    if fingerprint is not None:
+        cand = replace(cand, policy=replace(cand.policy, fingerprint=fingerprint))
+    if baseline_reasoning_present is not None:
+        base = replace(
+            base,
+            provenance=replace(
+                base.provenance,
+                memory_refs=replace(
+                    base.provenance.memory_refs,
+                    reasoning_input_present=baseline_reasoning_present,
+                ),
+            ),
+        )
+    return replace(run, trace_candidate=cand, trace_baseline=base)
+
+
+class TestSliceDDecisionABRun:
+    def test_construction_holds_both_traces_and_correlation_id(self):
+        run = _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN)
+        assert run.correlation_id == "cid-1"
+        assert run.trace_baseline.outcome.kind == TraceOutcomeKind.SUPPRESS
+        assert run.trace_candidate.outcome.kind == TraceOutcomeKind.WARN
+        # 载体仅持有两条 trace + correlation_id，不引入任何判定字段
+        assert set(DecisionABRun.__dataclass_fields__) == {
+            "correlation_id",
+            "trace_baseline",
+            "trace_candidate",
+        }
+
+    def test_valid_run_passes_conservation(self):
+        run = _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN)
+        run.assert_conserved()  # 不抛
+
+    def test_outcome_pair_reflects_both_arms(self):
+        run = _make_ab_run(TraceOutcomeKind.WARN, TraceOutcomeKind.SUPPRESS)
+        assert run.outcome_pair == (TraceOutcomeKind.WARN, TraceOutcomeKind.SUPPRESS)
+
+    def test_all_four_outcome_pairings_are_conserved(self):
+        """验收 #7：四种 outcome 配对均有用例，且守恒与 outcome 配对无关。"""
+        pairings = [
+            (TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN),  # Memory 唤醒一次漏报
+            (TraceOutcomeKind.WARN, TraceOutcomeKind.SUPPRESS),  # Memory 压制一次误报
+            (TraceOutcomeKind.WARN, TraceOutcomeKind.WARN),  # 需比较 risk_level/action
+            (TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.SUPPRESS),  # 无差异
+        ]
+        for b, c in pairings:
+            run = _make_ab_run(b, c)
+            run.assert_conserved()  # 守恒不受 outcome 配对影响
+            assert run.outcome_pair == (b, c)
+
+    def test_conservation_is_independent_of_arm_field(self):
+        # arm 不是守恒四条之一（它只是标识）；两臂 arm 不同但其余守恒仍成立
+        run = _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN)
+        assert run.trace_baseline.identity.arm == "baseline"
+        assert run.trace_candidate.identity.arm == "candidate"
+        run.assert_conserved()
+
+    def test_violation_correlation_id_raises_first(self):
+        bad = _break_conservation(
+            _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN),
+            correlation_id="other",
+        )
+        with pytest.raises(ABRunConservationError, match="1/4"):
+            bad.assert_conserved()
+
+    def test_violation_trigger_digest_raises_second(self):
+        bad = _break_conservation(
+            _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN),
+            trigger_digest="different",
+        )
+        with pytest.raises(ABRunConservationError, match="2/4"):
+            bad.assert_conserved()
+
+    def test_violation_fingerprint_raises_third(self):
+        bad = _break_conservation(
+            _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN),
+            fingerprint="different",
+        )
+        with pytest.raises(ABRunConservationError, match="3/4"):
+            bad.assert_conserved()
+
+    def test_violation_baseline_reasoning_present_raises_fourth(self):
+        bad = _break_conservation(
+            _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN),
+            baseline_reasoning_present=True,
+        )
+        with pytest.raises(ABRunConservationError, match="4/4"):
+            bad.assert_conserved()
+
+    def test_each_conservation_rule_fires_only_when_broken(self):
+        """四条断言相互独立：只破坏第 N 条时，精确触发第 N/4 条，前序条不被误报。"""
+        base_run = _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN)
+        # 只破 trigger_digest（第 2 条）：第 1 条须通过，第 2 条须触发
+        bad = _break_conservation(base_run, trigger_digest="x")
+        with pytest.raises(ABRunConservationError, match="2/4"):
+            bad.assert_conserved()
+        # 只破 fingerprint（第 3 条）：1/2 须通过，第 3 条触发
+        bad = _break_conservation(base_run, fingerprint="x")
+        with pytest.raises(ABRunConservationError, match="3/4"):
+            bad.assert_conserved()
+        # 只破 baseline reasoning_present（第 4 条）：1/2/3 须通过，第 4 条触发
+        bad = _break_conservation(base_run, baseline_reasoning_present=True)
+        with pytest.raises(ABRunConservationError, match="4/4"):
+            bad.assert_conserved()
+
+    def test_candidate_reasoning_present_not_constrained(self):
+        """D7 第四条只约束 baseline 臂；candidate 可含 Memory（reasoning_input_present=True）
+        仍守恒通过——证明约束精准、不误伤候选臂。"""
+        run = _make_ab_run(TraceOutcomeKind.SUPPRESS, TraceOutcomeKind.WARN)
+        assert run.trace_candidate.provenance.memory_refs.reasoning_input_present is True
+        run.assert_conserved()  # 通过
