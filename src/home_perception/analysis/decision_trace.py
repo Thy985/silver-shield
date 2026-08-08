@@ -883,6 +883,26 @@ class DecisionABRun:
         """两臂 `outcome.kind` 配对（D7 混淆矩阵可观测）。"""
         return (self.trace_baseline.outcome.kind, self.trace_candidate.outcome.kind)
 
+    def to_dict(self) -> dict[str, object]:
+        """序列化为 JSON-friendly dict（Slice E 落盘 / ADR-0030 Slice C 双轨报告产出）。
+
+        仅存两臂 trace 的 `to_dict` 与载体 `correlation_id`；不复制任何 Bundle 语义
+        （T8 不重复真相），反序列化经 `from_dict` 重建等价 `DecisionABRun`。
+        """
+        return {
+            "correlation_id": self.correlation_id,
+            "trace_baseline": self.trace_baseline.to_dict(),
+            "trace_candidate": self.trace_candidate.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> DecisionABRun:
+        return cls(
+            correlation_id=str(data["correlation_id"]),
+            trace_baseline=DecisionTrace.from_dict(data["trace_baseline"]),  # type: ignore[arg-type]
+            trace_candidate=DecisionTrace.from_dict(data["trace_candidate"]),  # type: ignore[arg-type]
+        )
+
 
 # ============================================================================
 # 导入期 fail-closed 契约守卫（D2 + T4）
