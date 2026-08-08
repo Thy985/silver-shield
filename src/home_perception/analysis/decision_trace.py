@@ -773,6 +773,118 @@ def build_suppress_trace(
 
 
 # ============================================================================
+# Slice D（双轨载体 · D7）：DecisionABRun + 唯一变量守恒
+# ============================================================================
+
+
+class ABRunConservationError(Exception):
+    """`DecisionABRun.assert_conserved` 失败时抛出（D7 六条守恒违反其一）。"""
+
+
+@dataclass(frozen=True)
+class DecisionABRun:
+    """决策层 A/B 双轨运行（ADR-0031 D7）。
+
+    对齐 reasoning 层 `ABRun`（`memory/evaluation/ab_runner.py`），补齐决策层对等物。
+    两臂 MUST 满足「唯一变量守恒」（见 `assert_conserved`）：**唯一差异 = Memory，
+    指定由 `correlation_id` 共享、由 trace 事后证明，而非由构造过程承诺**——这正是
+    `build_baseline_input` 在 Reasoning 层做的事，在决策层的对等表达。
+
+    `outcome.kind` 的四种配对**首次**让决策层的混淆矩阵可观测（D7）：
+    `SUPPRESS×WARN`（Memory 唤醒一次漏报）/ `WARN×SUPPRESS`（压制一次误报）/
+    `WARN×WARN`（比较 `risk_level` / `action` 是否抬升）/ `SUPPRESS×SUPPRESS`（无差异）。
+
+    Slice D 仅提供载体与守恒校验，**不启用 Memory 接线**；用两臂 trace 装配
+    `DecisionABRun` 的落地运行归 ADR-0030 Slice C。本结构本身零行为变化。
+
+    序列化（`to_dict` / `from_dict`）归 **Slice E**（JSONL 落盘 + ADR-0030 Slice C 双轨报告
+    产出）——本切片刻意只落地载体与守恒校验，不在 Slice D 引入序列化，避免与 Slice E 的
+    脱敏 / 留存契约抢先耦合。
+
+    命名注记：未来若 `MemoryABRun` / `ReasoningABRun` 等增多，可抽象为
+    `EvaluationRun{EvaluationKind, ...}`；本 ADR 沿用 `DecisionABRun` 以与 reasoning
+    层 `ABRun` 命名一致，不抢先泛化。
+    """
+
+    correlation_id: str
+    trace_baseline: DecisionTrace
+    trace_candidate: DecisionTrace
+
+    def assert_conserved(self) -> None:
+        """机器可验证的「唯一变量守恒」断言（D7 六条）。
+
+        任一不满足即抛 `ABRunConservationError`（调试 / 测试用；使用显式异常而非
+        `assert` 语句，避免被 `-O` 关闭）。两臂**仅** `outcome` 可不同（含 SUPPRESS
+        vs WARN 的差异），其余 Bundle 必须一致——这正是「唯一变量 = Memory」的充要条件
+        事后证明，而非构造期承诺。
+
+        第 5 / 6 条对 `reasoning_input_present` 使用 `is not False` / `is not True` 的
+        **身份比较**（fail-closed）：`MemoryRefs(reasoning_input_present=0)` 等 falsy 但
+        非 `False` / `True` 的值一律视为违反，与 `from_dict` 的 `bool(...)` 宽松归一化
+        刻意不同——装配层必须显式给出布尔真值，杜绝「静默降级」。
+        """
+        # (1) 载体 correlation_id 与两臂 identity.correlation_id 三方相等：
+        #     杜绝载体自身字段静默偏离两臂（下游按 run.correlation_id 反查时取不到）。
+        if not (
+            self.correlation_id
+            == self.trace_baseline.identity.correlation_id
+            == self.trace_candidate.identity.correlation_id
+        ):
+            raise ABRunConservationError(
+                "D7 守恒失败(1/6)：载体 correlation_id 与两臂 identity.correlation_id 必须三方相等 "
+                f"({self.correlation_id!r} / "
+                f"{self.trace_baseline.identity.correlation_id!r} / "
+                f"{self.trace_candidate.identity.correlation_id!r})"
+            )
+        # (2) 两臂 decision_id 必须不同：同一条 trace 不能同时充当两臂
+        #     （补强 TraceIdentity docstring 既有承诺「双轨时 decision_id 不同」）。
+        if self.trace_baseline.identity.decision_id == self.trace_candidate.identity.decision_id:
+            raise ABRunConservationError(
+                "D7 守恒失败(2/6)：两臂 identity.decision_id 必须不同 "
+                "（同一条 trace 不能同时充当 baseline 与 candidate 两臂）"
+            )
+        # (3) 输入 trigger 一致
+        if (
+            self.trace_baseline.provenance.trigger_digest
+            != self.trace_candidate.provenance.trigger_digest
+        ):
+            raise ABRunConservationError(
+                "D7 守恒失败(3/6)：两臂 provenance.trigger_digest 必须相同 "
+                f"（唯一变量 = Memory，两臂输入 trigger 必须一致；"
+                f"{self.trace_baseline.provenance.trigger_digest[:8]}… != "
+                f"{self.trace_candidate.provenance.trigger_digest[:8]}…）"
+            )
+        # (4) 同一策略配置
+        if self.trace_baseline.policy.fingerprint != self.trace_candidate.policy.fingerprint:
+            raise ABRunConservationError(
+                "D7 守恒失败(4/6)：两臂 policy.fingerprint 必须相同 "
+                f"（baseline / candidate 不得用不同路由表；"
+                f"{self.trace_baseline.policy.fingerprint[:8]}… != "
+                f"{self.trace_candidate.policy.fingerprint[:8]}…）"
+            )
+        # (5) baseline = perception-only：无 Memory 输入
+        if self.trace_baseline.provenance.memory_refs.reasoning_input_present is not False:
+            raise ABRunConservationError(
+                "D7 守恒失败(5/6)：baseline 臂 provenance.memory_refs.reasoning_input_present "
+                f"必须为 False（baseline = perception-only，无 Memory 输入；"
+                f"实际 {self.trace_baseline.provenance.memory_refs.reasoning_input_present!r}）"
+            )
+        # (6) candidate 必须**真的**携带 Memory：否则「无差异」可能是装配 bug 伪装的
+        #     实验结论（ADR-0031 增补条目；落地运行方 ADR-0030 Slice C 须保证 candidate 含 Memory）。
+        if self.trace_candidate.provenance.memory_refs.reasoning_input_present is not True:
+            raise ABRunConservationError(
+                "D7 守恒失败(6/6)：candidate 臂 provenance.memory_refs.reasoning_input_present "
+                f"必须为 True（candidate 必须真的携带 Memory，否则「无差异」结论可能由装配 bug 伪装）；"
+                f"实际 {self.trace_candidate.provenance.memory_refs.reasoning_input_present!r}"
+            )
+
+    @property
+    def outcome_pair(self) -> tuple[TraceOutcomeKind, TraceOutcomeKind]:
+        """两臂 `outcome.kind` 配对（D7 混淆矩阵可观测）。"""
+        return (self.trace_baseline.outcome.kind, self.trace_candidate.outcome.kind)
+
+
+# ============================================================================
 # 导入期 fail-closed 契约守卫（D2 + T4）
 # ============================================================================
 
@@ -802,6 +914,15 @@ def _assert_contract_shape() -> None:
             "禁止横向平铺字段退化成 God Object。"
         )
 
+    # DecisionABRun 同样受「禁止判定语义 Bundle」守卫：双轨载体不得偷偷引入 verdict 字段
+    ab_names = {f.name for f in fields(DecisionABRun)}
+    if DECISION_TRACE_FORBIDDEN_FIELDS & ab_names:
+        raise RuntimeError(
+            "DecisionABRun 含禁止的判定语义 Bundle "
+            f"{sorted(DECISION_TRACE_FORBIDDEN_FIELDS & ab_names)}；"
+            "决策层双轨载体不做最终判定（ADR-0001 / T4），审计血缘只记录事实不记录诈骗认定"
+        )
+
 
 _assert_contract_shape()
 
@@ -810,7 +931,9 @@ __all__ = [
     "DECISION_TRACE_FIELD_WHITELIST",
     "DECISION_TRACE_FORBIDDEN_FIELDS",
     "TRACE_ARMS",
+    "ABRunConservationError",
     "CandidateRecord",
+    "DecisionABRun",
     "DecisionTrace",
     "DecisionTraceRecorder",
     "DecisionTraceSpan",
