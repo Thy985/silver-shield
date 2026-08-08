@@ -7,7 +7,10 @@ meta:
   version: 1
   description: "Benchmark: night long dwell (odd hour + abnormal_dwell)"
   seed: 99
-  duration_frames: 140
+  # 帧数须同时满足两个运行时阈值（ADR-0033 端到端首次实测校正）：
+  # ① abnormal_dwell 需逻辑停留 >= long_duration_seconds(300s)：(610-3)*0.5s = 303.5s ✓
+  # ② 离场判定需尾部空缺 >= absence_gap_s(5s)：(659-610)*0.5s = 24.5s ✓（不离场则无 VisitorEvent）
+  duration_frames: 660
   owner: perception-team
   category: visitor
   difficulty: high
@@ -30,14 +33,20 @@ actors:
       - frame: 3
         pos: [130.0, 130.0]
         size: [40.0, 120.0]
-      - frame: 138
+      - frame: 610
         pos: [240.0, 130.0]
         size: [40.0, 120.0]
     objects: []
     appearance: {}
 timeline:
-  - frame: 139
+  - frame: 620
     type: abnormal_dwell
 expects:
   emitted_event_types: [visit_normal, abnormal_dwell]
   min_risk_level: LOW
+# ADR-0033 D3：安全评价标签，由场景作者显式声明，**不从 expects 推导**。
+# ScenarioValidator 不消费本字段（验证 ≠ 评价）。
+benchmark:
+  expected_alarm: true
+  severity: LOW
+  note: "凌晨长停留属可疑徘徊，期望触发告警提醒家属"

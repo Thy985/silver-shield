@@ -1,0 +1,32 @@
+# ADR-0033 Phase 1 负样本（空场景误报守护）。
+# 无 actor → 无检测 → 无 track → 无事件 → 无告警。用于占住混淆矩阵的 TN / FP 分支：
+# 若某次改动让 pipeline 对"空门厅"产出告警，本场景即从 TN 翻为 FP（false_alarm_rate 上升）。
+meta:
+  schema_version: "1.0"
+  scenario_id: sw_benchmark_quiet_hallway
+  version: 1
+  description: "Benchmark negative: empty hallway, no actor, expect no alarm"
+  seed: 11
+  duration_frames: 60
+  owner: perception-team
+  category: negative
+  difficulty: low
+  tags: [negative, quiet, benchmark]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+  static_objects: []
+actors: []
+timeline: []
+expects:
+  emitted_event_types: []
+# ADR-0033 D3：安全评价标签，由场景作者显式声明，**不从 expects 推导**。
+benchmark:
+  expected_alarm: false
+  note: "空门厅静止无人，任何告警都是误报"
