@@ -36,12 +36,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from uuid import uuid4
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型注解；运行期不求值，避免与 decision_contract 耦合
     from .decision_contract import DecisionInput
     from .perception import PerceptionEvent
+    from .warning import WarningEvent
 
 # LEVEL_PRIORITY 是稳定的路由优先级常量，单向 import（decision_policy 不反向 import 本模块）。
 from .decision_policy import LEVEL_PRIORITY
@@ -559,6 +560,149 @@ def candidate_records_from_events(
 
 
 # ============================================================================
+# 采集接缝（ADR-0031 Slice B · D6）：recorder 抽象 + WARN 路径装配
+# ============================================================================
+
+
+@runtime_checkable
+class DecisionTraceRecorder(Protocol):
+    """决策 trace 的采集接缝（D6）。
+
+    决策层（engine / policy）只调用 `record` 把已封口 trace **写**出去，**绝不读回**
+    （T1 只写不读）。`flush` 为 Slice E 落盘预留（Slice B 中 recorder 自行决定是否在
+    `record` 时即持久化；`NullRecorder` / `InMemoryRecorder` 的 `flush` 为 no-op）。
+    """
+
+    def record(self, trace: DecisionTrace) -> None:
+        """落一条已封口的 trace。实现 MUST NOT 抛异常影响决策（T3 失败隔离）。"""
+        ...
+
+    def flush(self) -> None:
+        """可选：批量刷盘（Slice E）。Slice B 中默认 no-op。"""
+        ...
+
+
+class NullRecorder:
+    """默认 recorder：所有方法 no-op。
+
+    `DecisionEngine(trace_recorder=None)` 等效于此（零行为变化，T2）。存在它是为了让
+    「显式注入 no-op」与「未注入」在契约上等价，便于测试与开关切换。
+    """
+
+    def record(self, trace: DecisionTrace) -> None:
+        return None
+
+    def flush(self) -> None:
+        return None
+
+
+@dataclass
+class InMemoryRecorder:
+    """测试 / Slice C 双轨用：内存累积 trace，供断言与回放（不落盘）。"""
+
+    traces: list[DecisionTrace] = field(default_factory=list)
+
+    def record(self, trace: DecisionTrace) -> None:
+        self.traces.append(trace)
+
+    def flush(self) -> None:
+        return None
+
+    def by_correlation_id(self, correlation_id: str) -> list[DecisionTrace]:
+        return [t for t in self.traces if t.identity.correlation_id == correlation_id]
+
+    def by_kind(self, kind: TraceOutcomeKind) -> list[DecisionTrace]:
+        return [t for t in self.traces if t.outcome.kind == kind]
+
+    @property
+    def warn_traces(self) -> list[DecisionTrace]:
+        return self.by_kind(TraceOutcomeKind.WARN)
+
+    @property
+    def suppress_traces(self) -> list[DecisionTrace]:
+        return self.by_kind(TraceOutcomeKind.SUPPRESS)
+
+
+def build_rationale(
+    trigger_events: Sequence[PerceptionEvent],
+    routing_table: Mapping[str, tuple[str, str, str]],
+) -> TraceRationale:
+    """从（已 C3 规范化的）`trigger_events` 重建候选与选中下标（D3 / T9，仅 WARN 路径用）。
+
+    **仅用于 trace 重建，绝不回灌决策逻辑。** 过滤与选择语义与 `RuleBasedDecisionPolicy
+    .decide` 一致：
+    - 过滤：`visit_normal` 且非 `is_odd_hour` 叠加 → 被抑制，不进入 candidates；
+    - 选择：`max(candidates, key=priority)`，首个最高优先级候选胜出（与 `decide` 的
+      `max` 语义一致）。
+
+    `trigger_index` 保留在 C3 规范化 `trigger_events` 中的原下标，便于与 `trigger_refs`
+    交叉引用；`considered_candidates` 顺序 = 传入顺序（T9 确定性）。
+    """
+    records: list[CandidateRecord] = []
+    for idx, ev in enumerate(trigger_events):
+        if ev.event_type == "visit_normal" and not ev.is_odd_hour:
+            continue  # 与 decide 的抑制逻辑一致：纯普通访问不进入候选
+        route = routing_table.get(ev.event_type)
+        routed_level = route[0] if route else ""
+        routed_action = route[1] if route else ""
+        priority = LEVEL_PRIORITY.get(routed_level, 0) if route else 0
+        records.append(
+            CandidateRecord(
+                trigger_index=idx,
+                event_type=ev.event_type,
+                routed_level=routed_level,
+                routed_action=routed_action,
+                priority=priority,
+            )
+        )
+    chosen_index: int | None = None
+    if records:
+        chosen_index = max(range(len(records)), key=lambda i: records[i].priority)
+    return TraceRationale(considered_candidates=tuple(records), chosen_index=chosen_index)
+
+
+def build_warning_trace(
+    input: DecisionInput,
+    warning: WarningEvent,
+    policy_name: str,
+    routing_table: Mapping[str, tuple[str, str, str]],
+    *,
+    arm: str = "production",
+    correlation_id: str = "",
+) -> DecisionTrace:
+    """装配一条 WARN trace（Slice B 采集接缝的核心工厂，零行为变化）。
+
+    - `identity`：每次 `decide` 唯一 `decision_id`；`correlation_id` 由调用方决定
+      （Slice B 单评估默认空，Slice C 双轨共享同一 `correlation_id`）——正面回答
+      ADR-0030 §5 开放问题（归 trace，不归 `DecisionInput`）。
+    - `provenance.memory_refs`：Slice B 一律空（Memory 尚未接线，ADR-0030 D2）。
+    - `policy.fingerprint`：实际生效路由表摘要（D5 / T10），取代硬编码 `"v1"`。
+    - `rationale`：由 `build_rationale` 从 `input.trigger_events` 重建（D3）。
+    - `outcome`：WARN，携带决策产物的输出侧记录（不违反 ADR-0030 C1）。
+    """
+    return DecisionTrace(
+        identity=TraceIdentity.new(arm=arm, correlation_id=correlation_id),
+        provenance=TraceProvenance(
+            input_digest=compute_input_digest(input),
+            trigger_digest=compute_trigger_digest(input.trigger_events),
+            trigger_refs=build_trigger_refs(input.trigger_events),
+            memory_refs=MemoryRefs(),
+        ),
+        policy=TracePolicy(
+            name=policy_name,
+            fingerprint=compute_policy_fingerprint(routing_table),
+        ),
+        rationale=build_rationale(input.trigger_events, routing_table),
+        outcome=TraceOutcome(
+            kind=TraceOutcomeKind.WARN,
+            risk_level=warning.risk_level,
+            recommended_action=warning.recommended_action,
+            warning_id=str(warning.warning_id),
+        ),
+    )
+
+
+# ============================================================================
 # 导入期 fail-closed 契约守卫（D2 + T4）
 # ============================================================================
 
@@ -598,7 +742,10 @@ __all__ = [
     "TRACE_ARMS",
     "CandidateRecord",
     "DecisionTrace",
+    "DecisionTraceRecorder",
+    "InMemoryRecorder",
     "MemoryRefs",
+    "NullRecorder",
     "SuppressReason",
     "TraceIdentity",
     "TraceOutcome",
@@ -607,7 +754,9 @@ __all__ = [
     "TraceProvenance",
     "TraceRationale",
     "TriggerRef",
+    "build_rationale",
     "build_trigger_refs",
+    "build_warning_trace",
     "candidate_records_from_events",
     "compute_input_digest",
     "compute_policy_fingerprint",
