@@ -1,6 +1,6 @@
 # ADR-0031: 决策审计血缘契约（Decision Audit Trace Contract）
 
-- **Status**: Proposed（review-ready，待 Owner 冻结）
+- **Status**: In Review（Owner 评审中；Proposed 阶段由 Owner 评审，冻结后修订权属 Owner）
 - **Date**: 2026-08-08
 - **Owner**: SilverShield 技术负责人
 - **Related**:
@@ -150,7 +150,7 @@ TraceOutcome:
 
 ### D2 · 五个具名 Bundle，沿用 ADR-0030 C7 的防膨胀纪律
 
-草案的 8 个平铺字段若直接实现，加上本 ADR 必需的 `correlation_id` / `arm` / 摘要等会膨胀到 13+ 个——正是 ADR-0030 C7 要防的 God Object。本 ADR **对自己适用同一条纪律**：顶层恰好 5 个字段，各自是具名 Bundle。
+草案的 8 个平铺字段若直接实现，加上本 ADR 必需的 `correlation_id` / `arm` / 摘要等会膨胀到 13+ 个——正是 ADR-0030 C7 要防的 God Object。本 ADR **对自己适用同一条纪律**：顶层字段必须属于一个**封闭的具名 Bundle 集合**——当前最小集合 = 5 个具名 Bundle。**5 是「当前最小集合」，不是终态冻结**；新增 Bundle 必须经 ADR 评审扩充白名单，禁止横向平铺字段。
 
 ```
 DecisionTrace
@@ -161,7 +161,7 @@ DecisionTrace
 └── outcome:    TraceOutcome     { kind, ...（见 D1）}
 ```
 
-与 ADR-0030 同构，`DECISION_TRACE_FIELD_WHITELIST` 在**导入期 fail-closed** 断言顶层字段集合，任何横向加字段在 `import` 瞬间抛错，强制走 ADR 评审。
+与 ADR-0030 同构，`DECISION_TRACE_FIELD_WHITELIST` 在**导入期 fail-closed** 断言顶层字段集合为「白名单 Bundle 集合的子集」：任何 (a) 平铺的非 Bundle 字段、或 (b) 白名单之外的 Bundle 字段，在 `import` 瞬间抛错。新增 Bundle 必须走 ADR 评审并扩充白名单。**纪律的目标是从源头阻止 God Object 的增生，而非永久冻结演化空间**——审计系统天然会增长（未来可能出现 `comparison` / `environment` / `timing` 等 Bundle，如 latency、deployment_version、hardware_context），关键约束是「新增必须评审」，不是「不能再新增」。
 
 - `arm`：`"production" | "baseline" | "candidate"`，默认 `"production"`。Slice C 双轨的载体。
 - `identity.decision_id`：每次 `decide()` 唯一（UUID）。**不复用 `warning_id`**——SUPPRESS 时根本没有 `WarningEvent`。
@@ -281,6 +281,7 @@ DecisionABRun { correlation_id, trace_baseline: DecisionTrace, trace_candidate: 
 | **T6** | **确定性**：同 `DecisionInput` + 同 `policy.fingerprint` → trace 除 `{identity.decision_id, identity.created_at}` 外逐字段相同 | `test_trace_deterministic_except_identity` |
 | **T7** | **抑制必留痕**：任何返回 `None` 的决策 MUST 产出 `outcome.kind == "SUPPRESS"` 且 `suppress_reason` 非空；三条真实返回点全覆盖 | `test_every_suppression_path_emits_trace` |
 | **T8** | **不重复真相**：trace 不内嵌完整 `ReasoningInput` / `PerceptionEvent` 对象，只存引用 + digest；`WarningEvent.meta` 四个 legacy 键不再新增 | `test_trace_stores_refs_not_payloads` |
+| **T9** | **候选顺序确定性**：同归一化 `DecisionInput` + 同 `policy.fingerprint` → `rationale.considered_candidates` 元素顺序逐条相同；采集侧 MUST NOT 依赖 `set` / `dict.values()` 等非稳定迭代顺序构造候选（否则 AB 比对会出现「内容相同但 diff 报变化」） | `test_considered_candidates_order_deterministic` |
 
 > **T4 与"记录 `chosen_action`"不矛盾**：ADR-0030 C1 禁止的是「决策语义进入**输入**」；trace 是**输出侧记录**，记录已发生的 `risk_level` / `recommended_action` 是审计的本职。T4 禁止的是**判定性**字段（诈骗与否），不是决策产物字段（严重度 / 建议动作）。
 
@@ -299,6 +300,7 @@ DecisionABRun { correlation_id, trace_baseline: DecisionTrace, trace_candidate: 
 5. ❌ **不做 trace 的中心上报**——本地留存，遵 ADR-0002「视频/证据不离 Home 端」；trace 只含引用 ID；
 6. ❌ **不产出任何"诈骗/suspect"语义**（AGENTS.md 模块边界铁律）；
 7. ❌ **不构造反事实**（`rejected_actions`，见 D3）——反事实归仿真/实验层，不归审计层。
+8. ❌ **不生成自然语言解释**——`DecisionTrace` 只保存**机器可验证血缘**（引用 / digest / fingerprint / 候选序列），Human-readable explanation（含 LLM 生成文本）属独立的 **Explanation Layer**，不得塞进 trace。审计链一旦混入「为什么」的解释文本即失去可证明性；若未来需 counterfactual / policy simulation，应另建 `SimulationTrace` 而非污染 `DecisionTrace`。
 
 ---
 
@@ -336,7 +338,7 @@ DecisionABRun { correlation_id, trace_baseline: DecisionTrace, trace_candidate: 
 
 > 契约先行、行为分级。A–C **零行为变化**可先合；D/E 触及运行时与落盘，门控评审。
 
-- **Slice A（契约定义，零行为变化）**：新增 `analysis/decision_trace.py`——`DecisionTrace` + 五个 Bundle + `SuppressReason` / `TraceOutcomeKind` 枚举 + `to_dict` / `from_dict` + `DECISION_TRACE_FIELD_WHITELIST` / `DECISION_TRACE_FORBIDDEN_FIELDS` 导入期 fail-closed 守卫（与 `decision_contract.py` 同构）。测试：T4 / T6 / T8 + 往返稳定 + `outcome` 联合互斥校验。**不接任何运行时。**
+- **Slice A（契约定义，零行为变化）**：新增 `analysis/decision_trace.py`——`DecisionTrace` + 具名 Bundle 集合（当前最小集合 = 5 个）+ `SuppressReason` / `TraceOutcomeKind` 枚举 + `to_dict` / `from_dict` + `DECISION_TRACE_FIELD_WHITELIST` / `DECISION_TRACE_FORBIDDEN_FIELDS` 导入期 fail-closed 守卫（与 `decision_contract.py` 同构）。测试：T4 / T6 / T8 / T9 + 往返稳定 + `outcome` 联合互斥校验。**不接任何运行时。**
 - **Slice B（采集接缝，默认关闭）**：`DecisionTraceRecorder` Protocol + `NullRecorder` + `InMemoryRecorder`；`DecisionEngine` 可选注入；WARN 路径产出完整 trace。测试：T1 / T2 / T3。
 - **Slice C（抑制留痕）**：三条 `return None` 路径接入 recorder，产出 `SUPPRESS` trace（**本 ADR 的核心价值**）。测试：T7 全覆盖 + 变异验证（新增第四条返回路径未登记枚举时测试必须失败）。
 - **Slice D（双轨载体，门控）**：`DecisionABRun` + 唯一变量守恒断言（D7 四条），与 `memory/evaluation/ab_runner.py` 风格对齐。**不启用 Memory 接线**，仅提供载体供 ADR-0030 Slice C 使用。
@@ -345,7 +347,7 @@ DecisionABRun { correlation_id, trace_baseline: DecisionTrace, trace_candidate: 
 ### 验收清单（Acceptance Criteria）
 
 1. **D1 空决策覆盖**：`SuppressReason` 三枚举与代码三条返回点一一对应；T7 通过且经变异验证；
-2. **D2 防膨胀**：`DecisionTrace` 顶层恰好 5 字段，`DECISION_TRACE_FIELD_WHITELIST` 导入期断言生效（新增字段即炸）；
+2. **D2 防膨胀**：`DecisionTrace` 顶层字段必须属于白名单 Bundle 集合（当前最小集合 = 5），新增 Bundle 经 ADR 评审；`DECISION_TRACE_FIELD_WHITELIST` 导入期断言生效（平铺字段 / 越界 Bundle 即炸）；
 3. **D3 无反事实**：trace 不含 `rejected_actions` 类字段；`considered_candidates` 全部可由 `decide()` 现有中间态导出，路由逻辑逐字未改；
 4. **D4 引用不复制**：T8 通过；`trigger_refs.index` 与 C3 规范化后顺序一致（回归测试钉死乱序输入→同 index）；
 5. **D5 fingerprint 真实**：注入自定义 `routing_table` 的策略产出的 fingerprint 与默认表不同（测试钉死）；`WarningEvent.meta` 四键未新增；
@@ -360,3 +362,5 @@ DecisionABRun { correlation_id, trace_baseline: DecisionTrace, trace_candidate: 
 > **修订权属（呼应 AGENTS.md §6.3）**：本 ADR 处于 Proposed 阶段由 Owner 评审；**冻结（Accepted）后的修订由 Owner 追加新条目，AI 不修改修订记录**。
 
 - **2026-08-08**：初稿（Proposed）。承接 ADR-0030 §5.1 路线图，并**以代码实情校正其 `DecisionTrace` 草案四处**：(1) 草案 `chosen_action` 隐含「决策必有产物」，而 `RuleBasedDecisionPolicy` 有三条**完全静默**的 `return None` 路径——漏报在今日不可观测，故 D1 把 `outcome` 定为 `WARN | SUPPRESS` 带标签联合，`SuppressReason` 严格派生自三条真实返回点；(2) 草案 `trigger_events_refs` 无稳定引用对象——`PerceptionEvent` 无 `event_id`，现有 `f"{visitor_id}:{event_type}"` 同访客同类型即冲突，故 D4 以「C3 规范化后下标 + 三元组」绕行并显式登记该债务，拒绝夹带 Level 1 Schema 变更；(3) 草案 `rejected_actions` 在"取 max 候选 + 单次查表"的策略下不可计算，强求需为可观测性改决策逻辑并记录虚构反事实，故 D3 代之以 `considered_candidates`（零逻辑改动、全部为已发生事实）；(4) 草案 `policy_version` 对应的现有 `meta.routing_table_version` 是硬编码 `"v1"`，定制路由表亦谎称 v1，故 D5 改为实际生效路由表的 fingerprint。另新增：D2 对自身适用 ADR-0030 C7 防膨胀纪律（顶层 5 个具名 Bundle + 导入期 fail-closed）；D5 回应 ADR-0014 `meta` 晋升条款，指出「挂在 `WarningEvent` 上永远覆盖不到空决策」这一结构性理由；D6 复用 ADR-0028 D4 可选注入范式，并记录 `DECISION_INPUT_FIELD_WHITELIST` 正确否决了「recorder 走 `DecisionInput`」的错误设计；D7 补齐 `ab_runner.ABRun` 在决策层的对等物 `DecisionABRun` 与「唯一变量守恒」的机器可验证断言。T1–T8 不变式钉死「trace 只写不读 / 不改决策 / 失败隔离 / 无判定 / 隐私 / 确定性 / 抑制必留痕 / 不重复真相」。本 ADR 仅冻结契约，不实现模型、不接 Memory。
+
+- **2026-08-08（Owner review 修订）**：吸收 Owner 评审三点收紧，状态由 Proposed 置为 In Review。(a) **D2 不过早冻结**——顶层不再宣称「恰好 5 字段」，改为「字段必须属于白名单 Bundle 集合（当前最小集合 = 5），新增 Bundle 须经 ADR 评审」；纪律目标从「永久冻结」改为「从源头阻止 God Object 增生，同时保留演化空间」。(b) **T6 收紧 + 新增 T9**——明确 `rationale.considered_candidates` 元素顺序必须确定性可复现，采集侧禁止依赖 `set` / `dict.values()` 等非稳定迭代顺序，否则 AB 比对会出现「内容相同但 diff 报变化」。(c) **新增 Non-goal #8**——`DecisionTrace` 不生成自然语言解释，Human-readable explanation（含 LLM 文本）属独立 Explanation Layer，不得污染事实层（审计链混入解释文本即失去可证明性）。Owner 明确要求**本 ADR 不再扩展功能**，下一步先实现 Slice A 用实情反验契约，再考虑 ADR-0032（程序化视频 / 场景生成）与 ADR-0033（Benchmark Harness）。
