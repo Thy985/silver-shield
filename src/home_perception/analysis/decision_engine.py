@@ -17,6 +17,7 @@ from ..common.logging import get_logger
 from ..common.timeutil import now_dt
 from .decision_contract import DecisionInput
 from .decision_policy import DecisionContext, DecisionPolicy, RuleBasedDecisionPolicy
+from .decision_trace import DecisionTraceRecorder, build_warning_trace
 from .perception import PerceptionEvent
 from .warning import WarningEvent
 
@@ -57,12 +58,16 @@ class DecisionEngine:
         elder_id: str,
         policy: DecisionPolicy | None = None,
         now_provider=None,
+        trace_recorder: DecisionTraceRecorder | None = None,
     ):
         if not elder_id or not str(elder_id).strip():
             raise ValueError("elder_id 不能为空（WarningEvent 必填字段）")
         self.elder_id = elder_id
         self.policy = policy or RuleBasedDecisionPolicy()
         self._now = now_provider or now_dt
+        # Slice B：可选 trace 采集接缝，默认关闭（`None` = 不采集，零行为变化，T2）。
+        # 不进入 `DecisionInput`（ADR-0031 D6），避免 Trace→DecisionInput 循环依赖。
+        self.trace_recorder = trace_recorder
 
     def evaluate(self, perception_events: list[PerceptionEvent]) -> WarningEvent | None:
         """单次决策：消费 PerceptionEvent 列表，输出 WarningEvent 或 None。
@@ -93,4 +98,23 @@ class DecisionEngine:
                 trigger_count=len(perception_events),
                 perception_score=round(warning.perception_score, 4),
             )
+            # Slice B：WARN 路径产出完整 trace（采集接缝默认关闭，仅当 recorder 注入时）。
+            # SUPPRESS 路径的留痕归 Slice C。失败隔离（T3）：构建/记录异常只日志，
+            # 决策照常返回，trace 故障不丢结果、不污染 WarningEvent（T1 只写不读）。
+            if self.trace_recorder is not None:
+                try:
+                    trace = build_warning_trace(
+                        input=input,
+                        warning=warning,
+                        policy_name=self.policy.name,
+                        routing_table=getattr(self.policy, "routing_table", {}),
+                        arm="production",
+                        correlation_id="",
+                    )
+                    self.trace_recorder.record(trace)
+                except Exception:  # 失败隔离（T3）：决策层不因 trace 故障而丢结果
+                    log.exception(
+                        "decision.trace_failed",
+                        warning_id=str(warning.warning_id),
+                    )
         return warning
