@@ -1,0 +1,41 @@
+# ADR-0032 回归守护场景示例（D8 registry 目录分层演示）。
+# 声明式几何场景：单 human 长停留（>=300s 逻辑时长）→ 触发 abnormal_dwell。
+meta:
+  schema_version: "1.0"
+  scenario_id: stranger_long_dwell
+  version: 1
+  description: "Regression: single human long dwell -> abnormal_dwell"
+  seed: 7
+  duration_frames: 120
+  owner: perception-team
+  category: visitor
+  difficulty: medium
+  tags: [dwell, regression]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    living_room: [0.4, 0.0, 1.0, 1.0]
+  static_objects: []
+actors:
+  - id: visitor_a
+    actor_type: human
+    tracks:
+      - frame: 2
+        pos: [150.0, 140.0]
+        size: [40.0, 120.0]
+      - frame: 118
+        pos: [200.0, 140.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 119
+    type: abnormal_dwell
+expects:
+  emitted_event_types: [abnormal_dwell]
+  min_risk_level: LOW
