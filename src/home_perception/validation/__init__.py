@@ -4,16 +4,22 @@
 pipeline 的两类上游输入（detections / frames），并执行 + 对照期望校验，
 为 ADR-0033 Benchmark Harness 提供可复现、隐私安全的输入源。
 
-子包：
-- ``scenario``  ：``Scenario`` schema + YAML 加载 + ``ScenarioCompiler``（YAML → ``SyntheticInput``）
-- ``simulation``：``generator``（detections 发射器）+ ``renderer``（frames 渲染器）
-- ``runner``    ：``ScenarioRunner``（输入 → pipeline → ``RunResult``）+ ``ScenarioValidator``
-- ``fixtures``  ：声明式 scenario YAML（D8 Scenario Registry 资产）
+子包 / 模块：
+- ``scenario``     ：``Scenario`` schema + YAML 加载 + ``ScenarioCompiler``（YAML → ``SyntheticInput``）
+- ``simulation``   ：``generator``（detections 发射器）+ ``renderer``（frames 渲染器）
+- ``runner``       ：``ScenarioRunner``（输入 → pipeline → ``RunResult``）+ ``ScenarioValidator``
+- ``fixtures``     ：声明式 scenario YAML（D8 Scenario Registry 资产）
+- ``demo_adapter`` ：合成帧源 → ``silver_demo`` 网关的适配层（Slice E，**刻意不在此急切导入**，
+  由组装层显式 import 并注册，见下）
 
 设计铁律（与音频 ``audio/tts`` 对称，但**不反向依赖**业务规则层 ``analysis/rule_engine``）：
 - generator 只产上游输入（frames / ``Detection``），不调用 ``RuleEngine``、不替下游算期望；
 - 确定性是契约（D2）：同 Scenario + 同代码/numpy/opencv 版本 → 字节级可复现；
-- 仅经 ADR-0014 L2 既有接缝（``Detector`` / ``build_frame_source``）注入，零生产行为变化（D3）。
+- 零生产行为变化（D3）：经 ADR-0014 L2 既有接缝（``Detector``）与 demo 侧
+  ``register_frame_source`` **依赖倒置钩子**注入。注意这里与 ADR-0032 原文
+  「``build_frame_source`` 直接调 ``render_frames``」有意偏离——直接调用会让
+  ``silver_demo`` import 本包，撞上 ADR-0015 §5 冻结 import 白名单；改用钩子后
+  白名单无需放宽，且不注册时 demo 行为与今天完全一致。
 """
 
 from __future__ import annotations

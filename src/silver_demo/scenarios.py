@@ -59,6 +59,11 @@ class ScenarioConfig(BaseModel):
     # 形如 {enabled: true, decision_enabled: true}，覆盖 settings.realtime_risk，
     # 使单个场景可开启实时风险旁路（如 CCTV 夜间场景），不影响全局默认与其他场景。
     realtime_risk: dict[str, Any] | None = None
+    # 合成帧源参数（ADR-0032 Slice E）：仅当 source_type 由组装层注册为合成源时消费，
+    # 形如 {scenario_path: "...", mode: "frames", seed: 42}。
+    # 本模块**不解释**其内容——语义由注册进来的 builder 决定，从而 silver_demo
+    # 无需 import 任何合成/验证层模块（冻结 import 白名单不放宽）。
+    synthetic: dict[str, Any] | None = None
 
     @field_validator("frame_interval_s")
     @classmethod
