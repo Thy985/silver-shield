@@ -17,7 +17,12 @@ from ..common.logging import get_logger
 from ..common.timeutil import now_dt
 from .decision_contract import DecisionInput
 from .decision_policy import DecisionContext, DecisionPolicy, RuleBasedDecisionPolicy
-from .decision_trace import DecisionTraceRecorder, build_warning_trace
+from .decision_trace import (
+    DecisionTraceRecorder,
+    DecisionTraceSpan,
+    build_suppress_trace,
+    build_warning_trace,
+)
 from .perception import PerceptionEvent
 from .warning import WarningEvent
 
@@ -86,7 +91,15 @@ class DecisionEngine:
             reasoning_result=None,
             prior_warning=None,
         )
-        warning = self.policy.decide(input)
+        # Slice C（D6.1）：trace 生命周期边界 CREATED。仅当 recorder 注入时开 span 并
+        # 绑定到策略；span 为 None 时策略不写 partial，决策逐字不变（T2）。finally 解绑，
+        # 避免 span 跨调用泄漏（单一写主：engine 拥有 span 生命周期，策略只写 partial）。
+        span = DecisionTraceSpan() if self.trace_recorder is not None else None
+        self.policy.bind_trace_span(span)
+        try:
+            warning = self.policy.decide(input)
+        finally:
+            self.policy.bind_trace_span(None)
         if warning is not None:
             log.info(
                 "decision.warning_emitted",
@@ -99,8 +112,8 @@ class DecisionEngine:
                 perception_score=round(warning.perception_score, 4),
             )
             # Slice B：WARN 路径产出完整 trace（采集接缝默认关闭，仅当 recorder 注入时）。
-            # SUPPRESS 路径的留痕归 Slice C。失败隔离（T3）：构建/记录异常只日志，
-            # 决策照常返回，trace 故障不丢结果、不污染 WarningEvent（T1 只写不读）。
+            # 失败隔离（T3）：构建/记录异常只日志，决策照常返回，trace 故障不丢结果、
+            # 不污染 WarningEvent（T1 只写不读）。
             if self.trace_recorder is not None:
                 try:
                     trace = build_warning_trace(
@@ -117,4 +130,28 @@ class DecisionEngine:
                         "decision.trace_failed",
                         warning_id=str(warning.warning_id),
                     )
+        else:
+            # Slice C（核心价值）：SUPPRESS 路径留痕——决策层首次可观测「为什么没报警」。
+            # 失败隔离前提：若策略未写入 reason（如子类未实现），不抛异常、不丢决策，
+            # 仅记日志并跳过留痕（防御性，正常策略三条 return None 前必写 reason）。
+            if self.trace_recorder is not None:
+                try:
+                    if span is None or span.suppress_reason is None:
+                        log.warning(
+                            "decision.trace_suppress_reason_missing",
+                            policy=self.policy.name,
+                        )
+                        return warning
+                    trace = build_suppress_trace(
+                        input=input,
+                        suppress_reason=span.suppress_reason,
+                        considered_candidates=span.considered_candidates,
+                        policy_name=self.policy.name,
+                        routing_table=getattr(self.policy, "routing_table", {}),
+                        arm="production",
+                        correlation_id="",
+                    )
+                    self.trace_recorder.record(trace)
+                except Exception:  # 失败隔离（T3）：决策层不因 trace 故障而丢结果
+                    log.exception("decision.trace_failed", warning_id=None)
         return warning

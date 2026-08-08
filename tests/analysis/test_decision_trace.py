@@ -492,3 +492,71 @@ class TestArmValidation:
         for arm in ("production", "baseline", "candidate"):
             ident = TraceIdentity(decision_id="d", correlation_id="c", arm=arm)
             assert ident.arm == arm
+
+
+# ============================================================================
+# Slice C（抑制留痕）契约单元 —— DecisionTraceSpan + build_suppress_trace
+# ============================================================================
+
+
+class TestSliceCDecisionTraceSpan:
+    def test_span_defaults_empty(self):
+        span = dt.DecisionTraceSpan()
+        assert span.suppress_reason is None
+        assert span.considered_candidates == ()
+
+    def test_span_reset_clears_partial(self):
+        span = dt.DecisionTraceSpan(
+            suppress_reason=SuppressReason.NO_TRIGGER_EVENTS,
+            considered_candidates=dt.candidate_records_from_events(
+                (make_perception(),), DEFAULT_ROUTING_TABLE
+            ),
+        )
+        span.reset()
+        assert span.suppress_reason is None
+        assert span.considered_candidates == ()
+
+
+class TestSliceCBuildSuppressTrace:
+    def test_build_suppress_trace_shape_and_roundtrip(self):
+        events = _mk_events()
+        di = DecisionInput(trigger_events=events, decision_context=make_ctx())
+        trace = dt.build_suppress_trace(
+            input=di,
+            suppress_reason=SuppressReason.UNROUTABLE_EVENT_TYPE,
+            considered_candidates=dt.candidate_records_from_events(events, DEFAULT_ROUTING_TABLE),
+            policy_name="RuleBasedDecisionPolicy",
+            routing_table=DEFAULT_ROUTING_TABLE,
+        )
+        # 五个 Bundle 齐备，outcome 为 SUPPRESS
+        assert trace.identity.arm == "production"
+        assert trace.provenance.input_digest and trace.provenance.trigger_digest
+        assert trace.provenance.trigger_refs == dt.build_trigger_refs(events)
+        assert trace.policy.fingerprint == dt.compute_policy_fingerprint(DEFAULT_ROUTING_TABLE)
+        assert trace.policy.fingerprint != "v1"
+        assert trace.rationale.considered_candidates == dt.candidate_records_from_events(
+            events, DEFAULT_ROUTING_TABLE
+        )
+        assert trace.rationale.chosen_index is None
+        assert trace.outcome.kind == TraceOutcomeKind.SUPPRESS
+        assert trace.outcome.suppress_reason == SuppressReason.UNROUTABLE_EVENT_TYPE
+        assert trace.outcome.risk_level is None
+        # 往返稳定
+        restored = DecisionTrace.from_dict(trace.to_dict())
+        assert restored == trace
+
+
+class TestSuppressReasonClosedEnum:
+    """T7 不变式的枚举层保证：SuppressReason 封闭，三条真实返回点一一对应。"""
+
+    def test_enum_has_exactly_three_members(self):
+        assert {s for s in SuppressReason} == {
+            SuppressReason.NO_TRIGGER_EVENTS,
+            SuppressReason.ALL_SUPPRESSED_NORMAL,
+            SuppressReason.UNROUTABLE_EVENT_TYPE,
+        }
+
+    def test_unregistered_reason_rejected(self):
+        # 封闭枚举：未登记的值构造即失败 —— 策略无法「悄悄」新增未登记抑制原因
+        with pytest.raises(ValueError):
+            SuppressReason("fourth_path_unregistered")

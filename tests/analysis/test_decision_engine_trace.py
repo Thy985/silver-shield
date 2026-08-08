@@ -17,14 +17,20 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
+
 from home_perception.analysis.decision_contract import DecisionContext
 from home_perception.analysis.decision_engine import DecisionEngine
-from home_perception.analysis.decision_policy import DEFAULT_ROUTING_TABLE
+from home_perception.analysis.decision_policy import (
+    DEFAULT_ROUTING_TABLE,
+    RuleBasedDecisionPolicy,
+)
 from home_perception.analysis.decision_trace import (
     DecisionTraceRecorder,
     InMemoryRecorder,
     MemoryRefs,
     NullRecorder,
+    SuppressReason,
     TraceOutcomeKind,
     build_rationale,
     build_warning_trace,
@@ -62,11 +68,12 @@ def make_perception(
     )
 
 
-def make_engine(trace_recorder=None, now=NOW) -> DecisionEngine:
+def make_engine(trace_recorder=None, now=NOW, policy=None) -> DecisionEngine:
     return DecisionEngine(
         elder_id="elder_001",
         now_provider=lambda: now,
         trace_recorder=trace_recorder,
+        policy=policy,
     )
 
 
@@ -143,16 +150,24 @@ def test_warning_identical_with_and_without_tracing_suppress():
     base = make_engine(trace_recorder=None)
     traced = make_engine(trace_recorder=InMemoryRecorder())
 
-    # 空事件 → SUPPRESS（Slice B 不记录 SUPPRESS，但决策结果必须一致）
+    # 空事件 → SUPPRESS（Slice C 留痕；决策结果仍一致为 None，T2）
     assert base.evaluate([]) is None
     assert traced.evaluate([]) is None
-    assert traced.trace_recorder.traces == []  # type: ignore[union-attr]
+    assert len(traced.trace_recorder.suppress_traces) == 1  # type: ignore[union-attr]
+    assert (
+        traced.trace_recorder.suppress_traces[0].outcome.suppress_reason  # type: ignore[union-attr]
+        == SuppressReason.NO_TRIGGER_EVENTS
+    )
 
     # 纯普通访问（无 odd_hour 叠加）→ SUPPRESS
     plain = [make_perception(event_type="visit_normal")]
     assert base.evaluate(plain) is None
     assert traced.evaluate(plain) is None
-    assert traced.trace_recorder.traces == []  # type: ignore[union-attr]
+    assert len(traced.trace_recorder.suppress_traces) == 2  # type: ignore[union-attr]
+    assert (
+        traced.trace_recorder.suppress_traces[1].outcome.suppress_reason  # type: ignore[union-attr]
+        == SuppressReason.ALL_SUPPRESSED_NORMAL
+    )
 
 
 # ============================================================================
@@ -245,9 +260,9 @@ def test_default_recorder_is_none_and_off():
     # warn → 1 次 record
     assert traced.evaluate([make_perception(event_type="abnormal_dwell")]) is not None
     assert calls["n"] == 1
-    # suppress → 0 次 record（Slice B 不记录 SUPPRESS）
+    # suppress → 1 次 record（Slice C 留痕，漏报首次可观测）
     assert traced.evaluate([]) is None
-    assert calls["n"] == 1
+    assert calls["n"] == 2
 
 
 # ============================================================================
@@ -311,3 +326,113 @@ def test_build_warning_trace_roundtrip():
     restored = trace.from_dict(trace.to_dict())
     assert restored == trace
     assert restored.outcome.warning_id == str(w.warning_id)
+
+
+# ============================================================================
+# T7：抑制必留痕（每条 return None → SUPPRESS trace，全覆盖 + 变异验证）
+# ============================================================================
+
+
+def _make_unroutable_engine(recorder) -> DecisionEngine:
+    """`unroutable_event_type` 路径：自定义路由表故意缺一条在场事件类型。
+
+    `PerceptionEvent.event_type` 被强制限定为 5 类枚举，无法用「未知类型」触发；
+    故以「路由表缺该类型」制造「在场但无路由」的真实抑制场景（ADR-0031 §5.3 同构）。
+    """
+    policy = RuleBasedDecisionPolicy(
+        routing_table={"high_risk_approach": ("HIGH", "ESCALATE_COMMUNITY", "x")}
+    )
+    return make_engine(trace_recorder=recorder, policy=policy)
+
+
+def test_every_suppression_path_emits_suppress_trace():
+    """T7：三条真实返回点各自产出 SUPPRESS trace，且覆盖全部 SuppressReason 枚举。"""
+    rec = InMemoryRecorder()
+    engine = make_engine(trace_recorder=rec)
+    # 1) no_trigger_events
+    engine.evaluate([])
+    # 2) all_suppressed_normal
+    engine.evaluate([make_perception(event_type="visit_normal")])
+    # 3) unroutable_event_type（独立引擎，因需定制策略）
+    unr = _make_unroutable_engine(InMemoryRecorder())
+    unr.evaluate([make_perception(event_type="abnormal_dwell")])
+
+    produced = {t.outcome.suppress_reason for t in rec.traces}
+    produced |= {t.outcome.suppress_reason for t in unr.trace_recorder.traces}
+    # 全部枚举成员都被真实返回点覆盖（新增第 4 条未登记路径会被下方变异测试拦下）
+    assert produced == set(SuppressReason)
+    # 每条 trace 均为合法 SUPPRESS（不带任何 WARN 字段）
+    for t in (*rec.traces, *unr.trace_recorder.traces):
+        assert t.outcome.kind == TraceOutcomeKind.SUPPRESS
+        assert t.outcome.risk_level is None
+        assert t.outcome.recommended_action is None
+        assert t.outcome.warning_id is None
+
+
+def test_suppress_trace_no_trigger_events_shape():
+    rec = InMemoryRecorder()
+    make_engine(trace_recorder=rec).evaluate([])
+    trace = rec.traces[0]
+    assert trace.outcome.suppress_reason == SuppressReason.NO_TRIGGER_EVENTS
+    assert trace.provenance.trigger_refs == ()
+    assert trace.rationale.considered_candidates == ()
+
+
+def test_suppress_trace_all_suppressed_normal_shape():
+    rec = InMemoryRecorder()
+    make_engine(trace_recorder=rec).evaluate([make_perception(event_type="visit_normal")])
+    trace = rec.traces[0]
+    assert trace.outcome.suppress_reason == SuppressReason.ALL_SUPPRESSED_NORMAL
+    # 事件确实存在（只是被抑制）→ trigger_refs 非空，证明「在场但被过滤」
+    assert len(trace.provenance.trigger_refs) == 1
+    assert trace.rationale.considered_candidates == ()
+
+
+def test_suppress_trace_unroutable_carries_candidates():
+    """unroutable：considered_candidates 反映「在场但无路由」的事实候选（非虚构）。"""
+    rec = InMemoryRecorder()
+    _make_unroutable_engine(rec).evaluate([make_perception(event_type="abnormal_dwell")])
+    trace = rec.traces[0]
+    assert trace.outcome.suppress_reason == SuppressReason.UNROUTABLE_EVENT_TYPE
+    assert len(trace.rationale.considered_candidates) == 1
+    cand = trace.rationale.considered_candidates[0]
+    assert cand.event_type == "abnormal_dwell"
+    assert cand.routed_level == ""  # 路由表缺该类型 → 空路由（事实，非虚构）
+    assert cand.routed_action == ""
+    assert cand.priority == 0
+    assert trace.rationale.chosen_index is None
+
+
+def test_suppress_trace_does_not_break_decision_t3():
+    """T3：SUPPRESS 路径 recorder 崩溃，决策仍返回 None（失败隔离）。"""
+
+    class BoomRecorder:
+        def record(self, trace):
+            raise RuntimeError("recorder down")
+
+        def flush(self):
+            return None
+
+    engine = make_engine(trace_recorder=BoomRecorder())
+    assert engine.evaluate([]) is None
+    assert engine.evaluate([make_perception(event_type="visit_normal")]) is None
+
+
+def test_unregistered_suppress_reason_is_rejected():
+    """T7 变异验证：新增第 4 条 return None 路径但未登记枚举 → 评估必失败。
+
+    证明 `SuppressReason` 是封闭枚举，策略无法「悄悄」新增未登记抑制原因——
+    强制新路径同步新增枚举值（契约测试由此失败并提示需先扩展 ADR 白名单）。
+    """
+
+    class FourthPathPolicy(RuleBasedDecisionPolicy):
+        def decide(self, inp):
+            from home_perception.analysis.decision_trace import SuppressReason
+
+            # 模拟新增第 4 条返回路径，但 SuppressReason 未登记该值
+            self._emit_suppress(SuppressReason("fourth_path_unregistered"), ())
+
+    engine = make_engine(trace_recorder=InMemoryRecorder(), policy=FourthPathPolicy())
+    with pytest.raises(ValueError):
+        engine.evaluate([make_perception(event_type="abnormal_dwell")])
+
