@@ -27,7 +27,7 @@ SilverShield 的 Home 感知模块需要**可复现、隐私安全、确定性**
 
 | 路径 | 现状 | 缺口 |
 | --- | --- | --- |
-| **(A) 声明式 YAML → 直注 Memory Graph** | ADR-0028 D6 的 fixture 是声明式 episode 数据，翻译器只存在于 `tests/memory/test_cross_modal_runtime.py`（`_scenario_to_episodes` 等），**绕过全部感知层** | 只验证 Memory，不验证"帧 → 事件"链路；翻译器在测试里、无 `src` 级 generator |
+| **(A) 声明式 YAML → 直注 Memory Graph** | ADR-0028 D6 的 fixture 是声明式 episode 数据，翻译器只存在于 `tests/memory/test_cross_modal_runtime.py`（`_scenario_to_episodes` 等），**绕过全部感知层**（已核实：ADR-0028 落地时 `_scenario_to_episodes` **未**迁出 `src`，至今仅在测试内，故路径 (A) 描述准确，评审 I1） | 只验证 Memory，不验证"帧 → 事件"链路；翻译器在测试里、无 `src` 级 generator |
 | **(B) 声明式 `ScenarioConfig` → `build_frame_source` → 真实 MP4/CAVIAR jpg → `process_frame`** | `silver_demo/scenarios.py` + `sources.py` 已支持，但 `media_path` 指向**外部真实素材** | 依赖未入库素材，CI 不可跑；且无"程序化生成素材"的能力 |
 
 两条路径之间有一个**结构性空白**：没有任何组件能从「声明式场景描述」生成**带语义**（人 / 轨迹 / 时序）的视频帧或 `DetectionResult` 序列。现有的最像样雏形是：
@@ -54,7 +54,7 @@ ADR-0028 D6 的 fixture 直接构造 `EpisodicRecord` 喂 Memory Graph（**绕�
 
 ```
 声明式 Scenario
-   ├── ADR-0032（本 ADR）──────→ 生成 frames / RawDetection ──→ 喂整条感知 pipeline（detector→…→WarningEvent）
+   ├── ADR-0032（本 ADR）──────→ 生成 frames / Detection ──→ 喂整条感知 pipeline（detector→…→WarningEvent）
    └── ADR-0028 D6（既有）──────→ 直注 EpisodicRecord ───────────→ 喂 Memory Graph（绕过感知层）
 ```
 
@@ -72,7 +72,7 @@ ADR-0028 D6 的 fixture 直接构造 `EpisodicRecord` 喂 Memory Graph（**绕�
 
 ### 0.6 战略定位：本 ADR 是「AI 验证基础设施（AI Validation Infrastructure）」的一环
 
-安全系统最难的两个问题是"**为什么报警**"和"**为什么没报警**"——而模型效果不好时，正确路径不是"找更多数据调模型"，而是"**我能证明系统在某种场景下为什么做出这个决策吗**"。三个 ADR 合起来补的就是这条链：
+> 安全系统最难的两个问题是"**为什么报警**"和"**为什么没报警**"——正确路径不是"找更多数据调模型"，而是"**我能证明系统在某种场景下为什么做出这个决策吗**"。三个 ADR 合起来补的就是这条链（唯一一处可视化）：
 
 ```
 Scenario Simulation (ADR-0032)   ← 本 ADR：事件到底是怎么产生的？（可复现输入）
@@ -90,7 +90,7 @@ Benchmark Harness (ADR-0033)     ← 这个版本到底提升还是下降？（�
 Regression / Improvement
 ```
 
-这已经不是普通项目的"测试"，而是在构建一个**面向多模态 / Agent AI 系统的 Evaluation Infrastructure**——与机器人仿真（`World Model → Simulation → Policy → Trace → Benchmark`）、自动驾驶（`Scenario → Simulator → Perception → Planner → Metrics`）、Agent evaluation（`Task Scenario → Environment → Agent → Trace → Evaluation`）是同一方向。SilverShield 正从"一个检测系统"升级为"一个**可验证的 AI 系统**"。本 ADR 负责链条最上游的"可复现、隐私安全输入源"，是 ADR-0031 / ADR-0033 的前置与硬约束。
+本 ADR 负责链条最上游的"可复现、隐私安全输入源"，是 ADR-0031 / ADR-0033 的前置与硬约束。（与机器人仿真 / 自动驾驶 / Agent evaluation 同方向；SilverShield 正从"一个检测系统"升级为"一个**可验证的 AI 系统**"。）
 
 ---
 
@@ -102,13 +102,19 @@ Regression / Improvement
 
 ```
 Scenario
-├── meta:        { schema_version:"1.0", scenario_id:str, version:int, description, seed, duration_frames }
+├── meta:        { schema_version:"1.0"(必填), scenario_id:str(必填), version:int(必填), description?(可选), seed(生成必填), duration_frames(生成必填) }
 ├── environment: { scene_type, regions:{name:normalized_bbox}, static_objects:[{type,bbox}] }
 ├── camera:      { resolution:[w,h], fps, viewpoint }
 ├── actors:      [ ActorSpec { id, actor_type:human|vehicle|pet|object, tracks:[{frame,pos,size}], objects:[str], appearance } ]
 ├── timeline:    [ EventGroundTruth { frame, type } ]      # 期望 emit 的事件（ground truth）
 └── expects:     { emitted_event_types:[...], min_risk_level, max_suppress_rate? }
 ```
+
+> **字段必填集 vs 可选集（评审 Q1）**：`meta` 的**资产身份字段** `schema_version` + `scenario_id` + `version` 为**加载即校验**（fail-closed，对应 T10），任何 mode 都必填；`seed` + `duration_frames` 为**生成时校验**（切片 A 编译期，见 §6），仅当实际 `synthesize` 才需要，纯注册/编目场景可暂缓。`description` / `actors[].appearance` / `expects.*` 等其余字段可选。
+>
+> **`actors[].tracks` 帧序契约（评审 Q2）**：同一 actor 的 `tracks` 中 `frame` **必须严格递增**（单调、无重复）且不得越界 `duration_frames`；允许**关键帧稀疏**（generator 在相邻关键帧间线性插值、边界处保持），不要求作者逐帧枚举——但越界或非单调即非法。这给 Slice A 加载器的"帧序合法"校验提供量化标准。
+>
+> **`expects.min_risk_level` 语义（评审 B4）**：`min_risk_level` 为**可选** `str`，取值集合与排序复用 `analysis/warning.py` 的 `RISK_LEVELS = ("LOW","MEDIUM","HIGH")`（按元组位置定序，非独立枚举）。`ScenarioValidator` 消费 pipeline 实际产出的事件序列（含 `RiskSignal` / `WarningEvent`，二者均携带 `risk_level`）：当 `expects` 声明 `min_risk_level` 时，断言 `max(产出 risk_level 序值) >= min_risk_level 序值`；未声明则跳过。校验深度**到 `WarningEvent` 为止**（含其 `risk_level`），不额外下钻内部 `RiskSignal` 字段。
 
 > **三层版本化（资产化 + 历史 benchmark 可复现）**：
 > - `meta.schema_version`：**Schema 格式**版本（v1/v2…），加载器校验，未知版本拒绝加载（fail-closed）——防"旧场景被新 renderer 静默误读"；
@@ -118,11 +124,13 @@ Scenario
 
 > **`environment` 与 `camera` 分离**：`camera`（resolution/fps/viewpoint）只描述"镜头怎么拍"；`environment`（scene_type / `regions` / `static_objects`）描述"拍的是哪类空间"——`regions` 是**命名区域集合**（`entrance` / `living_room` / `safe_zone` / `corridor` / `elevator`…），不再是单一 `door_region`。这是为"家庭态势感知平台"预留的抽象：SilverShield 未来不只有门口，客厅 / 卧室 / 楼道 / 电梯都需要独立区域语义，单一 `door_region` 会限制模型。
 
-> **`ActorSpec.actor_type` 解耦 person**：actor 是**实体**而非"人"，`actor_type ∈ {human, vehicle, pet, object}`。例：老人跌倒=`human`+`state=fallen`、诈骗递物=`human`、物体遗留=`object`。这避免将来为"非人实体"改 schema；`actor_type` 仅作生成 `RawDetection.label` 的语义提示，**不参与任何业务规则判定**（呼应 D3 边界）。
+> **`regions` 与运行时 ROI 的边界（评审 B3 / S1）**：`Scenario.regions` 是**场景资产级抽象标签**，仅用于 generator 的几何放置（在哪些命名区域布置 actor）与 `expects`/`timeline` 的语义表达（如"在 entrance 停留"）；它**不自动注入**运行时 `detection`/`analysis` 的 ROI 识别逻辑——运行时 ROI（如既有 `door_region`）是独立关注点，二者**不强制一一对应**。映射策略（若未来需把场景 region 同步为运行时 ROI）归后续编排 ADR，本 ADR 只定"regions 是抽象标签、与真实房型解耦"。这同时规避 S1 隐私风险：`regions` 名称（如 `living_room`）是**抽象分类标签**，不绑定真实户型，且场景 YAML 按 S1 不入公共 PR（见 T2）。
 
-**通道一 · 结构化场景描述（`mode: detections`）**——产出 `list[RawDetection]`，直接喂现有 `Detector` 接缝（替换 `CachedDetectionDetector`）。成本最低、最快、最确定性，**不跑任何模型**。这是 ADR-0033 批量回归的主力通道。
+> **`ActorSpec.actor_type` 解耦 person**：actor 是**实体**而非"人"，`actor_type ∈ {human, vehicle, pet, object}`。例：老人跌倒=`human`+`state=fallen`、诈骗递物=`human`、物体遗留=`object`。这避免将来为"非人实体"改 schema；`actor_type` 仅作生成 `Detection.class_name` 的语义提示，**不参与任何业务规则判定**（呼应 D3 边界）。
 
-> **`RawDetection` 所有权（producer，不是 judge）**：generator 只产**输入层原始检测**——仅有 `bbox` / `label` / `frame_index` 等感知原语，**不含 `track_id`、不做后处理聚合、不含任何业务判定**。它与 `DetectionResult`（`VisitorTracker` 输出、含 `track_id`、跨帧关联后的产物）严格区分，正如 ADR-0031 中 trace 不产出 verdict。generator 是**事实生产者**，不调用 `RuleEngine`、不"替"下游算出期望（期望由 `expects` 声明 + `runner.validate` 比对，呼应 ADR-0031 Non-goal #8「不混杂判断」）。`actor_type`（human/vehicle/pet/object）仅作生成 `RawDetection.label` 的语义提示，不影响业务判定。
+**通道一 · 结构化场景描述（`mode: detections`）**——产出 `list[Detection]`（**复用现有** `detection/detector.py` 的 `Detection` dataclass，**不引入新类型** `RawDetection`），经现有 `Detector` 接缝注入（替换 `CachedDetectionDetector`）。成本最低、最快、最确定性，**不跑任何模型**。这是 ADR-0033 批量回归的主力通道。
+
+> **`Detection` 所有权（producer，不是 judge；评审 B1 决议）**：generator **复用现有 `Detection` 类型**（**不新增 `RawDetection` 类型**——避免类型生态膨胀，且与 `CachedDetectionDetector` 缓存同 schema）。它只产**输入层感知原语**（`class_id` / `class_name` / `confidence` / `bbox` / `track_id`），**不调用 `RuleEngine`、不"替"下游算出期望、不含任何风险/业务判定**，正如 ADR-0031 中 trace 不产出 verdict。关键约束：`track_id` 由 generator **按 `actor.id` 确定性回填**（每个 actor 一个稳定 id，跨帧一致），**不能留 `None`**——因为 `VisitorTracker` 会丢弃 `track_id is None` 的检测（`detection/tracker.py:82`），这与 `CachedDetectionDetector` 缓存"必须含 track_id"的铁律一致。即 `track_id` 在此是**回放用的稳定关联键**（由生产者分配），**不是**下游 tracker 的输出；generator 仍只是事实生产者，不越权做业务判断。`actor_type`（human/vehicle/pet/object）仅作生成 `class_name` 的语义提示，不影响业务判定。
 
 **通道二 · 程序化视频帧（`mode: frames`）**——产出 `list[np.ndarray]` BGR 帧（OpenCV **程序化**渲染：在画布上按 `actors[].tracks` 画实心矩形/圆代表实体、小矩形代表 backpack 等），喂 `PerceptionPipeline.process_frame(raw_frame)`，跑**真实** detector→tracker→event 全链路。用于验证"真实检测层在受控输入下"的行为。可选 `export_mp4` 仅作人工检视用，**不入库**（§3 非目标、AGENTS.md §6.1）。
 
@@ -138,7 +146,7 @@ Scenario
 
 - 所有随机性 MUST 由 `seed` 驱动；禁止无 seed 的 `random` / `np.random` 默认状态；
 - 帧序列的**唯一时间轴是 `frame_index`**（整数），不允许 wall-clock / `time.time` 进入生成逻辑；
-- 同一 `Scenario` 文件（含 `schema_version`）+ 同一代码版本 → **字节级（或内容级）可复现**：`frames` 通道逐帧 `np.array_equal` 相等；`detections` 通道逐帧 `RawDetection` 相等（顺序敏感）；
+- 同一 `Scenario` 文件（含 `schema_version`）+ 同一代码版本 + 同 `numpy_version`/`opencv_version` → **字节级（或内容级）可复现**：`frames` 通道逐帧 `np.array_equal` 相等；`detections` 通道逐帧 `Detection` 相等（顺序敏感）；
 - 效果/抖动（如 appearance jitter）是**确定性函数**（`f(frame_index, seed)`，非随机游走）；
 - 该约束由 T1 契约测试钉死（跨进程复跑一致）。
 
@@ -147,7 +155,7 @@ Scenario
 生成物**只通过 ADR-0014 L2 既有可替换接缝**进入系统，绝不改动生产路径：
 
 - `frames` 通道 → 经 `silver_demo` 的 `build_frame_source` 新增 `source_type="synthetic"`（在 `silver_demo` 内，不碰 `home_perception` 生产代码）；
-- `detections` 通道 → 经现有 `Detector` ABC 注入（替换 `CachedDetectionDetector`，返回生成的 `RawDetection`）；
+- `detections` 通道 → 经现有 `Detector` ABC 注入（替换 `CachedDetectionDetector`，返回生成的 `Detection`）；
 - 生产 RTSP / 真实 `VideoFileFrameSource` 路径**逐字节不变**；generator 默认不启用。
 
 > 即：generator 是**独立的评估关注点**，生产 pipeline 不知道它的存在（呼应 ADR-0031 D6「可选注入、零行为变化」范式）。
@@ -175,12 +183,12 @@ ScenarioValidator  RunResult + expects ──▶ ValidationResult         # 对�
 ```
 src/home_perception/validation/
 ├── scenario/      # ScenarioCompiler：YAML + schema + 编译为 SyntheticInput（D1/D4）
-├── simulation/    # generator（detections / RawDetection）+ renderer（frames）+ effects（确定性）
+├── simulation/    # generator（detections / Detection）+ renderer（frames）+ effects（确定性）
 ├── runner/        # ScenarioRunner（执行编排）+ ScenarioValidator（对照 expects）
 └── fixtures/      # 声明式 scenario YAML + 由 Scenario 生成的 detections.json（D6/D8）
 ```
 
-它属于 `home_perception` 核心，因为产出的不是 demo 玩具，而是 pipeline 的**输入契约**（frames / `RawDetection`），与 `audio/tts` 产出音频输入同层；未来 ADR-0033 Benchmark Harness（`evaluation/`）与音频侧对称消费，包层级清晰、不跨 `silver_demo` 反向依赖。这与自动驾驶 / 机器人仿真 / Agent evaluation 的通用分层一致（`perception` / `detection` / `analysis` / `audio` / `validation` 平级）。
+它属于 `home_perception` 核心，因为产出的不是 demo 玩具，而是 pipeline 的**输入契约**（frames / `Detection`），与 `audio/tts` 产出音频输入同层；未来 ADR-0033 Benchmark Harness（`evaluation/`）与音频侧对称消费，包层级清晰、不跨 `silver_demo` 反向依赖。这与自动驾驶 / 机器人仿真 / Agent evaluation 的通用分层一致（`perception` / `detection` / `analysis` / `audio` / `validation` 平级）。
 
 **被否决的方案**：
 - **B（`silver_demo/simulation/`）**：放 demo 看似隔离更彻底，但 generator 产的是"pipeline 输入契约"而非 demo 附属物；归 demo 会让 ADR-0033 `evaluation/` 跨包消费、与音频 `audio/tts`（在核心）不对称，长期包面混乱；
@@ -190,13 +198,15 @@ src/home_perception/validation/
 
 ### D6 · 迁移既有 hack，不破坏现有测试
 
-- `CachedDetectionDetector` + `tests/fixtures/detections/*.detections.json`：**源真相改为 Scenario YAML**；保留 `export_detections_json(scenario)` 能力（将 `RawDetection` 序列序列化，重新生成等价 `detections.json`，向后兼容既有测试）；旧 `detections.json` 标记为"由 ADR-0032 生成物派生"，逐步退役；
+- `CachedDetectionDetector` + `tests/fixtures/detections/*.detections.json`：**源真相改为 Scenario YAML**；保留 `export_detections_json(scenario)` 能力（将 `Detection` 序列序列化，重新生成**字段级等价**的 `detections.json`——与既有缓存同 schema、均含确定性 `track_id`，向后兼容既有测试，非仅"几何等价"，评审 B2）；旧 `detections.json` 标记为"由 ADR-0032 生成物派生"，逐步退役；
 - `tests/demo/test_sources.py:_make_synthetic_mp4`：保留（仅验证解码路径），但新增的 `frames` 通道取代其"语义合成"职责；
 - `silver_demo/scenarios.py` 的 `ScenarioConfig`：**不破坏**，新增 `mode` / `seed` / `actors` 字段并标记 optional，旧 `media_path` 驱动的 `VideoFileFrameSource` 路径保留（真实素材仍可用）。
 
 ### D7 · generator.fingerprint（产出血缘，类比 ADR-0031 D5 `policy.fingerprint`）
 
-`SynthesizedInput`（及 `RunSummary`）**MUST** 携带 `generator.fingerprint`——对 `{schema_version, renderer_version, seed, code_version}` 的稳定哈希。原因：同一 `Scenario`（`scenario_id` + `seed` 相同）经不同 renderer 版本产出的帧/检测可能不同（如外观基元从"矩形"升级为"圆+矩形"）；下游 ADR-0033 Benchmark Harness 必须能区分"v1 渲染结果"与"v2 渲染结果"，否则跨版本回归不可解释（"分数变了"到底是 renderer 变了还是逻辑变了？）。这与 ADR-0031 D5 用 `policy.fingerprint` 反映"实际生效路由表"是同一思想：**产物必须可溯源到生成它的确切代码与配置**。fingerprint 由纯函数计算，写时 fail-closed（缺字段即报错，不静默）。
+`SynthesizedInput`（及 `RunSummary`）**MUST** 携带 `generator.fingerprint`——对 `{schema_version, renderer_version, seed, code_version, numpy_version, opencv_version}` 的稳定哈希。原因：同一 `Scenario`（`scenario_id` + `seed` 相同）经不同 renderer 版本产出的帧/检测可能不同（如外观基元从"矩形"升级为"圆+矩形"）；此外跨 `numpy`/`opencv` 大版本的浮点表示差异（如 BGR 渲染 round 模式）可能导致 `np.array_equal` 不一致——故 fingerprint **纳入二者版本**，CI 在 `numpy>=1.24` / `opencv-python>=4.8` 锁版本基线下断言（评审 T2）。下游 ADR-0033 Benchmark Harness 必须能区分"v1 渲染结果"与"v2 渲染结果"（及不同基线下产物），否则跨版本回归不可解释（"分数变了"到底是 renderer 变了还是逻辑变了？）。这与 ADR-0031 D5 用 `policy.fingerprint` 反映"实际生效路由表"是同一思想：**产物必须可溯源到生成它的确切代码与配置**。fingerprint 由纯函数计算，写时 fail-closed（缺字段即报错，不静默）。
+
+> **隐私边界（评审 S2）**：`generator.fingerprint` 仅由**渲染产物可复现性要素**（`schema_version` / `renderer_version` / `seed` / `code_version` / `numpy_version` / `opencv_version`）构成，**不含任何设备 ID / 家庭 ID / 用户标识**——它是"渲染产物指纹"而非"使用记录指纹"，不会构成"哪些家庭跑过哪个场景"的间接追踪。若下游（ADR-0033）把它随审计 trace（ADR-0031）上报，上报的是"产物可复现性"，须在上报层确保不附设备/家庭标识。
 
 ### D8 · Scenario Registry（资产编目，为 ADR-0033 Benchmark 前置）
 
@@ -213,19 +223,21 @@ src/home_perception/validation/
 
 | # | 不变式 | 契约测试 |
 | - | --- | --- |
-| **T1** | **确定性**：同 `Scenario`（同文件含 `schema_version` + 同代码版本）→ `frames` 通道逐帧 `np.array_equal` 相等、`detections` 通道逐帧 `RawDetection` 相等（顺序敏感）；跨进程复跑一致 | `test_scenario_deterministic_reproducible` |
-| **T2** | **隐私**：生成帧/检测**绝不含真实人脸 / PII / 真实场景**；全部为程序化基元（矩形/圆 + 噪声纹理）；本 ADR 是"替代真实素材"的手段，自身 MUST NOT 引入真实数据 | `test_synthetic_has_no_real_media` |
-| **T3** | **无真实媒体依赖**：generator 不 `cv2.VideoCapture` 真实文件、不读 `data/demo/`；纯内存程序化生成（T2 的强化） | `test_generator_loads_no_external_media` |
-| **T4** | **不破坏事件 Schema**：generator **只产出上游输入**（frames / `RawDetection`），**不修改** `PerceptionEvent` / `VisitorEvent` / `WarningEvent` 任何字段；新增事件类型仍须走 `docs/07` + Owner 评审 | `test_generator_does_not_alter_event_schema` |
-| **T5** | **零生产行为变化**：`recorder=None` 类比——不启用 generator 时，生产 RTSP / `VideoFileFrameSource` 路径逐字节不变；generator 默认不注入 | `test_production_pipeline_unchanged_without_generator` |
-| **T6** | **可机器校验的期望**：`expects` / `timeline` 可被 `ScenarioValidator` 自动比对，无需人工重看视频；校验失败给出"期望 vs 实际"的差异报告 | `test_runner_validates_against_expects` |
-| **T7** | **成本有界**：`frames` 通道仅用 OpenCV 程序化绘制（无模型推理）；CPU 轻量；可选"跑真实 detector"为 **opt-in**，不默认发生 | `test_frame_rendering_is_model_free` |
-| **T8** | **单一真相源**：`detections` 通道 box 与 `frames` 通道绘制矩形**同源**于 `actors.tracks`；两通道对同一 `Scenario` 在几何上等价（允许像素级渲染容差，但语义位置一致） | `test_two_channels_geometry_consistent` |
-| **T9** | **三组件职责分离（编排边界）**：`ScenarioCompiler` / `ScenarioRunner` / `ScenarioValidator` 从设计起分离，各自单一职责；任一组件**不内嵌**其余两组件职责（尤其 Runner 不含对比报告/可视化/结果存储/跨场景聚合，归 ADR-0033）；跨场景并行/聚合是 ADR-0033 `BenchmarkHarness` 职责 | `test_components_single_responsibility` |
-| **T10** | **场景资产三层版本化**：每个 `Scenario` 的 `meta` **MUST** 含 `schema_version`（Schema 格式）+ `scenario_id`（稳定资产标识）+ `version`（场景内容修订）；加载器对未知 `schema_version` 拒绝加载（fail-closed），不静默降级；`scenario_id` + `version` 作为历史 benchmark 可复现的锁定主键 | `test_scenario_requires_3level_versioning` |
-| **T11** | **产出血缘可溯源**：`SynthesizedInput` / `RunSummary` **MUST** 携带 `generator.fingerprint`（对 `{schema_version, renderer_version, seed, code_version}` 的稳定哈希）；缺字段即报错（fail-closed），不静默；下游 ADR-0033 据此区分不同 renderer 版本的产物 | `test_synthesized_input_carries_fingerprint` |
+| **T1** | **确定性**：同 `Scenario`（同文件含 `schema_version` + 同代码版本 + 同 `numpy_version`/`opencv_version`）→ `frames` 通道逐帧 `np.array_equal` 相等、`detections` 通道逐帧 `Detection` 相等（顺序敏感）；**跨进程复跑一致**；CI 在 `numpy>=1.24` / `opencv-python>=4.8` 锁版本基线下断言（评审 T2：跨大版本浮点差异由 `generator.fingerprint` 纳入版本字段体现） | `test_adr0032_t1_deterministic_reproducible` |
+| **T2** | **隐私**：生成帧/检测**绝不含真实人脸 / PII / 真实场景**；全部为程序化基元（矩形/圆 + 噪声纹理）；本 ADR 是"替代真实素材"的手段，自身 MUST NOT 引入真实数据。**场景 YAML 资产边界（评审 S1）**：普通场景集（非 gold）按 `.gitignore` 排除或置于私有目录，**不进公共 PR**；`regions` 名称（如 `living_room`）是**抽象分类标签**，与真实户型解耦，避免家庭拓扑元数据泄露 | `test_adr0032_t2_no_real_media_or_topology_leak` |
+| **T3** | **无真实媒体依赖**：generator 不 `cv2.VideoCapture` 真实文件、不读 `data/demo/`；纯内存程序化生成（T2 的强化） | `test_adr0032_t3_no_external_media` |
+| **T4** | **不破坏事件 Schema**：generator **只产出上游输入**（frames / `Detection`），**不修改** `PerceptionEvent` / `VisitorEvent` / `WarningEvent` 任何字段；新增事件类型仍须走 `docs/07` + Owner 评审 | `test_adr0032_t4_generator_does_not_alter_event_schema` |
+| **T5** | **零生产行为变化**：不启用 generator 时，生产 RTSP / `VideoFileFrameSource` 路径逐字节不变；generator 默认不注入 | `test_adr0032_t5_production_unchanged` |
+| **T6** | **可机器校验的期望**：`expects` / `timeline` 可被 `ScenarioValidator` 自动比对，无需人工重看视频；校验失败给出"期望 vs 实际"的差异报告 | `test_adr0032_t6_validates_against_expects` |
+| **T7** | **成本有界**：`frames` 通道仅用 OpenCV 程序化绘制（无模型推理）；CPU 轻量；可选"跑真实 detector"为 **opt-in**，不默认发生 | `test_adr0032_t7_frame_rendering_model_free` |
+| **T8** | **单一真相源**：`detections` 通道 box 与 `frames` 通道绘制矩形**同源**于 `actors.tracks`；两通道对同一 `Scenario` 在几何上等价（允许像素级渲染容差，但语义位置一致） | `test_adr0032_t8_two_channels_geometry_consistent` |
+| **T9** | **三组件职责分离（编排边界）**：`ScenarioCompiler` / `ScenarioRunner` / `ScenarioValidator` 从设计起分离，各自单一职责；任一组件**不内嵌**其余两组件职责（尤其 Runner 不含对比报告/可视化/结果存储/跨场景聚合，归 ADR-0033）；跨场景并行/聚合是 ADR-0033 `BenchmarkHarness` 职责 | `test_adr0032_t9_components_single_responsibility` |
+| **T10** | **场景资产三层版本化**：每个 `Scenario` 的 `meta` **MUST** 含 `schema_version`（Schema 格式）+ `scenario_id`（稳定资产标识）+ `version`（场景内容修订）；加载器对未知 `schema_version` 拒绝加载（fail-closed），不静默降级；`scenario_id` + `version` 作为历史 benchmark 可复现的锁定主键 | `test_adr0032_t10_requires_3level_versioning` |
+| **T11** | **产出血缘可溯源**：`SynthesizedInput` / `RunSummary` **MUST** 携带 `generator.fingerprint`（对 `{schema_version, renderer_version, seed, code_version, numpy_version, opencv_version}` 的稳定哈希）；缺字段即报错（fail-closed），不静默；下游 ADR-0033 据此区分不同 renderer 版本（及不同 numpy/opencv 基线）的产物 | `test_adr0032_t11_synthesized_input_carries_fingerprint` |
 
 > **T2/T3 与"替代真实素材"不矛盾**：本 ADR 的存在理由就是消除对真实家庭视频的依赖。generator 自身若引入真实数据，就违背了它要解决的问题。
+
+> **契约测试命名约定（评审 T1）**：全部 11 条不变式测试名带 `adr0032` 前缀（`test_adr0032_t{N}_*`），且测试文件以 `test_validation_` 命名，避免与 ADR-0033 Benchmark Harness 引入的 scenario 测试在 pytest 命名空间冲突、便于 CI 日志溯源。
 
 ---
 
@@ -298,11 +310,11 @@ entities:                       # 取代 actors
 
 > 契约先行、零行为变化优先。A/B/C 零行为变化可先合；D/E 触及 `silver_demo` 接缝与既有 hack 迁移，门控评审。
 
-- **Slice A（Scenario schema + 加载，零行为变化）**：新增 `validation/scenario/scenario.py`——`Scenario` pydantic 模型（meta/environment/camera/actors/timeline/expects）+ YAML 加载器 + 校验（`meta.seed`/`duration_frames`/`schema_version`/`scenario_id`/`version` 必填、`camera.resolution`/`fps` 必填、`actors.tracks` 帧序合法、`actor_type` 枚举合法）。测试：`test_scenario_roundtrip` + `test_scenario_validation_errors`（缺字段 / 帧序倒挂 / 未知 `schema_version` 即报错）。**不接任何运行时。**
-- **Slice B（通道一：detections 发射器，零行为变化）**：`validation/simulation/generator.py` 的 `emit_detections(scenario) -> list[RawDetection]`，从 `actors.tracks` 确定性派生每帧 `RawDetection`（human/vehicle/pet/object + backpack 等，仅 bbox/label/frame_index，无 track_id）。取代 `CachedDetectionDetector` 的手工 JSON，提供 `export_detections_json` 向后兼容。测试：T1 / T4 / T5 / T8 + 与既有 `detections.json` 几何等价。
+- **Slice A（Scenario schema + 加载，零行为变化）**：新增 `validation/scenario/scenario.py`——`Scenario` pydantic 模型（meta/environment/camera/actors/timeline/expects）+ YAML 加载器。**两层校验**：① 加载期 fail-closed 必填 `schema_version`/`scenario_id`/`version`（资产身份，T10）+ 结构合法（`camera.resolution`/`fps` 必填、`actors[].tracks` 帧序严格递增且不越界 `duration_frames`、`actor_type` 枚举合法）；② 生成期（切片 B/C `synthesize` 时）补充校验 `seed`/`duration_frames` 必填（仅当实际合成才需要）。测试：`test_scenario_roundtrip` + `test_scenario_validation_errors`（缺身份字段 / 帧序倒挂 / 越界 / 未知 `schema_version` 即报错）。**不接任何运行时。** 测试文件以 `test_validation_` 前缀（或测试名带 `adr0032` 标识），避免与 ADR-0033 的 scenario 测试命名冲突（评审 T1）。
+- **Slice B（通道一：detections 发射器，零行为变化）**：`validation/simulation/generator.py` 的 `emit_detections(scenario) -> list[Detection]`，**复用现有 `Detection` 类型**（**不新增 `RawDetection`**，评审 B1），从 `actors.tracks` 确定性派生每帧 `Detection`：`class_id`/`class_name`/`bbox` 来自 `actors`，`confidence` 设为合成定值，`track_id` 按 `actor.id` **确定性回填**（非 None，否则 `VisitorTracker` 丢弃，与 `CachedDetectionDetector` 缓存同语义）。取代 `CachedDetectionDetector` 的手工 JSON，提供 `export_detections_json` 向后兼容。测试：T1 / T4 / T5 / T8 + 与既有 `detections.json` **字段级等价**（均含确定性 `track_id`，非仅几何等价，评审 B2）。
 - **Slice C（通道二：frames 渲染器）**：`validation/simulation/renderer.py` 的 `render_frames(scenario) -> list[np.ndarray]`（OpenCV 程序化绘制，确定性）+ 可选 `export_mp4`（本地、不入库）。测试：T1 / T2 / T3 / T7 + T8（与 B 几何一致）。
-- **Slice D（Compiler / Runner / Validator 三组件）**：`validation/scenario/` 的 `ScenarioCompiler`（YAML → `SyntheticInput`）、`validation/runner/` 的 `ScenarioRunner`（→ `RunResult`）+ `ScenarioValidator`（→ `ValidationResult`，含"期望 vs 实际"差异），对标 `audio/tts/scenario_runner.py` 的 `validate_scenario` 模式。测试：在 2–3 个场景上跑通端到端（detections 通道喂 stub detector；frames 通道喂真实 detector 为 opt-in）。
-- **Slice E（`silver_demo` 接线 + 迁移）**：`build_frame_source` 新增 `source_type="synthetic"`（调 `render_frames`）；`ScenarioConfig` 加 optional `mode`/`seed`/`actors`；既有 `CachedDetectionDetector` + `detections.json` 迁移为 ADR-0032 生成物派生物。零生产行为变化；单独 PR + Owner 评审。
+- **Slice D（Compiler / Runner / Validator 三组件）**：`validation/scenario/` 的 `ScenarioCompiler`（YAML → `SyntheticInput`）、`validation/runner/` 的 `ScenarioRunner`（→ `RunResult`）+ `ScenarioValidator`（→ `ValidationResult`，含"期望 vs 实际"差异），对标 `audio/tts/scenario_runner.py` 的 `validate_scenario` 模式；`ScenarioValidator` 校验深度到 `WarningEvent` 为止（含其 `risk_level`，复用 `analysis/warning.py` 的 `RISK_LEVELS` 序值比对 `expects.min_risk_level`，评审 B4）。测试：在 2–3 个场景上跑通端到端（detections 通道喂 stub detector；frames 通道喂真实 detector 为 opt-in）。
+- **Slice E（`silver_demo` 接线 + 迁移）**：`build_frame_source` 新增 `source_type="synthetic"`（调 `render_frames`）；`ScenarioConfig` 加 optional `mode`/`seed`/`actors`；既有 `CachedDetectionDetector` + `detections.json` 迁移为 ADR-0032 生成物派生物。零生产行为变化；单独 PR + Owner 评审。**`ScenarioConfig` ↔ `Scenario` 映射（评审 I2）**：二者是同一概念的两个视图——`ScenarioConfig`（`silver_demo/scenarios.py`，可能含 `media_path` 兼容字段）是 demo 配置视图，`Scenario`（`validation/scenario/`）是 validation 子系统的契约视图；通过 `ScenarioCompiler` 转换（demo 配置 → 契约，缺省字段取默认值），**不双重维护校验规则**（校验只在 `Scenario` 侧，由切片 A 的 pydantic 模型统一负责）。
 
 ### 验收清单（Acceptance Criteria）
 
@@ -326,3 +338,5 @@ entities:                       # 取代 actors
 - **2026-08-08（二修 · Owner 架构评审收紧）**：(1) **D5 采纳方案 A**（`src/home_perception/simulation/`），否决 B（防 `evaluation/` 跨包消费 + 与音频不对称）；(2) **`RawDetection` 所有权**（D1 + T 系）：generator 只产输入层原始检测（无 `track_id`、无后处理、无业务判定），与 `DetectionResult`（tracker 输出）严格分离，呼应 ADR-0031 Non-goal #8；(3) **`meta.schema_version` + `scenario_id`** 资产化前置（D1 + 新增 **T10**）；(4) **D7 `generator.fingerprint`**（类比 ADR-0031 D5 `policy.fingerprint`，对 `{schema_version, renderer_version, seed, code_version}` 哈希，下游 ADR-0033 区分 renderer 版本产物；新增 **T11**）；(5) **D4 Runner 编排边界**：禁止膨胀为 God Object，既定 `ScenarioCompiler`/`Executor`/`Validator` 拆分出口（新增 **T9**）；(6) **§3 记录 `ActorSpec→EntitySpec` 语义演化路线**（几何→"发生什么"，本 ADR 不做但留存设计意图）；(7) **§0.6 战略定位**：明确本 ADR 是 AI Validation Infrastructure 三 ADR 闭环（Simulation→Pipeline→Trace→Benchmark）的最上游输入源。不变式由 T1–T8 扩至 T1–T11。
 
 - **2026-08-08（三修 · Owner 第二轮架构评审）**：(1) **D1 schema 结构性增强**：`camera` 拆为 `environment`（`scene_type` / 命名 `regions` 集合 / `static_objects`）+ `camera`（`resolution`/`fps`/`viewpoint`），`door_region` 升级为多区域抽象（家庭态势感知平台）；`ActorSpec` 加 `actor_type ∈ {human, vehicle, pet, object}`，解耦"实体=人"；`meta` 增 `version`（场景内容修订），与 `schema_version`（格式）/ `scenario_id`（资产）构成**三层版本化**（T10 扩为三字段）。(2) **`frames` 通道验证边界明示**（D1 通道二）：✅ 验证 frame 摄入 / detector 接口兼容 / tracking 连续性 / temporal 推理；❌ 不验证语义准确率 / 外观鲁棒性 / 光照鲁棒性 / 真实 domain gap——杜绝"生成视频+跑 YOLO=验证视觉能力"的误解。(3) **D5 升级为 `validation/` 父包变体**：`src/home_perception/validation/`（含 `scenario`/`simulation`/`runner`/`fixtures` 子包），本质是 Perception Test Infrastructure 而非生产仿真，否决扁平 `simulation/` 与 `silver_demo/simulation/`。(4) **D4 三组件预拆**：`ScenarioCompiler` / `ScenarioRunner` / `ScenarioValidator` 从设计起分离（非膨胀后再拆），T9 钉死单一职责，为 ADR-0033 并行 100 scenario + 聚合让路。(5) **D8 Scenario Registry**：`validation/fixtures/scenarios/{perception,regression,benchmark}/` 目录分层 + `meta` 预留 `owner`/`tags`/`difficulty`/`category`，使 ADR-0033 可直接消费不回改 schema。切片 A–E 引用同步 `validation/` 路径。
+
+- **2026-08-08（四修 · Owner 第三轮评审）**：闭环 Q1–Q3 / B1–B4 / S1–S2 / T1–T2 / I1–I2：(1) **B1 关键修正（纠正二修中『RawDetection 无 track_id』措辞）**：codebase 实际无 `RawDetection` 类型——`detection/detector.py` 的 `Detection` 含 `track_id: int | None`；`VisitorTracker` 会丢弃 `track_id is None` 的检测（`detection/tracker.py:82`）；`CachedDetectionDetector` 缓存铁律"必须含 track_id"（`tests/runtime/_closed_loop_helpers.py:35`）。故**放弃新增 `RawDetection`，复用现有 `Detection`**，且 `track_id` 由 generator 按 `actor.id` **确定性回填（非 None）**，而非二修所称"无 track_id"——否则合成检测会被 tracker 丢弃、无法取代 `CachedDetectionDetector`。(2) **B2**：新生成 `detections.json` 与旧缓存**字段级等价**（均含确定性 `track_id`），非仅几何等价。(3) **Q1 + 切片 A 两层校验**：`meta` 身份字段（`schema_version`/`scenario_id`/`version`）加载期 fail-closed 必填，`seed`/`duration_frames` 生成期必填。(4) **Q2**：`actors[].tracks.frame` 必须严格递增且不越界 `duration_frames`，允许关键帧稀疏插值。(5) **B3/S1**：`regions` 是抽象标签、不绑运行时 ROI、不绑真实户型；场景 YAML 不入公共 PR、按 `.gitignore` 排除（T2 扩展）。(6) **B4**：`expects.min_risk_level` 复用 `analysis/warning.py` 的 `RISK_LEVELS = ("LOW","MEDIUM","HIGH")` 序值，`ScenarioValidator` 校验深度到 `WarningEvent`（含其 `risk_level`）。(7) **S2**：`generator.fingerprint` 不含设备/家庭/用户标识，仅为渲染产物可复现性指纹。(8) **T1/T2**：11 条契约测试名带 `adr0032` 前缀、测试文件 `test_validation_*`；T1 纳入 `numpy`/`opencv` 版本（CI 锁 `numpy>=1.24`/`opencv-python>=4.8`），`generator.fingerprint` 同步含 `numpy_version`/`opencv_version`。(9) **Q3**：§0.6 精简、ASCII 图作为唯一三 ADR 闭环可视化。(10) **I1**：确认 `_scenario_to_episodes` 仅存于 `tests/memory/test_cross_modal_runtime.py`、未迁出 src，§0.2 路径 (A) 描述准确。(11) **I2**：`ScenarioConfig`（`silver_demo/scenarios.py`）↔ `Scenario`（`validation/scenario/`）经 `ScenarioCompiler` 转换、校验只在 `Scenario` 侧。README 0032 行同步。
