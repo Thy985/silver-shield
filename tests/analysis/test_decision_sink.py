@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -157,6 +158,48 @@ class TestDesensitizationGuard:
         with pytest.raises(DesensitizationError, match="forbidden_field:is_scammer"):
             assert_desensitized(payload)
 
+    def test_sensitive_key_substring_match(self):
+        # 子串匹配：命名变体也必须命中（修复 exact-set 语义偏差）
+        for variant in [
+            "user_password_hash",
+            "secret_question",
+            "auth_token",
+            "aws_access_key_id",
+            "api_keys",
+            "client_secret",
+        ]:
+            payload = {"identity": {"decision_id": "x"}, variant: "v"}  # type: ignore[dict-item]
+            with pytest.raises(DesensitizationError, match="sensitive_key:"):
+                assert_desensitized(payload)
+
+    def test_id_card_and_ssn_keys_rejected(self):
+        # 身份证 / ssn / social_security 等个人敏感键（PR 描述承诺，此前漏判）
+        for key in ["id_card", "ssn", "social_security", "身份证"]:
+            payload = {"identity": {"decision_id": "x"}, key: "v"}  # type: ignore[dict-item]
+            with pytest.raises(DesensitizationError, match="sensitive_key:"):
+                assert_desensitized(payload)
+
+    def test_path_detection_only_at_string_start(self):
+        # 当前意图：路径 / URL 仅从字符串**开头**匹配（避免正文里的 "http://" 误报）。
+        # 钉住此行为：嵌套正文中的 URL 不触发，但开头路径触发。
+        inline = {"identity": {"decision_id": "x"}, "note": "见 http://center 上传"}
+        assert_desensitized(inline)  # 不抛
+        leading = {"identity": {"decision_id": "x"}, "note": "http://center/上传"}
+        with pytest.raises(DesensitizationError, match="path_or_url"):
+            assert_desensitized(leading)
+
+    def test_bytes_payload_rejected_fail_closed(self):
+        # bytes 一律 fail-closed 拒绝（不该出现在落盘 payload，且可藏匿路径 / 凭证）
+        payload = {"identity": {"decision_id": "x"}, "blob": b"/etc/passwd"}
+        with pytest.raises(DesensitizationError, match="bytes_payload"):
+            assert_desensitized(payload)
+
+    def test_tuple_recursion_no_false_negative(self):
+        # tuple 复用 list 分支递归；路径藏在 tuple 内仍应被捕获
+        payload = {"identity": {"decision_id": "x"}, "refs": ("/home/elder/a.mp4",)}
+        with pytest.raises(DesensitizationError, match="path_or_url"):
+            assert_desensitized(payload)
+
 
 # ---------------------------------------------------------------------------
 # JSONL 落盘 + 往返
@@ -262,6 +305,59 @@ class TestRetentionPrune:
         now = datetime(2026, 8, 8, 12, 0, 0, tzinfo=UTC)
         rec.record(_make_trace(decision_id="d-old", created_at=now - timedelta(days=3)))
         assert rec.prune(now_utc=now) == 1
+
+    def test_prune_preserves_corrupt_line(self, tmp_path: Path, capsys):
+        # PR 承诺「损坏行不阻断其余行」：损坏行保留、正常行按保留期轮转。
+        path = tmp_path / "traces.jsonl"
+        now = datetime(2026, 8, 8, 12, 0, 0, tzinfo=UTC)
+        # 手工写入：一行损坏 + 一行过期正常 trace + 一行近期正常 trace
+        corrupt = "{malformed json no closing"
+        expired = json.dumps(
+            _make_trace(decision_id="d-old", created_at=now - timedelta(days=3)).to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        recent = json.dumps(
+            _make_trace(decision_id="d-recent", created_at=now - timedelta(hours=1)).to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        path.write_text(corrupt + "\n" + expired + "\n" + recent + "\n", encoding="utf-8")
+
+        removed = prune_jsonl(path, retention_days=1, now_utc=now)
+        # 仅 expired 被删；corrupt 保留（宁留痕不丢）；recent 保留
+        assert removed == 1
+        lines = _read_lines(path)
+        assert corrupt in lines  # 损坏行被保留
+        assert len(lines) == 2  # corrupt + recent
+        # 损坏行确实触发了告警（structlog 经 PrintLogger 写 stdout，用 capsys 捕获）
+        assert "decision.trace_prune_parse_failed" in capsys.readouterr().out
+
+
+class TestConcurrentRecord:
+    def test_shared_fh_no_race(self, tmp_path: Path):
+        # 长生命周期 fh + 锁：多线程并发写不丢行、不抛异常。
+        path = tmp_path / "traces.jsonl"
+        rec = JsonlTraceRecorder(path=path)
+        errors: list[BaseException] = []
+
+        def worker(i: int) -> None:
+            try:
+                for _ in range(20):
+                    rec.record(_make_trace(decision_id=f"d-{i}-{_}"))
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        rec.flush()
+
+        assert not errors
+        # 4 线程 × 20 行 = 80 行，无丢失
+        assert len(_read_lines(path)) == 80
 
 
 # ---------------------------------------------------------------------------

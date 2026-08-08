@@ -24,10 +24,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Generic, TypeVar
 
 from ..common.logging import get_logger
 from .decision_trace import (
@@ -36,12 +38,16 @@ from .decision_trace import (
     DecisionTrace,
 )
 
+PayloadT = TypeVar("PayloadT")
+
 log = get_logger(__name__)
 
 # 默认保留期：对齐 ADR-0027 D9 MEDIUM 层级（结构化审计事实 30d）。可按合规要求收紧 / 延长。
 DEFAULT_RETENTION_DAYS: int = 30
 
-# 落盘期脱敏守卫：密钥类键（即便出现在嵌套字典里也拒绝）。
+# 落盘期脱敏守卫：密钥类键提示（**子串**匹配，覆盖 `user_password_hash` /
+# `secret_question` / `auth_token` / `aws_access_key_id` 等命名变体）。即便出现在
+# 嵌套字典里也拒绝。集合刻意收敛，避免普通业务键（如 `decision_id`）误命中。
 _SENSITIVE_KEY_HINTS: frozenset[str] = frozenset(
     {
         "password",
@@ -53,6 +59,10 @@ _SENSITIVE_KEY_HINTS: frozenset[str] = frozenset(
         "credential",
         "private_key",
         "access_key",
+        "ssn",
+        "social_security",
+        "id_card",
+        "身份证",
     }
 )
 
@@ -67,8 +77,12 @@ class DesensitizationError(Exception):
 def _scan_undesensitized(obj: object, path: tuple[str, ...] = ()) -> list[str]:
     """递归扫描 payload，返回所有未脱敏命中（空列表 = 通过）。
 
-    仅扫描 dict / list / str：数字、布尔、None 不可能携带定位或判定语义。命中三类：
-    1. 键名属于 T4 禁止判定语义字段；2. 键名属于密钥类提示；3. 字符串值是绝对路径或 URL。
+    仅扫描 dict / list / tuple / str / bytes：数字、布尔、None 不可能携带定位或判定语义。
+    命中三类：1. 键名属于 T4 禁止判定语义字段；2. 键名**子串**命中密钥类提示（覆盖
+    命名变体）；3. 字符串值是绝对路径或 URL（仅从头匹配，见 `_PATH_PATTERN`）。
+
+    `bytes` 一律 fail-closed 拒绝——它不该出现在 JSON 序列化前的 payload 里，且可藏匿
+    路径 / 凭证；`tuple` 复用 `list` 分支递归。
     """
     findings: list[str] = []
     if isinstance(obj, dict):
@@ -76,14 +90,16 @@ def _scan_undesensitized(obj: object, path: tuple[str, ...] = ()) -> list[str]:
             k = str(key).lower()
             if k in DECISION_TRACE_FORBIDDEN_FIELDS:
                 findings.append(f"forbidden_field:{k}@{'.'.join(path)}")
-            if k in _SENSITIVE_KEY_HINTS:
+            if any(hint in k for hint in _SENSITIVE_KEY_HINTS):
                 findings.append(f"sensitive_key:{k}@{'.'.join(path)}")
             findings.extend(_scan_undesensitized(val, (*path, k)))
-    elif isinstance(obj, list):
+    elif isinstance(obj, (list, tuple)):
         for i, val in enumerate(obj):
             findings.extend(_scan_undesensitized(val, (*path, f"[{i}]")))
     elif isinstance(obj, str) and _PATH_PATTERN.match(obj):
         findings.append(f"path_or_url:{obj[:60]}@{'.'.join(path)}")
+    elif isinstance(obj, bytes):
+        findings.append(f"bytes_payload:{obj[:30]!r}@{'.'.join(path)}")
     return findings
 
 
@@ -128,6 +144,9 @@ def prune_jsonl(path: Path, retention_days: int, now_utc: datetime | None = None
     - **失败不阻塞主链**（ADR-0027 D9）：单行解析损坏 → 仅告警并保留该行（宁留痕不丢），
       不影响其余记录轮转。
     - 文件不存在 → 返回 0（无操作）。
+    - 重写经临时文件 `*.tmp` 再 `replace`：POSIX 下原子；**跨卷替换会抛 `OSError`**，
+      由本函数 `except` 兜底告警、不阻塞主链（按 ADR-0002 部署于 Linux Home 端，本地盘
+      内替换安全）。
     """
     if not path.exists():
         return 0
@@ -161,7 +180,75 @@ def prune_jsonl(path: Path, retention_days: int, now_utc: datetime | None = None
 
 
 @dataclass
-class JsonlTraceRecorder:
+class _JsonlSinkBase(Generic[PayloadT]):
+    """本地 JSONL 落盘骨架（Slice E 共享）。
+
+    抽出两个 recorder 的镜像逻辑：path / retention_days / `__post_init__` 校验 /
+    `_write_payload`（脱敏 + 序列化 + 追加，T3 隔离）/ `flush`（fsync 持久化）/ `prune`
+    （轮转）。子类只实现 `record` 中的「item → payload 字典」转换，再交 `_write_payload`
+    统一落盘。
+
+    句柄管理：**每次操作独立开闭**文件句柄（不持有长生命周期 fh）。理由：
+    - 规避 Windows 下 `prune_jsonl` 的 `os.replace` 被本进程持有的打开句柄阻塞
+      （POSIX 可 rename 覆盖打开文件，Windows 不行）——独立句柄在 `prune` 时文件处于
+      关闭态，`os.replace` 始终可用。
+    - 并发由 `threading.Lock` 串行化追加；读 / 轮转时文件已关闭，无 fh 冲突。
+    - `record` 写后即 `flush()` + `os.fsync`，落盘即持久化；`flush()` 仅做显式 fsync 兜底。
+    """
+
+    path: Path
+    retention_days: int = DEFAULT_RETENTION_DAYS
+
+    def __post_init__(self) -> None:
+        if self.retention_days < 0:
+            raise ValueError("retention_days 必须 >= 0")
+        # 友好校验（非白名单，避免单测痛苦）：父目录若已存在则必须是目录，
+        # 防止符号链接 / 错误配置把审计血缘写进非目录位置。
+        parent = self.path.parent
+        if parent.exists() and not parent.is_dir():
+            raise NotADirectoryError(
+                f"落盘父路径不是目录（可能符号链接跟随 / 配置错误）：{parent}"
+            )
+        self._fh_lock = threading.Lock()
+
+    def _write_payload(self, payload: Mapping[str, object]) -> None:
+        """脱敏守卫 + 序列化 + 追加一行（T3 隔离，绝不外抛）。"""
+        try:
+            assert_desensitized(payload)
+            line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            log.exception("decision.sink_serialize_failed", path=str(self.path))
+            return
+        try:
+            with self._fh_lock, self.path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+                fh.flush()  # Python 缓冲刷到 OS 页缓存
+                os.fsync(fh.fileno())  # 落盘即持久化
+        except Exception:
+            log.exception("decision.sink_write_failed", path=str(self.path))
+
+    def flush(self) -> None:
+        # 每条 record 写后已 fsync，此处做显式持久化兜底（文件不存在则 no-op）。
+        try:
+            if not self.path.exists():
+                return
+            with self._fh_lock, self.path.open("rb") as fh:
+                os.fsync(fh.fileno())
+        except Exception:
+            log.exception("decision.sink_flush_failed", path=str(self.path))
+
+    def prune(self, now_utc: datetime | None = None) -> int:
+        """按 `retention_days` 删除过期记录（本地 UTC），返回删除行数。
+
+        文件句柄在 `record` 后即关闭（不持有长生命周期 fh），故 `prune` 时文件处于关闭态，
+        Windows 下 `prune_jsonl` 的 `os.replace` 不会被本进程持有的打开句柄阻塞。
+        """
+        with self._fh_lock:
+            return prune_jsonl(self.path, self.retention_days, now_utc)
+
+
+@dataclass
+class JsonlTraceRecorder(_JsonlSinkBase[DecisionTrace]):
     """本地 JSONL 落盘 recorder（Slice E）。
 
     实现 `DecisionTraceRecorder`：每条已封口 trace 经 `to_dict` 序列化 + `assert_desensitized`
@@ -172,84 +259,34 @@ class JsonlTraceRecorder:
     `retention_days` 默认 30（对齐 ADR-0027 D9 MEDIUM）；`prune()` 按本地 UTC 删除过期记录。
     """
 
-    path: Path
-    retention_days: int = DEFAULT_RETENTION_DAYS
-
-    def __post_init__(self) -> None:
-        if self.retention_days < 0:
-            raise ValueError("retention_days 必须 >= 0")
-
     def record(self, trace: DecisionTrace) -> None:
         try:
             payload = trace.to_dict()
-            assert_desensitized(payload)
-            line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         except Exception:
             log.exception(
                 "decision.trace_serialize_failed", decision_id=trace.identity.decision_id
             )
             return
-        try:
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except Exception:
-            log.exception("decision.trace_write_failed", path=str(self.path))
-
-    def flush(self) -> None:
-        try:
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.flush()
-                os.fsync(fh.fileno())
-        except Exception:
-            log.exception("decision.trace_flush_failed", path=str(self.path))
-
-    def prune(self, now_utc: datetime | None = None) -> int:
-        """按 `retention_days` 删除过期记录，返回删除行数。"""
-        return prune_jsonl(self.path, self.retention_days, now_utc)
+        self._write_payload(payload)
 
 
 @dataclass
-class JsonlABRunRecorder:
+class JsonlABRunRecorder(_JsonlSinkBase[DecisionABRun]):
     """决策层双轨运行（`DecisionABRun`）的本地 JSONL 落盘，供 ADR-0030 Slice C 产出。
 
     复用与 `JsonlTraceRecorder` 相同的脱敏守卫与保留期轮转；每条 AB run 序列化两臂 trace
     后追加一行。失败隔离同 `JsonlTraceRecorder`（T3）。
     """
 
-    path: Path
-    retention_days: int = DEFAULT_RETENTION_DAYS
-
-    def __post_init__(self) -> None:
-        if self.retention_days < 0:
-            raise ValueError("retention_days 必须 >= 0")
-
     def record(self, run: DecisionABRun) -> None:
         try:
             payload = run.to_dict()
-            assert_desensitized(payload)
-            line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         except Exception:
             log.exception(
                 "decision.abrun_serialize_failed", correlation_id=run.correlation_id
             )
             return
-        try:
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except Exception:
-            log.exception("decision.abrun_write_failed", path=str(self.path))
-
-    def flush(self) -> None:
-        try:
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.flush()
-                os.fsync(fh.fileno())
-        except Exception:
-            log.exception("decision.abrun_flush_failed", path=str(self.path))
-
-    def prune(self, now_utc: datetime | None = None) -> int:
-        """按 `retention_days` 删除过期记录，返回删除行数。"""
-        return prune_jsonl(self.path, self.retention_days, now_utc)
+        self._write_payload(payload)
 
 
 __all__ = [
