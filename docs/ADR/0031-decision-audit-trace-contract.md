@@ -370,7 +370,13 @@ DecisionABRun { correlation_id, trace_baseline: DecisionTrace, trace_candidate: 
 - **Slice B（采集接缝，默认关闭）**：`DecisionTraceRecorder` Protocol + `NullRecorder` + `InMemoryRecorder`；`DecisionEngine` 可选注入；WARN 路径产出完整 trace。测试：T1 / T2 / T3。
 - **Slice C（抑制留痕）**：三条 `return None` 路径接入 recorder，产出 `SUPPRESS` trace（**本 ADR 的核心价值**）。测试：T7 全覆盖 + 变异验证（新增第四条返回路径未登记枚举时测试必须失败）。
 - **Slice D（双轨载体，门控）**：`DecisionABRun` + 唯一变量守恒断言（D7 六条），与 `memory/evaluation/ab_runner.py` 风格对齐。**不启用 Memory 接线**，仅提供载体供 ADR-0030 Slice C 使用。
-- **Slice E（落盘与留存，门控）**：trace sink（JSONL）+ 保留期 + 脱敏；须与 ADR-0002 / ADR-0027 D9 对齐，单独 PR + Owner 评审。
+- **Slice E（落盘与留存，门控 · 已落地）**：新增 `analysis/decision_sink.py`——本地 JSONL sink + 保留期轮转 + 落盘期脱敏守卫，对齐 ADR-0002（本地留存、证据仅引用 ID）/ ADR-0027 D9（分层留存，默认 `retention_days=30` 对齐 MEDIUM；本地 UTC 计时、幂等删除、失败不阻塞主链）：
+  - `JsonlTraceRecorder`（实现 `DecisionTraceRecorder`）：每条已封口 trace 经 `to_dict` 序列化 + `assert_desensitized` 守卫后追加一行 JSON 到本地文件；`flush` 做 fsync；`record` / `flush` 异常仅 `log.exception`（T3 失败隔离，绝不外抛）。
+  - `JsonlABRunRecorder`：决策层双轨 `DecisionABRun` 的对等落盘（供 ADR-0030 Slice C 产出），复用同一脱敏守卫与保留期轮转。
+  - `DecisionABRun.to_dict` / `from_dict`：补齐 review #4（序列化归 Slice E），与模块内其他契约类型一致（T8 不复制 Bundle 语义）。
+  - `assert_desensitized`（fail-closed 兜底）：拒绝落盘任何含 T4 判定字段 / 密钥类键 / 绝对路径或 URL 串的 payload——trace 数据模型已凭构造满足 T4 / T5，守卫是落盘边界的最后兜底。
+  - `prune_jsonl`：按 `retention_days`（本地 UTC）删除过期记录；保留边界 inclusive、幂等、损坏行仅告警保留（不阻塞主链）。
+  - **零行为变化**：`JsonlTraceRecorder` 结构上满足 `DecisionTraceRecorder` Protocol，可直接注入 `DecisionEngine(trace_recorder=...)`，无需改动 engine。单独 PR + Owner 评审。
 
 ### 验收清单（Acceptance Criteria）
 
@@ -383,6 +389,7 @@ DecisionABRun { correlation_id, trace_baseline: DecisionTrace, trace_candidate: 
 7. **D7 双轨守恒**：`DecisionABRun` 六条守恒断言通过；四种 outcome 配对均有用例；
 8. **边界铁律**：T4 / T5 通过；全量 `ruff check src tests` + `pytest` 全绿（AGENTS.md 基线，不允许回归）。
 9. **D6.1 生命周期契约**：trace 状态机 `CREATED→COLLECTING→FINALIZED→PERSISTED?` 由 `DecisionEngine` 拥有 span；`DecisionPolicy` 仅写 partial（`suppress_reason` / `candidates`）；重复 `flush` 以 `decision_id` 去重不产生第二条 trace；`COLLECTING` 阶段 recorder 异常仍由 engine 封口为 `FINALIZED`（T3 失败隔离）；T10 规范化测试通过。
+10. **Slice E 落盘与留存**：`JsonlTraceRecorder` 每条 trace 落一行本地 JSON、往返一致（`from_dict` 重建等价 trace）；`assert_desensitized` 拒绝 forbidden / 敏感键 / 路径串且对正常 trace 无误报；`prune_jsonl` 按 `retention_days`（本地 UTC）删除过期记录、边界 inclusive、幂等、损坏行不阻断；`DecisionABRun` 序列化往返一致且守恒在往返后仍成立；`record` / `flush` 写盘异常不向外传播（T3）。
 
 ---
 
