@@ -1,0 +1,43 @@
+# ADR-0032 单点链路验证场景（CI torch-free）。
+# 一个 human 在 odd hour 短暂停留 → 触发 visit_normal（+ is_odd_hour）→ LOW 警告。
+# 验证 detections 通道：ScenarioDetectionDetector → VisitorTracker → EventBuilder
+# → FeatureExtractor → RuleEngine → DecisionEngine 全链路（torch-free）。
+meta:
+  schema_version: "1.0"
+  scenario_id: torchfree_visit
+  version: 1
+  description: "CI torch-free single human visit at odd hour (detections channel E2E)"
+  seed: 42
+  duration_frames: 60
+  owner: perception-team
+  category: visitor
+  difficulty: low
+  tags: [visit, odd_hour]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+  static_objects: []
+actors:
+  - id: visitor_01
+    actor_type: human
+    tracks:
+      - frame: 5
+        pos: [120.0, 120.0]
+        size: [40.0, 120.0]
+      - frame: 50
+        pos: [220.0, 120.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 56
+    type: visit_normal
+expects:
+  emitted_event_types: [visit_normal]
+  min_risk_level: LOW

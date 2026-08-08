@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -180,14 +180,69 @@ class VideoFileFrameSource(DemoFrameSource):
             cap.release()
 
 
+# ============================================================================
+# 外部帧源注册表（ADR-0032 Slice E · 依赖倒置接缝）
+# ============================================================================
+
+FrameSourceBuilder = Callable[[ScenarioConfig, Any], "DemoFrameSource"]
+
+#: 内建 source_type，**不可**被外部注册覆盖（防止核心输入路径被劫持）。
+BUILTIN_SOURCE_TYPES = frozenset({"video_file", "caviar_jpg"})
+
+#: source_type → builder。由**组装层**（如 ``scripts/run_demo.py``）填充。
+_SOURCE_BUILDERS: dict[str, FrameSourceBuilder] = {}
+
+
+def register_frame_source(
+    source_type: str, builder: FrameSourceBuilder, *, replace: bool = False
+) -> None:
+    """注册一个外部 ``source_type`` 的帧源构造器。
+
+    这是 ADR-0032 Slice E 的**依赖倒置接缝**：``silver_demo`` 不 import 任何
+    合成/验证层模块，而是暴露此钩子，由组装层把 builder 注入进来。因此
+    ADR-0015 §5 的冻结 import 白名单**无需放宽**。
+
+    builder 只需返回结构上满足 ``DemoFrameSource`` 的对象（``frame_count``
+    属性 + ``__iter__`` 产出 ``(timestamp, frame)``），无需继承本模块的 ABC
+    ——与 ``DemoFrameSource`` 相对冻结 ``FrameSource`` 的"结构一致、各自独立"
+    是同一原则，避免反向依赖。
+
+    :param replace: 是否允许覆盖**已注册的外部**类型（默认拒绝，避免静默顶替）。
+    :raises ValueError: 试图覆盖内建类型，或未开 ``replace`` 却重复注册。
+    """
+    if source_type in BUILTIN_SOURCE_TYPES:
+        raise ValueError(
+            f"source_type {source_type!r} 是内建类型，禁止注册覆盖"
+            f"（内建：{sorted(BUILTIN_SOURCE_TYPES)}）"
+        )
+    if source_type in _SOURCE_BUILDERS and not replace:
+        raise ValueError(f"source_type {source_type!r} 已注册；如需顶替请显式传 replace=True")
+    _SOURCE_BUILDERS[source_type] = builder
+
+
+def unregister_frame_source(source_type: str) -> None:
+    """注销一个外部帧源构造器（不存在时静默忽略，便于测试清理）。"""
+    _SOURCE_BUILDERS.pop(source_type, None)
+
+
+def registered_source_types() -> frozenset[str]:
+    """返回当前已注册的**外部** source_type 集合（只读快照）。"""
+    return frozenset(_SOURCE_BUILDERS)
+
+
 def build_frame_source(scenario: ScenarioConfig, hp_settings: Any) -> DemoFrameSource:
     """按场景配置构造 ``DemoFrameSource``（网关消费入口）。
 
     - ``source_type == "video_file"`` → ``VideoFileFrameSource``（真实 MP4 产品展示）
+    - 命中外部注册表 → 该 builder（ADR-0032 Slice E，如 ``synthetic``）
     - 其他（默认 ``caviar_jpg``）→ ``CaviarJpgFrameSource``（CAVIAR 工程验证）
 
     这是 P0-11.3 的核心替换点：切换输入源只需改 ``source_type`` / ``media_path``，
     Dashboard / Pipeline / WarningEvent 完全不变。
+
+    .. note::
+       未知 ``source_type`` 仍沿用既有的 CAVIAR 兜底行为（**未**改为报错），
+       以保证本次接缝是纯加法、对既有场景零行为变化。
     """
     source_type = scenario.source_type
     if source_type == "video_file":
@@ -195,6 +250,11 @@ def build_frame_source(scenario: ScenarioConfig, hp_settings: Any) -> DemoFrameS
         if not media_path:
             raise ValueError(f"video_file 源需要 media_path，场景 {scenario.scenario_id!r} 缺失")
         return VideoFileFrameSource(str(media_path), fps_target=scenario.fps_target)
+
+    # 外部注册的 source_type（ADR-0032 Slice E：synthetic 等）
+    builder = _SOURCE_BUILDERS.get(source_type)
+    if builder is not None:
+        return builder(scenario, hp_settings)
 
     # 默认 CAVIAR jpg 目录
     base_dir = hp_settings.runtime.caviar_base_dir

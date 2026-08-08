@@ -1,0 +1,43 @@
+# ADR-0032 横向打分集场景示例（D8 registry 目录分层演示）。
+# 声明式几何场景：odd hour + 长停留 → 触发 visit_normal（odd_hour 叠加）+ abnormal_dwell，
+# 供 ADR-0033 Benchmark Harness 横向打分。
+meta:
+  schema_version: "1.0"
+  scenario_id: sw_benchmark_night_dwell
+  version: 1
+  description: "Benchmark: night long dwell (odd hour + abnormal_dwell)"
+  seed: 99
+  duration_frames: 140
+  owner: perception-team
+  category: visitor
+  difficulty: high
+  tags: [night, dwell, benchmark]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+    corridor: [0.4, 0.0, 1.0, 1.0]
+  static_objects: []
+actors:
+  - id: visitor_b
+    actor_type: human
+    tracks:
+      - frame: 3
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 138
+        pos: [240.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 139
+    type: abnormal_dwell
+expects:
+  emitted_event_types: [visit_normal, abnormal_dwell]
+  min_risk_level: LOW

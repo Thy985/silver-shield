@@ -159,6 +159,26 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _register_synthetic_source() -> None:
+    """把 ADR-0032 合成帧源注册进 demo 帧源表（组装层接线）。
+
+    这里是**依赖倒置的汇合点**：``silver_demo`` 不 import
+    ``home_perception.validation``（否则撞 ADR-0015 §5 冻结 import 白名单），
+    ``validation`` 也不 import ``silver_demo``；由本脚本——既不属于前者包内、
+    也不属于后者——把 builder 递进去。
+
+    合成源是**可选**能力：validation 层缺失（例如精简部署）时静默跳过，
+    demo 照常以 CAVIAR / MP4 启动，不因此失败。
+    """
+    try:
+        from home_perception.validation.demo_adapter import install_into
+        from silver_demo.sources import register_frame_source
+    except ImportError as exc:  # pragma: no cover - 精简部署降级路径
+        print(f"[i] 合成帧源不可用，跳过注册（{exc}）")
+        return
+    install_into(register_frame_source, replace=True)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -200,6 +220,8 @@ def main() -> None:
     print_banner(scenario_path)
 
     import silver_demo.gateway as gw  # 懒加载：预检通过后才 import（会拉 torch）
+
+    _register_synthetic_source()
 
     gw.main()
 
