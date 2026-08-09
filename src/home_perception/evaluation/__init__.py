@@ -39,6 +39,15 @@ _PUBLIC_MODULES: dict[str, str] = {
     "write_baseline_report": "home_perception.evaluation.ab_runner",
     "baseline_path": "home_perception.evaluation.ab_runner",
     "BASELINES_DIR": "home_perception.evaluation.ab_runner",
+    # Phase 3（gate）：生产门控（D5 Hard Gate 先于复合分 + D7 BenchmarkThresholds）
+    "BenchmarkThresholds": "home_perception.evaluation.gate",
+    "BenchmarkScore": "home_perception.evaluation.gate",
+    "HardGateSummary": "home_perception.evaluation.gate",
+    "ThresholdCheck": "home_perception.evaluation.gate",
+    "GateResult": "home_perception.evaluation.gate",
+    "summarize_hard_gate": "home_perception.evaluation.gate",
+    "compute_benchmark_score": "home_perception.evaluation.gate",
+    "evaluate_gate": "home_perception.evaluation.gate",
 }
 
 
