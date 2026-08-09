@@ -22,6 +22,7 @@ from .metrics import (
     OUTCOME_TP,
     OUTCOME_UNLABELED,
     ScenarioScore,
+    _require_mapping,
 )
 
 
@@ -140,6 +141,97 @@ class BenchmarkReport:
             "scores": [s.to_dict() for s in self.scores],
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, object]) -> BenchmarkReport:
+        """从 ``to_dict`` / ``canonical_dict`` 结构重建（Phase 2 基线可回放 T10）。
+
+        ``canonical_dict`` 不含 ``generated_at``；``mean_risk_shortfall`` 允许 ``None``；
+        ``provenance`` 一并恢复（基线对照的守恒校验依赖它）。
+
+        反序列化校验（M10 / L11）：缺字段 / 类型不符统一转 ``TypeError`` 带上下文
+        （TRY004：类型错误用 ``TypeError``，与 ``load_baseline_report_path`` 一致）；
+        数值字段强制 ``isinstance`` 校验，拒绝字符串 / ``None`` 静默塌缩（手工编辑基线若塞入
+        ``"tp": "abc"`` 或 ``None`` 必须显式报错，而非被 ``int()``/``float()`` 吞掉）。
+        ``bool`` 是 ``int`` 子类，True/False 数值上静默等价 1/0、违反计数语义，计数键
+        显式拒绝 ``bool``（round 5）；计数键接受整数值浮点（如 ``tp=1.0``）但拒绝非整数浮点。
+        """
+        if not isinstance(d, dict):
+            _require_mapping(d, "基线报告")  # Medium 14：与 ScenarioScore / load 共享校验口径
+
+        scenario_set_id = d.get("scenario_set_id")
+        if not isinstance(scenario_set_id, str) or not scenario_set_id:
+            raise TypeError("基线报告缺字段 scenario_set_id（或为空/非字符串）")
+        harness_fingerprint = d.get("harness_fingerprint")
+        if not isinstance(harness_fingerprint, str) or not harness_fingerprint:
+            raise TypeError("基线报告缺字段 harness_fingerprint（或为空/非字符串）")
+
+        metrics = d.get("metrics")
+        if not isinstance(metrics, dict):
+            raise TypeError("基线报告缺字段 metrics（或为非对象）")
+
+        int_keys = ("tp", "tn", "fn", "fp", "unlabeled_scenario_count")
+        float_keys = (
+            "suppression_rate",
+            "false_alarm_rate",
+            "precision",
+            "recall",
+            "f1",
+            "mean_event_recall",
+        )
+        int_vals: dict[str, int] = {}
+        for k in int_keys:
+            v = metrics.get(k)
+            # round 5：三段条件拆分独立 if，错误信息分别说明（不再三段 or 串联）
+            if isinstance(v, bool):
+                raise TypeError(
+                    f"基线报告指标 {k!r} 不能为布尔（bool 是 int 子类，True/False 静默等价"
+                    f"1/0，违反计数语义），收到 {v!r}"
+                )
+            if not isinstance(v, (int, float)):
+                raise TypeError(f"基线报告指标 {k!r} 须为数值（计数键），收到 {v!r}")
+            if isinstance(v, float) and not v.is_integer():
+                raise TypeError(
+                    f"基线报告指标 {k!r} 须为整数值浮点（如 1.0），收到非整数浮点 {v!r}"
+                )
+            int_vals[k] = int(v)
+        float_vals: dict[str, float] = {}
+        for k in float_keys:
+            v = metrics.get(k)
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise TypeError(f"基线报告指标 {k!r} 须为数值，收到 {v!r}")
+            float_vals[k] = float(v)
+
+        shortfall = metrics.get("mean_risk_shortfall")
+        if shortfall is not None and (
+            not isinstance(shortfall, (int, float)) or isinstance(shortfall, bool)
+        ):
+            raise TypeError(f"基线报告指标 mean_risk_shortfall 须为数值或 None，收到 {shortfall!r}")
+
+        scores_raw = d.get("scores", [])
+        if not isinstance(scores_raw, list):
+            raise TypeError("基线报告 scores 须为列表")
+
+        return cls(
+            scenario_set_id=scenario_set_id,
+            harness_fingerprint=harness_fingerprint,
+            scores=tuple(ScenarioScore.from_dict(s) for s in scores_raw),
+            generated_at=str(d.get("generated_at", "")),
+            tp=int_vals["tp"],
+            tn=int_vals["tn"],
+            fn=int_vals["fn"],
+            fp=int_vals["fp"],
+            unlabeled_scenario_count=int_vals["unlabeled_scenario_count"],
+            suppression_rate=float_vals["suppression_rate"],
+            false_alarm_rate=float_vals["false_alarm_rate"],
+            precision=float_vals["precision"],
+            recall=float_vals["recall"],
+            f1=float_vals["f1"],
+            mean_event_recall=float_vals["mean_event_recall"],
+            mean_risk_shortfall=(float(shortfall) if shortfall is not None else None),
+            unlabeled_scenario_ids=tuple(d.get("unlabeled_scenario_ids", [])),  # type: ignore[arg-type]
+            provenance=dict(d.get("provenance", {})),  # type: ignore[arg-type]
+        )
+
     def _sorted_scores(self) -> list[ScenarioScore]:
         """场景排序**唯一来源**（按 ``scenario_id`` 升序）。
 
@@ -210,4 +302,22 @@ class BenchmarkReport:
         assert_desensitized(self.to_dict())  # 落盘即脱敏守卫
         p.write_text(
             json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def write_canonical_report(self, path: str) -> None:
+        """落盘**确定性**基线 JSON（``canonical_dict``，剔除 ``generated_at``）。
+
+        与 ``write_report`` 共用双重守卫（fail-closed）：脱敏守卫 + 父目录存在性守卫
+        （拒绝自动创建父目录，纵深防御路径穿越）。供基线 bump 工作流（``--write-baseline``）
+        复用，保证"基线落盘 = 已通过脱敏守卫"（C2 / M8，与 ``write_report`` 同向）。
+        """
+        p = Path(path).resolve()
+        if not p.parent.exists():
+            raise ValueError(
+                f"write_canonical_report 父目录不存在，拒绝自动创建以防路径穿越：{p.parent}"
+            )
+        assert_desensitized(self.canonical_dict())  # 落盘即脱敏守卫
+        p.write_text(
+            json.dumps(self.canonical_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )

@@ -1,0 +1,77 @@
+{
+  "scenario_set_id": "adr0033-phase1",
+  "harness_fingerprint": "2bbdd8d19de7584e9486bde46fe96e8029b5bcfcca6a6d4fe1abfa138684913b",
+  "metrics": {
+    "tp": 1,
+    "tn": 1,
+    "fn": 0,
+    "fp": 0,
+    "unlabeled_scenario_count": 0,
+    "suppression_rate": 0.0,
+    "false_alarm_rate": 0.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "mean_event_recall": 1.0,
+    "mean_risk_shortfall": 0.0
+  },
+  "unlabeled_scenario_ids": [],
+  "provenance": {
+    "scenario_set_id": "adr0033-phase1",
+    "code_version": "18c3087",
+    "generator_fingerprint": "ff712c7f1229030ebdcac8476040e01b447d527ad15234ba588375743ffffa25",
+    "policy_fingerprint": "c4cb7cb6e1e2b678d12e3d4cfcde4b920bf91ab2afdd65b9af71a54f44de51b4",
+    "model_fingerprint": {
+      "detector": "scenario-detection-detector",
+      "tracker": "visitor_tracker",
+      "event_extractor": "feature_extractor"
+    },
+    "runtime_dependencies": {
+      "numpy": "2.4.2",
+      "opencv": "4.13.0",
+      "torch": "2.11.0+cu130"
+    }
+  },
+  "scores": [
+    {
+      "scenario_id": "sw_benchmark_night_dwell",
+      "expected_label": "alert",
+      "actual_label": "alert",
+      "outcome": "TP",
+      "validation_ok": true,
+      "validation_details": "observed_event_types=['abnormal_dwell', 'visit_normal']; expected_event_types=['abnormal_dwell', 'visit_normal']; missing_event_types=[]; observed_risk_levels=['LOW']; min_risk_level='LOW' -> ok=True",
+      "observed_event_types": [
+        "abnormal_dwell",
+        "visit_normal"
+      ],
+      "expected_event_types": [
+        "abnormal_dwell",
+        "visit_normal"
+      ],
+      "missing_event_types": [],
+      "observed_risk_levels": [
+        "LOW"
+      ],
+      "event_recall": 1.0,
+      "risk_shortfall": 0.0,
+      "benchmark_expected_alarm": true,
+      "benchmark_severity": "LOW"
+    },
+    {
+      "scenario_id": "sw_benchmark_quiet_hallway",
+      "expected_label": "no_alert",
+      "actual_label": "no_alert",
+      "outcome": "TN",
+      "validation_ok": true,
+      "validation_details": "observed_event_types=[]; expected_event_types=[]; missing_event_types=[]; observed_risk_levels=[]; min_risk_level=None -> ok=None",
+      "observed_event_types": [],
+      "expected_event_types": [],
+      "missing_event_types": [],
+      "observed_risk_levels": [],
+      "event_recall": 1.0,
+      "risk_shortfall": null,
+      "benchmark_expected_alarm": false,
+      "benchmark_severity": null
+    }
+  ]
+}

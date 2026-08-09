@@ -38,6 +38,7 @@ from home_perception.validation.fingerprint import (
 from home_perception.validation.scenario.scenario import Scenario
 from home_perception.validation.synthetic_input import SyntheticInput
 
+from .fingerprint_fields import FINGERPRINT_COMPONENT_FIELDS
 from .metrics import build_scenario_score
 from .report import BenchmarkReport
 
@@ -152,19 +153,29 @@ def compute_harness_fingerprint(
     model_fingerprint: Mapping[str, str],
     runtime_dependencies: Mapping[str, str],
 ) -> str:
-    """计算 ``harness_fingerprint``（D4 三元组，fail-closed）。"""
-    if not scenario_set_id:
-        raise BenchmarkProvenanceError("scenario_set_id 不能为空")
-    if not code_version:
-        raise BenchmarkProvenanceError("code_version 不能为空")
-    if not generator_fingerprint:
-        raise BenchmarkProvenanceError("generator_fingerprint 不能为空")
-    if not policy_fingerprint:
-        raise BenchmarkProvenanceError("policy_fingerprint 不能为空")
-    if not model_fingerprint:
-        raise BenchmarkProvenanceError("model_fingerprint 不能为空")
-    if not runtime_dependencies:
-        raise BenchmarkProvenanceError("runtime_dependencies 不能为空")
+    """计算 ``harness_fingerprint``（D4 三元组，fail-closed）。
+
+    成分集合由 ``FINGERPRINT_COMPONENT_FIELDS``（fingerprint_fields.py，Medium 9）单一
+    来源驱动：先做**漂移守卫**（本函数入参与常量不一致即报错，防未来只改一处），再逐成分
+    ``if not X`` 兜底（空字符串 / 空 dict 同判缺失）。
+    """
+    values: dict[str, Any] = {
+        "scenario_set_id": scenario_set_id,
+        "code_version": code_version,
+        "generator_fingerprint": generator_fingerprint,
+        "policy_fingerprint": policy_fingerprint,
+        "model_fingerprint": model_fingerprint,
+        "runtime_dependencies": runtime_dependencies,
+    }
+    # 漂移守卫：常量与入参集合必须完全一致（防新增成分时只改 signature 或只改常量）
+    if set(values) != set(FINGERPRINT_COMPONENT_FIELDS):
+        raise BenchmarkProvenanceError(
+            "compute_harness_fingerprint 入参与 FINGERPRINT_COMPONENT_FIELDS 不一致"
+            f"（实现={sorted(values)}，常量={sorted(FINGERPRINT_COMPONENT_FIELDS)}）"
+        )
+    for name in FINGERPRINT_COMPONENT_FIELDS:
+        if not values[name]:
+            raise BenchmarkProvenanceError(f"{name} 不能为空")
     parts: dict[str, Any] = {
         "scenario_set_id": scenario_set_id,
         "code_version": code_version,

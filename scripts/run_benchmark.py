@@ -1,11 +1,15 @@
-"""ADR-0033 Phase 1 手动 / CI 入口（不接线 demo / gateway，D8）。
+"""ADR-0033 Phase 1 + 2 手动 / CI 入口（不接线 demo / gateway，D8）。
 
 用法：
     python scripts/run_benchmark.py --scenarios <dir> --set-id <id> [--out report.json]
+    # Phase 2 基线对照 / bump（报告性、非门禁）：
+    python scripts/run_benchmark.py ... --baseline <path> --max-regression-delta 0.01
+    python scripts/run_benchmark.py ... --write-baseline auto --force
 
 默认构造 torch-free 的 ``PerceptionPipeline``（detections 通道零模型），不拉起真实
 YOLO；``--frames`` 可切换 frames 通道（需真实 detector，opt-in）。报告落盘 JSON +
-stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自动门禁。
+stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自动门禁；Phase 2 基线对照
+**不**触发 CI 非零退出、**不**做 Hard Gate / 复合分门控（MUST NOT，见 ADR-0033 §6）。
 
 依赖延迟导入：脚本仅在 ``main`` 内 import 运行时 / 评估链，避免加载即拉起重链。
 """
@@ -13,7 +17,9 @@ stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自�
 from __future__ import annotations
 
 import argparse
+import math
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from home_perception.common.logging import get_logger
 
@@ -85,6 +91,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--code-version", default=None, help="显式注入 code_version（否则取 git 短哈希）"
     )
+    # —— Phase 2 基线对照 / bump（D7，报告性、非门禁）——
+    parser.add_argument(
+        "--baseline",
+        default=None,
+        metavar="PATH",
+        help="对照基线 JSON 路径；提供则跑 evaluate_regression 并打印 diff "
+        "（退出码恒 0，Phase 2 不触发 CI 非零；candidate 须与基线在 vary 轴不同）",
+    )
+    parser.add_argument(
+        "--max-regression-delta",
+        type=float,
+        default=None,
+        help="回归预算 Δ（仅信息性对照，超过置 regressions_exceeded=True，不阻断）",
+    )
+    parser.add_argument(
+        "--write-baseline",
+        default=None,
+        metavar="PATH",
+        help="写基线 JSON（bump 工作流）：canonical_dict 落到指定路径；"
+        "若填 'auto' 则落到 <baselines_dir>/<set-id>.json。"
+        "显式 PATH 默认仅允许 baselines 目录子树内（自动建父目录，与 --out 同规约）；"
+        "子树外路径须加 --write-baseline-allow-anywhere 显式放行（注意路径安全，round 5）",
+    )
+    parser.add_argument(
+        "--write-baseline-allow-anywhere",
+        action="store_true",
+        help="与 --write-baseline 配合：允许显式路径落在 baselines 目录子树之外并自动创建"
+        "父目录（默认拒绝，防路径穿越/误写任意位置；请自行确认路径安全）",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="与 --write-baseline 配合：覆盖已存在的基线文件（D7 显式 bump 动作，"
+        "须 Owner 评审；默认不覆盖以防误操作）",
+    )
     args = parser.parse_args(argv)
 
     from home_perception.evaluation.harness import BenchmarkHarness
@@ -112,11 +153,85 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.out:
         # write_report 拒绝自动创建父目录（防路径穿越），故此处显式建目录
-        from pathlib import Path
-
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         report.write_report(args.out)
         logger.info("benchmark_report_written", path=args.out)
+
+    # —— Phase 2：写基线（bump 工作流）——
+    if args.write_baseline:
+        from home_perception.evaluation.ab_runner import (
+            BASELINES_DIR,
+            baseline_path,
+            baseline_write_gate,
+            write_baseline_report,
+        )
+
+        if args.write_baseline == "auto":
+            target = baseline_path(args.set_id, BASELINES_DIR)
+        else:
+            target = Path(args.write_baseline)
+        # round 5：落盘门（纯策略）——防静默覆盖（C1）+ 防子树外路径自动建父目录（路径安全）。
+        # auto 落点恒在 BASELINES_DIR 内；显式子树内路径经门后安全 mkdir；子树外路径须
+        # --write-baseline-allow-anywhere 显式放行。
+        ok, hint = baseline_write_gate(
+            target,
+            force=args.force,
+            allow_anywhere=args.write_baseline_allow_anywhere,
+            baselines_dir=BASELINES_DIR,
+        )
+        if not ok:
+            logger.warning("benchmark_baseline_write_blocked", path=str(target))
+            print(hint)
+            return 2
+        # 函数层 ``write_canonical_report`` 仍拒自动建目录（守程序化调用方路径穿越），
+        # 故由 CLI 在门通过后预先建好父目录（auto 落点 BASELINES_DIR 已存在，no-op）。
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_baseline_report(target, report)
+        logger.info("benchmark_baseline_written", path=str(target))
+
+    # —— Phase 2：对照基线（报告性、非门禁）——
+    if args.baseline:
+        from home_perception.evaluation.ab_runner import (
+            BenchmarkABConservationError,
+            evaluate_regression,
+            load_baseline_report_path,
+        )
+
+        # C3：max_regression_delta 必须 ≥ 0 且非 NaN，负值令语义反转、NaN 静默吞判定，入口即拦
+        if args.max_regression_delta is not None and (
+            args.max_regression_delta < 0 or math.isnan(args.max_regression_delta)
+        ):
+            print(
+                "[regression] --max-regression-delta 必须 ≥ 0 且非 NaN（表达可容忍退化预算），"
+                f"收到 {args.max_regression_delta}"
+            )
+            return 2
+
+        # Medium 11：基线加载失败（文件不存在 / JSON 损坏 / 顶层非对象 / 字段非法）给友好
+        # 错误并退出码 1，而非 raw 异常栈；JSONDecodeError 是 ValueError 子类，一并覆盖。
+        # 解析错误在此显式捕获（区别于 evaluate_regression 的守恒错误），不再伪装成守恒失败。
+        try:
+            baseline = load_baseline_report_path(args.baseline)
+        except (FileNotFoundError, ValueError, TypeError) as exc:
+            logger.warning("benchmark_baseline_load_failed", error=str(exc))
+            print(
+                f"[regression] 基线加载失败：{exc}\n"
+                "          提示：检查路径是否存在、基线 JSON 是否完整（可用 "
+                "--write-baseline 重新生成，并确认 PR 注明 benchmark-baseline-bump）"
+            )
+            return 1
+        try:
+            reg = evaluate_regression(
+                report,
+                baseline,
+                max_regression_delta=args.max_regression_delta,
+            )
+        except BenchmarkABConservationError as exc:  # 守恒/装配错误，清晰报错，退出码 1
+            logger.warning("benchmark_regression_conservation_failed", error=str(exc))
+            print(f"[regression] 守恒校验失败（基线对照装配错误）：{exc}")
+            return 1
+        print(reg.render_markdown())
+
     # 最终报告为人类可读产物，输出到 stdout（命令主产物，非日志）
     print(report.render_markdown())
     return 0
