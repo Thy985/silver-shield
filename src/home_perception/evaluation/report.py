@@ -22,6 +22,7 @@ from .metrics import (
     OUTCOME_TP,
     OUTCOME_UNLABELED,
     ScenarioScore,
+    _require_mapping,
 )
 
 
@@ -153,7 +154,7 @@ class BenchmarkReport:
         ``"tp": "abc"`` 或 ``None`` 必须显式报错，而非被 ``int()``/``float()`` 吞掉）。
         """
         if not isinstance(d, dict):
-            raise TypeError(f"基线报告顶层须为对象，收到 {type(d).__name__}")
+            _require_mapping(d, "基线报告")  # Medium 14：与 ScenarioScore / load 共享校验口径
 
         scenario_set_id = d.get("scenario_set_id")
         if not isinstance(scenario_set_id, str) or not scenario_set_id:

@@ -106,6 +106,16 @@ def risk_shortfall(scenario: Scenario, observed_risk_levels: list[str]) -> float
     return float(exp_ord - max_obs_ord)
 
 
+def _require_mapping(d: Any, what: str, detail: str = "") -> None:
+    """顶层须为 mapping；否则抛 ``TypeError``（TRY004：类型错误用 TypeError）。
+
+    供 ``ScenarioScore.from_dict`` / ``BenchmarkReport.from_dict`` / ``load_baseline_report_path``
+    共用（Medium 14：单一校验口径，避免三处各写一套、错误消息漂移）。
+    """
+    if not isinstance(d, dict):
+        raise TypeError(f"{what}顶层须为对象，收到 {type(d).__name__}{detail}")
+
+
 @dataclass(frozen=True, slots=True)
 class ScenarioScore:
     """单场景打分（D2 / D3）。由 ``build_scenario_score`` 从 ``RunResult`` + ``ValidationResult``
@@ -153,25 +163,36 @@ class ScenarioScore:
     def from_dict(cls, d: dict[str, object]) -> ScenarioScore:
         """从 ``to_dict`` 结构重建（Phase 2 基线可回放 T10）。
 
-        ``set`` 字段经可迭代重建（``to_dict`` 已排序为 list）；``risk_shortfall`` /
-        ``benchmark_expected_alarm`` / ``benchmark_severity`` 允许 ``None``。
+        ``set`` 字段经可迭代重建（``to_dict`` 已排序为 list）；允许 ``None`` 的字段与
+        dataclass 注解一致（Medium 2）：``expected_label`` / ``risk_shortfall`` /
+        ``benchmark_expected_alarm`` / ``benchmark_severity`` 显式允许 ``None``；
+        ``actual_label`` / ``outcome`` / ``validation_details`` 注解为纯 ``str``、永不允许
+        ``None``，与 ``validation_ok`` 同口径显式拒绝。
 
-        反序列化校验（M10）：必填字段缺失转 ``ValueError`` 带上下文；``validation_ok``
-        显式拒绝 ``None``（``bool(None)`` 会静默塌缩为 ``False``）；``event_recall`` 强制
-        数值，拒绝字符串 / ``None`` 注入。手工编辑基线若塞入非法类型必须显式报错。
+        反序列化校验（M10 / Medium 1）：必填字段缺失/类型不符统一转 ``TypeError`` 带上下文
+        （TRY004）；``validation_ok`` 显式拒绝 ``None``（``bool(None)`` 会静默塌缩为 ``False``）；
+        ``event_recall`` 强制数值、**必为非 None**（对应 dataclass 注解 ``float``，默认 0.0，
+        语义上无 None 概念，Medium 8）；``risk_shortfall`` 同数值口径、额外允许 ``None``。
+        手工编辑基线若塞入非法类型必须显式报错。
         """
-        if not isinstance(d, dict):
-            raise TypeError(f"ScenarioScore 顶层须为对象，收到 {type(d).__name__}")
+        _require_mapping(d, "ScenarioScore ")
 
         scenario_id = d.get("scenario_id")
-        if not isinstance(scenario_id, str) or not scenario_id:
-            raise TypeError("ScenarioScore 缺字段 scenario_id（或为空/非字符串）")
+        # 先类型后值（Medium 3 可读性）：None/非字符串拒绝；空字符串拒绝
+        if not isinstance(scenario_id, str):
+            raise TypeError("ScenarioScore 缺字段 scenario_id（或非字符串）")
+        if scenario_id == "":
+            raise TypeError("ScenarioScore.scenario_id 为空字符串")
         actual_label = d.get("actual_label")
         if not isinstance(actual_label, str):
-            raise TypeError("ScenarioScore 缺字段 actual_label（或非字符串）")
+            raise TypeError(
+                f"ScenarioScore.actual_label 须为字符串（注解 str，不允许 None），收到 {actual_label!r}"
+            )
         outcome = d.get("outcome")
         if not isinstance(outcome, str):
-            raise TypeError("ScenarioScore 缺字段 outcome（或非字符串）")
+            raise TypeError(
+                f"ScenarioScore.outcome 须为字符串（注解 str，不允许 None），收到 {outcome!r}"
+            )
         validation_ok = d.get("validation_ok")
         if not isinstance(validation_ok, bool):
             raise TypeError(
@@ -180,22 +201,31 @@ class ScenarioScore:
             )
         validation_details = d.get("validation_details")
         if not isinstance(validation_details, str):
-            raise TypeError("ScenarioScore 缺字段 validation_details（或非字符串）")
+            raise TypeError(
+                f"ScenarioScore.validation_details 须为字符串（注解 str，不允许 None），收到 {validation_details!r}"
+            )
+        expected_label = d.get("expected_label")
+        if expected_label is not None and not isinstance(expected_label, str):
+            raise TypeError(
+                f"ScenarioScore.expected_label 须为字符串或 None（注解 str | None），收到 {expected_label!r}"
+            )
         event_recall = d.get("event_recall")
         if not isinstance(event_recall, (int, float)) or isinstance(event_recall, bool):
-            raise TypeError(f"ScenarioScore.event_recall 须为数值，收到 {event_recall!r}")
+            raise TypeError(
+                f"ScenarioScore.event_recall 须为数值且非 None（注解 float，默认 0.0），收到 {event_recall!r}"
+            )
 
         risk_shortfall = d.get("risk_shortfall")
         if risk_shortfall is not None and (
             not isinstance(risk_shortfall, (int, float)) or isinstance(risk_shortfall, bool)
         ):
-            raise ValueError(
+            raise TypeError(
                 f"ScenarioScore.risk_shortfall 须为数值或 None，收到 {risk_shortfall!r}"
             )
 
         return cls(
             scenario_id=scenario_id,
-            expected_label=d.get("expected_label"),  # str | None
+            expected_label=expected_label,
             actual_label=actual_label,
             outcome=outcome,
             validation_ok=validation_ok,

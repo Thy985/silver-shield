@@ -31,7 +31,8 @@ from home_perception.evaluation.ab_runner import (
 from home_perception.evaluation.metrics import ScenarioScore
 from home_perception.evaluation.report import BenchmarkReport
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Medium 12：单一测试根常量，所有路径构造统一锚定 __file__（不再混用 m.__file__ / 相对路径）
+_TEST_ROOT = Path(__file__).resolve().parents[2]
 
 SET_ID = "adr0033-phase1"
 
@@ -198,9 +199,7 @@ def test_t8_law7_scenario_order_mismatch():
 
 
 def test_t9_ab_runner_module_boundary():
-    import home_perception.evaluation.ab_runner as m
-
-    src = Path(m.__file__).read_text(encoding="utf-8")
+    src = (_TEST_ROOT / "src/home_perception/evaluation/ab_runner.py").read_text(encoding="utf-8")
     banned = (
         "import home_perception.validation",
         "from home_perception.validation",
@@ -514,6 +513,85 @@ def test_t10_baseline_canonical_roundtrip():
 
 
 # ============================================================================
+# 审查 round 4 修正验证（Medium 1/2/9/10）
+# ============================================================================
+
+
+def test_r4_risk_shortfall_typeerror():
+    """risk_shortfall 非数值/非 None → TypeError（Medium 1：与 event_recall 同口径，TRY004）。"""
+    bad = ScenarioScore(
+        scenario_id="x",
+        expected_label=None,
+        actual_label="no_alert",
+        outcome="UNLABELED",
+        validation_ok=True,
+        validation_details="",
+    ).to_dict()
+    bad["risk_shortfall"] = "abc"
+    with pytest.raises(TypeError, match="risk_shortfall"):
+        ScenarioScore.from_dict(bad)
+
+
+def test_r4_expected_label_none_roundtrip():
+    """expected_label=None（UNLABELED 场景）经 from_dict 合法往返（Medium 2：注解 str | None）。"""
+    s = ScenarioScore(
+        scenario_id="x",
+        expected_label=None,
+        actual_label="no_alert",
+        outcome="UNLABELED",
+        validation_ok=True,
+        validation_details="",
+    )
+    again = ScenarioScore.from_dict(s.to_dict())
+    assert again.expected_label is None
+    assert again.outcome == "UNLABELED"
+
+
+def test_r4_actual_label_none_rejected():
+    """actual_label=None → TypeError（Medium 2：注解 str 永不允许 None，与 validation_ok 同口径）。"""
+    bad = ScenarioScore(
+        scenario_id="x",
+        expected_label=None,
+        actual_label="no_alert",
+        outcome="UNLABELED",
+        validation_ok=True,
+        validation_details="",
+    ).to_dict()
+    bad["actual_label"] = None
+    with pytest.raises(TypeError, match="actual_label"):
+        ScenarioScore.from_dict(bad)
+
+
+def test_r4_render_markdown_no_budget_label():
+    """max_regression_delta=None 时显示「未设回归预算」而非误导的「在回归预算内」（Medium 10）。"""
+    base = load_baseline_report(SET_ID)
+    cand = replace(base, provenance={**base.provenance, "code_version": "candidate-v2"})
+    reg = evaluate_regression(cand, base)  # max_regression_delta=None
+    md = reg.render_markdown()
+    assert "未设回归预算" in md
+    assert "在回归预算内" not in md
+
+
+def test_r4_fingerprint_drift_guard(monkeypatch):
+    """compute_harness_fingerprint 入参与常量不一致 → BenchmarkProvenanceError（Medium 9 漂移守卫）。"""
+    import home_perception.evaluation.harness as h
+    from home_perception.evaluation.fingerprint_fields import FINGERPRINT_COMPONENT_FIELDS
+
+    monkeypatch.setattr(
+        h, "FINGERPRINT_COMPONENT_FIELDS", FINGERPRINT_COMPONENT_FIELDS + ("detector_config",)
+    )
+    with pytest.raises(h.BenchmarkProvenanceError, match="不一致"):
+        h.compute_harness_fingerprint(
+            scenario_set_id="s",
+            code_version="v",
+            generator_fingerprint="g",
+            policy_fingerprint="p",
+            model_fingerprint={"detector": "d"},
+            runtime_dependencies={"numpy": "2.4.2"},
+        )
+
+
+# ============================================================================
 # 集成：两次真实 harness 跑出 BenchmarkDiff（ADR §6 验收）
 # ============================================================================
 
@@ -579,7 +657,7 @@ def test_t10_integration_real_ab_run():
     from home_perception.validation import load_scenarios_dir
 
     scenarios = load_scenarios_dir(
-        str(_PROJECT_ROOT / "src/home_perception/validation/fixtures/scenarios/benchmark")
+        str(_TEST_ROOT / "src/home_perception/validation/fixtures/scenarios/benchmark")
     )
     base = BenchmarkHarness().run(
         scenarios,

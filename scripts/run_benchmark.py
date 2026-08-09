@@ -1,11 +1,15 @@
-"""ADR-0033 Phase 1 手动 / CI 入口（不接线 demo / gateway，D8）。
+"""ADR-0033 Phase 1 + 2 手动 / CI 入口（不接线 demo / gateway，D8）。
 
 用法：
     python scripts/run_benchmark.py --scenarios <dir> --set-id <id> [--out report.json]
+    # Phase 2 基线对照 / bump（报告性、非门禁）：
+    python scripts/run_benchmark.py ... --baseline <path> --max-regression-delta 0.01
+    python scripts/run_benchmark.py ... --write-baseline auto --force
 
 默认构造 torch-free 的 ``PerceptionPipeline``（detections 通道零模型），不拉起真实
 YOLO；``--frames`` 可切换 frames 通道（需真实 detector，opt-in）。报告落盘 JSON +
-stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自动门禁。
+stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自动门禁；Phase 2 基线对照
+**不**触发 CI 非零退出、**不**做 Hard Gate / 复合分门控（MUST NOT，见 ADR-0033 §6）。
 
 依赖延迟导入：脚本仅在 ``main`` 内 import 运行时 / 评估链，避免加载即拉起重链。
 """
@@ -105,7 +109,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="PATH",
         help="写基线 JSON（bump 工作流）：canonical_dict 落到指定路径；"
-        "若填 'auto' 则落到 <baselines_dir>/<set-id>.json",
+        "若填 'auto' 则落到 <baselines_dir>/<set-id>.json。"
+        "显式 PATH 将自动创建父目录（与 --out 同规约，Medium 5），请确保路径安全；"
+        "函数层 write_canonical_report 仍拒自动建目录（守程序化调用方路径穿越）",
     )
     parser.add_argument(
         "--force",
@@ -193,7 +199,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-        baseline = load_baseline_report_path(args.baseline)
+        # Medium 11：基线加载失败（文件不存在 / JSON 损坏 / 顶层非对象 / 字段非法）给友好
+        # 错误并退出码 1，而非 raw 异常栈；JSONDecodeError 是 ValueError 子类，一并覆盖。
+        # 解析错误在此显式捕获（区别于 evaluate_regression 的守恒错误），不再伪装成守恒失败。
+        try:
+            baseline = load_baseline_report_path(args.baseline)
+        except (FileNotFoundError, ValueError, TypeError) as exc:
+            logger.warning("benchmark_baseline_load_failed", error=str(exc))
+            print(
+                f"[regression] 基线加载失败：{exc}\n"
+                "          提示：检查路径是否存在、基线 JSON 是否完整（可用 "
+                "--write-baseline 重新生成，并确认 PR 注明 benchmark-baseline-bump）"
+            )
+            return 1
         try:
             reg = evaluate_regression(
                 report,
@@ -204,8 +222,6 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("benchmark_regression_conservation_failed", error=str(exc))
             print(f"[regression] 守恒校验失败（基线对照装配错误）：{exc}")
             return 1
-        # 注意：基线 JSON 解析错误（KeyError / JSONDecodeError / TypeError）不在此捕获，
-        # 直接透传给调用方，暴露真实根因（C4：不再裸 except Exception 伪装成守恒失败）。
         print(reg.render_markdown())
 
     # 最终报告为人类可读产物，输出到 stdout（命令主产物，非日志）
