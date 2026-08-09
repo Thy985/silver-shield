@@ -77,14 +77,26 @@ def _resolve_code_version() -> str:
         ) from exc
 
 
-def _strip_build_suffix(version: str) -> str:
-    """归一化构建后缀（D4，跨 OS / 跨构建可比）。
+def normalize_version(version: str) -> str:
+    """归一化构建后缀（D4，跨 OS / 跨构建可比）—— ADR-0033 回归比较"行为兼容环境"。
 
     pip 在不同平台装出的同一语义版本带不同构建后缀：Windows CUDA 为
     ``2.11.0+cu130``、Linux CPU 为 ``2.11.0+cpu``、本地开发可能为 ``2.11.0+local``。
     这些后缀差异不代表依赖语义变化，却会让 ``runtime_dependencies`` 守恒(4/7) 把
     baseline（开发机生成）与 candidate（CI ubuntu 生成）判为不一致 → 每个 PR 误红。
+
     归一为 ``MAJOR.MINOR.PATCH`` 后，跨 OS / 跨构建可比，仍保留真实主/次/补丁级升级检测。
+    这是 benchmark 从"实验脚本"走向"回归基础设施"的核心工程契约：baseline 比较的是
+    "行为兼容环境"，不是"字节级运行环境"。
+
+    ⚠️ 回归指纹只消费 ``normalize_version`` 的结果；``runtime_dependencies`` 守恒(4/7)
+    据此判定可比性。切勿把 ``torch.__version__`` 等带后缀的原始字符串直接塞回指纹——
+    见 ``tests/evaluation/test_benchmark_harness.py::test_runtime_versions_normalized``。
+
+    注：ADR-0033 范围内仅做简单后缀剥离即可。未来若出现需保留 backend 信息的依赖
+    （如 ``onnxruntime-gpu`` / ``tensorflow`` / ``cuda toolkit``），应升级为
+    ``{"version": "2.11.0", "backend": "cuda"}`` 结构，回归消费 ``.version``、运行时记录
+    ``.backend``；当前不动，避免引入 fingerprint 重构债务。
     """
     return version.split("+", 1)[0]
 
@@ -100,13 +112,13 @@ def _runtime_versions() -> dict[str, str]:
 
     vr = _imp_rt()  # {numpy_version, opencv_version}
     deps: dict[str, str] = {
-        "numpy": _strip_build_suffix(vr["numpy_version"]),
-        "opencv": _strip_build_suffix(vr["opencv_version"]),
+        "numpy": normalize_version(vr["numpy_version"]),
+        "opencv": normalize_version(vr["opencv_version"]),
     }
     try:  # torch 为可选依赖，缺失不报错
         import torch
 
-        deps["torch"] = _strip_build_suffix(torch.__version__)
+        deps["torch"] = normalize_version(torch.__version__)
     except ImportError:
         deps["torch"] = "n/a"
     return deps

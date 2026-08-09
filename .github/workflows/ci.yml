@@ -94,15 +94,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install deps (full AI stack, CPU torch)
-        run: |
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-          pip install -e .
-          # 钉死回归门禁比较关键依赖：runtime_dependencies 守恒(4/7) 要求版本确定，
-          # 否则浮动下限（numpy>=1.26 / opencv>=4.9 / torch 经 ultralytics 传递）随时间漂移
-          # 会令每个 PR 的 baseline gate 误红。torch==2.11.0 在 linux 装出 2.11.0+cpu，
-          # 由 harness._strip_build_suffix 归一为 2.11.0，与开发机 2.11.0+cu130 一致。
-          pip install "numpy==2.4.2" "opencv-python==4.13.0" "torch==2.11.0"
+        # benchmark 回归门禁专用约束：constraints-benchmark.txt 钉死 numpy/opencv/torch
+        # 精确版本，使 committed baseline 可重放、跨时间/跨 OS 稳定（ADR-0033 D4 契约）。
+        # 与 production requirements.txt 解耦——生产保持">="下限灵活，benchmark 走 constraints。
+        # torch==2.11.0 在 linux 装出 2.11.0+cpu，经 harness.normalize_version 归一为 2.11.0，
+        # 与开发机 2.11.0+cu130 归一结果一致 → runtime_dependencies 守恒(4/7) 跨 OS 通过。
+        run: pip install -c constraints-benchmark.txt -r requirements-dev.txt
       - name: Run gate + regression + bump tests
         run: |
           pytest \

@@ -32,8 +32,10 @@ from home_perception.evaluation.harness import (
     BenchmarkHarness,
     BenchmarkProvenanceError,
     _generator_config_fingerprint,
+    _runtime_versions,
     compute_harness_fingerprint,
     default_model_fingerprint,
+    normalize_version,
 )
 from home_perception.evaluation.report import BenchmarkReport
 from home_perception.runtime.pipeline import PerceptionPipeline
@@ -423,3 +425,75 @@ def test_adr0033_phase3_cli_gate_end_to_end_fail(tmp_path):
         capture_output=True, text=True, cwd=str(_ROOT), check=False,
     )
     assert r.returncode == 3, r.stderr + "\n" + r.stdout
+
+
+from home_perception.evaluation.ab_runner import BASELINES_DIR
+
+_BASELINE_PATH = BASELINES_DIR / "adr0033-phase1.json"
+
+
+@pytest.mark.timeout(180)
+def test_adr0033_phase3_cli_gate_baseline_tamper_detected(tmp_path):
+    """P0 回归门禁「真卡」证明：baseline 指纹被篡改 → assert_conserved 失败 → 退出码 1。
+
+    该测试与 Python/torch 版本无关（任何环境下篡改指纹都必然触发守恒校验失败），
+    用于锁定「baseline gate 不是 no-op」——若有人改了决策策略/生成器而未 bump 基线，
+    CI 必然拦截。对照：未篡改的真实 baseline 在 CI e2e smoke 中须退出码 0。
+    """
+    tampered = tmp_path / "tampered_baseline.json"
+    data = json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
+    # 篡改 policy_fingerprint（模拟「改了决策逻辑却没 bump 基线」）
+    data["provenance"]["policy_fingerprint"] = "tampered-policy-fingerprint"
+    tampered.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "scripts/run_benchmark.py",
+         "--scenarios", str(FIX / "benchmark"),
+         "--set-id", "adr0033-phase1",
+         "--baseline", str(tampered),
+         "--gate", "--out", str(tmp_path / "r.json")],
+        capture_output=True, text=True, cwd=str(_ROOT), check=False,
+    )
+    # 退出码 1 = 基线对照守恒校验失败（装配/篡改错误），非门禁指标失败（3）
+    assert r.returncode == 1, (
+        f"篡改 baseline 指纹后门禁应守恒失败(退出码1)，实际 {r.returncode}\n"
+        f"{r.stderr}\n{r.stdout}"
+    )
+
+
+# ============================================================================
+# 跨平台版本归一化契约（ADR-0033 D4）：regression 比较"行为兼容环境"而非"字节级环境"
+# ============================================================================
+
+
+def test_normalize_version_strips_build_suffix():
+    """构建后缀（+cu130 / +cpu / +local）必须被剥离，仅留 MAJOR.MINOR.PATCH。"""
+    assert normalize_version("2.11.0+cu130") == "2.11.0"
+    assert normalize_version("2.11.0+cpu") == "2.11.0"
+    assert normalize_version("2.11.0+local") == "2.11.0"
+    # 无后缀不变
+    assert normalize_version("2.4.2") == "2.4.2"
+    assert normalize_version("4.13.0") == "4.13.0"
+
+
+def test_cuda_cpu_versions_are_compatible():
+    """CUDA 构建与 CPU 构建在 regression 比较中应视为同一 torch API 版本。
+
+    防止今后再有人把 ``torch.__version__`` 原始字符串（带 +cu130 / +cpu）直接塞回
+    ``runtime_dependencies`` → 每次 baseline(cu130) vs candidate(cpu) 误红。
+    """
+    assert normalize_version("2.11.0+cu130") == normalize_version("2.11.0+cpu")
+    assert normalize_version("2.11.0+cpu") == normalize_version("2.11.0+cu130")
+
+
+def test_runtime_versions_normalized():
+    """``_runtime_versions`` 输出不得再携带构建后缀（否则指纹跨 OS 漂移）。
+
+    针对 harness 实际输出的最强契约：无论本地是 CUDA 还是 CI 的 CPU，落进
+    ``runtime_dependencies`` 的值都必须是归一化后的纯语义版本。
+    """
+    versions = _runtime_versions()
+    assert set(versions) == {"numpy", "opencv", "torch"}
+    for name, ver in versions.items():
+        assert "+" not in ver, f"{name} 版本未归一化：{ver!r}（不得携带 +build 后缀）"
+        # 归一化后应为纯 MAJOR.MINOR.PATCH
+        assert ver.count(".") == 2, f"{name} 版本格式异常：{ver!r}"
