@@ -77,13 +77,18 @@ def _resolve_code_version() -> str:
 
 
 def _runtime_versions() -> dict[str, str]:
-    """锁版本集合（替代原 numpy_version / opencv_version 散字段，D4）。"""
-    import cv2
-    import numpy as np
+    """锁版本集合（D4）。
 
+    复用 ADR-0032 ``validation.fingerprint._runtime_versions`` 取 numpy / opencv 版本
+    （避免重复实现，review 1.5），键名适配为本 harness 的 ``numpy`` / ``opencv`` 风格，
+    并补充可选 ``torch`` 版本（缺失记为 ``n/a``）。
+    """
+    from home_perception.validation.fingerprint import _runtime_versions as _val_rt
+
+    vr = _val_rt()  # {numpy_version, opencv_version}
     deps: dict[str, str] = {
-        "numpy": np.__version__,
-        "opencv": cv2.__version__,
+        "numpy": vr["numpy_version"],
+        "opencv": vr["opencv_version"],
     }
     try:  # torch 为可选依赖，缺失不报错
         import torch
@@ -95,11 +100,16 @@ def _runtime_versions() -> dict[str, str]:
 
 
 def _generator_config_fingerprint(scenario: Scenario) -> str:
-    """场景集共享的 generator 配置指纹（D4，剔除 per-scenario seed 以保证集级一致）。
+    """场景**集级** generator 配置指纹（D4，seed-independent）。
 
-    复用 ADR-0032 ``fingerprint_components``，仅取配置成分（schema_version / renderer /
-    code_version / numpy / opencv）重哈希；seed 随场景变化、不进入集级指纹（与
-    ``RunResult.fingerprint`` 同源但 seed-independent，代表"生成器配置"而非"单次生成产物"）。
+    语义区分（review 1.4）：
+    - **集级指纹（本函数）**：仅由配置成分（``schema_version`` / ``renderer`` /
+      ``code_version`` / numpy / opencv）决定，**剔除 per-scenario ``seed``**——代表"这批场景
+      用什么生成器配置产生"，同一配置下不同 seed 产出**相同集级指纹**；
+    - **单产物指纹**（``RunResult.fingerprint`` / ADR-0032 ``compute_fingerprint``）：含 seed，
+      标识"某一次具体生成产物"。
+
+    复用 ADR-0032 ``fingerprint_components`` 取成分后 ``pop("seed")`` 再哈希，即得到上述集级语义。
     """
     import home_perception
 
@@ -172,6 +182,10 @@ def _resolve_policy_fingerprint(pipeline: Any) -> str:
 
     鸭子类型经 ``pipeline.decision_engine.policy.routing_table``（与 ADR-0031
     ``compute_policy_fingerprint`` 同输入）。抽不到即报错（不静默）。
+
+    注意（review 2.2）：``run()`` 仅对**代表场景 ``scenarios[0]``** 构造 pipeline 并抽取
+    policy 指纹。Phase 1 假设**场景集共享单一 policy**（即集内所有场景用同一 decision policy），
+    故抽取首个即代表全集；若未来引入 per-scenario policy，此处须改为聚合 / 校验一致性。
     """
     try:
         engine = pipeline.decision_engine
@@ -211,9 +225,27 @@ class BenchmarkHarness:
         runtime_dependencies: Mapping[str, str] | None = None,
         generated_at: str = "",
     ) -> BenchmarkReport:
-        """跑通 Scenario → Harness → ScenarioScore → BenchmarkReport（D1 最小闭环）。"""
+        """跑通 Scenario → Harness → ScenarioScore → BenchmarkReport（D1 最小闭环）。
+
+        集合同源假设（review 2.1）：场景集须共享**单一 schema_version** 与**单一 mode**，
+        因为 ``harness_fingerprint`` 是**集级指纹**（由代表场景 ``scenarios[0]`` 抽取），混源
+        会让指纹静默折叠到首个场景。此处显式校验，不一致即 fail-closed 拒绝。
+        """
         if not scenarios:
             raise BenchmarkProvenanceError("scenarios 为空，无法产出可复现报告")
+
+        # 集合同源校验（fail-closed）：单一 schema_version + 单一 mode
+        schema_versions = {s.meta.schema_version for s in scenarios}
+        if len(schema_versions) > 1:
+            raise BenchmarkProvenanceError(
+                f"场景集 schema_version 不一致（{sorted(schema_versions)}）；"
+                "harness_fingerprint 为集级指纹，要求集合同源（单一 schema_version）"
+            )
+        modes = {s.mode for s in scenarios}
+        if len(modes) > 1:
+            raise BenchmarkProvenanceError(
+                f"场景集 mode 不一致（{sorted(modes)}）；集级指纹要求单一 mode"
+            )
 
         # —— 指纹成分收集（D4，fail-closed）——
         rep = scenarios[0]

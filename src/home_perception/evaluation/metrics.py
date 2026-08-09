@@ -24,6 +24,10 @@ OUTCOME_FN = "FN"  # 漏报：期望报警却未报警 ❌（ADR-0031 SUPPRESS×
 OUTCOME_FP = "FP"  # 误报：期望不报警却报警 ❌（ADR-0031 WARN×SUPPRESS 语义）
 OUTCOME_UNLABELED = "UNLABELED"  # 场景未声明 benchmark，不参与混淆矩阵
 
+# 无观测风险级别时的隐式序值：低于 RISK_LEVELS 起始序值（LOW=0），
+# 表达"实际无任何告警"语义。"命名常量"替代魔法数字 -1，使隐式假设显式可读。
+_MISSING_OBS_ORD = -1
+
 
 def scenario_expected_label(scenario: Scenario) -> str | None:
     """从 ``benchmark`` 推导期望标签（D3）。
@@ -72,6 +76,9 @@ def scenario_confusion(expected_label: str | None, actual_label: str) -> str:
 def event_recall(observed: set[str], expected: set[str]) -> float:
     """期望事件类型被产出的比例（ADR-0032 ``ValidationResult`` 的验证指标，跨场景均值）。
 
+    ``emitted_event_types`` 列表在语义上按**集合**处理（事件类型去重、不计重复权重）：
+    传入的 ``observed`` / ``expected`` 均为 ``set[str]``，列表转 set 由调用方完成。
+
     ``expected`` 为空 → 1.0（无期望事件，召回真空满足）。
     """
     if not expected:
@@ -93,16 +100,20 @@ def risk_shortfall(scenario: Scenario, observed_risk_levels: list[str]) -> float
     exp_ord = RISK_LEVELS.index(min_risk)
     if observed_risk_levels:
         obs_ords = [RISK_LEVELS.index(r) for r in observed_risk_levels if r in RISK_LEVELS]
-        max_obs_ord = max(obs_ords) if obs_ords else -1
+        max_obs_ord = max(obs_ords) if obs_ords else _MISSING_OBS_ORD
     else:
-        max_obs_ord = -1
+        max_obs_ord = _MISSING_OBS_ORD
     return float(exp_ord - max_obs_ord)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ScenarioScore:
     """单场景打分（D2 / D3）。由 ``build_scenario_score`` 从 ``RunResult`` + ``ValidationResult``
     + ``Scenario`` 派生，纯数据、可序列化。
+
+    字段集合**冻结**（`frozen=True` + `slots=True`）：运行期无法向实例注入未知属性，从结构上
+    杜绝"未来有人给 Score 加 ``video_path`` / ``raw_frame_uri`` 之类字段"导致的原始媒体 /
+    路径经报告泄露。与 ADR-0031 T5 黑名单测试互补——白名单（结构冻结）优于黑名单（事后扫描）。
     """
 
     scenario_id: str

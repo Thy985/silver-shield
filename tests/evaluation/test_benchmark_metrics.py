@@ -300,3 +300,36 @@ def test_adr0033_t6_build_scenario_score_wires_all_three_inputs():
     d = score.to_dict()
     assert d["observed_event_types"] == ["visit_normal"]
     assert d["expected_event_types"] == ["abnormal_dwell", "visit_normal"]
+
+
+# ============================================================================
+# 5.1 向后兼容：旧 YAML / raw dict 不带 benchmark 字段仍能构造 Scenario
+# ============================================================================
+
+
+def test_adr0033_scenario_backward_compat_without_benchmark_field():
+    raw = {
+        "meta": {
+            "schema_version": "1.0",
+            "scenario_id": "legacy",
+            "version": 1,
+            "seed": 1,
+            "duration_frames": 10,
+        },
+        "mode": "detections",
+        "camera": {"resolution": [384, 288], "fps": 2},
+    }
+    scn = Scenario(**raw)  # 旧场景无 benchmark 字段必须成功
+    assert scn.benchmark is None
+
+
+# ============================================================================
+# 3.3 ScenarioScore 字段集合冻结（frozen + slots）：结构上禁止运行期注入未知字段
+# ============================================================================
+
+
+def test_adr0033_scenario_score_field_set_is_frozen():
+    sc = _score(OUTCOME_TP, sid="frozen")
+    # 任何未知属性注入必须失败（否则未来有人加 video_path / raw_frame_uri 会泄露媒体）
+    with pytest.raises((AttributeError, TypeError)):
+        sc.injected_media_path = "/etc/secret/video.mp4"  # type: ignore[attr-defined]

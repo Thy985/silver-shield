@@ -23,7 +23,7 @@ from home_perception.action.notifier import MockNotifier
 from home_perception.action.publisher import MockPublisher
 from home_perception.analysis.decision_engine import DecisionEngine
 from home_perception.analysis.decision_policy import RuleBasedDecisionPolicy
-from home_perception.analysis.decision_sink import assert_desensitized
+from home_perception.analysis.decision_sink import DesensitizationError, assert_desensitized
 from home_perception.analysis.event_builder import VisitorEventBuilder
 from home_perception.analysis.feature_extractor import FeatureExtractor
 from home_perception.analysis.rule_engine import RuleEngine
@@ -31,9 +31,11 @@ from home_perception.detection.tracker import VisitorTracker
 from home_perception.evaluation.harness import (
     BenchmarkHarness,
     BenchmarkProvenanceError,
+    _generator_config_fingerprint,
     compute_harness_fingerprint,
     default_model_fingerprint,
 )
+from home_perception.evaluation.report import BenchmarkReport
 from home_perception.runtime.pipeline import PerceptionPipeline
 from home_perception.validation import (
     ScenarioCompiler,
@@ -42,6 +44,7 @@ from home_perception.validation import (
     load_scenario,
 )
 from home_perception.validation.scenario.compiler import SyntheticInput
+from home_perception.validation.scenario.scenario import CameraSpec, MetaSpec, Scenario
 
 FIX = (
     pathlib.Path(__import__("home_perception.validation", fromlist=["__file__"]).__file__).parent
@@ -116,6 +119,7 @@ def _load_benchmark_scenarios():
 # ============================================================================
 
 
+@pytest.mark.timeout(120)
 def test_adr0033_t1_deterministic_report():
     scenarios = _load_benchmark_scenarios()
     harness = BenchmarkHarness()
@@ -142,6 +146,13 @@ def test_adr0033_t1_deterministic_report():
     # 离散指标聚合稳定
     assert (r1.tp, r1.tn, r1.fn, r1.fp) == (r2.tp, r2.tn, r2.fn, r2.fp)
 
+    # 4.1 硬约束：benchmark 集须恰好 正样本 TP=1（night_dwell） + 负样本 TN=1
+    #（quiet_hallway）；此断言锁定"端到端 TP/TN 真实可达"，避免某人误改 fixture 的
+    # benchmark.expected_alarm 仍能通过 T1/T3/T4/T5 而无护栏。
+    assert (r1.tp, r1.tn, r1.fn, r1.fp) == (1, 1, 0, 0), (
+        f"benchmark 集须恰好 TP=1/TN=1/FN=0/FP=0，实际 {r1.tp, r1.tn, r1.fn, r1.fp}"
+    )
+
 
 # ============================================================================
 # T2 零行为变化：evaluation 不进入 demo/gateway/runtime（仅 D3 叶子接缝允许）
@@ -150,11 +161,11 @@ def test_adr0033_t1_deterministic_report():
 
 def test_adr0033_t2_evaluation_not_wired_into_production():
     root = pathlib.Path(__file__).resolve().parents[2]
-    # 允许：evaluation 自身 + validation/scenario/scenario.py（D3 叶子接缝）
-    #       + scripts/run_benchmark.py（手动入口，非运行时生产路径）
+    # 允许：evaluation 自身 + scripts/run_benchmark.py（手动入口，非运行时生产路径）。
+    # 注（review 5.2）：validation/scenario/scenario.py 经 BenchmarkExpectation 下移至
+    # validation.contracts 后，已不再 import evaluation，故不再需要白名单豁免。
     allowed_suffixes = (
         "src/home_perception/evaluation/",
-        "src/home_perception/validation/scenario/scenario.py",
         "scripts/run_benchmark.py",
     )
     needle = (
@@ -296,3 +307,76 @@ def test_adr0033_t5_report_desensitized():
     # 逐场景 score 不得含 media 通道
     for sc in report.scores:
         assert "frames" not in sc.to_dict()
+
+
+# ============================================================================
+# 4.2 集级 generator 指纹与 per-scenario seed 无关（剔除 seed 的硬约束）
+# ============================================================================
+
+
+def test_adr0033_generator_config_fingerprint_is_seed_independent():
+    def _mk(seed: int) -> Scenario:
+        return Scenario(
+            meta=MetaSpec(
+                schema_version="1.0",
+                scenario_id="s",
+                version=1,
+                seed=seed,
+                duration_frames=10,
+            ),
+            mode="detections",
+            camera=CameraSpec(resolution=[384, 288], fps=2),
+        )
+
+    a = _generator_config_fingerprint(_mk(1))
+    b = _generator_config_fingerprint(_mk(99))
+    assert a == b, "集级 generator 指纹须剔除 seed（seed-independent），否则跨 seed 不可比"
+
+
+# ============================================================================
+# 2.3 落盘脱敏守卫内聚到 write_report（不再仅依赖测试侧护栏）
+# ============================================================================
+
+
+@pytest.mark.timeout(120)
+def test_adr0033_t5_write_report_invokes_desensitized_guard(monkeypatch, tmp_path):
+    """write_report 落盘前必须调用 assert_desensitized，且失败时 fail-closed 传播。"""
+    from home_perception.evaluation import report as report_mod
+
+    calls: dict[str, bool] = {}
+
+    def _boom(payload):  # 守卫接缝：故意抛出来验证调用链
+        calls["called"] = True
+        raise DesensitizationError("injected-undesensitized")
+
+    monkeypatch.setattr(report_mod, "assert_desensitized", _boom)
+    scenarios = _load_benchmark_scenarios()
+    rep = BenchmarkHarness().run(scenarios, _build_pipeline, scenario_set_id="x", **_FIXED)
+    with pytest.raises(DesensitizationError):
+        rep.write_report(str(tmp_path / "r.json"))
+    assert calls.get("called") is True
+
+
+@pytest.mark.timeout(120)
+def test_adr0033_t5_write_report_writes_legit(tmp_path):
+    """合法报告可正常落盘（守卫不对正常数据误杀），且内容含正确指纹。"""
+    scenarios = _load_benchmark_scenarios()
+    rep = BenchmarkHarness().run(scenarios, _build_pipeline, scenario_set_id="x", **_FIXED)
+    out = tmp_path / "r.json"
+    rep.write_report(str(out))
+    assert out.exists()
+    loaded = json.loads(out.read_text(encoding="utf-8"))
+    assert loaded["harness_fingerprint"] == rep.harness_fingerprint
+
+
+# ============================================================================
+# 3.2 落盘路径越界守卫：拒绝父目录不存在（防 ../../etc 穿越）
+# ============================================================================
+
+
+def test_adr0033_write_report_rejects_missing_parent(tmp_path):
+    rep = BenchmarkReport.aggregate(
+        scenario_set_id="s", harness_fingerprint="f", scores=[]
+    )
+    with pytest.raises(ValueError, match="父目录"):
+        rep.write_report(str(tmp_path / "nope" / "r.json"))

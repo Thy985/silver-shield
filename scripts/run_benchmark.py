@@ -13,8 +13,11 @@ stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自�
 from __future__ import annotations
 
 import argparse
-import sys
 from datetime import UTC, datetime, timedelta
+
+from home_perception.common.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class _SimpleClock:
@@ -90,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 
     scenarios = load_scenarios_dir(args.scenarios)
     if not scenarios:
-        print(f"[!] 目录 {args.scenarios} 无场景 YAML", file=sys.stderr)
+        logger.warning("benchmark_scenarios_empty", dir=args.scenarios)
         return 2
 
     odd_start = datetime(2026, 1, 1, 3, 0, 0, tzinfo=UTC)  # odd hour 起点（与 ADR-0032 同款）
@@ -108,8 +111,13 @@ def main(argv: list[str] | None = None) -> int:
         generated_at=datetime.now(UTC).isoformat(),
     )
     if args.out:
+        # write_report 拒绝自动创建父目录（防路径穿越），故此处显式建目录
+        from pathlib import Path
+
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         report.write_report(args.out)
-        print(f"[i] 报告已写入 {args.out}")
+        logger.info("benchmark_report_written", path=args.out)
+    # 最终报告为人类可读产物，输出到 stdout（命令主产物，非日志）
     print(report.render_markdown())
     return 0
 

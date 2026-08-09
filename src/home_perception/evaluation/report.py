@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from home_perception.analysis.decision_sink import assert_desensitized
+
 from .metrics import (
     OUTCOME_FN,
     OUTCOME_FP,
@@ -138,14 +140,23 @@ class BenchmarkReport:
             "scores": [s.to_dict() for s in self.scores],
         }
 
+    def _sorted_scores(self) -> list[ScenarioScore]:
+        """场景排序**唯一来源**（按 ``scenario_id`` 升序）。
+
+        ``render_markdown`` 与 ``canonical_dict`` 共用，避免两处独立 ``sorted`` 排序键不一致
+        导致"文本报告"与"canonical JSON"场景序错位（review 1.3）。
+        """
+        return sorted(self.scores, key=lambda s: s.scenario_id)
+
     def canonical_dict(self) -> dict[str, object]:
         """确定性序列化（剔除 ``generated_at`` 时间戳，保证 T1 跨进程逐字节一致）。
 
-        同时对 ``scores`` 按 ``scenario_id`` 升序排序，使聚合结果顺序无关。
+        同时对 ``scores`` 按 ``scenario_id`` 升序排序，使聚合结果顺序无关
+        （排序经 ``_sorted_scores`` 单一来源）。
         """
         d = self.to_dict()
         d.pop("generated_at", None)
-        d["scores"] = sorted(d["scores"], key=lambda s: s["scenario_id"])  # type: ignore[index]
+        d["scores"] = [s.to_dict() for s in self._sorted_scores()]  # type: ignore[index]
         return d
 
     def render_markdown(self) -> str:
@@ -170,7 +181,7 @@ class BenchmarkReport:
             "",
             "## 每场景",
         ]
-        for s in sorted(self.scores, key=lambda x: x.scenario_id):
+        for s in self._sorted_scores():
             lines.append(
                 f"- `{s.scenario_id}`: {s.outcome} "
                 f"(expected={s.expected_label}, actual={s.actual_label}, "
@@ -182,7 +193,21 @@ class BenchmarkReport:
         return "\n".join(lines)
 
     def write_report(self, path: str) -> None:
-        """落盘 JSON 报告（确定性部分用 canonical_dict 之外仍含 generated_at）。"""
-        Path(path).write_text(
+        """落盘 JSON 报告（确定性部分用 canonical_dict 之外仍含 generated_at）。
+
+        落盘前双重守卫（fail-closed）：
+        - **脱敏守卫**（review 2.3，复用 ADR-0031 ``assert_desensitized``）：任何未脱敏内容
+          （原始媒体路径 / 凭证类键 / bytes）一律拒绝写入，把"写入磁盘 = 已通过守卫"的内聚
+          责任收口到 API 本身，而非依赖测试侧护栏；
+        - **父目录存在性守卫**（review 3.2）：拒绝自动创建父目录，纵深防御
+          ``../../etc/...`` 类路径穿越——调用方须显式提供已存在的输出目录。
+        """
+        p = Path(path).resolve()
+        if not p.parent.exists():
+            raise ValueError(
+                f"write_report 父目录不存在，拒绝自动创建以防路径穿越：{p.parent}"
+            )
+        assert_desensitized(self.to_dict())  # 落盘即脱敏守卫
+        p.write_text(
             json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )

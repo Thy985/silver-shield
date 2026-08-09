@@ -23,7 +23,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-from home_perception.evaluation.schema import BenchmarkExpectation
+from home_perception.validation.contracts import BenchmarkExpectation
 
 # 已知 Schema 格式版本（未知版本拒绝加载，fail-closed，防旧场景被新 renderer 静默误读）。
 KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
