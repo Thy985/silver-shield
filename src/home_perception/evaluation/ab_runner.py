@@ -8,7 +8,17 @@
 - ``evaluate_regression(report, baseline, *, max_regression_delta=None)``：**轻量、报告性**
   回归对照（在基线上算 ``BenchmarkDiff``、对照 ``max_regression_delta``），**不**做 Hard Gate
   准入门禁、**不**触发 CI 非零退出、**不**做复合分门控（Phase 2 MUST NOT，见 §6）。其返回的
-  ``regressions_exceeded`` 仅为信息性标志，供人读或 Phase 3 ``gate.evaluate_gate`` 消费。
+   ``regressions_exceeded`` 仅为信息性标志，供人读或 Phase 3 ``gate.evaluate_gate`` 消费。
+
+回归监控语义（``_REGRESSION_MONITORED``）：仅下列指标 candidate − baseline **严格大于**
+（``>``，等于阈值不算超）``max_regression_delta`` 时置 ``regressions_exceeded=True``；其余指标
+仅展示 Δ、不触发回归标志（Medium 4，文档与实现一致）：
+
+* 增幅有害（监控）：``suppression_rate``(漏报率) / ``false_alarm_rate``(误报率) / ``fn``(漏报数)
+  / ``fp``(误报数) —— 这些指标升高代表感知质量下降；
+* 增幅有益（仅展示）：``tp`` / ``tn`` / ``precision`` / ``recall`` / ``f1`` / ``mean_event_recall``
+  —— 升高代表质量上升，永不计为退化；
+* 中性（仅展示，需人审）：``unlabeled_scenario_count`` / ``mean_risk_shortfall`` —— 升高不直接判退化。
 
 基底依赖（零急切 import，守 ``evaluation/__init__.py`` 断环铁律）：仅 import ``.report`` /
 ``.metrics`` 的公开符号；本模块**不** import ``validation`` / ``runtime`` 重链。
@@ -26,6 +36,7 @@ from .metrics import (
     OUTCOME_FP,
     OUTCOME_TN,
     OUTCOME_TP,
+    OUTCOME_UNLABELED,
 )
 from .report import BenchmarkReport
 
@@ -37,7 +48,9 @@ VARY_AXES = (VARY_CODE, VARY_MODEL)
 # 退化监控指标（candidate − baseline > 0 表示"变差"，安全指标增幅有害）
 _REGRESSION_MONITORED = ("suppression_rate", "false_alarm_rate", "fn", "fp")
 
-# 逐指标比较的离散指标键（``BenchmarkReport`` 上的属性名）
+# 逐指标比较的离散指标键（``BenchmarkReport`` 上的属性名）。
+# 含 ``mean_risk_shortfall``：任一侧为 ``None``（未标定场景集）时跳过该指标对比并记入
+# ``skipped_metrics``（Medium 10）；两侧均有值时正常算 Δ（但不在 _REGRESSION_MONITORED，不触发回归标志）。
 _METRIC_KEYS = (
     "tp",
     "tn",
@@ -50,6 +63,7 @@ _METRIC_KEYS = (
     "recall",
     "f1",
     "mean_event_recall",
+    "mean_risk_shortfall",
 )
 
 _GOOD_OUTCOMES = frozenset({OUTCOME_TP, OUTCOME_TN})
@@ -82,22 +96,26 @@ class BenchmarkABRun:
     vary: Literal["code_version", "model_fingerprint"] = "code_version"
 
     def __post_init__(self) -> None:
-        """强制 ``scenario_set_id`` 与两臂报告一致（M9：构造参数不再被静默忽略）。
+        """强制 ``scenario_set_id`` 与两臂报告**完全一致**（M9 / Medium 8：构造参数不再被静默忽略）。
 
-        调用方传入的 ``scenario_set_id`` 必须至少匹配基线/候选之一——否则属装配错误
-        （拿错了基线/候选）。当两臂 ``scenario_set_id`` 本身一致时，该检查退化为
-        ``self == 两臂``；当两臂不一致（``law1`` 会管）时，``self`` 仍须匹配其一以通过构造，
-        随后由 ``assert_conserved`` 的 (1/7) 报具体不一致。
+        调用方传入的 ``scenario_set_id`` 必须同时匹配基线 **与** 候选（等价地三者一致），
+        否则属装配错误（拿错了基线/候选）。该严格校验与 ``assert_conserved`` 的 (1/7)
+        同源、职责合并——构造期即拦截，而非依赖 ``law1`` 事后报具体不一致。
         """
         b_id = self.report_baseline.scenario_set_id
         c_id = self.report_candidate.scenario_set_id
-        if self.scenario_set_id not in (b_id, c_id):
+        if self.scenario_set_id != b_id or self.scenario_set_id != c_id:
             raise BenchmarkABConservationError(
-                "BenchmarkABRun.scenario_set_id 与两臂报告不一致 "
-                f"（{self.scenario_set_id!r} 不在 baseline={b_id!r} / candidate={c_id!r} 之内）"
+                "BenchmarkABRun.scenario_set_id 必须与两臂报告完全一致 "
+                f"（{self.scenario_set_id!r} 须 == baseline={b_id!r} == candidate={c_id!r}）"
             )
 
-    # 守恒判定依赖的 provenance 字段（缺任一即视为基线被手工篡改/缺失，fail-closed）
+    # 守恒判定依赖的 provenance 字段。
+    # 注：这是 harness 指纹成分（compute_harness_fingerprint 入参）的**子集**——
+    # 仅含除 scenario_set_id 之外的 5 个成分；scenario_set_id 由 report.scenario_set_id
+    # 单独取（见 _components）。二者须与 harness.py:153-167 一一对齐，防未来漂移（Medium 9）。
+    # 任一字段缺失（None）或为空（空字符串 / 空 dict）即视为基线被手工篡改/不完整，
+    # 抛 BenchmarkABConservationError（D4 指纹 fail-closed 对齐，Critical 1）。
     _REQUIRED_PROVENANCE_FIELDS = (
         "generator_fingerprint",
         "policy_fingerprint",
@@ -110,16 +128,18 @@ class BenchmarkABRun:
         """抽取守恒判定所需的成分（baseline / candidate 同构）。
 
         从 ``provenance`` 取 generator/policy/model/runtime/code 成分；``scenario_set_id``
-        与场景数/序直接从报告本身取。任一守恒 provenance 字段缺失（``None``）即抛
-        ``BenchmarkABConservationError``（M5：D4 指纹 fail-closed，A/B 守恒须对齐，
-        手工编辑基线若抹掉字段不能让守恒「假绿」）。
+        与场景数/序直接从报告本身取。任一守恒 provenance 字段缺失（``None``）**或为空**
+        （空字符串 / 空 ``dict``）即抛 ``BenchmarkABConservationError``（Critical 1 / M5：
+        D4 指纹 fail-closed 对齐——harness 的 ``compute_harness_fingerprint`` 对所有成分用
+        ``if not X`` 兜底，A/B 守恒须同口径，手工编辑基线若抹掉字段或写成空 dict 不能让守恒
+        「假绿」）。
         """
         prov = report.provenance or {}
         for field_name in self._REQUIRED_PROVENANCE_FIELDS:
-            if prov.get(field_name) is None:
+            if not prov.get(field_name):
                 raise BenchmarkABConservationError(
-                    f"D6 守恒失败：provenance 缺字段 {field_name!r}（基线可能被手工篡改或"
-                    "生成链不完整，无法证明守恒）"
+                    f"D6 守恒失败：provenance 字段 {field_name!r} 缺失或为空"
+                    "（基线可能被手工篡改或生成链不完整，无法证明守恒）"
                 )
         return {
             "scenario_set_id": report.scenario_set_id,
@@ -243,13 +263,16 @@ class BenchmarkDiff:
 
     - ``deltas``：逐指标 candidate − baseline；
     - ``regressed_scenario_ids``：结果退化的场景集合（baseline 为良好结果、candidate 退化为
-      FN/FP）。
+      FN/FP/UNLABELED，或 baseline 无该 sid 而 candidate 翻成 UNLABELED）；
+    - ``skipped_metrics``：因 baseline/candidate 任一侧为 ``None`` 而被跳过对比的指标名
+      （如 ``mean_risk_shortfall`` 在未标定场景集为 ``None``），暴露出来供人审查（Medium 10）。
     """
 
     scenario_set_id: str
     vary: str
     deltas: tuple[MetricDelta, ...] = field(default_factory=tuple)
     regressed_scenario_ids: tuple[str, ...] = field(default_factory=tuple)
+    skipped_metrics: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_reports(
@@ -261,13 +284,17 @@ class BenchmarkDiff:
     ) -> BenchmarkDiff:
         """从两臂报告派生（纯函数）。
 
-        ``mean_risk_shortfall`` 为 ``None`` 时跳过该指标（未标定的场景集无此值）。
+        任一指标在 baseline/candidate 任一侧为 ``None``（如 ``mean_risk_shortfall`` 在未标定
+        场景集）时跳过该指标对比，并将指标名记入 ``skipped_metrics``（Medium 10，供 review
+        可见，避免静默漏报）。
         """
         deltas: list[MetricDelta] = []
+        skipped: list[str] = []
         for key in _METRIC_KEYS:
             bv = getattr(baseline, key)
             cv = getattr(candidate, key)
             if bv is None or cv is None:
+                skipped.append(key)
                 continue
             bvf = float(bv)
             cvf = float(cv)
@@ -279,6 +306,7 @@ class BenchmarkDiff:
             vary=vary,
             deltas=tuple(deltas),
             regressed_scenario_ids=tuple(sorted(_regressed_scenario_ids(baseline, candidate))),
+            skipped_metrics=tuple(skipped),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -287,6 +315,7 @@ class BenchmarkDiff:
             "vary": self.vary,
             "deltas": [d.to_dict() for d in self.deltas],
             "regressed_scenario_ids": list(self.regressed_scenario_ids),
+            "skipped_metrics": list(self.skipped_metrics),
         }
 
     def render_markdown(self) -> str:
@@ -310,19 +339,26 @@ class BenchmarkDiff:
 def _regressed_scenario_ids(baseline: BenchmarkReport, candidate: BenchmarkReport) -> set[str]:
     """退化场景集：baseline 为良好结果（TP/TN）、candidate 退化为 FN/FP **或** UNLABELED。
 
-    退化定义（M7）：baseline 能稳定断言为良好结果（TP/TN），candidate 却失去该断言——
-    要么翻成坏结果（FN/FP），要么掉回 UNLABELED（场景元数据被改/运行未产出标签，
-    同样意味着该场景不再能被断言为良好）。任一都计入退化清单，供人审查。
+    退化定义（M7 / Critical 2）：
+    （A）baseline 能稳定断言为良好结果（TP/TN），candidate 却失去该断言——要么翻成坏结果
+        （FN/FP），要么掉回 UNLABELED（场景元数据被改/运行未产出标签，同样意味着该场景不再
+        能被断言为良好）；
+    （B）baseline 根本无该场景（无法断言），candidate 却产出 UNLABELED——同样代表该场景未被
+        良好断言（覆盖「candidate 新增 UNLABELED」漏检分支，即便 baseline 无此 sid）。
+
+    任一都计入退化清单，供人审查。迭代**两臂 sid 并集**，避免遗漏仅存在于 candidate 的 sid。
     """
     base = {s.scenario_id: s.outcome for s in baseline.scores}
     cand = {s.scenario_id: s.outcome for s in candidate.scores}
     regressed: set[str] = set()
-    for sid, b_out in base.items():
+    for sid in (set(base) | set(cand)):
+        b_out = base.get(sid)
         c_out = cand.get(sid)
-        if c_out is None:
-            continue
         if b_out in _GOOD_OUTCOMES and c_out not in _GOOD_OUTCOMES:
-            # TP/TN → (FN / FP / UNLABELED) 均视为退化
+            # (A) TP/TN → (FN / FP / UNLABELED) 均视为退化
+            regressed.add(sid)
+        elif b_out is None and c_out == OUTCOME_UNLABELED:
+            # (B) baseline 无该场景、candidate 翻成 UNLABELED → 失去良好断言
             regressed.add(sid)
     return regressed
 
@@ -384,8 +420,10 @@ def evaluate_regression(
     ``gate.evaluate_gate``（含 ``BenchmarkThresholds`` + Hard Gate）。
 
     ``    max_regression_delta`` 仅监控「增幅有害」的指标（``suppression_rate`` / ``false_alarm_rate``
-    / ``fn`` / ``fp``）：其 candidate − baseline 超过该阈值即置 ``regressions_exceeded=True``
-    （信息性）。
+    / ``fn`` / ``fp``）：其 candidate − baseline **严格大于**（``>``）该阈值即置
+    ``regressions_exceeded=True``（信息性）；**等于**阈值不算超（Medium 4，文档与实现一致）。
+    非监控指标（``tp`` / ``tn`` / ``precision`` / ``recall`` / ``f1`` 等增幅有益，``unlabeled_scenario_count``
+    / ``mean_risk_shortfall`` 中性）仅展示 Δ、不触发该标志。
 
     ``max_regression_delta`` 必须 ≥ 0：它表达"可容忍的退化预算"。负值会令语义反转
     （``delta > 负值`` 恒真，任何改善也被判为回归），属调用错误，立即抛 ``ValueError``。

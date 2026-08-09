@@ -107,12 +107,14 @@ def test_t8_conserved_ok_vary_model():
 
 
 def test_t8_law1_scenario_set_id_mismatch():
+    # Medium 8：scenario_set_id 一致性已合并到 __post_init__ 严格校验（须 == 两臂）。
+    # baseline/candidate 不一致在构造期即被拦截（等价原 (1/7) 职责）。
     b = _mk_report(scenario_set_id="s1")
     c = _mk_report(scenario_set_id="s2")
-    with pytest.raises(BenchmarkABConservationError, match="1/7"):
+    with pytest.raises(BenchmarkABConservationError, match="完全一致"):
         BenchmarkABRun(
             scenario_set_id="s1", report_baseline=b, report_candidate=c
-        ).assert_conserved()
+        )
 
 
 def test_t8_law2_generator_mismatch():
@@ -338,7 +340,7 @@ def test_m5_conservation_rejects_missing_provenance():
     bad = dict(c.provenance)
     del bad["generator_fingerprint"]
     c = replace(c, provenance=bad)
-    with pytest.raises(BenchmarkABConservationError, match="provenance 缺字段"):
+    with pytest.raises(BenchmarkABConservationError, match="provenance 字段"):
         BenchmarkABRun(
             scenario_set_id=SET_ID, report_baseline=b, report_candidate=c, vary=VARY_CODE
         ).assert_conserved()
@@ -359,7 +361,7 @@ def test_m6_from_dict_rejects_top_level_non_dict():
 
 
 def test_m6_from_dict_rejects_missing_metrics():
-    """from_dict 缺 metrics 字段 → ValueError 带上下文（M6 / L11）。"""
+    """from_dict 缺 metrics 字段 → TypeError 带上下文（M6 / L11，TRY004 类型错误用 TypeError）。"""
     with pytest.raises(TypeError, match="缺字段 metrics"):
         BenchmarkReport.from_dict(
             {"scenario_set_id": "x", "harness_fingerprint": "h", "scores": []}
@@ -367,7 +369,7 @@ def test_m6_from_dict_rejects_missing_metrics():
 
 
 def test_m6_load_baseline_report_path_rejects_top_level_list(tmp_path):
-    """load_baseline_report_path 顶层 JSON 为 list → ValueError（M6）。"""
+    """load_baseline_report_path 顶层 JSON 为 list → TypeError（M6，与 from_dict 一致）。"""
     p = tmp_path / "bad.json"
     p.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
     with pytest.raises(TypeError, match="顶层须为对象"):
@@ -415,6 +417,100 @@ def test_l14_baselines_dir_exported():
     from home_perception.evaluation import BASELINES_DIR
 
     assert (BASELINES_DIR / f"{SET_ID}.json").exists()
+
+
+# ============================================================================
+# 审查 round 3 覆盖空白（Critical 1 / Critical 2 / Medium 10 / Low 13）
+# ============================================================================
+
+
+def test_c1_empty_dict_provenance_fails_conservation():
+    """model_fingerprint / runtime_dependencies 为空 dict（非 None）→ 守恒失败（Critical 1 / Low 11）。
+
+    对齐 harness ``compute_harness_fingerprint`` 的 ``if not X`` 兜底：空容器与缺失同判，
+    防止 aggregate 写出空 dict 时守恒「假绿」。
+    """
+    b = _mk_report(code_version="v1")
+    c = _mk_report(code_version="v2")
+
+    # model_fingerprint 空 dict
+    bad_model = dict(c.provenance)
+    bad_model["model_fingerprint"] = {}
+    c_model = replace(c, provenance=bad_model)
+    with pytest.raises(BenchmarkABConservationError, match="provenance 字段"):
+        BenchmarkABRun(
+            scenario_set_id=SET_ID, report_baseline=b, report_candidate=c_model, vary=VARY_CODE
+        ).assert_conserved()
+
+    # runtime_dependencies 空 dict
+    bad_rt = dict(c.provenance)
+    bad_rt["runtime_dependencies"] = {}
+    c_rt = replace(c, provenance=bad_rt)
+    with pytest.raises(BenchmarkABConservationError, match="provenance 字段"):
+        BenchmarkABRun(
+            scenario_set_id=SET_ID, report_baseline=b, report_candidate=c_rt, vary=VARY_CODE
+        ).assert_conserved()
+
+
+def test_load_baseline_report_path_missing_file():
+    """load_baseline_report_path 文件不存在 → FileNotFoundError（fail-closed，覆盖空白）。"""
+    import tempfile
+
+    p = Path(tempfile.mkdtemp()) / "does_not_exist.json"
+    with pytest.raises(FileNotFoundError):
+        load_baseline_report_path(p)
+
+
+def test_evaluate_regression_mean_risk_shortfall_none_skipped():
+    """baseline/candidate mean_risk_shortfall=None 时不崩溃，且 skipped_metrics 暴露该指标（覆盖空白）。
+
+    未标定场景集（无 risk_shortfall）聚合后 mean_risk_shortfall=None，``BenchmarkDiff`` 应跳过
+    该指标对比并记入 ``skipped_metrics``，供 review 可见（Medium 10）。
+    """
+    b = _mk_report(scenario_ids=("a", "b"), outcomes=("TP", "TN"))
+    assert b.mean_risk_shortfall is None
+    cand = _mk_report(code_version="v2", scenario_ids=("a", "b"), outcomes=("TP", "TN"))
+    assert cand.mean_risk_shortfall is None
+
+    diff = BenchmarkDiff.from_reports(b, cand)
+    assert "mean_risk_shortfall" in diff.skipped_metrics
+
+    # evaluate_regression 不应因 None 而崩溃
+    reg = evaluate_regression(cand, b, max_regression_delta=0.01)
+    assert reg.regressions_exceeded is False
+
+
+def test_regressed_scenario_ids_candidate_new_unlabeled():
+    """baseline 无该 sid、candidate 新增 UNLABELED → 计入退化（Critical 2 漏检分支覆盖空白）。
+
+    退化定义 (B)：baseline 根本无该场景（无法断言），candidate 却产出 UNLABELED——代表该场景
+    未被良好断言，应计入退化清单。
+    """
+    b = _mk_report(scenario_ids=("a",), outcomes=("TP",))
+    new_scores = b.scores + (
+        ScenarioScore(
+            scenario_id="b",
+            expected_label=None,
+            actual_label="no_alert",
+            outcome="UNLABELED",
+            validation_ok=True,
+            validation_details="",
+            benchmark_expected_alarm=None,
+        ),
+    )
+    cand = _reaggregate(b, new_scores)
+    diff = BenchmarkDiff.from_reports(b, cand)
+    assert "b" in diff.regressed_scenario_ids
+    assert "a" not in diff.regressed_scenario_ids  # baseline/candidate 同为 TP，未退化
+
+
+def test_t10_baseline_canonical_roundtrip():
+    """canonical_dict 往返对称（剔除 generated_at，确定性，Low 13）。"""
+    base = load_baseline_report(SET_ID)
+    again = BenchmarkReport.from_dict(base.canonical_dict())
+    assert again.tp == base.tp
+    assert again.provenance == base.provenance
+    assert again.canonical_dict() == base.canonical_dict()
 
 
 # ============================================================================

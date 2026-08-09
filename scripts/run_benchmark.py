@@ -156,6 +156,10 @@ def main(argv: list[str] | None = None) -> int:
             target = baseline_path(args.set_id, BASELINES_DIR)
         else:
             target = Path(args.write_baseline)
+            # Critical 3：与 --out 对称——CLI 层显式建父目录（用户显式指定路径即视为其落盘意图）。
+            # 函数层 ``write_canonical_report`` 仍拒自动建目录（守程序化调用方路径穿越），故此处
+            # 由 CLI 预先建好父目录；'auto' 落点 BASELINES_DIR 随 commit 已存在，无需建。
+            target.parent.mkdir(parents=True, exist_ok=True)
         # C1：已提交基线不可被静默覆盖（D7 显式 bump 必须 --force）；
         # 显式路径同理需 --force 才允许覆盖，防止误操作抹掉 reference。
         if target.exists() and not args.force:
@@ -177,8 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.baseline:
         from home_perception.evaluation.ab_runner import (
             BenchmarkABConservationError,
-            load_baseline_report_path,
             evaluate_regression,
+            load_baseline_report_path,
         )
 
         # C3：max_regression_delta 必须 ≥ 0，负值令语义反转，入口即拦
