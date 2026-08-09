@@ -13,7 +13,6 @@ stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自�
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -108,6 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         help="写基线 JSON（bump 工作流）：canonical_dict 落到指定路径；"
         "若填 'auto' 则落到 <baselines_dir>/<set-id>.json",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="与 --write-baseline 配合：覆盖已存在的基线文件（D7 显式 bump 动作，"
+        "须 Owner 评审；默认不覆盖以防误操作）",
+    )
     args = parser.parse_args(argv)
 
     from home_perception.evaluation.harness import BenchmarkHarness
@@ -141,25 +146,48 @@ def main(argv: list[str] | None = None) -> int:
 
     # —— Phase 2：写基线（bump 工作流）——
     if args.write_baseline:
-        from home_perception.evaluation.ab_runner import BASELINES_DIR, baseline_path
+        from home_perception.evaluation.ab_runner import (
+            BASELINES_DIR,
+            baseline_path,
+            write_baseline_report,
+        )
 
         if args.write_baseline == "auto":
             target = baseline_path(args.set_id, BASELINES_DIR)
         else:
             target = Path(args.write_baseline)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            json.dumps(report.canonical_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        # C1：已提交基线不可被静默覆盖（D7 显式 bump 必须 --force）；
+        # 显式路径同理需 --force 才允许覆盖，防止误操作抹掉 reference。
+        if target.exists() and not args.force:
+            logger.warning(
+                "benchmark_baseline_overwrite_blocked",
+                path=str(target),
+                hint="加 --force 显式覆盖（须 Owner 评审，注明 benchmark-baseline-bump）",
+            )
+            print(
+                f"[baseline] 拒绝覆盖已存在文件（防误操作）：{target}\n"
+                f"          若确要 bump 基线，请加 --force（并务必在 PR 注明 benchmark-baseline-bump）"
+            )
+            return 2
+        # C2/M8：走 write_baseline_report 双守卫（脱敏 + 父目录须存在，不 mkdir parents）
+        write_baseline_report(target, report)
         logger.info("benchmark_baseline_written", path=str(target))
 
     # —— Phase 2：对照基线（报告性、非门禁）——
     if args.baseline:
         from home_perception.evaluation.ab_runner import (
+            BenchmarkABConservationError,
             load_baseline_report_path,
             evaluate_regression,
         )
+
+        # C3：max_regression_delta 必须 ≥ 0，负值令语义反转，入口即拦
+        if args.max_regression_delta is not None and args.max_regression_delta < 0:
+            print(
+                "[regression] --max-regression-delta 必须 ≥ 0（表达可容忍退化预算），"
+                f"收到 {args.max_regression_delta}"
+            )
+            return 2
 
         baseline = load_baseline_report_path(args.baseline)
         try:
@@ -168,10 +196,12 @@ def main(argv: list[str] | None = None) -> int:
                 baseline,
                 max_regression_delta=args.max_regression_delta,
             )
-        except Exception as exc:  # 守恒校验失败（装配错误，非回归判断）→ 清晰报错，退出码 1
+        except BenchmarkABConservationError as exc:  # 守恒/装配错误，清晰报错，退出码 1
             logger.warning("benchmark_regression_conservation_failed", error=str(exc))
             print(f"[regression] 守恒校验失败（基线对照装配错误）：{exc}")
             return 1
+        # 注意：基线 JSON 解析错误（KeyError / JSONDecodeError / TypeError）不在此捕获，
+        # 直接透传给调用方，暴露真实根因（C4：不再裸 except Exception 伪装成守恒失败）。
         print(reg.render_markdown())
 
     # 最终报告为人类可读产物，输出到 stdout（命令主产物，非日志）

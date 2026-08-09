@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -80,13 +81,46 @@ class BenchmarkABRun:
     report_candidate: BenchmarkReport
     vary: Literal["code_version", "model_fingerprint"] = "code_version"
 
+    def __post_init__(self) -> None:
+        """强制 ``scenario_set_id`` 与两臂报告一致（M9：构造参数不再被静默忽略）。
+
+        调用方传入的 ``scenario_set_id`` 必须至少匹配基线/候选之一——否则属装配错误
+        （拿错了基线/候选）。当两臂 ``scenario_set_id`` 本身一致时，该检查退化为
+        ``self == 两臂``；当两臂不一致（``law1`` 会管）时，``self`` 仍须匹配其一以通过构造，
+        随后由 ``assert_conserved`` 的 (1/7) 报具体不一致。
+        """
+        b_id = self.report_baseline.scenario_set_id
+        c_id = self.report_candidate.scenario_set_id
+        if self.scenario_set_id not in (b_id, c_id):
+            raise BenchmarkABConservationError(
+                "BenchmarkABRun.scenario_set_id 与两臂报告不一致 "
+                f"（{self.scenario_set_id!r} 不在 baseline={b_id!r} / candidate={c_id!r} 之内）"
+            )
+
+    # 守恒判定依赖的 provenance 字段（缺任一即视为基线被手工篡改/缺失，fail-closed）
+    _REQUIRED_PROVENANCE_FIELDS = (
+        "generator_fingerprint",
+        "policy_fingerprint",
+        "runtime_dependencies",
+        "model_fingerprint",
+        "code_version",
+    )
+
     def _components(self, report: BenchmarkReport) -> dict[str, Any]:
         """抽取守恒判定所需的成分（baseline / candidate 同构）。
 
         从 ``provenance`` 取 generator/policy/model/runtime/code 成分；``scenario_set_id``
-        与场景数/序直接从报告本身取。
+        与场景数/序直接从报告本身取。任一守恒 provenance 字段缺失（``None``）即抛
+        ``BenchmarkABConservationError``（M5：D4 指纹 fail-closed，A/B 守恒须对齐，
+        手工编辑基线若抹掉字段不能让守恒「假绿」）。
         """
         prov = report.provenance or {}
+        for field_name in self._REQUIRED_PROVENANCE_FIELDS:
+            if prov.get(field_name) is None:
+                raise BenchmarkABConservationError(
+                    f"D6 守恒失败：provenance 缺字段 {field_name!r}（基线可能被手工篡改或"
+                    "生成链不完整，无法证明守恒）"
+                )
         return {
             "scenario_set_id": report.scenario_set_id,
             "generator_fingerprint": prov.get("generator_fingerprint"),
@@ -274,7 +308,12 @@ class BenchmarkDiff:
 
 
 def _regressed_scenario_ids(baseline: BenchmarkReport, candidate: BenchmarkReport) -> set[str]:
-    """退化场景集：baseline 为良好结果（TP/TN）、candidate 退化为 FN/FP。"""
+    """退化场景集：baseline 为良好结果（TP/TN）、candidate 退化为 FN/FP **或** UNLABELED。
+
+    退化定义（M7）：baseline 能稳定断言为良好结果（TP/TN），candidate 却失去该断言——
+    要么翻成坏结果（FN/FP），要么掉回 UNLABELED（场景元数据被改/运行未产出标签，
+    同样意味着该场景不再能被断言为良好）。任一都计入退化清单，供人审查。
+    """
     base = {s.scenario_id: s.outcome for s in baseline.scores}
     cand = {s.scenario_id: s.outcome for s in candidate.scores}
     regressed: set[str] = set()
@@ -282,7 +321,8 @@ def _regressed_scenario_ids(baseline: BenchmarkReport, candidate: BenchmarkRepor
         c_out = cand.get(sid)
         if c_out is None:
             continue
-        if b_out in _GOOD_OUTCOMES and c_out in _BAD_OUTCOMES:
+        if b_out in _GOOD_OUTCOMES and c_out not in _GOOD_OUTCOMES:
+            # TP/TN → (FN / FP / UNLABELED) 均视为退化
             regressed.add(sid)
     return regressed
 
@@ -343,10 +383,17 @@ def evaluate_regression(
     **不**做 Hard Gate / 复合分门控（Phase 2 MUST NOT）。真正的准入门禁归 Phase 3 的
     ``gate.evaluate_gate``（含 ``BenchmarkThresholds`` + Hard Gate）。
 
-    ``max_regression_delta`` 仅监控「增幅有害」的指标（``suppression_rate`` / ``false_alarm_rate``
+    ``    max_regression_delta`` 仅监控「增幅有害」的指标（``suppression_rate`` / ``false_alarm_rate``
     / ``fn`` / ``fp``）：其 candidate − baseline 超过该阈值即置 ``regressions_exceeded=True``
     （信息性）。
+
+    ``max_regression_delta`` 必须 ≥ 0：它表达"可容忍的退化预算"。负值会令语义反转
+    （``delta > 负值`` 恒真，任何改善也被判为回归），属调用错误，立即抛 ``ValueError``。
     """
+    if max_regression_delta is not None and max_regression_delta < 0:
+        raise ValueError(
+            f"max_regression_delta 必须 ≥ 0（表达可容忍的退化预算），收到 {max_regression_delta!r}"
+        )
     ab = BenchmarkABRun(
         scenario_set_id=report.scenario_set_id,
         report_baseline=baseline,
@@ -394,10 +441,9 @@ def load_baseline_report_path(path: Path | str) -> BenchmarkReport:
     """按**路径**加载基线 ``BenchmarkReport``（CLI ``--baseline`` 入口用）。
 
     与 ``load_baseline_report`` 同源，仅 baselines 目录默认约定改为任意显式路径
-    （如刚生成的临时基线）。基线文件不存在即报错（fail-closed）。
+    （如刚生成的临时基线）。基线文件不存在即报错（fail-closed）。顶层 JSON 须为对象
+    （M6：列表/标量会被 ``from_dict`` 误解，提前显式报错而非吞到内层 ``TypeError``）。
     """
-    import json
-
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(
@@ -405,7 +451,24 @@ def load_baseline_report_path(path: Path | str) -> BenchmarkReport:
             "--write-baseline 生成；基线 bump 须在 PR 注明 benchmark-baseline-bump）"
         )
     data = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise TypeError(
+            f"基线 JSON 顶层须为对象，收到 {type(data).__name__}（路径：{p}）"
+        )
     return BenchmarkReport.from_dict(data)
+
+
+def write_baseline_report(path: str | Path, report: BenchmarkReport) -> None:
+    """落盘基线 JSON（canonical_dict），复用 ``write_report`` 双守卫（C2/M8，fail-closed）。
+
+    守卫逻辑集中在 ``BenchmarkReport.write_canonical_report``（与 ``write_report`` 同向：
+    脱敏 + 父目录须存在、不 ``mkdir parents``），``ab_runner`` 仅做委托，自身不 import
+    ``analysis`` 重链（守 T9 模块边界）。
+
+    基线 bump 是「显式、Owner 评审动作」（ADR-0033 D7）：覆盖既有文件须由调用方显式确认
+    （CLI 经 ``--force``），本函数自身不做 overwrite 决策，只保证写入内容安全。
+    """
+    report.write_canonical_report(path)
 
 
 __all__ = [
@@ -422,4 +485,5 @@ __all__ = [
     "evaluate_regression",
     "load_baseline_report",
     "load_baseline_report_path",
+    "write_baseline_report",
 ]

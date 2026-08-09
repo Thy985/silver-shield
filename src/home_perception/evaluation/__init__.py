@@ -36,7 +36,9 @@ _PUBLIC_MODULES: dict[str, str] = {
     "evaluate_regression": "home_perception.evaluation.ab_runner",
     "load_baseline_report": "home_perception.evaluation.ab_runner",
     "load_baseline_report_path": "home_perception.evaluation.ab_runner",
+    "write_baseline_report": "home_perception.evaluation.ab_runner",
     "baseline_path": "home_perception.evaluation.ab_runner",
+    "BASELINES_DIR": "home_perception.evaluation.ab_runner",
 }
 
 

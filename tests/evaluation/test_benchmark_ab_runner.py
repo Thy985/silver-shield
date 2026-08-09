@@ -10,6 +10,7 @@ T10 基线可回放（committed baseline 经 ``from_dict`` 还原、``BenchmarkD
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,9 +25,13 @@ from home_perception.evaluation.ab_runner import (
     BenchmarkDiff,
     evaluate_regression,
     load_baseline_report,
+    load_baseline_report_path,
+    write_baseline_report,
 )
 from home_perception.evaluation.metrics import ScenarioScore
 from home_perception.evaluation.report import BenchmarkReport
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 SET_ID = "adr0033-phase1"
 
@@ -287,6 +292,132 @@ def test_t10_regression_detected():
 
 
 # ============================================================================
+# 审查 round 2 修正验证（C2/C3/M5/M6/M7/M9/M10/L14）
+# ============================================================================
+
+
+def test_m7_good_to_unlabeled_counts_as_regression():
+    """TP/TN → UNLABELED 也计入退化（M7：失去对良好结果的断言即退化）。"""
+    b = _mk_report(scenario_ids=("a", "b"), outcomes=("TP", "TN"))
+    cand_scores = tuple(
+        replace(
+            s,
+            outcome="UNLABELED",
+            actual_label="no_alert",
+            expected_label=None,
+            benchmark_expected_alarm=None,
+        )
+        if s.scenario_id == "a"
+        else s
+        for s in b.scores
+    )
+    cand = _reaggregate(b, cand_scores)
+    diff = BenchmarkDiff.from_reports(b, cand)
+    assert "a" in diff.regressed_scenario_ids
+
+
+def test_m9_scenario_set_id_post_init_consistency():
+    """BenchmarkABRun.scenario_set_id 不再被静默忽略（M9）。"""
+    b = _mk_report(scenario_set_id="s1", code_version="v1")
+    c = _mk_report(scenario_set_id="s1", code_version="v2")
+    # 与两臂一致 → 构造通过
+    BenchmarkABRun(
+        scenario_set_id="s1", report_baseline=b, report_candidate=c, vary=VARY_CODE
+    )
+    # 与两臂均不一致 → fail-closed
+    with pytest.raises(BenchmarkABConservationError):
+        BenchmarkABRun(
+            scenario_set_id="sX", report_baseline=b, report_candidate=c, vary=VARY_CODE
+        )
+
+
+def test_m5_conservation_rejects_missing_provenance():
+    """provenance 缺守恒字段 → 守恒失败（M5：防手工编辑基线假绿）。"""
+    b = _mk_report(code_version="v1")
+    c = _mk_report(code_version="v2")
+    bad = dict(c.provenance)
+    del bad["generator_fingerprint"]
+    c = replace(c, provenance=bad)
+    with pytest.raises(BenchmarkABConservationError, match="provenance 缺字段"):
+        BenchmarkABRun(
+            scenario_set_id=SET_ID, report_baseline=b, report_candidate=c, vary=VARY_CODE
+        ).assert_conserved()
+
+
+def test_c3_negative_max_regression_delta_rejected():
+    """max_regression_delta < 0 令语义反转（任何改善判为回归）→ 显式 ValueError（C3）。"""
+    base = load_baseline_report(SET_ID)
+    cand = replace(base, provenance={**base.provenance, "code_version": "candidate-v2"})
+    with pytest.raises(ValueError, match="必须 ≥ 0"):
+        evaluate_regression(cand, base, max_regression_delta=-0.1)
+
+
+def test_m6_from_dict_rejects_top_level_non_dict():
+    """from_dict 顶层非对象 → TypeError（M6：不再让裸 KeyError 透到内层；TRY004 类型检查用 TypeError）。"""
+    with pytest.raises(TypeError):
+        BenchmarkReport.from_dict(["not", "a", "dict"])  # type: ignore[arg-type]
+
+
+def test_m6_from_dict_rejects_missing_metrics():
+    """from_dict 缺 metrics 字段 → ValueError 带上下文（M6 / L11）。"""
+    with pytest.raises(TypeError, match="缺字段 metrics"):
+        BenchmarkReport.from_dict(
+            {"scenario_set_id": "x", "harness_fingerprint": "h", "scores": []}
+        )
+
+
+def test_m6_load_baseline_report_path_rejects_top_level_list(tmp_path):
+    """load_baseline_report_path 顶层 JSON 为 list → ValueError（M6）。"""
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    with pytest.raises(TypeError, match="顶层须为对象"):
+        load_baseline_report_path(p)
+
+
+def test_m10_from_dict_rejects_string_metric():
+    """metrics 数值字段塞字符串 → ValueError（M10：拒绝静默塌缩）。"""
+    bad = load_baseline_report(SET_ID).to_dict()
+    bad["metrics"]["tp"] = "abc"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        BenchmarkReport.from_dict(bad)
+
+
+def test_m10_scenario_score_from_dict_rejects_none_validation_ok():
+    """ScenarioScore.validation_ok=None → TypeError（M10：bool(None) 静默塌缩已拒；TRY004 类型检查用 TypeError）。"""
+    bad = ScenarioScore(
+        scenario_id="x",
+        expected_label=None,
+        actual_label="alert",
+        outcome="TP",
+        validation_ok=True,
+        validation_details="",
+    ).to_dict()
+    bad["validation_ok"] = None
+    with pytest.raises(TypeError):
+        ScenarioScore.from_dict(bad)
+
+
+def test_c2_write_baseline_report_dual_guard(tmp_path):
+    """write_baseline_report 复用双守卫（脱敏 + 父目录须存在，不 mkdir）（C2/M8）。"""
+    base = load_baseline_report(SET_ID)
+    out = tmp_path / "b.json"
+    write_baseline_report(out, base)  # 父目录存在 → 写入
+    assert out.exists()
+    again = BenchmarkReport.from_dict(json.loads(out.read_text(encoding="utf-8")))
+    assert (again.tp, again.tn, again.fn, again.fp) == (1, 1, 0, 0)
+    # 父目录不存在 → 拒绝自动创建（纵深防路径穿越）
+    with pytest.raises(ValueError, match="父目录不存在"):
+        write_baseline_report(tmp_path / "nope" / "x.json", base)
+
+
+def test_l14_baselines_dir_exported():
+    """__init__ 转发 BASELINES_DIR（L14：可经包入口取基线目录）。"""
+    from home_perception.evaluation import BASELINES_DIR
+
+    assert (BASELINES_DIR / f"{SET_ID}.json").exists()
+
+
+# ============================================================================
 # 集成：两次真实 harness 跑出 BenchmarkDiff（ADR §6 验收）
 # ============================================================================
 
@@ -352,7 +483,7 @@ def test_t10_integration_real_ab_run():
     from home_perception.validation import load_scenarios_dir
 
     scenarios = load_scenarios_dir(
-        "src/home_perception/validation/fixtures/scenarios/benchmark"
+        str(_PROJECT_ROOT / "src/home_perception/validation/fixtures/scenarios/benchmark")
     )
     base = BenchmarkHarness().run(
         scenarios,

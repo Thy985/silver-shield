@@ -155,20 +155,56 @@ class ScenarioScore:
 
         ``set`` 字段经可迭代重建（``to_dict`` 已排序为 list）；``risk_shortfall`` /
         ``benchmark_expected_alarm`` / ``benchmark_severity`` 允许 ``None``。
+
+        反序列化校验（M10）：必填字段缺失转 ``ValueError`` 带上下文；``validation_ok``
+        显式拒绝 ``None``（``bool(None)`` 会静默塌缩为 ``False``）；``event_recall`` 强制
+        数值，拒绝字符串 / ``None`` 注入。手工编辑基线若塞入非法类型必须显式报错。
         """
+        if not isinstance(d, dict):
+            raise TypeError(f"ScenarioScore 顶层须为对象，收到 {type(d).__name__}")
+
+        scenario_id = d.get("scenario_id")
+        if not isinstance(scenario_id, str) or not scenario_id:
+            raise TypeError("ScenarioScore 缺字段 scenario_id（或为空/非字符串）")
+        actual_label = d.get("actual_label")
+        if not isinstance(actual_label, str):
+            raise TypeError("ScenarioScore 缺字段 actual_label（或非字符串）")
+        outcome = d.get("outcome")
+        if not isinstance(outcome, str):
+            raise TypeError("ScenarioScore 缺字段 outcome（或非字符串）")
+        validation_ok = d.get("validation_ok")
+        if not isinstance(validation_ok, bool):
+            raise TypeError(
+                f"ScenarioScore.validation_ok 须为布尔，收到 {validation_ok!r}（None 会被"
+                "bool() 静默塌缩为 False，已显式拒绝）"
+            )
+        validation_details = d.get("validation_details")
+        if not isinstance(validation_details, str):
+            raise TypeError("ScenarioScore 缺字段 validation_details（或非字符串）")
+        event_recall = d.get("event_recall")
+        if not isinstance(event_recall, (int, float)) or isinstance(event_recall, bool):
+            raise TypeError(f"ScenarioScore.event_recall 须为数值，收到 {event_recall!r}")
+
         risk_shortfall = d.get("risk_shortfall")
+        if risk_shortfall is not None and (
+            not isinstance(risk_shortfall, (int, float)) or isinstance(risk_shortfall, bool)
+        ):
+            raise ValueError(
+                f"ScenarioScore.risk_shortfall 须为数值或 None，收到 {risk_shortfall!r}"
+            )
+
         return cls(
-            scenario_id=str(d["scenario_id"]),
+            scenario_id=scenario_id,
             expected_label=d.get("expected_label"),  # str | None
-            actual_label=str(d["actual_label"]),
-            outcome=str(d["outcome"]),
-            validation_ok=bool(d["validation_ok"]),
-            validation_details=str(d["validation_details"]),
+            actual_label=actual_label,
+            outcome=outcome,
+            validation_ok=validation_ok,
+            validation_details=validation_details,
             observed_event_types=set(d.get("observed_event_types", [])),  # type: ignore[arg-type]
             expected_event_types=set(d.get("expected_event_types", [])),  # type: ignore[arg-type]
             missing_event_types=set(d.get("missing_event_types", [])),  # type: ignore[arg-type]
             observed_risk_levels=list(d.get("observed_risk_levels", [])),  # type: ignore[arg-type]
-            event_recall=float(d["event_recall"]),
+            event_recall=float(event_recall),
             risk_shortfall=(float(risk_shortfall) if risk_shortfall is not None else None),
             benchmark_expected_alarm=d.get("benchmark_expected_alarm"),
             benchmark_severity=d.get("benchmark_severity"),
