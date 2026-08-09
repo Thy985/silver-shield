@@ -28,14 +28,13 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from .fingerprint_fields import CONSERVATION_PROVENANCE_FIELDS
 from .metrics import (
-    OUTCOME_FN,
-    OUTCOME_FP,
     OUTCOME_TN,
     OUTCOME_TP,
     OUTCOME_UNLABELED,
@@ -70,7 +69,8 @@ _METRIC_KEYS = (
 )
 
 _GOOD_OUTCOMES = frozenset({OUTCOME_TP, OUTCOME_TN})
-_BAD_OUTCOMES = frozenset({OUTCOME_FN, OUTCOME_FP})
+# 注：不再单独定义"坏结果常量"（round 5 删死代码）——退化判定以「非 good = 退化」为口径
+# （见 _regressed_scenario_ids docstring 的 G/B/U 语义表），FN/FP 坏结果仅作表格可读性说明。
 
 # 基线 JSON 落点（D7）：``evaluation/fixtures/baselines/<scenario_set_id>.json``
 BASELINES_DIR = Path(__file__).resolve().parent / "fixtures" / "baselines"
@@ -282,10 +282,18 @@ class BenchmarkDiff:
     ) -> BenchmarkDiff:
         """从两臂报告派生（纯函数）。
 
+        入口强制两臂 ``scenario_set_id`` 一致（round 5：``baseline`` 是结果对象里
+        ``scenario_set_id`` 的权威来源，两臂不一致时逐指标 Δ / 退化场景跨 sid 比对无意义，
+        显式 ``ValueError`` 拒绝，与 ``BenchmarkABRun.__post_init__`` 同口径）。
         任一指标在 baseline/candidate 任一侧为 ``None``（如 ``mean_risk_shortfall`` 在未标定
         场景集）时跳过该指标对比，并将指标名记入 ``skipped_metrics``（Medium 10，供 review
         可见，避免静默漏报）。
         """
+        if baseline.scenario_set_id != candidate.scenario_set_id:
+            raise ValueError(
+                "BenchmarkDiff.from_reports 两臂 scenario_set_id 必须一致 "
+                f"（baseline={baseline.scenario_set_id!r} != candidate={candidate.scenario_set_id!r}）"
+            )
         deltas: list[MetricDelta] = []
         skipped: list[str] = []
         for key in _METRIC_KEYS:
@@ -438,11 +446,20 @@ def evaluate_regression(
     / ``mean_risk_shortfall`` 中性）仅展示 Δ、不触发该标志。
 
     ``max_regression_delta`` 必须 ≥ 0：它表达"可容忍的退化预算"。负值会令语义反转
-    （``delta > 负值`` 恒真，任何改善也被判为回归），属调用错误，立即抛 ``ValueError``。
+    （``delta > 负值`` 恒真，任何改善也被判为回归），属调用错误，立即抛 ``ValueError``；
+    ``NaN`` 同样拒绝（``nan < 0`` 恒 False，负值拦截对其无效，且后续 ``delta > nan`` 恒
+    False 会静默吞掉判定，round 5）。
     """
-    if max_regression_delta is not None and max_regression_delta < 0:
+    # 入口预校验（round 5）：vary 未声明字面量 / NaN 预算属调用错误，与 assert_conserved
+    # 提前拦截一致——不依赖运行时才暴露。
+    if vary not in VARY_AXES:
+        raise ValueError(f"未知 vary 轴：{vary!r}（须为 {VARY_AXES}）")
+    if max_regression_delta is not None and (
+        max_regression_delta < 0 or math.isnan(max_regression_delta)
+    ):
         raise ValueError(
-            f"max_regression_delta 必须 ≥ 0（表达可容忍的退化预算），收到 {max_regression_delta!r}"
+            f"max_regression_delta 必须 ≥ 0 且非 NaN（表达可容忍的退化预算；NaN 会静默使"
+            f"任何比较为 False），收到 {max_regression_delta!r}"
         )
     ab = BenchmarkABRun(
         scenario_set_id=report.scenario_set_id,
@@ -520,6 +537,54 @@ def write_baseline_report(path: str | Path, report: BenchmarkReport) -> None:
     report.write_canonical_report(path)
 
 
+def _is_within(child: Path, parent: Path) -> bool:
+    """``child`` 是否位于 ``parent`` 目录（含自身）之内（路径安全判定，round 5）。"""
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def baseline_write_gate(
+    target: Path | str,
+    *,
+    force: bool,
+    allow_anywhere: bool,
+    baselines_dir: Path = BASELINES_DIR,
+) -> tuple[bool, str]:
+    """CLI ``--write-baseline`` 落盘门（D7 显式 bump + 路径安全，round 5 安全风险）。
+
+    返回 ``(ok, hint)``：``ok=False`` 时调用方应打印 ``hint`` 并以退出码 2 结束。两条规则：
+
+    1. **防静默覆盖**（C1）：目标已存在且未 ``force`` → 拒绝（已提交基线 bump 须 ``--force``）；
+    2. **防路径穿越**（round 5）：显式路径的父目录不在 ``baselines_dir`` 子树内、且未显式
+       ``allow_anywhere`` → 拒绝自动创建父目录（``write_canonical_report`` 函数层本就拒建，
+       CLI 层不得绕过守卫默认放行任意路径）。
+
+    通过后由调用方决定是否 ``mkdir(parents=True)``（auto 落点 / 子树内 / 显式 allow-anywhere
+    均可安全建目录）。本函数为纯策略，不触碰文件系统。
+    """
+    t = Path(target)
+    if t.exists() and not force:
+        return (
+            False,
+            (
+                f"[baseline] 拒绝覆盖已存在文件（防误操作）：{t}\n"
+                "          若确要 bump 基线，请加 --force（并务必在 PR 注明 benchmark-baseline-bump）"
+            ),
+        )
+    if not _is_within(t.parent, baselines_dir) and not allow_anywhere:
+        return (
+            False,
+            (
+                f"[baseline] 显式路径不在 baselines 目录子树内，拒绝自动创建父目录：{t}\n"
+                "          如需写入任意路径请加 --write-baseline-allow-anywhere（注意路径安全）"
+            ),
+        )
+    return True, ""
+
+
 __all__ = [
     "BASELINES_DIR",
     "VARY_AXES",
@@ -531,6 +596,7 @@ __all__ = [
     "MetricDelta",
     "RegressionReport",
     "baseline_path",
+    "baseline_write_gate",
     "evaluate_regression",
     "load_baseline_report",
     "load_baseline_report_path",

@@ -17,6 +17,7 @@ stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自�
 from __future__ import annotations
 
 import argparse
+import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -110,8 +111,14 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="写基线 JSON（bump 工作流）：canonical_dict 落到指定路径；"
         "若填 'auto' 则落到 <baselines_dir>/<set-id>.json。"
-        "显式 PATH 将自动创建父目录（与 --out 同规约，Medium 5），请确保路径安全；"
-        "函数层 write_canonical_report 仍拒自动建目录（守程序化调用方路径穿越）",
+        "显式 PATH 默认仅允许 baselines 目录子树内（自动建父目录，与 --out 同规约）；"
+        "子树外路径须加 --write-baseline-allow-anywhere 显式放行（注意路径安全，round 5）",
+    )
+    parser.add_argument(
+        "--write-baseline-allow-anywhere",
+        action="store_true",
+        help="与 --write-baseline 配合：允许显式路径落在 baselines 目录子树之外并自动创建"
+        "父目录（默认拒绝，防路径穿越/误写任意位置；请自行确认路径安全）",
     )
     parser.add_argument(
         "--force",
@@ -155,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         from home_perception.evaluation.ab_runner import (
             BASELINES_DIR,
             baseline_path,
+            baseline_write_gate,
             write_baseline_report,
         )
 
@@ -162,24 +170,22 @@ def main(argv: list[str] | None = None) -> int:
             target = baseline_path(args.set_id, BASELINES_DIR)
         else:
             target = Path(args.write_baseline)
-            # Critical 3：与 --out 对称——CLI 层显式建父目录（用户显式指定路径即视为其落盘意图）。
-            # 函数层 ``write_canonical_report`` 仍拒自动建目录（守程序化调用方路径穿越），故此处
-            # 由 CLI 预先建好父目录；'auto' 落点 BASELINES_DIR 随 commit 已存在，无需建。
-            target.parent.mkdir(parents=True, exist_ok=True)
-        # C1：已提交基线不可被静默覆盖（D7 显式 bump 必须 --force）；
-        # 显式路径同理需 --force 才允许覆盖，防止误操作抹掉 reference。
-        if target.exists() and not args.force:
-            logger.warning(
-                "benchmark_baseline_overwrite_blocked",
-                path=str(target),
-                hint="加 --force 显式覆盖（须 Owner 评审，注明 benchmark-baseline-bump）",
-            )
-            print(
-                f"[baseline] 拒绝覆盖已存在文件（防误操作）：{target}\n"
-                f"          若确要 bump 基线，请加 --force（并务必在 PR 注明 benchmark-baseline-bump）"
-            )
+        # round 5：落盘门（纯策略）——防静默覆盖（C1）+ 防子树外路径自动建父目录（路径安全）。
+        # auto 落点恒在 BASELINES_DIR 内；显式子树内路径经门后安全 mkdir；子树外路径须
+        # --write-baseline-allow-anywhere 显式放行。
+        ok, hint = baseline_write_gate(
+            target,
+            force=args.force,
+            allow_anywhere=args.write_baseline_allow_anywhere,
+            baselines_dir=BASELINES_DIR,
+        )
+        if not ok:
+            logger.warning("benchmark_baseline_write_blocked", path=str(target))
+            print(hint)
             return 2
-        # C2/M8：走 write_baseline_report 双守卫（脱敏 + 父目录须存在，不 mkdir parents）
+        # 函数层 ``write_canonical_report`` 仍拒自动建目录（守程序化调用方路径穿越），
+        # 故由 CLI 在门通过后预先建好父目录（auto 落点 BASELINES_DIR 已存在，no-op）。
+        target.parent.mkdir(parents=True, exist_ok=True)
         write_baseline_report(target, report)
         logger.info("benchmark_baseline_written", path=str(target))
 
@@ -191,10 +197,12 @@ def main(argv: list[str] | None = None) -> int:
             load_baseline_report_path,
         )
 
-        # C3：max_regression_delta 必须 ≥ 0，负值令语义反转，入口即拦
-        if args.max_regression_delta is not None and args.max_regression_delta < 0:
+        # C3：max_regression_delta 必须 ≥ 0 且非 NaN，负值令语义反转、NaN 静默吞判定，入口即拦
+        if args.max_regression_delta is not None and (
+            args.max_regression_delta < 0 or math.isnan(args.max_regression_delta)
+        ):
             print(
-                "[regression] --max-regression-delta 必须 ≥ 0（表达可容忍退化预算），"
+                "[regression] --max-regression-delta 必须 ≥ 0 且非 NaN（表达可容忍退化预算），"
                 f"收到 {args.max_regression_delta}"
             )
             return 2

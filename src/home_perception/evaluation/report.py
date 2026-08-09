@@ -152,6 +152,8 @@ class BenchmarkReport:
         （TRY004：类型错误用 ``TypeError``，与 ``load_baseline_report_path`` 一致）；
         数值字段强制 ``isinstance`` 校验，拒绝字符串 / ``None`` 静默塌缩（手工编辑基线若塞入
         ``"tp": "abc"`` 或 ``None`` 必须显式报错，而非被 ``int()``/``float()`` 吞掉）。
+        ``bool`` 是 ``int`` 子类，True/False 数值上静默等价 1/0、违反计数语义，计数键
+        显式拒绝 ``bool``（round 5）；计数键接受整数值浮点（如 ``tp=1.0``）但拒绝非整数浮点。
         """
         if not isinstance(d, dict):
             _require_mapping(d, "基线报告")  # Medium 14：与 ScenarioScore / load 共享校验口径
@@ -179,12 +181,18 @@ class BenchmarkReport:
         int_vals: dict[str, int] = {}
         for k in int_keys:
             v = metrics.get(k)
-            # 计数键：纯 int，或整数值 float（如手工编辑写成 1.0）；bool 子类显式拒绝，
-            # 非整数 float（如 1.5）拒收（Medium 7：与 aggregate 永远产 int 对齐，且容错手工 1.0）。
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or (
-                isinstance(v, float) and not v.is_integer()
-            ):
-                raise TypeError(f"基线报告指标 {k!r} 须为整数（或整数值浮点），收到 {v!r}")
+            # round 5：三段条件拆分独立 if，错误信息分别说明（不再三段 or 串联）
+            if isinstance(v, bool):
+                raise TypeError(
+                    f"基线报告指标 {k!r} 不能为布尔（bool 是 int 子类，True/False 静默等价"
+                    f"1/0，违反计数语义），收到 {v!r}"
+                )
+            if not isinstance(v, (int, float)):
+                raise TypeError(f"基线报告指标 {k!r} 须为数值（计数键），收到 {v!r}")
+            if isinstance(v, float) and not v.is_integer():
+                raise TypeError(
+                    f"基线报告指标 {k!r} 须为整数值浮点（如 1.0），收到非整数浮点 {v!r}"
+                )
             int_vals[k] = int(v)
         float_vals: dict[str, float] = {}
         for k in float_keys:

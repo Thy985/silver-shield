@@ -23,6 +23,7 @@ from home_perception.evaluation.ab_runner import (
     BenchmarkABConservationError,
     BenchmarkABRun,
     BenchmarkDiff,
+    baseline_write_gate,
     evaluate_regression,
     load_baseline_report,
     load_baseline_report_path,
@@ -589,6 +590,96 @@ def test_r4_fingerprint_drift_guard(monkeypatch):
             model_fingerprint={"detector": "d"},
             runtime_dependencies={"numpy": "2.4.2"},
         )
+
+
+# ============================================================================
+# 审查 round 5 修正验证（死代码 / from_reports sid / vary / NaN / 落盘门 / 计数键）
+# ============================================================================
+
+
+def test_r5_no_bad_outcomes_dead_constant():
+    """_BAD_OUTCOMES 死代码已删（round 5）：模块源码不再引用该常量。"""
+    src = (_TEST_ROOT / "src/home_perception/evaluation/ab_runner.py").read_text(encoding="utf-8")
+    assert "_BAD_OUTCOMES" not in src
+
+
+def test_r5_diff_from_reports_rejects_sid_mismatch():
+    """BenchmarkDiff.from_reports 两臂 scenario_set_id 不一致 → ValueError（round 5）。"""
+    b = _mk_report(scenario_set_id="s1", code_version="v1")
+    c = _mk_report(scenario_set_id="s2", code_version="v2")
+    with pytest.raises(ValueError, match="scenario_set_id 必须一致"):
+        BenchmarkDiff.from_reports(b, c)
+
+
+def test_r5_evaluate_regression_rejects_unknown_vary():
+    """evaluate_regression 入口拒绝未声明 vary 轴（round 5，与 assert_conserved 提前拦截一致）。"""
+    base = load_baseline_report(SET_ID)
+    cand = replace(base, provenance={**base.provenance, "code_version": "candidate-v2"})
+    with pytest.raises(ValueError, match="未知 vary 轴"):
+        evaluate_regression(cand, base, vary="dataset_version")
+
+
+def test_r5_evaluate_regression_rejects_nan_budget():
+    """max_regression_delta=NaN → ValueError（round 5：NaN<0 恒 False，负值拦截无效且会静默吞判定）。"""
+    base = load_baseline_report(SET_ID)
+    cand = replace(base, provenance={**base.provenance, "code_version": "candidate-v2"})
+    with pytest.raises(ValueError, match="NaN"):
+        evaluate_regression(cand, base, max_regression_delta=float("nan"))
+
+
+def test_r5_baseline_write_gate_blocks_overwrite_without_force(tmp_path):
+    """落盘门：目标已存在且未 --force → 拒绝（C1 防静默覆盖）。"""
+    target = tmp_path / "adr0033-phase1.json"
+    target.write_text("{}", encoding="utf-8")
+    ok, hint = baseline_write_gate(target, force=False, allow_anywhere=False, baselines_dir=tmp_path)
+    assert ok is False
+    assert "--force" in hint
+
+
+def test_r5_baseline_write_gate_force_overwrites(tmp_path):
+    """落盘门：目标已存在 + --force → 放行（D7 显式 bump）。"""
+    target = tmp_path / "adr0033-phase1.json"
+    target.write_text("{}", encoding="utf-8")
+    ok, _ = baseline_write_gate(target, force=True, allow_anywhere=False, baselines_dir=tmp_path)
+    assert ok is True
+
+
+def test_r5_baseline_write_gate_inside_baselines_ok(tmp_path):
+    """落盘门：baselines 子树内的显式路径（父目录尚不存在）→ 放行（自动建目录安全）。"""
+    target = tmp_path / "nested" / "x.json"
+    ok, _ = baseline_write_gate(target, force=False, allow_anywhere=False, baselines_dir=tmp_path)
+    assert ok is True
+
+
+def test_r5_baseline_write_gate_blocks_outside_baselines(tmp_path):
+    """落盘门：baselines 子树外的显式路径且未 allow-anywhere → 拒绝（round 5 路径安全）。"""
+    outside = tmp_path.parent / "outside.json"
+    ok, hint = baseline_write_gate(outside, force=False, allow_anywhere=False, baselines_dir=tmp_path)
+    assert ok is False
+    assert "allow-anywhere" in hint
+
+
+def test_r5_baseline_write_gate_allow_anywhere(tmp_path):
+    """落盘门：baselines 子树外 + --write-baseline-allow-anywhere → 放行（显式开关）。"""
+    outside = tmp_path.parent / "outside.json"
+    ok, _ = baseline_write_gate(outside, force=False, allow_anywhere=True, baselines_dir=tmp_path)
+    assert ok is True
+
+
+def test_r5_count_key_bool_rejected():
+    """计数键塞 bool → TypeError（round 5：bool 是 int 子类，静默等价 1/0 违反计数语义）。"""
+    bad = load_baseline_report(SET_ID).to_dict()
+    bad["metrics"]["tp"] = True
+    with pytest.raises(TypeError, match="不能为布尔"):
+        BenchmarkReport.from_dict(bad)
+
+
+def test_r5_count_key_non_integral_float_rejected():
+    """计数键塞非整数浮点（1.5）→ TypeError（round 5：仅接受整数值浮点）。"""
+    bad = load_baseline_report(SET_ID).to_dict()
+    bad["metrics"]["tp"] = 1.5
+    with pytest.raises(TypeError, match="整数值浮点"):
+        BenchmarkReport.from_dict(bad)
 
 
 # ============================================================================
