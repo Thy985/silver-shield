@@ -385,8 +385,8 @@ def test_adr0033_write_report_rejects_missing_parent(tmp_path):
 # ============================================================================
 # ADR-0033 Phase 3 CLI 端到端：--gate 退出码（需完整 AI 栈，仅 main / test-runtime 跑）
 # ============================================================================
-import subprocess  # noqa: E402
-import sys  # noqa: E402
+import subprocess
+import sys
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -401,7 +401,7 @@ def test_adr0033_phase3_cli_gate_end_to_end_pass(tmp_path):
          "--scenarios", str(bench_dir),
          "--set-id", "adr0033-phase1",
          "--gate", "--out", str(out)],
-        capture_output=True, text=True, cwd=str(_ROOT),
+        capture_output=True, text=True, cwd=str(_ROOT), check=False,
     )
     assert r.returncode == 0, r.stderr + "\n" + r.stdout
 
@@ -420,6 +420,6 @@ def test_adr0033_phase3_cli_gate_end_to_end_fail(tmp_path):
          "--scenarios", str(failing_dir),
          "--set-id", "adr0033-fail",
          "--gate", "--out", str(tmp_path / "r.json")],
-        capture_output=True, text=True, cwd=str(_ROOT),
+        capture_output=True, text=True, cwd=str(_ROOT), check=False,
     )
     assert r.returncode == 3, r.stderr + "\n" + r.stdout
