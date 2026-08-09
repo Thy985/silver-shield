@@ -6,7 +6,10 @@ meta:
   version: 1
   description: "Regression: single human long dwell -> abnormal_dwell"
   seed: 7
-  duration_frames: 120
+  # 帧数须同时满足两个运行时阈值（ADR-0033 端到端首次实测校正）：
+  # ① abnormal_dwell 需逻辑停留 >= long_duration_seconds(300s)：(608-2)*0.5s = 303.0s ✓
+  # ② 离场判定需尾部空缺 >= absence_gap_s(5s)：(659-608)*0.5s = 25.5s ✓（不离场则无 VisitorEvent）
+  duration_frames: 660
   owner: perception-team
   category: visitor
   difficulty: medium
@@ -28,13 +31,13 @@ actors:
       - frame: 2
         pos: [150.0, 140.0]
         size: [40.0, 120.0]
-      - frame: 118
+      - frame: 608
         pos: [200.0, 140.0]
         size: [40.0, 120.0]
     objects: []
     appearance: {}
 timeline:
-  - frame: 119
+  - frame: 620
     type: abnormal_dwell
 expects:
   emitted_event_types: [abnormal_dwell]

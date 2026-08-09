@@ -23,6 +23,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from home_perception.validation.contracts import BenchmarkExpectation
+
 # 已知 Schema 格式版本（未知版本拒绝加载，fail-closed，防旧场景被新 renderer 静默误读）。
 KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
 
@@ -126,6 +128,9 @@ class Scenario(BaseModel):
     actors: list[ActorSpec] = Field(default_factory=list)
     timeline: list[EventGroundTruth] = Field(default_factory=list)
     expects: ExpectsSpec = Field(default_factory=ExpectsSpec)
+    # ADR-0033：可选安全评价标签（向后兼容缺省 None；ScenarioValidator 不消费此字段，
+    # 验证 ≠ 评价，职责分离）。benchmark.expected_alarm 由场景作者显式声明。
+    benchmark: BenchmarkExpectation | None = None
 
 
 # ============================================================================
