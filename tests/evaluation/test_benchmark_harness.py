@@ -380,3 +380,46 @@ def test_adr0033_write_report_rejects_missing_parent(tmp_path):
     )
     with pytest.raises(ValueError, match="父目录"):
         rep.write_report(str(tmp_path / "nope" / "r.json"))
+
+
+# ============================================================================
+# ADR-0033 Phase 3 CLI 端到端：--gate 退出码（需完整 AI 栈，仅 main / test-runtime 跑）
+# ============================================================================
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.timeout(180)
+def test_adr0033_phase3_cli_gate_end_to_end_pass(tmp_path):
+    """真实 benchmark 场景（TP=1/TN=1）→ --gate 通过 → 退出码 0（端到端冒烟）。"""
+    bench_dir = FIX / "benchmark"
+    out = tmp_path / "gate_report.json"
+    r = subprocess.run(
+        [sys.executable, "scripts/run_benchmark.py",
+         "--scenarios", str(bench_dir),
+         "--set-id", "adr0033-phase1",
+         "--gate", "--out", str(out)],
+        capture_output=True, text=True, cwd=str(_ROOT),
+    )
+    assert r.returncode == 0, r.stderr + "\n" + r.stdout
+
+
+@pytest.mark.timeout(180)
+def test_adr0033_phase3_cli_gate_end_to_end_fail(tmp_path):
+    """构造「期望报警却无告警」场景 → FN → 门禁失败 → 退出码 3。"""
+    # 复制 quiet_hallway 负样本，但把 expected_alarm 翻成 true → 空门厅无告警即成 FN
+    failing_dir = tmp_path / "fail_scenarios"
+    failing_dir.mkdir()
+    yaml_text = (FIX / "benchmark" / "quiet_hallway.yaml").read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("expected_alarm: false", "expected_alarm: true")
+    (failing_dir / "flipped_quiet.yaml").write_text(yaml_text, encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "scripts/run_benchmark.py",
+         "--scenarios", str(failing_dir),
+         "--set-id", "adr0033-fail",
+         "--gate", "--out", str(tmp_path / "r.json")],
+        capture_output=True, text=True, cwd=str(_ROOT),
+    )
+    assert r.returncode == 3, r.stderr + "\n" + r.stdout

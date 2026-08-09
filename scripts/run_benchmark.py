@@ -10,6 +10,8 @@
 YOLO；``--frames`` 可切换 frames 通道（需真实 detector，opt-in）。报告落盘 JSON +
 stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自动门禁；Phase 2 基线对照
 **不**触发 CI 非零退出、**不**做 Hard Gate / 复合分门控（MUST NOT，见 ADR-0033 §6）。
+Phase 3 生产门控为**独立开关**：``--gate`` 启用 Hard Gate + 阈值 + 可选基线回归门禁，
+未通过 → 退出码 3；默认关闭，保持 Phase 1/2 行为零变化（D8）。
 
 依赖延迟导入：脚本仅在 ``main`` 内 import 运行时 / 评估链，避免加载即拉起重链。
 """
@@ -126,6 +128,30 @@ def main(argv: list[str] | None = None) -> int:
         help="与 --write-baseline 配合：覆盖已存在的基线文件（D7 显式 bump 动作，"
         "须 Owner 评审；默认不覆盖以防误操作）",
     )
+    # —— Phase 3 生产门控（独立 --gate 开关，默认关闭，零行为变化）——
+    parser.add_argument(
+        "--gate",
+        action="store_true",
+        help="启用生产门禁（ADR-0033 Phase 3，D5）：Hard Gate（全部场景 MUST 通过 "
+        "ScenarioValidator 且达阈值）→ 阈值对照 → 可选基线回归 → 复合分（仅报告）。"
+        "门禁未通过 → 退出码 3（非零，CI 拦截）；默认不启用，保持 Phase 1/2 行为。",
+    )
+    parser.add_argument(
+        "--min-pass-rate", type=float, default=None,
+        help="门控：标注场景最低通过率（默认 1.0，须全部 TP/TN）",
+    )
+    parser.add_argument(
+        "--max-suppression-rate", type=float, default=None,
+        help="门控：漏报率上限（默认 0.0）",
+    )
+    parser.add_argument(
+        "--max-false-alarm-rate", type=float, default=None,
+        help="门控：误报率上限（默认 0.05）",
+    )
+    parser.add_argument(
+        "--max-mean-risk-shortfall", type=float, default=None,
+        help="门控：平均风险缺口上限（默认 0.0；场景集未标定时该阈值自动跳过）",
+    )
     args = parser.parse_args(argv)
 
     from home_perception.evaluation.harness import BenchmarkHarness
@@ -189,11 +215,12 @@ def main(argv: list[str] | None = None) -> int:
         write_baseline_report(target, report)
         logger.info("benchmark_baseline_written", path=str(target))
 
-    # —— Phase 2：对照基线（报告性、非门禁）——
+    # —— Phase 2/3：基线对照（Phase 2 报告性 / Phase 3 可选门禁）——
+    # 先把基线加载出来，供后续 Phase 2 回归展示 或 Phase 3 门禁共用（避免重复加载）。
+    baseline = None
     if args.baseline:
         from home_perception.evaluation.ab_runner import (
             BenchmarkABConservationError,
-            evaluate_regression,
             load_baseline_report_path,
         )
 
@@ -209,7 +236,6 @@ def main(argv: list[str] | None = None) -> int:
 
         # Medium 11：基线加载失败（文件不存在 / JSON 损坏 / 顶层非对象 / 字段非法）给友好
         # 错误并退出码 1，而非 raw 异常栈；JSONDecodeError 是 ValueError 子类，一并覆盖。
-        # 解析错误在此显式捕获（区别于 evaluate_regression 的守恒错误），不再伪装成守恒失败。
         try:
             baseline = load_baseline_report_path(args.baseline)
         except (FileNotFoundError, ValueError, TypeError) as exc:
@@ -220,11 +246,47 @@ def main(argv: list[str] | None = None) -> int:
                 "--write-baseline 重新生成，并确认 PR 注明 benchmark-baseline-bump）"
             )
             return 1
+
+    # —— Phase 3 生产门控（仅 --gate 启用，默认关闭）——
+    if args.gate:
+        from home_perception.evaluation.ab_runner import BenchmarkABConservationError
+        from home_perception.evaluation.gate import (
+            BenchmarkThresholds,
+            evaluate_gate,
+        )
+
+        gate_thr: dict[str, object] = {}
+        # 仅当用户显式覆盖时才传入，否则用 BenchmarkThresholds D7 默认值
+        if args.min_pass_rate is not None:
+            gate_thr["min_pass_rate"] = args.min_pass_rate
+        if args.max_suppression_rate is not None:
+            gate_thr["max_suppression_rate"] = args.max_suppression_rate
+        if args.max_false_alarm_rate is not None:
+            gate_thr["max_false_alarm_rate"] = args.max_false_alarm_rate
+        if args.max_mean_risk_shortfall is not None:
+            gate_thr["max_mean_risk_shortfall"] = args.max_mean_risk_shortfall
+        # max_regression_delta 交由 thresholds（None = 不对照回归门禁）
+        gate_thr["max_regression_delta"] = args.max_regression_delta
+        thresholds = BenchmarkThresholds(**gate_thr)
+
+        try:
+            gate = evaluate_gate(report, thresholds, baseline=baseline)
+        except BenchmarkABConservationError as exc:  # 基线对照装配/守恒错误，退出码 1
+            logger.warning("benchmark_gate_conservation_failed", error=str(exc))
+            print(f"[gate] 基线对照守恒校验失败（装配错误）：{exc}")
+            return 1
+        print(gate.render_markdown())
+        if not gate.passed:
+            logger.warning("benchmark_gate_failed", set_id=args.set_id)
+            # 退出码 3：Hard Gate / 阈值 / 回归未通过（区别于 1=加载/装配错误、2=输入错误）
+            return 3
+    elif baseline is not None:
+        # Phase 2 行为（--baseline 且无 --gate）：报告性回归对照，退出码恒 0
+        from home_perception.evaluation.ab_runner import evaluate_regression
+
         try:
             reg = evaluate_regression(
-                report,
-                baseline,
-                max_regression_delta=args.max_regression_delta,
+                report, baseline, max_regression_delta=args.max_regression_delta
             )
         except BenchmarkABConservationError as exc:  # 守恒/装配错误，清晰报错，退出码 1
             logger.warning("benchmark_regression_conservation_failed", error=str(exc))
