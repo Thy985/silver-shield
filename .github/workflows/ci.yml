@@ -98,6 +98,11 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
           pip install -e .
+          # 钉死回归门禁比较关键依赖：runtime_dependencies 守恒(4/7) 要求版本确定，
+          # 否则浮动下限（numpy>=1.26 / opencv>=4.9 / torch 经 ultralytics 传递）随时间漂移
+          # 会令每个 PR 的 baseline gate 误红。torch==2.11.0 在 linux 装出 2.11.0+cpu，
+          # 由 harness._strip_build_suffix 归一为 2.11.0，与开发机 2.11.0+cu130 一致。
+          pip install "numpy==2.4.2" "opencv-python==4.13.0" "torch==2.11.0"
       - name: Run gate + regression + bump tests
         run: |
           pytest \
@@ -105,11 +110,13 @@ jobs:
             tests/evaluation/test_benchmark_ab_runner.py \
             tests/evaluation/test_benchmark_metrics.py \
             tests/evaluation/test_baseline_bump_check.py -q
-      - name: End-to-end CLI --gate smoke (real benchmark scenarios, no baseline)
+      - name: End-to-end CLI --gate smoke (real benchmark scenarios + baseline regression gate)
         run: |
           python scripts/run_benchmark.py \
             --scenarios src/home_perception/validation/fixtures/scenarios/benchmark \
             --set-id adr0033-phase1 \
+            --baseline src/home_perception/evaluation/fixtures/baselines/adr0033-phase1.json \
+            --max-regression-delta 0.05 \
             --gate --out /tmp/bench_gate_report.json
 
   # ADR-0033 D7 基线 bump 治理：基线 JSON 变更的 PR 必须注明 benchmark-baseline-bump（Owner 评审）。

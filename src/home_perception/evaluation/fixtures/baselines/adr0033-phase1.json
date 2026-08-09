@@ -1,6 +1,6 @@
 {
   "scenario_set_id": "adr0033-phase1",
-  "harness_fingerprint": "450bc2a8dfb10487398ad5ea3d94633f8e30a079aa0d84bbafd989ddcda455ec",
+  "harness_fingerprint": "59ced0449d0a97bf5884230ae46c597c4ed6266e38fd14453521be9d7153dfa7",
   "metrics": {
     "tp": 1,
     "tn": 1,
@@ -18,7 +18,7 @@
   "unlabeled_scenario_ids": [],
   "provenance": {
     "scenario_set_id": "adr0033-phase1",
-    "code_version": "455de5b",
+    "code_version": "12f5a94",
     "generator_fingerprint": "ff712c7f1229030ebdcac8476040e01b447d527ad15234ba588375743ffffa25",
     "policy_fingerprint": "c4cb7cb6e1e2b678d12e3d4cfcde4b920bf91ab2afdd65b9af71a54f44de51b4",
     "model_fingerprint": {
@@ -29,7 +29,7 @@
     "runtime_dependencies": {
       "numpy": "2.4.2",
       "opencv": "4.13.0",
-      "torch": "2.11.0+cu130"
+      "torch": "2.11.0"
     }
   },
   "scores": [

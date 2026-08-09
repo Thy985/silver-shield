@@ -77,6 +77,18 @@ def _resolve_code_version() -> str:
         ) from exc
 
 
+def _strip_build_suffix(version: str) -> str:
+    """归一化构建后缀（D4，跨 OS / 跨构建可比）。
+
+    pip 在不同平台装出的同一语义版本带不同构建后缀：Windows CUDA 为
+    ``2.11.0+cu130``、Linux CPU 为 ``2.11.0+cpu``、本地开发可能为 ``2.11.0+local``。
+    这些后缀差异不代表依赖语义变化，却会让 ``runtime_dependencies`` 守恒(4/7) 把
+    baseline（开发机生成）与 candidate（CI ubuntu 生成）判为不一致 → 每个 PR 误红。
+    归一为 ``MAJOR.MINOR.PATCH`` 后，跨 OS / 跨构建可比，仍保留真实主/次/补丁级升级检测。
+    """
+    return version.split("+", 1)[0]
+
+
 def _runtime_versions() -> dict[str, str]:
     """锁版本集合（D4）。
 
@@ -84,17 +96,17 @@ def _runtime_versions() -> dict[str, str]:
     （避免重复实现，review 1.5），键名适配为本 harness 的 ``numpy`` / ``opencv`` 风格，
     并补充可选 ``torch`` 版本（缺失记为 ``n/a``）。
     """
-    from home_perception.validation.fingerprint import _runtime_versions as _val_rt
+    from home_perception.validation.fingerprint import _runtime_versions as _imp_rt
 
-    vr = _val_rt()  # {numpy_version, opencv_version}
+    vr = _imp_rt()  # {numpy_version, opencv_version}
     deps: dict[str, str] = {
-        "numpy": vr["numpy_version"],
-        "opencv": vr["opencv_version"],
+        "numpy": _strip_build_suffix(vr["numpy_version"]),
+        "opencv": _strip_build_suffix(vr["opencv_version"]),
     }
     try:  # torch 为可选依赖，缺失不报错
         import torch
 
-        deps["torch"] = torch.__version__
+        deps["torch"] = _strip_build_suffix(torch.__version__)
     except ImportError:
         deps["torch"] = "n/a"
     return deps
