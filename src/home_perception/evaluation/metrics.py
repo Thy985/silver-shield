@@ -149,6 +149,31 @@ class ScenarioScore:
             "benchmark_severity": self.benchmark_severity,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, object]) -> ScenarioScore:
+        """从 ``to_dict`` 结构重建（Phase 2 基线可回放 T10）。
+
+        ``set`` 字段经可迭代重建（``to_dict`` 已排序为 list）；``risk_shortfall`` /
+        ``benchmark_expected_alarm`` / ``benchmark_severity`` 允许 ``None``。
+        """
+        risk_shortfall = d.get("risk_shortfall")
+        return cls(
+            scenario_id=str(d["scenario_id"]),
+            expected_label=d.get("expected_label"),  # str | None
+            actual_label=str(d["actual_label"]),
+            outcome=str(d["outcome"]),
+            validation_ok=bool(d["validation_ok"]),
+            validation_details=str(d["validation_details"]),
+            observed_event_types=set(d.get("observed_event_types", [])),  # type: ignore[arg-type]
+            expected_event_types=set(d.get("expected_event_types", [])),  # type: ignore[arg-type]
+            missing_event_types=set(d.get("missing_event_types", [])),  # type: ignore[arg-type]
+            observed_risk_levels=list(d.get("observed_risk_levels", [])),  # type: ignore[arg-type]
+            event_recall=float(d["event_recall"]),
+            risk_shortfall=(float(risk_shortfall) if risk_shortfall is not None else None),
+            benchmark_expected_alarm=d.get("benchmark_expected_alarm"),
+            benchmark_severity=d.get("benchmark_severity"),
+        )
+
 
 def build_scenario_score(
     scenario: Scenario,

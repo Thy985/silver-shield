@@ -140,6 +140,38 @@ class BenchmarkReport:
             "scores": [s.to_dict() for s in self.scores],
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, object]) -> BenchmarkReport:
+        """从 ``to_dict`` / ``canonical_dict`` 结构重建（Phase 2 基线可回放 T10）。
+
+        ``canonical_dict`` 不含 ``generated_at``；``mean_risk_shortfall`` 允许 ``None``；
+        ``provenance`` 一并恢复（基线对照的守恒校验依赖它）。
+        """
+        metrics = d["metrics"]  # type: ignore[index]
+        shortfall = metrics.get("mean_risk_shortfall")  # type: ignore[union-attr]
+        return cls(
+            scenario_set_id=str(d["scenario_set_id"]),  # type: ignore[index]
+            harness_fingerprint=str(d["harness_fingerprint"]),  # type: ignore[index]
+            scores=tuple(
+                ScenarioScore.from_dict(s) for s in d.get("scores", [])  # type: ignore[union-attr]
+            ),
+            generated_at=str(d.get("generated_at", "")),  # type: ignore[arg-type]
+            tp=int(metrics["tp"]),  # type: ignore[index]
+            tn=int(metrics["tn"]),  # type: ignore[index]
+            fn=int(metrics["fn"]),  # type: ignore[index]
+            fp=int(metrics["fp"]),  # type: ignore[index]
+            unlabeled_scenario_count=int(metrics["unlabeled_scenario_count"]),  # type: ignore[index]
+            suppression_rate=float(metrics["suppression_rate"]),  # type: ignore[index]
+            false_alarm_rate=float(metrics["false_alarm_rate"]),  # type: ignore[index]
+            precision=float(metrics["precision"]),  # type: ignore[index]
+            recall=float(metrics["recall"]),  # type: ignore[index]
+            f1=float(metrics["f1"]),  # type: ignore[index]
+            mean_event_recall=float(metrics["mean_event_recall"]),  # type: ignore[index]
+            mean_risk_shortfall=(float(shortfall) if shortfall is not None else None),
+            unlabeled_scenario_ids=tuple(d.get("unlabeled_scenario_ids", [])),  # type: ignore[arg-type]
+            provenance=dict(d.get("provenance", {})),  # type: ignore[arg-type]
+        )
+
     def _sorted_scores(self) -> list[ScenarioScore]:
         """场景排序**唯一来源**（按 ``scenario_id`` 升序）。
 

@@ -13,7 +13,9 @@ stdout Markdown。Phase 1 报告**给人读、人工判断**，不进任何自�
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from home_perception.common.logging import get_logger
 
@@ -85,6 +87,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--code-version", default=None, help="显式注入 code_version（否则取 git 短哈希）"
     )
+    # —— Phase 2 基线对照 / bump（D7，报告性、非门禁）——
+    parser.add_argument(
+        "--baseline",
+        default=None,
+        metavar="PATH",
+        help="对照基线 JSON 路径；提供则跑 evaluate_regression 并打印 diff "
+        "（退出码恒 0，Phase 2 不触发 CI 非零；candidate 须与基线在 vary 轴不同）",
+    )
+    parser.add_argument(
+        "--max-regression-delta",
+        type=float,
+        default=None,
+        help="回归预算 Δ（仅信息性对照，超过置 regressions_exceeded=True，不阻断）",
+    )
+    parser.add_argument(
+        "--write-baseline",
+        default=None,
+        metavar="PATH",
+        help="写基线 JSON（bump 工作流）：canonical_dict 落到指定路径；"
+        "若填 'auto' 则落到 <baselines_dir>/<set-id>.json",
+    )
     args = parser.parse_args(argv)
 
     from home_perception.evaluation.harness import BenchmarkHarness
@@ -112,11 +135,45 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.out:
         # write_report 拒绝自动创建父目录（防路径穿越），故此处显式建目录
-        from pathlib import Path
-
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         report.write_report(args.out)
         logger.info("benchmark_report_written", path=args.out)
+
+    # —— Phase 2：写基线（bump 工作流）——
+    if args.write_baseline:
+        from home_perception.evaluation.ab_runner import BASELINES_DIR, baseline_path
+
+        if args.write_baseline == "auto":
+            target = baseline_path(args.set_id, BASELINES_DIR)
+        else:
+            target = Path(args.write_baseline)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(report.canonical_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        logger.info("benchmark_baseline_written", path=str(target))
+
+    # —— Phase 2：对照基线（报告性、非门禁）——
+    if args.baseline:
+        from home_perception.evaluation.ab_runner import (
+            load_baseline_report_path,
+            evaluate_regression,
+        )
+
+        baseline = load_baseline_report_path(args.baseline)
+        try:
+            reg = evaluate_regression(
+                report,
+                baseline,
+                max_regression_delta=args.max_regression_delta,
+            )
+        except Exception as exc:  # 守恒校验失败（装配错误，非回归判断）→ 清晰报错，退出码 1
+            logger.warning("benchmark_regression_conservation_failed", error=str(exc))
+            print(f"[regression] 守恒校验失败（基线对照装配错误）：{exc}")
+            return 1
+        print(reg.render_markdown())
+
     # 最终报告为人类可读产物，输出到 stdout（命令主产物，非日志）
     print(report.render_markdown())
     return 0

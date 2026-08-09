@@ -27,6 +27,16 @@ _PUBLIC_MODULES: dict[str, str] = {
     "default_model_fingerprint": "home_perception.evaluation.harness",
     "BenchmarkReport": "home_perception.evaluation.report",
     "ScenarioScore": "home_perception.evaluation.metrics",
+    # Phase 2（ab_runner）：回归能力（D6 / D7）
+    "BenchmarkABRun": "home_perception.evaluation.ab_runner",
+    "BenchmarkABConservationError": "home_perception.evaluation.ab_runner",
+    "BenchmarkDiff": "home_perception.evaluation.ab_runner",
+    "MetricDelta": "home_perception.evaluation.ab_runner",
+    "RegressionReport": "home_perception.evaluation.ab_runner",
+    "evaluate_regression": "home_perception.evaluation.ab_runner",
+    "load_baseline_report": "home_perception.evaluation.ab_runner",
+    "load_baseline_report_path": "home_perception.evaluation.ab_runner",
+    "baseline_path": "home_perception.evaluation.ab_runner",
 }
 
 
