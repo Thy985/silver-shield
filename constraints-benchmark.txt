@@ -17,5 +17,5 @@
 #   本地 CUDA 构建的 torch 2.11.0+cu130 经 harness.normalize_version 归一为 2.11.0，
 #   与 linux CPU 构建的 2.11.0+cpu 归一结果相同 → 跨 OS 可比。
 numpy==2.4.2
-opencv-python==4.13.0
+opencv-python==4.13.0.92
 torch==2.11.0
