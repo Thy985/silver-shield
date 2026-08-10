@@ -94,10 +94,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install deps (full AI stack, CPU torch)
-        run: |
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-          pip install -e .
+        # benchmark 回归门禁专用约束：constraints-benchmark.txt 钉死 numpy/opencv/torch
+        # 精确版本，使 committed baseline 可重放、跨时间/跨 OS 稳定（ADR-0033 D4 契约）。
+        # 与 production requirements.txt 解耦——生产保持">="下限灵活，benchmark 走 constraints。
+        # torch==2.11.0 在 linux 装出 2.11.0+cpu，经 harness.normalize_version 归一为 2.11.0，
+        # 与开发机 2.11.0+cu130 归一结果一致 → runtime_dependencies 守恒(4/7) 跨 OS 通过。
+        run: pip install -c constraints-benchmark.txt -r requirements-dev.txt
       - name: Run gate + regression + bump tests
         run: |
           pytest \
@@ -105,11 +107,13 @@ jobs:
             tests/evaluation/test_benchmark_ab_runner.py \
             tests/evaluation/test_benchmark_metrics.py \
             tests/evaluation/test_baseline_bump_check.py -q
-      - name: End-to-end CLI --gate smoke (real benchmark scenarios, no baseline)
+      - name: End-to-end CLI --gate smoke (real benchmark scenarios + baseline regression gate)
         run: |
           python scripts/run_benchmark.py \
             --scenarios src/home_perception/validation/fixtures/scenarios/benchmark \
             --set-id adr0033-phase1 \
+            --baseline src/home_perception/evaluation/fixtures/baselines/adr0033-phase1.json \
+            --max-regression-delta 0.05 \
             --gate --out /tmp/bench_gate_report.json
 
   # ADR-0033 D7 基线 bump 治理：基线 JSON 变更的 PR 必须注明 benchmark-baseline-bump（Owner 评审）。
