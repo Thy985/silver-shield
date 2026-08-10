@@ -4,11 +4,13 @@ These tests build temporary manifests/roots so they never touch the real repo
 fixtures or invoke git. Every call passes ``--root`` explicitly, keeping ``main``
 deterministic in CI.
 """
+
 from __future__ import annotations
 
 import hashlib
 import io
 import sys
+import urllib.error
 from pathlib import Path
 from typing import Self
 
@@ -84,7 +86,9 @@ def test_is_present_type_mismatch_image_but_dir_warns(tmp_path: Path) -> None:
     warnings: list[str] = []
     # declared image (file mode) but path is a directory -> not present per
     # declared semantics, and a mismatch warning is emitted (no silent fallback).
-    assert _is_present({"id": "vid", "type": "image", "path": "frames"}, tmp_path, warnings) is False
+    assert (
+        _is_present({"id": "vid", "type": "image", "path": "frames"}, tmp_path, warnings) is False
+    )
     assert any("DIRECTORY" in w for w in warnings)
 
 
@@ -223,7 +227,9 @@ class _FakeResponse:
 def _patch_download(monkeypatch: pytest.MonkeyPatch, payload: bytes, **headers: str) -> None:
     """Route _secure_download at a fixed in-memory body (no network)."""
     monkeypatch.setattr(
-        fm, "_open_url", lambda url, timeout=fm.DOWNLOAD_TIMEOUT_SECONDS: _FakeResponse(payload, headers)
+        fm,
+        "_open_url",
+        lambda url, timeout=fm.DOWNLOAD_TIMEOUT_SECONDS: _FakeResponse(payload, headers),
     )
 
 
@@ -293,9 +299,7 @@ def test_secure_download_verifies_matching_sha(
     payload = b"trusted-bytes"
     _patch_download(monkeypatch, payload)
     dest = tmp_path / "a.bin"
-    ok, _ = _secure_download(
-        GOOD_URL, dest, hashlib.sha256(payload).hexdigest(), root=tmp_path
-    )
+    ok, _ = _secure_download(GOOD_URL, dest, hashlib.sha256(payload).hexdigest(), root=tmp_path)
     assert ok is True
     assert dest.read_bytes() == payload
 
@@ -320,21 +324,15 @@ def test_secure_download_streams_multi_chunk_payload(
     payload = b"Z" * (fm.DOWNLOAD_CHUNK_BYTES * 2 + 7)
     _patch_download(monkeypatch, payload)
     dest = tmp_path / "big.bin"
-    ok, _ = _secure_download(
-        GOOD_URL, dest, hashlib.sha256(payload).hexdigest(), root=tmp_path
-    )
+    ok, _ = _secure_download(GOOD_URL, dest, hashlib.sha256(payload).hexdigest(), root=tmp_path)
     assert ok is True
     assert dest.stat().st_size == len(payload)
 
 
-def test_secure_download_empty_body_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_secure_download_empty_body_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_download(monkeypatch, b"")
     dest = tmp_path / "a.bin"
-    ok, msgs = _secure_download(
-        GOOD_URL, dest, hashlib.sha256(b"").hexdigest(), root=tmp_path
-    )
+    ok, msgs = _secure_download(GOOD_URL, dest, hashlib.sha256(b"").hexdigest(), root=tmp_path)
     assert ok is False
     assert any("empty file" in m for m in msgs)
     assert not dest.exists()
@@ -348,7 +346,9 @@ def test_secure_download_aborts_on_declared_oversize(
 ) -> None:
     _patch_download(monkeypatch, b"x" * 100, **{"Content-Length": "999999"})
     dest = tmp_path / "a.bin"
-    ok, msgs = _secure_download(GOOD_URL, dest, "a" * 64, root=tmp_path, max_bytes=10)
+    # max_bytes=2048 is a legitimate (>=1024) ceiling; the declared 999999B is
+    # what trips the cap here (the <1024 absurd-value guard must NOT fire).
+    ok, msgs = _secure_download(GOOD_URL, dest, "a" * 64, root=tmp_path, max_bytes=2048)
     assert ok is False
     assert any("exceeds cap" in m for m in msgs)
     assert not dest.exists()
@@ -375,9 +375,7 @@ def test_secure_download_malformed_content_length_falls_through_to_stream_cap(
     payload = b"ok-bytes"
     _patch_download(monkeypatch, payload, **{"Content-Length": "not-a-number"})
     dest = tmp_path / "a.bin"
-    ok, _ = _secure_download(
-        GOOD_URL, dest, hashlib.sha256(payload).hexdigest(), root=tmp_path
-    )
+    ok, _ = _secure_download(GOOD_URL, dest, hashlib.sha256(payload).hexdigest(), root=tmp_path)
     assert ok is True
 
 
@@ -386,19 +384,15 @@ def test_secure_download_malformed_content_length_falls_through_to_stream_cap(
 
 def test_redirect_handler_blocks_foreign_host() -> None:
     handler = fm._AllowlistRedirectHandler()
-    with pytest.raises(Exception) as exc:
-        handler.redirect_request(
-            None, None, 302, "Found", {}, "https://evil.example.com/payload"
-        )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        handler.redirect_request(None, None, 302, "Found", {}, "https://evil.example.com/payload")
     assert "non-allowlisted host" in str(exc.value)
 
 
 def test_redirect_handler_blocks_downgrade_to_http() -> None:
     handler = fm._AllowlistRedirectHandler()
-    with pytest.raises(Exception) as exc:
-        handler.redirect_request(
-            None, None, 302, "Found", {}, "http://raw.githubusercontent.com/x"
-        )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        handler.redirect_request(None, None, 302, "Found", {}, "http://raw.githubusercontent.com/x")
     assert "non-HTTPS" in str(exc.value)
 
 
@@ -748,3 +742,97 @@ def test_main_allow_unpinned_without_acquire_warns(
     )
     main(["--manifest", str(m), "--root", str(tmp_path), "--allow-unpinned"])
     assert "no effect without --acquire" in capsys.readouterr().err
+
+
+# ----- B2: destination symlink escaping the root is refused -------------
+
+
+def test_secure_download_blocks_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.bin"
+    outside.write_bytes(b"x")
+    link = tmp_path / "link.bin"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation unsupported in this environment")
+    # `dest` is a symlink resolving OUTSIDE root: must be refused *before* any
+    # download, even though `dest` "exists" (the old `dest.parent` check would
+    # have missed this by inspecting the parent directory instead).
+    ok, msgs = _secure_download(
+        "https://raw.githubusercontent.com/x/y", link, "0" * 64, root=tmp_path
+    )
+    assert ok is False
+    assert any("destination escapes repo root" in m for m in msgs)
+    assert not link.exists() or link.is_symlink()
+
+
+# ----- B6: absurd max_bytes is refused --------------------------------
+
+
+def test_secure_download_refuses_absurd_max_bytes(tmp_path: Path) -> None:
+    dest = tmp_path / "a.bin"
+    ok, msgs = _secure_download(GOOD_URL, dest, "0" * 64, root=tmp_path, max_bytes=1)
+    assert ok is False
+    assert any("max_bytes" in m for m in msgs)
+    assert not dest.exists()
+
+
+# ----- S1: bare github.com top-level is not allow-listed --------------
+
+
+def test_allowlist_excludes_bare_github_com() -> None:
+    assert "github.com" not in fm.ALLOWED_DOWNLOAD_HOSTS
+
+
+def test_secure_download_rejects_github_com_top_level(tmp_path: Path) -> None:
+    dest = tmp_path / "a.bin"
+    ok, msgs = _secure_download(
+        "https://github.com/owner/repo/asset", dest, "0" * 64, root=tmp_path
+    )
+    assert ok is False
+    assert any("not allow-listed" in m for m in msgs)
+    assert not dest.exists()
+
+
+# ----- T1: _resolve_root fallback chain --------------------------------
+
+
+def test_resolve_root_explicit_overrides_everything(tmp_path: Path) -> None:
+    manifest = tmp_path / "tests" / "fixtures" / "manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("fixtures: []\n", encoding="utf-8")
+    root, warnings = fm._resolve_root(manifest, explicit="/srv/ci-root")
+    assert root == Path("/srv/ci-root").resolve()
+    assert warnings == []
+
+
+def test_resolve_root_uses_git_toplevel_when_under_tests_fixtures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = Path("/repo").resolve()
+    monkeypatch.setattr(fm, "_git_toplevel", lambda: repo)
+    manifest = Path("/repo") / "tests" / "fixtures" / "manifest.yaml"
+    root, warnings = fm._resolve_root(manifest, None)
+    assert root == repo
+    assert warnings == []
+
+
+def test_resolve_root_warns_when_manifest_outside_tests_fixtures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = Path("/repo").resolve()
+    monkeypatch.setattr(fm, "_git_toplevel", lambda: repo)
+    manifest = Path("/repo") / "other" / "manifest.yaml"
+    root, warnings = fm._resolve_root(manifest, None)
+    assert root == repo
+    assert any("not under tests/fixtures" in w for w in warnings)
+
+
+def test_resolve_root_falls_back_when_git_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fm, "_git_toplevel", lambda: None)
+    manifest = tmp_path / "tests" / "fixtures" / "manifest.yaml"
+    root, warnings = fm._resolve_root(manifest, None)
+    assert root == manifest.parent.parent.parent
+    assert any("could not resolve git top-level" in w for w in warnings)

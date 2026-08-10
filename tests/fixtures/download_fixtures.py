@@ -40,19 +40,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# Preliminary root, used only to put `scripts` on sys.path before importing it.
+_PRELIM_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PRELIM_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PRELIM_ROOT))
+
+from scripts.fixture_manager import _git_toplevel, _secure_download, _sha256_of
+
+# Repo root resolved the *same* way fixture_manager does: prefer
+# `git rev-parse --show-toplevel`, fall back to the manifest-relative location so
+# a relocated/renamed checkout cannot silently point this script at the wrong
+# tree. (Single source of truth for "where is the repo root".)
+REPO_ROOT = _git_toplevel() or _PRELIM_ROOT
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures"
 RAW_DIR = FIXTURE_DIR / "caviar_raw"
 DOORWAY_DIR = FIXTURE_DIR / "doorway"
-
-# Reuse the hardened downloader instead of hand-rolling a second one: a single
-# allow-list / size cap / verify-before-rename implementation is the whole point.
-# Imported as `scripts.fixture_manager` (not by bare module name) so this script
-# and the test suite share ONE module object in sys.modules — two copies would
-# silently diverge and make the allow-list impossible to patch in tests.
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-from scripts.fixture_manager import _secure_download, _sha256_of
 
 CAVIAR_BASE = "https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1"
 CAVIAR_DATA2_BASE = "https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA2"
@@ -90,12 +92,22 @@ SCENARIOS = [
 def download(url: str, dst: Path, sha256: str) -> bool:
     """Fetch one upstream MPG, verifying its pinned digest.
 
-    A cached file whose digest no longer matches is discarded and re-fetched:
-    stale-but-present is exactly the failure mode a checksum exists to catch.
+    The decision is driven entirely by the checksum — there is no separate size
+    sniff:
+      * present AND digest matches  -> skip (zero network I/O)
+      * present AND digest mismatch -> discard and re-fetch (stale-but-present is
+        exactly the failure mode a checksum exists to catch)
+      * absent                      -> fetch
+
+    The previous ">1 KiB" precondition was a fragile proxy for "looks truncated";
+    the digest is the real gate, so we no longer second-guess it by byte count.
+    ``_secure_download`` re-verifies the digest after transfer as a backstop.
     """
-    if dst.exists() and dst.stat().st_size > 1024:
+    if dst.exists():
         if _sha256_of(dst) == sha256:
-            print(f"  [skip] {dst.name} already present & verified ({dst.stat().st_size // 1024}KB)")
+            print(
+                f"  [skip] {dst.name} already present & verified ({dst.stat().st_size // 1024}KB)"
+            )
             return True
         print(f"  [warn] {dst.name} checksum mismatch, re-downloading")
         dst.unlink()

@@ -42,6 +42,22 @@ Why ``sha256: null`` blocks acquisition
     human act: run with ``--allow-unpinned``, read the printed digest, paste it
     into the manifest, commit. CI never passes that flag.
 
+SHA pin rotation governance
+----------------------------
+A pinned ``sha256`` is a trust anchor: it says "this exact byte sequence, or the
+fixture is invalid." When an upstream asset legitimately changes (new model
+weights, re-encoded video), the pin must be rotated. This is a governed act, not
+a silent edit:
+
+* Rotation happens only through a dedicated PR whose body is labelled
+  ``fixture-rotation`` (so it is greppable in history and review).
+* The human owner (Thy985) reviews and merges it; CI never auto-rotates.
+* Between a source change and the pin update, ``--acquire --strict`` correctly
+  FAILS CLOSED (checksum mismatch) — that red is the intended signal that a
+  rotation is due, not a bug to "fix" by loosening the pin.
+* Never widen ``ALLOWED_DOWNLOAD_HOSTS`` or drop a hash to make a red go away;
+  rotate the hash instead.
+
 Why derived directories are not content-hashed
     ffmpeg output is not bit-reproducible across versions/platforms, so pinning
     a digest of extracted frames would fail on any runner whose ffmpeg differs.
@@ -69,6 +85,7 @@ Usage
     # bootstrap a new fixture locally (prints the digest to pin):
     python scripts/fixture_manager.py --manifest ... --acquire --allow-unpinned
 """
+
 from __future__ import annotations
 
 import argparse
@@ -96,11 +113,18 @@ ACQUIRE_METHODS: frozenset[str] = frozenset({"http-file", "script"})
 
 # Hosts we are willing to fetch fixtures from, including redirect targets.
 # Adding an entry is a governance decision: it widens the trusted supply chain.
+# NOTE: only specific sub-domains are listed — the bare ``github.com`` top-level
+# domain is intentionally EXCLUDED. Permitting it would let a download target any
+# repo path (including attacker-pushed content under a repo), which is a needless
+# supply-chain surface. Redirects are still allowed to ``objects.githubusercontent.com``
+# (where GitHub serves raw/release bytes), but the *initial* pull entry point is
+# confined to ``raw.githubusercontent.com`` (person_smoke) and ``homepages.inf.ed.ac.uk``
+# (CAVIAR). ``source:`` provenance URLs in the manifest are metadata only and are
+# never fetched, so dropping ``github.com`` here does not affect any real download.
 ALLOWED_DOWNLOAD_HOSTS: frozenset[str] = frozenset(
     {
         "raw.githubusercontent.com",
         "objects.githubusercontent.com",  # GitHub release/raw redirect target
-        "github.com",
         "homepages.inf.ed.ac.uk",  # CAVIAR upstream
     }
 )
@@ -176,6 +200,14 @@ class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
 def _open_url(url: str, timeout: int = DOWNLOAD_TIMEOUT_SECONDS):
     """Open *url* through the allow-listed-redirect opener.
 
+    Transport trust model (defense-in-depth, documented for reviewers): we trust
+    the **host allow-list + redirect policy + HTTPS**, but we do **NOT** pin the
+    TLS certificate (no HPKP / public-key pinning). The allow-list already bounds
+    the set of origins to two specific GitHub sub-domains and one academic host,
+    and a 302 cannot leave that set, so certificate pinning is deliberately
+    omitted — its rotation-maintenance cost would outweigh the marginal gain for
+    fixtures. Revisit only if the allow-list is ever widened to a general CDN.
+
     Seam for tests: monkeypatch this to avoid real network I/O.
     """
     opener = urllib.request.build_opener(_AllowlistRedirectHandler())
@@ -221,7 +253,24 @@ def _secure_download(
         )
         return False, msgs
 
-    if not _is_within(dest.parent if not dest.exists() else dest, root):
+    # Guard against an absurd ceiling: a ``max_bytes`` below one KiB would let the
+    # very first 1 MiB chunk through before the streaming cap engages, defeating
+    # the disk-exhaustion protection. ``max_bytes`` is a coarse ceiling, not a
+    # precise quota, so anything sub-KiB is treated as a misconfiguration.
+    if max_bytes < 1024:
+        msgs.append(
+            f"refusing absurd max_bytes={max_bytes} (must be >= 1024; "
+            "it is a coarse size ceiling, not a precise byte budget)"
+        )
+        return False, msgs
+
+    # Destination must resolve *inside* the repo root. We check ``dest`` itself
+    # (not ``dest.parent``): if ``dest`` already exists as a symlink that points
+    # OUTSIDE the root, ``_is_within``'s ``resolve()`` walks that link and reports
+    # the escape, so a malicious ``dest -> /etc/passwd`` is refused before any byte
+    # is written. For the normal (not-yet-existing) case ``resolve()`` still yields
+    # a path under ``root``, so the check passes identically.
+    if not _is_within(dest, root):
         msgs.append(f"destination escapes repo root: {dest}")
         return False, msgs
 
@@ -284,7 +333,15 @@ def _secure_download(
 
 
 def _run_acquire_script(spec: dict, root: Path) -> tuple[bool, list[str]]:
-    """Run a repo-local generator script that materialises a derived fixture."""
+    """Run a repo-local generator script that materialises a derived fixture.
+
+    The child runs with ``cwd=root`` and an **explicit copy of the caller's
+    environment** (``env=os.environ.copy()``). Inheriting the parent env is
+    intentional: acquire scripts rely on the caller's ``PATH`` to find ffmpeg /
+    ffprobe / python. We pass an explicit copy rather than relying on
+    subprocess' default inheritance so the dependency on the caller's toolchain
+    is visible and not silently lost if a future sandbox isolates the env.
+    """
     msgs: list[str] = []
     rel = spec.get("script")
     if not rel:
@@ -305,6 +362,7 @@ def _run_acquire_script(spec: dict, root: Path) -> tuple[bool, list[str]]:
         proc = subprocess.run(
             cmd,
             cwd=str(root),
+            env=os.environ.copy(),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -331,7 +389,9 @@ def _run_acquire_script(spec: dict, root: Path) -> tuple[bool, list[str]]:
     return True, msgs
 
 
-def acquire_entry(entry: dict, root: Path, *, allow_unpinned: bool = False) -> tuple[bool, list[str]]:
+def acquire_entry(
+    entry: dict, root: Path, *, allow_unpinned: bool = False
+) -> tuple[bool, list[str]]:
     """Materialise one missing fixture. Returns ``(ok, messages)``."""
     fid = entry.get("id", "<unnamed>")
     spec = entry.get("acquire")
@@ -399,7 +459,11 @@ def _is_present(entry: dict, root: Path, warnings: list[str]) -> bool:
     elif declared in FILE_TYPES:
         expect_dir = False
     else:
-        # Unknown / absent type -> infer from the path attribute (never crash).
+        # DEPRECATED FALLBACK PATH: the manifest schema now requires ``type``
+        # (validate_manifest rejects its absence), so this branch only exists for
+        # backwards-compat with any pre-schema fixture still in the wild. Infer
+        # from the path attribute and never crash; do NOT add new logic here.
+        # When the last legacy entry is migrated, delete this branch entirely.
         expect_dir = is_dir_attr and not is_file_attr
 
     # Type/real-shape mismatch: warn loudly, keep declared-type semantics.
@@ -488,9 +552,7 @@ def _validate_acquire(entry: dict, loc: str, fid: str, errors: list[str]) -> Non
         return
     method = spec.get("method")
     if method not in ACQUIRE_METHODS:
-        errors.append(
-            f"{loc} ({fid}): acquire.method '{method}' not in {sorted(ACQUIRE_METHODS)}"
-        )
+        errors.append(f"{loc} ({fid}): acquire.method '{method}' not in {sorted(ACQUIRE_METHODS)}")
         return
     if method == "http-file":
         url = spec.get("url")
