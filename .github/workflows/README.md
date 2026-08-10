@@ -65,6 +65,14 @@ every blocking workflow must leave downloadable evidence behind.
 5. **Runtime-heavy validation is separated from fast PR feedback.**
    `ci-runtime` installs torch + ultralytics + downloads weights (~20 min) and
    therefore runs only on `main` / manual, never on every PR.
+6. **No silent skips in the runtime path (anti false-green).**
+   In an ordinary software repo a skip is a convenience; in an AI system a skip
+   caused by a missing model / dataset / GPU path means CI is validating a
+   pipeline that never actually executed — and still reporting green. That is the
+   most dangerous CI anti-pattern for AI systems. `ci-runtime` therefore runs a
+   **fail-closed fixture gate** (`scripts/fixture_manager.py --strict`) *before*
+   the test suite: if a required runtime fixture (real YOLO image, CAVIAR
+   scenario assets) is absent, the workflow turns **red**, never silently green.
 
 ## ADR Mapping
 
@@ -120,6 +128,44 @@ the run summary when a check fails.
   (structured summary parsed from real pytest results), plus
   `artifacts/junit.xml` and `artifacts/coverage.xml`, and decision/action
   *trace artifacts* once ADR-0034 scenarios are wired in.
+
+## Fail-Closed Fixture Gate (Stage 2 — anti false-green)
+
+The single most dangerous failure mode in AI-system CI is the **silent skip**:
+a test that should exercise the real inference path is skipped because its
+fixture (model / video / image / dataset) is missing, and the run still reports
+green. In an ordinary software repo a skip is a convenience; in an AI system it
+means CI is validating a pipeline that never actually executed.
+
+`ci-runtime` defends against this in two layers:
+
+1. **Manifest as single source of truth** — `tests/fixtures/manifest.yaml`
+   declares every required AI asset (`id`, `type`, `path`, `source`, `sha256`,
+   `license`, `required_for`). Unlike ordinary pip dependencies, AI assets carry
+   *version / checksum / source / size / license* metadata and must be governed,
+   not just downloaded.
+2. **Fail-closed gate before the suite** — the workflow runs
+   `scripts/fixture_manager.py --manifest tests/fixtures/manifest.yaml --strict`
+   as a dedicated step between install and `run_integration.py`. Under
+   `--strict`, a missing *required* fixture makes the script `exit 1`, so the job
+   fails loudly instead of letting `pytest.skip()` hide the gap.
+
+**Current state (P0):** the gate is wired and fail-closed, but the manifest's
+fixtures are not yet auto-acquired in CI (their `source`/`sha256` are
+placeholders pending P1). Until P1 lands the download + checksum + cache step,
+`ci-runtime` will correctly turn **red** when the real inference assets are
+absent — which is the intended, honest signal. P1 will add `--acquire` to fetch
+and verify them so the genuine YOLO / CAVIAR path actually runs.
+
+Stage roadmap (per governance decision):
+
+| Stage | Goal | Status |
+|---|---|---|
+| 1 | CI governance infrastructure (4 workflows + locked deps + entrypoints) | ✅ Done (#174, #175) |
+| 2 | Eliminate false-green (fail-closed fixture gate) | ✅ This change |
+| 3 | Real YOLO smoke closed loop (image→YOLO→Detection→Tracker→Decision→Trace→Benchmark) | P1 |
+| 4 | CAVIAR real scenario closed loop | P2 |
+| 5 | ADR-0034 integration | P3 |
 
 ## Related (non-governance) workflows
 
