@@ -157,6 +157,14 @@ placeholders pending P1). Until P1 lands the download + checksum + cache step,
 absent — which is the intended, honest signal. P1 will add `--acquire` to fetch
 and verify them so the genuine YOLO / CAVIAR path actually runs.
 
+> **⚠️ Mergeability note (Stage-2 → Stage-3 transition):** because the gate is
+> fail-closed and the manifest fixtures are *not* yet auto-acquired, **`main`
+> will show a red `ci-runtime` on every push until P1 lands `--acquire`**. This
+> is the intended honest signal, *not* a regression — do **not** bypass or
+> "fix" it by weakening the gate. Contributors: a red `ci-runtime` on `main`
+> means the runtime fixtures are intentionally absent from CI; land P1 (download
+> + checksum + cache) to turn the genuine YOLO / CAVIAR path green.
+
 Stage roadmap (per governance decision):
 
 | Stage | Goal | Status |

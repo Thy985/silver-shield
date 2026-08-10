@@ -11,11 +11,25 @@
 # manager does not provide:
 #   id        stable identifier used by scripts/fixture_manager.py
 #   type      image | video | model | dataset | audio
-#   path      repo-relative location checked for presence
+#   path      repo-relative location checked for presence.
+#              MUST resolve to a git-tracked or otherwise controlled location
+#              under the repo root. A symlink is accepted only if it resolves
+#              INSIDE the repo (fixture_manager.py warns when a link escapes root).
 #   source    where to acquire it (P1 download; null = declared-but-not-yet-sourced)
 #   sha256    content hash; null = not yet pinned (P1 fills it, then enforced)
 #   license   attribution / redistribution terms
 #   required_for  test nodeids that MUST NOT run without this asset
+#
+# Security note for P1 download (source URLs below)
+# ------------------------------------------------
+# When `--acquire` lands, the downloader MUST:
+#   * upgrade http:// -> https:// (or pin a CA / cert), never fetch over plain HTTP;
+#   * restrict redirects to an allow-listed host (no follow-to-arbitrary-domain);
+#   * enforce the `sha256` here as a strong post-download check (manifest already
+#     carries the field; the empty/null placeholders are NOT a bypass — they block
+#     acquisition until pinned).
+# The CAVIAR `source` URLs are plain http:// upstream pages; treat them as
+# untrusted until the above is implemented.
 #
 # ci-runtime's `prepare-runtime-fixtures` step runs
 #   python scripts/fixture_manager.py --manifest tests/fixtures/manifest.yaml --strict
