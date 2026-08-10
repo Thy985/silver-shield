@@ -52,12 +52,37 @@ jobs:
         run: |
           pip install -r requirements-ci-ai.txt
           pip install -e . --no-deps
+      - name: Cache runtime fixtures (downloaded + derived)
+        # 命中缓存 => prepare 步零网络 I/O。key 绑定 manifest 与生成脚本：
+        # 改 URL / 改 sha256 / 改抽帧策略都会自动失效缓存，避免拿旧资产假装验证过。
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/fixtures/person.jpg
+            tests/fixtures/caviar_raw
+            tests/fixtures/doorway
+          key: >-
+            fixtures-${{ runner.os }}-${{ hashFiles('tests/fixtures/manifest.yaml',
+            'tests/fixtures/download_fixtures.py') }}
+      - name: Install ffmpeg (CAVIAR frame extraction)
+        # 仅 caviar_doorway 的 acquire 需要；命中缓存时 ffmpeg 不会被调用，
+        # 但装上才能在缓存未命中时自愈，否则 prepare 步会 fail-closed 变红。
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -1
       - name: Prepare & validate runtime fixtures (fail-closed)
         # 治理铁律（Stage 2 反 false-green）：ci-runtime 是「完整 AI 栈运行时验证」，
         # 不允许因 fixture 缺失而静默 skip 真实推理路径（YOLO / CAVIAR）后以假绿通过。
-        # fixture_manager 在 --strict 下若缺失必需资产直接 exit 1，使 workflow 变红而非假绿。
-        # P1 将接上 --acquire（按 manifest 下载 + 校验 sha256 + 缓存）以真正跑通真实链路。
-        run: python scripts/fixture_manager.py --manifest tests/fixtures/manifest.yaml --strict
+        # --acquire 按 manifest 下载/生成缺失资产（HTTPS-only + 重定向白名单 + sha256 强校验），
+        # --strict 则在仍然缺失/校验不过时 exit 1，使 workflow 变红而非假绿。
+        # 注意：CI 绝不传 --allow-unpinned —— 未 pin 哈希的资产一律拒绝获取。
+        run: |
+          python scripts/fixture_manager.py \
+            --manifest tests/fixtures/manifest.yaml \
+            --acquire --strict
       - name: Run full runtime suite (emit IntegrationReport.json)
         run: python scripts/run_integration.py
       - name: Upload integration evidence

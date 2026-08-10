@@ -28,9 +28,16 @@ jobs:
       - name: Install quality deps (locked)
         run: pip install -r requirements-ci.txt
       - name: Run ruff
-        # 仅 lint 正式代码 + 本治理新建的 4 个 CI 入口脚本；
+        # 仅 lint 正式代码 + 本治理新建的 CI 入口脚本；
         # scripts/ 下遗留运营脚本（soak/demo 等）存在历史债务，不计入门禁。
-        run: ruff check src tests scripts/run_tests.py scripts/run_integration.py scripts/validate_yaml.py scripts/run_benchmark.py
+        # fixture_manager.py 是 fail-closed 闸门本体，必须与其他门禁脚本同标准受检。
+        run: |
+          ruff check src tests \
+            scripts/run_tests.py \
+            scripts/run_integration.py \
+            scripts/validate_yaml.py \
+            scripts/run_benchmark.py \
+            scripts/fixture_manager.py
 
   format:
     name: Format (black)
