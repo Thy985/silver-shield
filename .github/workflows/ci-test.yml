@@ -1,0 +1,100 @@
+name: CI Test
+
+# 普通测试分层（torch-free，每 PR 运行，不装 AI 栈）。三档职责：
+#   contract     接口/状态机/schema/配置契约（最轻）
+#   unit         组件单测（DecisionEngine / Memory / Policy / Tracker / Rule / Warning …）证明单测不绑 torch
+#   integration  真实闭环（Scenario→Tracker→Decision→Policy→Action，合成 detector 零模型）证明闭环有人跑
+# 测试路径归属集中在 scripts/run_tests.py（单一事实来源），YAML 不散落 pytest 长路径列表。
+# 每档统一产出 JUnit XML + coverage XML 到 artifacts/，失败后可下载溯源（CI 必须有 Artifact 能力）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  contract:
+    name: Contract tests (torch-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - name: Install torch-free deps (locked)
+        run: |
+          pip install -r requirements-ci.txt
+          pip install -e . --no-deps
+      - name: Run contract tier
+        run: python scripts/run_tests.py --tier contract
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-contract
+          path: |
+            artifacts/junit-contract.xml
+            artifacts/coverage-contract.xml
+          if-no-files-found: warn
+
+  unit:
+    name: Unit tests (torch-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - name: Install torch-free deps (locked)
+        run: |
+          pip install -r requirements-ci.txt
+          pip install -e . --no-deps
+      - name: Run unit tier
+        run: python scripts/run_tests.py --tier unit
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-unit
+          path: |
+            artifacts/junit-unit.xml
+            artifacts/coverage-unit.xml
+          if-no-files-found: warn
+
+  integration:
+    name: Integration tests (torch-free closed-loop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - name: Install torch-free deps (locked)
+        run: |
+          pip install -r requirements-ci.txt
+          pip install -e . --no-deps
+      - name: Run integration tier
+        run: python scripts/run_tests.py --tier integration
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-integration
+          path: |
+            artifacts/junit-integration.xml
+            artifacts/coverage-integration.xml
+          if-no-files-found: warn

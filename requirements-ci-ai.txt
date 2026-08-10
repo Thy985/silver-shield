@@ -1,0 +1,37 @@
+# =============================================================================
+# SilverShield CI 锁定依赖 —— 全量 AI 栈层（ci-benchmark / ci-runtime 使用）
+# =============================================================================
+#
+# 在 requirements-ci.txt（torch-free 基础层）之上，补充 AI 栈与 Web 栈：
+#   - 基线关键 trio（numpy / opencv / torch）**精确钉死**，与 committed baseline
+#     的 provenance.runtime_dependencies 完全一致（harness 经 normalize_version
+#     归一 MAJOR.MINOR.PATCH，跨 OS 可比）。这是 benchmark 回归可重放的前提。
+#   - ultralytics / fastapi / uvicorn 等 AI/Web 运行时库用**下限约束**：它们只在
+#     ci-runtime（main / dispatch 全量运行，非 per-PR 门禁）且真实 YOLO 推理时
+#     才被加载（延迟导入），不参与 baseline 指纹，故允许小版本浮动以避免与未来
+#     torch 大版本解析冲突；ci-benchmark 的 detections 通道同样不依赖它们。
+#
+# 注意：本文件替代原 constraints-benchmark.txt（已删除）。原文件仅钉 numpy/opencv/
+# torch 三项，本文件是同等约束的扩展与单一化，避免两份锁漂移。
+#
+# 安装范式：
+#   pip install -e . --no-deps
+#   pip install -r requirements-ci-ai.txt
+# -----------------------------------------------------------------------------
+
+# —— 继承 torch-free 基础层全部钉死项 ——
+-r requirements-ci.txt
+
+# —— 基线关键 trio（MUST 精确钉死，与 baseline provenance 一致）——
+torch==2.11.0
+
+# —— AI 推理栈（延迟导入；下限约束，避免与未来 torch 大版本解析冲突）——
+ultralytics>=8.2.0
+onnxruntime>=1.16
+scipy>=1.11
+
+# —— Demo 网关 Web 栈（tests/demo 需要；下限约束）——
+fastapi>=0.110
+uvicorn[standard]>=0.27
+websockets>=12.0
+python-multipart>=0.0.9
