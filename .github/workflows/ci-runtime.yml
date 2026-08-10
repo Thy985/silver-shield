@@ -11,9 +11,10 @@ name: CI Runtime
 #   - ADR-0034 接进来后，run_integration.py 可扩展 --mode scenario，对每个 scenario 记录
 #     decision / reason，形成用户示例中的 {scenario, decision, reason} 证据。
 on:
+  # 仅 main 合入或手动触发（workflow_dispatch）运行 —— 见 .github/workflows/README.md
+  # 「Trigger Policy」。临时 per-PR 触发已在治理契约定稿后移除：每 PR 强装 AI 栈≈20min
+  # 会拖垮 ci-test / ci-benchmark 双保险已覆盖的快速反馈回路。
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch:
 
