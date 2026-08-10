@@ -1,0 +1,81 @@
+# Runtime fixture manifest — AI test-asset governance (ADR-0034 prerequisite, Stage 2)
+#
+# Problem this file solves
+# -------------------------
+# `ci-runtime` is named "full AI-stack validation", but its real visual-inference
+# path (YOLO smoke on person.jpg + CAVIAR scenario E2E) was silently SKIPPED because
+# the assets are .gitignored and never acquired in CI -> false green. See
+# .github/workflows/README.md (Principles #6 + "Runtime fixtures").
+#
+# An AI test asset is NOT a pip dependency. It needs governance metadata a package
+# manager does not provide:
+#   id        stable identifier used by scripts/fixture_manager.py
+#   type      image | video | model | dataset | audio
+#   path      repo-relative location checked for presence.
+#              MUST resolve to a git-tracked or otherwise controlled location
+#              under the repo root. A symlink is accepted only if it resolves
+#              INSIDE the repo (fixture_manager.py warns when a link escapes root).
+#   source    where to acquire it (P1 download; null = declared-but-not-yet-sourced)
+#   sha256    content hash; null = not yet pinned (P1 fills it, then enforced)
+#   license   attribution / redistribution terms
+#   required_for  test nodeids that MUST NOT run without this asset
+#
+# Security note for P1 download (source URLs below)
+# ------------------------------------------------
+# When `--acquire` lands, the downloader MUST:
+#   * upgrade http:// -> https:// (or pin a CA / cert), never fetch over plain HTTP;
+#   * restrict redirects to an allow-listed host (no follow-to-arbitrary-domain);
+#   * enforce the `sha256` here as a strong post-download check (manifest already
+#     carries the field; the empty/null placeholders are NOT a bypass — they block
+#     acquisition until pinned).
+# The CAVIAR `source` URLs are plain http:// upstream pages; treat them as
+# untrusted until the above is implemented.
+#
+# ci-runtime's `prepare-runtime-fixtures` step runs
+#   python scripts/fixture_manager.py --manifest tests/fixtures/manifest.yaml --strict
+# which FAILS CLOSED (exit 1) when a required fixture is missing or checksum-mismatched.
+# No more silent skip.
+#
+# Scope
+# -----
+# P0 (this file + fixture_manager.py): validate + fail-closed.
+# P1: implement download + checksum verify + cache; fill `source`/`sha256` below.
+
+fixtures:
+  - id: person_smoke
+    type: image
+    description: YOLO smoke golden asset (ultralytics official example, multi-person indoor)
+    path: tests/fixtures/person.jpg
+    source: null            # TODO(P1): lock the official example URL
+    sha256: null            # TODO(P1): fill after first download
+    license: Ultralytics YOLO example (attribution required)
+    required_for:
+      - tests.test_tracker::test_real_yolo_track_produces_stable_track_id
+      - tests.test_tracker::test_real_visitor_tracker_lifecycle
+
+  - id: caviar_doorway
+    type: video
+    description: CAVIAR surveillance scene frames (one_stop_enter / one_leave_reenter / meet_walk_together)
+    path: tests/fixtures/doorway
+    source:
+      - https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1
+      - https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA2
+    sha256: null            # TODO(P1): fill per-scene (doorway/<scene>/frame_*.jpg set)
+    license: CAVIAR project (EC IST 2001 37540), free, attribute to CAVIAR
+    required_for:
+      - tests.demo.test_sources::test_caviar_jpg_frame_source_yields_frames
+      - tests.demo.test_sources::test_caviar_jpg_frame_source_loop_replay
+      - tests.demo.test_sources::test_build_frame_source_caviar
+      - tests.test_action::test_caviar_end_to_end_pipeline_emits_action_command
+      - tests.test_event::test_caviar_one_stop_enter_generates_visitor_event
+      - tests.test_feature::test_caviar_end_to_end_pipeline_yields_risk_features
+      - tests.test_integration::test_caviar_end_to_end_full_pipeline
+      - tests.test_rule::test_caviar_end_to_end_pipeline_yields_perception_events
+      - tests.test_runtime::test_caviar_end_to_end_via_runtime
+      - tests.test_runtime::test_run_demo_end_to_end
+      - tests.test_tracker::test_caviar_one_stop_enter_detects_person
+      - tests.test_tracker::test_caviar_one_stop_enter_visitor_tracker_active
+      - tests.test_tracker::test_caviar_one_leave_reenter_visitor_lifecycle
+      - tests.test_tracker::test_caviar_meet_walk_together_detects_multi_person
+      - tests.test_tracker::test_caviar_meet_walk_together_track_id_unique_in_frame
+      - tests.test_warning::test_caviar_end_to_end_pipeline_yields_decision

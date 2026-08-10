@@ -52,6 +52,12 @@ jobs:
         run: |
           pip install -r requirements-ci-ai.txt
           pip install -e . --no-deps
+      - name: Prepare & validate runtime fixtures (fail-closed)
+        # 治理铁律（Stage 2 反 false-green）：ci-runtime 是「完整 AI 栈运行时验证」，
+        # 不允许因 fixture 缺失而静默 skip 真实推理路径（YOLO / CAVIAR）后以假绿通过。
+        # fixture_manager 在 --strict 下若缺失必需资产直接 exit 1，使 workflow 变红而非假绿。
+        # P1 将接上 --acquire（按 manifest 下载 + 校验 sha256 + 缓存）以真正跑通真实链路。
+        run: python scripts/fixture_manager.py --manifest tests/fixtures/manifest.yaml --strict
       - name: Run full runtime suite (emit IntegrationReport.json)
         run: python scripts/run_integration.py
       - name: Upload integration evidence
