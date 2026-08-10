@@ -137,19 +137,27 @@ def main(argv: list[str] | None = None) -> int:
         "门禁未通过 → 退出码 3（非零，CI 拦截）；默认不启用，保持 Phase 1/2 行为。",
     )
     parser.add_argument(
-        "--min-pass-rate", type=float, default=None,
+        "--min-pass-rate",
+        type=float,
+        default=None,
         help="门控：标注场景最低通过率（默认 1.0，须全部 TP/TN）",
     )
     parser.add_argument(
-        "--max-suppression-rate", type=float, default=None,
+        "--max-suppression-rate",
+        type=float,
+        default=None,
         help="门控：漏报率上限（默认 0.0）",
     )
     parser.add_argument(
-        "--max-false-alarm-rate", type=float, default=None,
+        "--max-false-alarm-rate",
+        type=float,
+        default=None,
         help="门控：误报率上限（默认 0.05）",
     )
     parser.add_argument(
-        "--max-mean-risk-shortfall", type=float, default=None,
+        "--max-mean-risk-shortfall",
+        type=float,
+        default=None,
         help="门控：平均风险缺口上限（默认 0.0；场景集未标定时该阈值自动跳过）",
     )
     args = parser.parse_args(argv)

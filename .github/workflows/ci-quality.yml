@@ -1,0 +1,97 @@
+name: CI Quality
+
+# 静态质量门禁（不跑业务测试）：ruff / black / mypy / yaml+schema 校验 / 阶段一致性。
+# 与 ci-test / ci-benchmark / ci-runtime 平行，职责单一，便于「哪个质量项挂了」快速定位。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install quality deps (locked)
+        run: pip install -r requirements-ci.txt
+      - name: Run ruff
+        # 仅 lint 正式代码 + 本治理新建的 4 个 CI 入口脚本；
+        # scripts/ 下遗留运营脚本（soak/demo 等）存在历史债务，不计入门禁。
+        run: ruff check src tests scripts/run_tests.py scripts/run_integration.py scripts/validate_yaml.py scripts/run_benchmark.py
+
+  format:
+    name: Format (black)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install quality deps (locked)
+        run: pip install -r requirements-ci.txt
+      - name: Run black --check
+        # 作用域收窄为本次 CI 重构引入/负责的 4 个入口脚本。
+        # 说明：repo 存量 src/ 从未强制 black（ruff 一直绿），直接对 src tests 开 black 会
+        # 一次性 flag ~30 个存量文件，属独立"全量 blacken"任务，不应塞进 CI 结构治理 PR。
+        # 故 black 门禁只覆盖本 PR 新增/修改的脚本，保证新代码格式受控。
+        run: black --check scripts/run_tests.py scripts/run_integration.py scripts/validate_yaml.py scripts/run_benchmark.py
+
+  typecheck:
+    # mypy 当前为非阻塞（仓库尚未全量标注类型）；存在即算「类型检查底座就位」，
+    # 后续逐步消除 `type: ignore` 与缺失 stub 后再置为阻塞项。
+    name: Type check (mypy, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install deps (locked) + project (no-deps)
+        run: |
+          pip install -e . --no-deps
+          pip install -r requirements-ci.txt
+      - name: Run mypy
+        run: mypy src/home_perception || true
+
+  yaml-schema:
+    name: YAML & schema validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install deps (locked) + project (no-deps)
+        run: |
+          pip install -e . --no-deps
+          pip install -r requirements-ci.txt
+      - name: Validate yaml syntax + Perception scenario schema
+        run: python scripts/validate_yaml.py
+
+  phase-consistency:
+    # 阶段一致性锁：README「当前状态」= SSOT，AGENTS §10 / Roadmap §8.2 为投影。
+    # 脚本只读、加法型，仅用 Python 标准库（无依赖），退出码 0=一致 / 1=漂移 / 2=输入错误。
+    # 漂移即 PR 阻塞——防止文档间状态不一致悄然合入。
+    name: Phase consistency (SSOT lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Run phase consistency check
+        run: python scripts/phase_consistency_check.py

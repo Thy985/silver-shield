@@ -1,0 +1,42 @@
+# =============================================================================
+# SilverShield CI 锁定依赖 —— torch-free 基础层（ci-quality / ci-test 使用）
+# =============================================================================
+#
+# 工程契约（对应 ADR-0033 D4 + 本次 CI 治理「稳定依赖环境」要求）：
+#   - 本文件是 CI 依赖的**单一事实来源**，禁止散落 `>=` 下限到各 workflow。
+#   - 关键数值/AI 库**钉死精确版本**，保证：今天 CI 跑 torch 2.11 / numpy 2.x /
+#     opencv 4.x，半年后不会因为 `>=` 解析漂移成 torch 2.13 / numpy 3.x /
+#     opencv 5.x，否则 committed baseline 直接失效。
+#   - 本层**不含 torch / ultralytics**（它们是延迟导入，torch-free 测试不依赖），
+#     以此强制证明「单元测试不依赖 AI 栈」这一独立性契约。需要 AI 栈的 job 用
+#     requirements-ci-ai.txt。
+#
+# 升级流程（任何版本变更都须走 PR + Owner 评审）：
+#   1. 在 PR 中同步升级本文件（及 requirements-ci-ai.txt 对应行）；
+#   2. 若涉及 benchmark 回归门禁依赖（numpy / opencv / torch），须在 PR 注明
+#      benchmark-baseline-bump 并重新 capture baseline（见 ci-benchmark.yml）。
+#
+# 安装范式（每个 job 均用，保证 pins 不被 --no-deps 之外的来源覆盖）：
+#   pip install -e . --no-deps
+#   pip install -r requirements-ci.txt
+# -----------------------------------------------------------------------------
+
+# —— 基线关键 trio（MUST 精确钉死）——
+numpy==2.4.2
+opencv-python==4.13.0.92
+
+# —— 测试 / 质量工具链（稳定、不与 torch 耦合，精确钉死）——
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==5.0.0
+ruff==0.16.1
+black==24.10.0
+mypy==1.13.0
+
+# —— 运行时基础依赖（下限约束；非基线指纹成分，允许小版本浮动）——
+pydantic>=2.6.0
+pyyaml>=6.0.1
+structlog>=24.1.0
+requests>=2.31.0
+paho-mqtt>=2.0.0
+python-dotenv>=1.0.0

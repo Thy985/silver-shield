@@ -1,0 +1,95 @@
+name: CI Benchmark
+
+# ADR-0032 / ADR-0033 生产门控（每 PR 运行）：真实跑通
+#   Scenario YAML → Generator → Pipeline(detections 通道) → Harness → Benchmark Report → Gate
+# 关键契约：
+#   - detections 模式 + 合成输入 + 少量场景，不拉真实 YOLO / 不依赖 GPU；
+#     但确实构建并运行 PerceptionPipeline，跑通 Tracker / Decision / Policy / Action 整条链路，
+#     不是「测函数」的假跑（满足「benchmark 不能是假跑」禁令）。
+#   - 依赖锁定（requirements-ci-ai.txt）钉死 numpy/opencv/torch 精确版本，与 committed baseline
+#     的 provenance.runtime_dependencies 一致 → 跨时间 / 跨 OS 可重放，baseline 才有意义。
+#   - 报告上传为 artifact：门禁失败时 Owner 可直接下载 WHY（否则 /tmp 报告随 runner 销毁丢失）。
+#   - baseline 变更治理（ADR-0033 D7）：基线 JSON 变更的 PR 必须注明 benchmark-baseline-bump。
+#   - pip + 模型权重走缓存，避免每 PR 重复下载 torch(~800MB) / YOLO。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  benchmark:
+    name: Benchmark gate (ADR-0033)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整历史：供 harness 指纹取 git 短哈希 + baseline diff
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci-ai.txt
+      - name: Cache model weights (YOLO/torch)
+        # 权重不进 git/LFS，走缓存——避免权重版本变更污染仓库历史（ADR-0033 D4 契约）。
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ultralytics
+            ~/.cache/torch
+          key: models-${{ runner.os }}-v1
+          restore-keys: |
+            models-${{ runner.os }}-
+      - name: Install full AI stack (CPU torch, locked)
+        run: |
+          pip install -r requirements-ci-ai.txt
+          pip install -e . --no-deps
+      - name: Run benchmark tier (gate / regression / metrics / bump / audio recorder)
+        run: python scripts/run_tests.py --tier benchmark
+      - name: End-to-end CLI --gate smoke (real benchmark scenarios + baseline regression gate)
+        run: |
+          python scripts/run_benchmark.py \
+            --scenarios src/home_perception/validation/fixtures/scenarios/benchmark \
+            --set-id adr0033-phase1 \
+            --baseline src/home_perception/evaluation/fixtures/baselines/adr0033-phase1.json \
+            --max-regression-delta 0.05 \
+            --gate --out /tmp/bench_gate_report.json
+      - name: Upload benchmark gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-gate-report
+          path: /tmp/bench_gate_report.json
+          if-no-files-found: warn
+
+  baseline-bump-check:
+    name: Baseline bump governance (ADR-0033 D7)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Collect PR marker text (title + body + commits)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            gh pr view ${{ github.event.pull_request.number }} \
+              --json title,body --jq '.title + "\n" + (.body // "")' 2>/dev/null || true
+            echo "---COMMITS---"
+            git log origin/main..HEAD --pretty=%B 2>/dev/null || true
+          } > /tmp/pr_marker.txt
+      - name: Check baseline bump policy
+        run: python scripts/check_baseline_bump.py --base origin/main --marker-file /tmp/pr_marker.txt

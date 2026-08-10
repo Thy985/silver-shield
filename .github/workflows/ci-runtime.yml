@@ -1,0 +1,65 @@
+name: CI Runtime
+
+# ADR-0034 接入槽位：完整 AI 栈运行时验证（含真实 YOLO 推理路径的测试）。
+# 设计纪律：
+#   - 仅 main 合入或手动触发（workflow_dispatch）时运行，避免每 PR 强行安装整个 AI 栈
+#     （装 torch+ultralytics+下载权重 ≈ 20 分钟，不可接受）。
+#   - 每 PR 已由 ci-test(真实闭环) + ci-benchmark(回归门禁) 双保险覆盖；
+#     全量 AI 栈只在主干回归，防止 PR 被长装依赖拖垮。
+#   - 产出三类证据（落 artifacts/，CI 上传）：IntegrationReport.json（结构化汇总，失败可下载溯源）
+#     / junit.xml / coverage.xml。IntegrationReport 由真实 pytest 结果解析而来，非伪造。
+#   - ADR-0034 接进来后，run_integration.py 可扩展 --mode scenario，对每个 scenario 记录
+#     decision / reason，形成用户示例中的 {scenario, decision, reason} 证据。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  runtime:
+    name: Full runtime tests (AI stack) + IntegrationReport
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci-ai.txt
+      - name: Cache model weights (YOLO/torch/models)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ultralytics
+            ~/.cache/torch
+            ~/.cache/models
+          key: models-${{ runner.os }}-v1
+          restore-keys: |
+            models-${{ runner.os }}-
+      - name: Install full AI stack (CPU torch, locked)
+        run: |
+          pip install -r requirements-ci-ai.txt
+          pip install -e . --no-deps
+      - name: Run full runtime suite (emit IntegrationReport.json)
+        run: python scripts/run_integration.py
+      - name: Upload integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-report
+          path: |
+            artifacts/IntegrationReport.json
+            artifacts/junit.xml
+            artifacts/coverage.xml
+          if-no-files-found: warn
