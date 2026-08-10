@@ -15,40 +15,47 @@
 #              MUST resolve to a git-tracked or otherwise controlled location
 #              under the repo root. A symlink is accepted only if it resolves
 #              INSIDE the repo (fixture_manager.py warns when a link escapes root).
-#   source    where to acquire it (P1 download; null = declared-but-not-yet-sourced)
-#   sha256    content hash; null = not yet pinned (P1 fills it, then enforced)
+#   source    human-facing provenance / attribution page
+#   acquire   how `--acquire` materialises it (method: http-file | script)
+#   sha256    content hash; enforced whenever non-null. REQUIRED for http-file
+#             acquisition — a null hash blocks the download rather than
+#             permitting an unverifiable one (bootstrap with --allow-unpinned).
+#   structure integrity check for *derived* directory fixtures that cannot be
+#             content-hashed (see caviar_doorway below)
 #   license   attribution / redistribution terms
 #   required_for  test nodeids that MUST NOT run without this asset
 #
-# Security note for P1 download (source URLs below)
-# ------------------------------------------------
-# When `--acquire` lands, the downloader MUST:
-#   * upgrade http:// -> https:// (or pin a CA / cert), never fetch over plain HTTP;
-#   * restrict redirects to an allow-listed host (no follow-to-arbitrary-domain);
-#   * enforce the `sha256` here as a strong post-download check (manifest already
-#     carries the field; the empty/null placeholders are NOT a bypass — they block
-#     acquisition until pinned).
-# The CAVIAR `source` URLs are plain http:// upstream pages; treat them as
-# untrusted until the above is implemented.
+# Download security (implemented in scripts/fixture_manager.py::_secure_download)
+# -------------------------------------------------------------------------------
+#   * HTTPS-only. A plain http:// source is REJECTED, never silently upgraded —
+#     a silent transformation is the same class of bug as a silent skip.
+#   * Redirects are restricted to ALLOWED_DOWNLOAD_HOSTS; a 302 cannot walk the
+#     download to an arbitrary origin.
+#   * Body is streamed in 1 MiB chunks to a `.part` file under a hard size cap,
+#     hashed, and only then atomically renamed — a failed/tampered download
+#     leaves nothing that a later run could mistake for a valid fixture.
+#   * `sha256` is a strong post-download gate, not a hint.
+#
+# Why urls are pinned to immutable refs
+#   `.../ultralytics/main/...` would let upstream silently change the bytes under
+#   a pinned hash and break CI. Tagged refs (v8.3.0) are immutable.
 #
 # ci-runtime's `prepare-runtime-fixtures` step runs
-#   python scripts/fixture_manager.py --manifest tests/fixtures/manifest.yaml --strict
-# which FAILS CLOSED (exit 1) when a required fixture is missing or checksum-mismatched.
-# No more silent skip.
-#
-# Scope
-# -----
-# P0 (this file + fixture_manager.py): validate + fail-closed.
-# P1: implement download + checksum verify + cache; fill `source`/`sha256` below.
+#   python scripts/fixture_manager.py --manifest tests/fixtures/manifest.yaml --acquire --strict
+# which FAILS CLOSED (exit 1) when a required fixture is missing, checksum-mismatched
+# or structurally incomplete. No more silent skip.
 
 fixtures:
   - id: person_smoke
     type: image
-    description: YOLO smoke golden asset (ultralytics official example, multi-person indoor)
+    description: YOLO smoke golden asset (ultralytics official example, multi-person street scene)
     path: tests/fixtures/person.jpg
-    source: null            # TODO(P1): lock the official example URL
-    sha256: null            # TODO(P1): fill after first download
-    license: Ultralytics YOLO example (attribution required)
+    source: https://github.com/ultralytics/ultralytics/blob/v8.3.0/ultralytics/assets/bus.jpg
+    acquire:
+      method: http-file
+      url: https://raw.githubusercontent.com/ultralytics/ultralytics/v8.3.0/ultralytics/assets/bus.jpg
+    sha256: c02019c4979c191eb739ddd944445ef408dad5679acab6fd520ef9d434bfbc63
+    license: Ultralytics YOLO example asset, AGPL-3.0 upstream (attribution required)
     required_for:
       - tests.test_tracker::test_real_yolo_track_produces_stable_track_id
       - tests.test_tracker::test_real_visitor_tracker_lifecycle
@@ -60,7 +67,22 @@ fixtures:
     source:
       - https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1
       - https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA2
-    sha256: null            # TODO(P1): fill per-scene (doorway/<scene>/frame_*.jpg set)
+    acquire:
+      method: script
+      script: tests/fixtures/download_fixtures.py
+      timeout_seconds: 1800
+    # No sha256: these JPGs are DERIVED by ffmpeg, whose output is not
+    # bit-reproducible across versions/platforms — a pinned digest would fail on
+    # any runner with a different ffmpeg build. Integrity is anchored one level
+    # up instead: download_fixtures.py pins the sha256 of each upstream .mpg,
+    # and `structure` below asserts what the extraction actually produced.
+    sha256: null
+    structure:
+      require_subdirs:
+        - one_stop_enter
+        - one_leave_reenter
+        - meet_walk_together
+      min_files_per_subdir: 20
     license: CAVIAR project (EC IST 2001 37540), free, attribute to CAVIAR
     required_for:
       - tests.demo.test_sources::test_caviar_jpg_frame_source_yields_frames
