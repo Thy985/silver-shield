@@ -38,3 +38,7 @@ class SyntheticInput:
     fingerprint: str
     seed: int
     scenario: Scenario
+    # ADR-0034 Phase B.2：编译出的音频感知事件（供 loop 驱动 AudioSessionRecorder）。
+    # 缺省空元组 = 无音频会话。与视觉 ``detector`` / ``frames`` 互斥无关——音频是
+    # 独立通道，不随视频帧同步调用（ADR-0026 §8）。
+    audio_events: tuple[Any, ...] = ()

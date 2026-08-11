@@ -1,0 +1,84 @@
+# ADR-0034 Phase B.2 · 跨模态关联「真实关联边」fixture（自洽，确定性可复现）。
+# 蓝本：adr0034_alarm.yaml 的 abnormal_dwell 几何（已实测产出 1 条视觉 episode）。
+# 新增：audio 通道声明 2 枚音频感知事件，时间戳跨越会话窗口（首帧 + 末帧附近），
+# 使纯音频 episode 时间窗覆盖视觉 episode 时间窗 → CrossModalLinker 建出 1 条
+# vision<->audio 的 supports 边（ADR-0028 D1 同设备 + D3 时间窗重叠）。
+#
+# 时间基准：clock_start = 2026-07-19 18:00:00 UTC = 1752952800.0 (Unix 秒)；
+# duration_frames=660, frame_interval_s=0.5 → 会话窗口 [1752952800.0, 1752953130.0]。
+# audio 事件 1 @ 1752952800.0（首帧）、事件 2 @ 1752953120.0（末帧内，start+320s），
+# 二者跨度覆盖全会话，保证与视觉 episode 严格重叠。
+meta:
+  schema_version: "1.0"
+  scenario_id: sw_adr0034_cross_modal
+  version: 1
+  description: "ADR-0034 Phase B.2: abnormal_dwell + audio telephone -> real vision<->audio cross-modal link"
+  seed: 99
+  duration_frames: 660
+  owner: perception-team
+  category: visitor
+  difficulty: high
+  tags: [adr0034, cross_modal, integration]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+    corridor: [0.4, 0.0, 1.0, 1.0]
+  static_objects: []
+actors:
+  - id: visitor_b
+    actor_type: human
+    tracks:
+      - frame: 3
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 610
+        pos: [240.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 620
+    type: abnormal_dwell
+expects:
+  emitted_event_types: [abnormal_dwell]
+  min_risk_level: LOW
+benchmark:
+  expected_alarm: true
+  severity: LOW
+  note: "凌晨长停留 + 持续通话，视觉与音频共同指向可疑徘徊"
+# ADR-0034 D4：闭环集成期望（opt-in，仅 IntegrationValidator 消费）。
+integration:
+  perception:
+    min_perception_events: 1
+  decision:
+    outcome: WARN
+  action:
+    expected_notification: true
+    expected_command_types: [LOG_ONLY]
+  memory:
+    min_records: 2   # 视觉 episode + 音频 episode
+  cross_modal:
+    min_links: 1
+    expected_linked_modalities: [vision, audio]
+    required_relationships: [supports]
+# ADR-0034 Phase B.2：音频通道（跨模态关联来源）。
+# 两枚音频感知事件，时间戳跨越会话窗口，保证与视觉 episode 时间窗严格重叠。
+audio:
+  - kind: audio_telephone_persistent
+    timestamp: 1752952800.0   # 首帧：2026-07-19 18:00:00 UTC
+    score: 0.9
+    confidence: 0.9
+    source_segment_ids: ["seg-0"]
+    labels: ["telephone"]
+  - kind: audio_telephone_persistent
+    timestamp: 1752953120.0   # 末帧内：start + 320s = 2026-07-19 18:05:20 UTC
+    score: 0.9
+    confidence: 0.9
+    source_segment_ids: ["seg-1"]
+    labels: ["telephone"]

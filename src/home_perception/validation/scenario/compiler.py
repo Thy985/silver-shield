@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import home_perception
 
 from ..fingerprint import RENDERER_VERSION, compute_fingerprint
@@ -54,6 +56,27 @@ class ScenarioCompiler:
             seed=scenario.meta.seed,  # type: ignore[arg-type]
             code_version=home_perception.__version__,
         )
+
+        # ADR-0034 Phase B.2：把音频声明编译为正式 AudioPerceptionEvent。
+        # created_at 由 timestamp（Unix 秒）推导为 UTC datetime，确定性、可回放。
+        # 延迟 import 音频事件模型：避免编译器加载期拉起 audio 子包重链。
+        from home_perception.audio.event import AudioPerceptionEvent
+
+        audio_events: list[AudioPerceptionEvent] = []
+        for i, spec in enumerate(scenario.audio):
+            audio_events.append(
+                AudioPerceptionEvent(
+                    event_id=spec.event_id or f"aev-{i}",
+                    timestamp=spec.timestamp,
+                    kind=spec.kind,
+                    score=spec.score,
+                    confidence=spec.confidence,
+                    source_segment_ids=list(spec.source_segment_ids),
+                    labels=list(spec.labels),
+                    created_at=datetime.fromtimestamp(spec.timestamp, tz=UTC),
+                )
+            )
+
         return SyntheticInput(
             scenario_id=scenario.meta.scenario_id,
             mode=chosen,
@@ -63,4 +86,5 @@ class ScenarioCompiler:
             fingerprint=fingerprint,
             seed=scenario.meta.seed,  # type: ignore[arg-type]
             scenario=scenario,
+            audio_events=tuple(audio_events),
         )

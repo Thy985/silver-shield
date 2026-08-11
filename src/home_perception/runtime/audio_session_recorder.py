@@ -73,6 +73,12 @@ class AudioSessionSummary:
     - ``evidence_ids``：本次会话产出的音频证据 id（供 I4 溯源）
     - ``episode_recorded``：是否已落库纯音频 EpisodicRecord（D3 门槛后恒为真，
       无 Memory 后端时为 False）
+    - ``warnings`` / ``commands``（ADR-0034 Phase B.2 增强）：D3 门槛后携带本会话
+      产出的真实 ``WarningEvent`` / ``ActionCommand`` 对象。用途：音频是独立
+      Audio Loop（ADR-0026 §8），其产物不进 ``FrameResult``——闭环编排器
+      （``IntegrationRunner``）需把它并入**生产侧自报通道**，F6 交叉校验才不会把
+      「探针观测到、生产通道缺失」误判为 Observability Drop。缺省空 = 未过门槛 /
+      空会话（向后兼容，历史字段语义不变）。
     """
 
     session_id: str
@@ -80,6 +86,8 @@ class AudioSessionSummary:
     warning_ids: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     episode_recorded: bool
+    warnings: tuple[WarningEvent, ...] = ()
+    commands: tuple[ActionCommand, ...] = ()
 
 
 class AudioSessionRecorder:
@@ -282,6 +290,8 @@ class AudioSessionRecorder:
             warning_ids=(str(warning.warning_id),),
             evidence_ids=tuple(e.evidence_id for e in evidence),
             episode_recorded=recorded,
+            warnings=(warning,),  # Phase B.2：生产侧自报（供 F6 交叉校验）
+            commands=tuple(actions),
         )
 
     # -- 内部 ---------------------------------------------------------------
