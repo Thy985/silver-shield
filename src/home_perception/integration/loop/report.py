@@ -142,6 +142,14 @@ class IntegrationReport:
     ``provenance`` 是唯一的自由字典（供调用方塞 ``code_version`` / ``scenario_set_id``
     等溯源信息）。它也因此是报告里唯一可能混入 PII 的入口——落盘守卫正是为它存在
     （t5：塞入原始媒体路径时 ``write_report`` 必须 fail-closed，而不是写出去再说）。
+
+    **两枚闭环指纹的填充契约**（评审 B3/E3）：``expectation_fingerprint`` /
+    ``loop_fingerprint`` 由 ``build()`` 从 ``run_result`` 投影（runner 保证非空）；
+    **直接构造** ``IntegrationReport(...)`` 会得到空字符串——属调用方责任。canonical
+    序列化**固定**包含这两个键（空字符串也输出，键集稳定），同 seed 两次运行的一致性
+    不受影响（空则两次皆空）。指纹成分均为确定性输入（场景/期望/装配，**不含**环境
+    版本），跨环境（本地/CI）算值一致——场景变更导致的指纹变化正是 DoD C4 基线漂移
+    治理的预期触发源，而非伪造漂移。
     """
 
     scenario_id: str
@@ -149,6 +157,8 @@ class IntegrationReport:
     mode: str = ""
     n_frames: int = 0
     scenario_fingerprint: str = ""
+    expectation_fingerprint: str = ""  # Phase C：评价标准指纹（run_result 投影）
+    loop_fingerprint: str = ""  # Phase C：运行血缘指纹（run_result 投影）
     failure_codes: tuple[str, ...] = ()
     stages: tuple[Any, ...] = ()  # tuple[StageResult, ...]（避免运行期循环 import）
     artifacts: LoopArtifactSummary = field(default_factory=LoopArtifactSummary)
@@ -171,6 +181,10 @@ class IntegrationReport:
         报告**不**自行推导 ``ok``——那是 ``IntegrationValidator`` 的唯一职责。这里若再算
         一遍，就会出现"报告说通过、验证器说不通过"的双事实源，而两者不一致时没人知道
         该信谁。
+
+        两枚闭环指纹（``expectation_fingerprint`` / ``loop_fingerprint``）**直接投影**
+        ``run_result`` 的已算值（B.3），不在此重算——报告是 CI 决策依据，必须能看到
+        "用什么标准 + 怎么跑的"（DoD C2/C5）。
         """
         return cls(
             scenario_id=validation.scenario_id or run_result.scenario_id,
@@ -178,6 +192,8 @@ class IntegrationReport:
             mode=run_result.mode,
             n_frames=run_result.n_frames,
             scenario_fingerprint=run_result.fingerprint,
+            expectation_fingerprint=run_result.expectation_fingerprint,
+            loop_fingerprint=run_result.loop_fingerprint,
             failure_codes=validation.failure_codes(),
             stages=tuple(validation.stages),
             artifacts=LoopArtifactSummary.from_run(run_result),
@@ -217,6 +233,8 @@ class IntegrationReport:
             "mode": self.mode,
             "n_frames": self.n_frames,
             "scenario_fingerprint": self.scenario_fingerprint,
+            "expectation_fingerprint": self.expectation_fingerprint,
+            "loop_fingerprint": self.loop_fingerprint,
             "generated_at": self.generated_at,
             "failure_codes": list(self.failure_codes),
             "stages": self._stage_dicts(include_detail=True),
