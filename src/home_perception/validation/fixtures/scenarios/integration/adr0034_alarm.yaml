@@ -1,0 +1,65 @@
+# ADR-0034 Phase A · 最小闭环「告警」fixture（自洽，确定性可复现）。
+# 拷贝自 benchmark/night_dwell 的几何与帧序列，但：
+# ① 修正 `expects.emitted_event_types` 为实际发射的 [abnormal_dwell]（原 night_dwell 多声明
+#    visit_normal，会让 ScenarioValidator 判 missing → F1 失败；本 fixture 经实测校正）；
+# ② 新增 `integration:` 闭环期望块（D4 子集）：告警后整条链应真发生
+#    （WARN + LOG_ONLY 命令 + 至少 1 条 episodic 落库）。
+meta:
+  schema_version: "1.0"
+  scenario_id: sw_adr0034_alarm
+  version: 1
+  description: "ADR-0034 Phase A: night long dwell -> abnormal_dwell -> WARN + command + episode"
+  seed: 99
+  # 帧数须同时满足两个运行时阈值（ADR-0033 端到端首次实测校正）：
+  # ① abnormal_dwell 需逻辑停留 >= long_duration_seconds(300s)：(610-3)*0.5s = 303.5s ✓
+  # ② 离场判定需尾部空缺 >= absence_gap_s(5s)：(659-610)*0.5s = 24.5s ✓（不离场则无 VisitorEvent）
+  duration_frames: 660
+  owner: perception-team
+  category: visitor
+  difficulty: high
+  tags: [adr0034, alarm, integration]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+    corridor: [0.4, 0.0, 1.0, 1.0]
+  static_objects: []
+actors:
+  - id: visitor_b
+    actor_type: human
+    tracks:
+      - frame: 3
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 610
+        pos: [240.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 620
+    type: abnormal_dwell
+expects:
+  emitted_event_types: [abnormal_dwell]
+  min_risk_level: LOW
+# ADR-0033 D3：安全评价标签，由场景作者显式声明。
+benchmark:
+  expected_alarm: true
+  severity: LOW
+  note: "凌晨长停留属可疑徘徊，期望触发告警提醒家属"
+# ADR-0034 D4：闭环集成期望（opt-in，仅 IntegrationValidator 消费）。
+integration:
+  perception:
+    min_perception_events: 1
+  decision:
+    outcome: WARN
+  action:
+    expected_notification: true
+    expected_command_types: [LOG_ONLY]
+  memory:
+    min_records: 1
