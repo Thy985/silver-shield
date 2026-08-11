@@ -100,8 +100,9 @@ jobs:
           if-no-files-found: warn
 
   # ADR-0034 Phase C：生产门禁（PR 级）。跑真实闭环 + Phase C gate 判定：
-  # 退出码按 gate.passed（blocking 语义）——warning 失败仅标记 degraded 不拦合并，
-  # 但 canonical 报告 + gate 报告落盘留痕（fingerprint 比对 / baseline 治理的地基）。
+  # 退出码按 gate.passed（blocking 语义）——warning 失败仅标记 degraded 不拦合并；
+  # canonical 报告 / gate 报告 / 指纹 artifact 全部落盘留痕。
+  # 再叠加 DoD C4：loop 指纹基线漂移检测（漂移须 PR 注明 integration-baseline-bump）。
   integration-gate:
     name: Integration gate (ADR-0034 Phase C)
     runs-on: ubuntu-latest
@@ -110,6 +111,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        # fetch-depth 0：check_integration_baseline.py 需 git diff base...HEAD 查基线文件变更
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -121,6 +125,22 @@ jobs:
           pip install -e . --no-deps
       - name: Run integration gate (blocking semantics)
         run: python scripts/run_integration_validation.py --gate --strict
+      - name: Collect PR marker text (title + body + commits)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            gh pr view ${{ github.event.pull_request.number }} \
+              --json title,body --jq '.title + "\n" + (.body // "")' 2>/dev/null || true
+            echo "---COMMITS---"
+            git log origin/main..HEAD --pretty=%B 2>/dev/null || true
+          } > /tmp/pr_marker.txt
+      - name: Check loop fingerprint baseline (DoD C4 drift)
+        run: |
+          python scripts/check_integration_baseline.py \
+            --current artifacts/adr0034_integration/adr0034_fingerprints.json \
+            --baseline src/home_perception/integration/fixtures/baselines/loop_fingerprints.json \
+            --marker-file /tmp/pr_marker.txt
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,4 +1,4 @@
-"""ADR-0034 Phase A · 闭环集成验证入口（手动 / 后续 CI 接入点）。
+"""ADR-0034 Phase A–C · 闭环集成验证入口（手动 / CI integration-gate 接入点）。
 
 对 ``integration`` fixture 目录下的每个 scenario 跑完整闭环：
 
@@ -8,30 +8,40 @@
 产出物（落 ``artifacts/adr0034_integration/``，**刻意避开** CI 的
 ``IntegrationReport.json`` 同名异义产物）：
 
-    <scenario_id>.canonical.json  —— 单场景确定性报告（canonical_dict，t1 比对用）
-    adr0034_summary.json          —— 汇总（每场景 ok / failure_codes / markdown）
+    <scenario_id>.canonical.json  —— 单场景确定性报告（canonical_dict，t1 比对用；
+                                     含两枚闭环指纹 + runtime provenance）
+    <scenario_id>.gate.json       —— Phase C 门禁判定（--gate；blocking/warning 语义）
+    <scenario_id>.fingerprints.json —— 两枚闭环指纹（DoD C5 独立指纹 artifact）
+    adr0034_fingerprints.json     —— 全部场景指纹汇总（DoD C4 baseline 漂移比较的输入）
+    adr0034_summary.json          —— 汇总（每场景 ok / gate / fingerprints）
 
-设计纪律（ADR-0034 Phase A MUST）：
+设计纪律（ADR-0034 Phase A MUST + Phase C 扩展）：
 
 - **零行为变化**：本脚本只调用已存在的 ``IntegrationRunner`` / ``IntegrationValidator`` /
   ``IntegrationReport``，不新增任何决策/感知行为；
 - **不进自动门禁**：默认退出码恒 0，报告给人读、人工判断（与 ADR-0033 D8 同口径）。
-  仅当显式 ``--strict`` 时才在任一场景失败时退出码 1——供本地预检，不接 CI 非零门禁；
+  ``--strict`` 按 validator.ok（全 AND）；``--gate --strict`` 按 gate.passed
+  （**blocking 语义**，warning 失败仅 degraded 不拦）——CI integration-gate 用后者；
 - **确定性比对友好**：canonical 报告剔除 UUID / 时间戳（见 ``report.canonical_dict``），
-  同 seed 两次运行逐字节一致（t1）。
+  同 seed 两次运行逐字节一致（t1）；
+- **指纹可溯源（DoD C2/C5/C7）**：报告含两枚闭环指纹；provenance 填 code_version +
+  python/numpy/opencv/torch 版本——回答"失败发生在哪次提交、哪套运行时"。
 
 依赖延迟导入：仅在 ``main`` 内 import 运行时 / 验证链，避免加载即拉起重链。
 
 用法：
     python scripts/run_integration_validation.py
     python scripts/run_integration_validation.py --scenarios <dir> --out-dir <dir>
-    python scripts/run_integration_validation.py --strict
+    python scripts/run_integration_validation.py --gate --strict
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
+import platform
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,6 +56,51 @@ _DEFAULT_SCENARIOS = (
 )
 # 输出目录：与 CI 的 artifacts/integration/（IntegrationReport.json）刻意分开。
 _DEFAULT_OUT = Path(__file__).resolve().parent.parent / "artifacts" / "adr0034_integration"
+
+# 报告 provenance 里记录的运行时依赖（缺失记 "n/a"，不因可选依赖缺失而崩）。
+_RUNTIME_PKG_NAMES: tuple[str, ...] = ("numpy", "opencv-python", "torch")
+
+
+def _code_version() -> str:
+    """code_version：git 短哈希优先，回退 ``home_perception.__version__``（DoD C7）。"""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=Path(__file__).resolve().parent.parent,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except OSError:
+        pass
+    try:
+        import home_perception
+
+        return getattr(home_perception, "__version__", "unknown")
+    except ImportError:
+        return "unknown"
+
+
+def _normalize_version(version: str) -> str:
+    """归一化构建后缀（跨 OS / 跨构建可比，对齐 ADR-0033 harness.normalize_version）。"""
+    return version.split("+", 1)[0]
+
+
+def _runtime_provenance() -> dict[str, str]:
+    """运行血缘（DoD C7）：code_version + python/numpy/opencv/torch 版本。"""
+    deps: dict[str, str] = {}
+    for pkg in _RUNTIME_PKG_NAMES:
+        try:
+            deps[pkg] = _normalize_version(importlib.metadata.version(pkg))
+        except importlib.metadata.PackageNotFoundError:
+            deps[pkg] = "n/a"
+    return {
+        "code_version": _code_version(),
+        "python": platform.python_version(),
+        **deps,
+    }
 
 
 def _iter_scenario_paths(directory: Path) -> list[Path]:
@@ -126,18 +181,32 @@ def main(argv: list[str] | None = None) -> int:
     summary: dict[str, object] = {
         "generated_at": datetime.now(UTC).isoformat(),
         "scenarios_dir": str(args.scenarios),
+        "provenance": _runtime_provenance(),  # DoD C7：失败可溯源到提交 + 运行时
         "scenarios": [],
     }
     any_failed = False
+    all_fingerprints: dict[str, dict[str, str]] = {}
 
     for path in paths:
         scn = load_scenario(path)
         result = runner.run(scn)
         validation = validator.validate(result, scn)
-        report = IntegrationReport.build(result, validation)
+        report = IntegrationReport.build(
+            result, validation, provenance=_runtime_provenance()
+        )
 
         canonical_path = out_dir / f"{scn.meta.scenario_id}.canonical.json"
         report.write_canonical_report(canonical_path)  # 过双重守卫（脱敏 + 父目录存在）
+
+        fingerprints = {
+            "expectation_fingerprint": report.expectation_fingerprint,
+            "loop_fingerprint": report.loop_fingerprint,
+        }
+        all_fingerprints[scn.meta.scenario_id] = fingerprints
+        fp_path = out_dir / f"{scn.meta.scenario_id}.fingerprints.json"
+        _write_guarded(
+            fp_path, {"scenario_id": scn.meta.scenario_id, **fingerprints}, who="fingerprints"
+        )
 
         entry: dict[str, object] = {
             "scenario_id": scn.meta.scenario_id,
@@ -145,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
             "ok": validation.ok,
             "failure_codes": list(validation.failure_codes()),
             "canonical_report": str(canonical_path),
+            "fingerprints": fingerprints,
         }
         summary["scenarios"].append(entry)  # type: ignore[arg-type]
         any_failed = any_failed or (not validation.ok)
@@ -169,7 +239,19 @@ def main(argv: list[str] | None = None) -> int:
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    # DoD C4：全部场景指纹汇总（check_integration_baseline.py 的 current 输入）。
+    fingerprints_path = out_dir / "adr0034_fingerprints.json"
+    _write_guarded(
+        fingerprints_path,
+        {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "provenance": _runtime_provenance(),
+            "scenarios": all_fingerprints,
+        },
+        who="fingerprints",
+    )
     print(f"汇总已写入：{summary_path}")
+    print(f"指纹汇总已写入：{fingerprints_path}")
     print(f"逐场景 canonical 报告目录：{out_dir}")
 
     # 退出码语义（Phase C）：

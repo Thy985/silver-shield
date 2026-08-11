@@ -1,0 +1,22 @@
+{
+  "generated_at": "",
+  "note": "ADR-0034 loop 指纹基线（DoD C4）。变更须 PR 注明 integration-baseline-bump。",
+  "scenarios": {
+    "sw_adr0034_alarm": {
+      "expectation_fingerprint": "734e993a1d4bcb491d4824f40cdde4e8b4c98f9de7b62624d5056f6377917edd",
+      "loop_fingerprint": "3c2e47cce387e9df920bbc27d595e12b0a8f3c69cf08ada53422d4fb91e09c17"
+    },
+    "sw_adr0034_benign": {
+      "expectation_fingerprint": "ec401bcf27ff1893c54f2bf437e71f1e6c35d7860423700e8b3ec5e9552fd70a",
+      "loop_fingerprint": "5abb5839439340f88cc6c5f35f8e6856512f00c7f651e01c7b38480016a444f3"
+    },
+    "sw_adr0034_cross_modal": {
+      "expectation_fingerprint": "c788f50d589c393a502d9a83281e98bbe012829ee7b2fa52ad68c46f14eff307",
+      "loop_fingerprint": "c38b8442aaccfb5ffde5d6e39cc2dfe10900557c200089868ba8ef242eae6f2c"
+    },
+    "sw_adr0034_elderly_dwell": {
+      "expectation_fingerprint": "c8b4730f3262a00eba9ee0529e0b90563d3f6a0efb0ac940ab4f25ba44079aa0",
+      "loop_fingerprint": "2eae4c272791994ee8f26657852f48ba7e9252e3f40ff46b0b4c54f7c8c72172"
+    }
+  }
+}
