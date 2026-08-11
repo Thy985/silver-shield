@@ -25,6 +25,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from home_perception.action.command import COMMAND_TYPES
@@ -58,6 +60,21 @@ DECISION_EXPECTATION_OUTCOMES: tuple[str, ...] = (*DECISION_OUTCOMES, OUTCOME_NO
 
 # Memory 结构化断言里允许出现的证据模态（单一事实源，派生自 ``EvidenceModality``）。
 MEMORY_MODALITIES: tuple[str, ...] = tuple(m.value for m in EvidenceModality)
+
+# Phase C：stage 期望的严重级别（ADR-0034 §Phase C / 实施计划 §2.5）。
+# - ``blocking``（默认）：该 stage 失败 → 门禁不通过（``gate.passed=False``）；
+# - ``warning``：该 stage 失败 → 门禁仍通过但标记 ``degraded=True``。
+# 默认 ``blocking`` 是 fail-closed 姿态：没写明"可降级"就按最严处理。
+EXPECTED_SEVERITIES: tuple[str, ...] = ("blocking", "warning")
+
+
+def _validate_severity_value(value: str, *, owner: str) -> str:
+    """Phase C severity 合法性校验（5 个子期望共用，owner 用于报错定位）。"""
+    if value not in EXPECTED_SEVERITIES:
+        raise ValueError(
+            f"{owner}.severity={value!r} 非法；必须为 {EXPECTED_SEVERITIES}（fail-closed）"
+        )
+    return value
 
 
 class BenchmarkExpectation(BaseModel):
@@ -94,8 +111,8 @@ class BenchmarkExpectation(BaseModel):
 # - Phase A（已落地）：`perception` / `memory.min_records` / `decision` / `action`
 # - Phase B.1（已落地）：`MemoryExpectation` 结构化字段 `expected_risk_level` /
 #   `expected_action_types` / `required_modalities`（Memory 深度断言）
-# - Phase B.2（本次）：`CrossModalExpectation`（F5，vision+audio 真实关联）
-# - Phase C：各子期望的 `severity: Literal["blocking","warning"]` 字段
+# - Phase B.2（已落地）：`CrossModalExpectation`（F5，vision+audio 真实关联）
+# - Phase C（本次）：各子期望的 `severity: Literal["blocking","warning"]` 字段
 #
 # 提前落 Phase C 字段 = 落一个当前无人消费的空契约，反而给"已支持"的错觉。
 
@@ -115,6 +132,7 @@ class PerceptionExpectation(_StrictModel):
     """
 
     min_perception_events: int | None = None
+    severity: Literal["blocking", "warning"] = "blocking"  # Phase C：warning 可降级不拦门禁
 
     @field_validator("min_perception_events")
     @classmethod
@@ -122,6 +140,11 @@ class PerceptionExpectation(_StrictModel):
         if v is not None and v < 0:
             raise ValueError(f"min_perception_events 必须 >= 0，收到 {v}（下界语义）")
         return v
+
+    @field_validator("severity")
+    @classmethod
+    def _validate_severity(cls, v: str) -> str:
+        return _validate_severity_value(v, owner="perception")
 
 
 class MemoryExpectation(_StrictModel):
@@ -148,6 +171,7 @@ class MemoryExpectation(_StrictModel):
     expected_risk_level: str | None = None
     expected_action_types: list[str] | None = None
     required_modalities: list[str] | None = None
+    severity: Literal["blocking", "warning"] = "blocking"  # Phase C
 
     @field_validator("min_records")
     @classmethod
@@ -155,6 +179,11 @@ class MemoryExpectation(_StrictModel):
         if v < 0:
             raise ValueError(f"min_records 必须 >= 0，收到 {v}（下界语义）")
         return v
+
+    @field_validator("severity")
+    @classmethod
+    def _validate_severity(cls, v: str) -> str:
+        return _validate_severity_value(v, owner="memory")
 
     @field_validator("expected_risk_level")
     @classmethod
@@ -225,6 +254,7 @@ class DecisionExpectation(_StrictModel):
     recommended_action: str | None = None
     reason_code: str | None = None
     confidence: float | None = None
+    severity: Literal["blocking", "warning"] = "blocking"  # Phase C
 
     @field_validator("outcome")
     @classmethod
@@ -300,6 +330,11 @@ class DecisionExpectation(_StrictModel):
             )
         return self
 
+    @field_validator("severity")
+    @classmethod
+    def _validate_severity(cls, v: str) -> str:
+        return _validate_severity_value(v, owner="decision")
+
 
 class ActionExpectation(_StrictModel):
     """Notification 阶段期望（F3 判据），对照 ``ActionSink`` 收到的 ``ActionCommand``。
@@ -312,6 +347,7 @@ class ActionExpectation(_StrictModel):
 
     expected_command_types: list[str] | None = None
     expected_notification: bool | None = None
+    severity: Literal["blocking", "warning"] = "blocking"  # Phase C
 
     @field_validator("expected_command_types")
     @classmethod
@@ -350,6 +386,11 @@ class ActionExpectation(_StrictModel):
             )
         return self
 
+    @field_validator("severity")
+    @classmethod
+    def _validate_severity(cls, v: str) -> str:
+        return _validate_severity_value(v, owner="action")
+
 
 class CrossModalExpectation(_StrictModel):
     """跨模态关联阶段期望（F5 判据 · Phase B.2）。
@@ -375,6 +416,7 @@ class CrossModalExpectation(_StrictModel):
     min_links: int = 1
     expected_linked_modalities: list[str] | None = None
     required_relationships: list[str] | None = None
+    severity: Literal["blocking", "warning"] = "blocking"  # Phase C
 
     @field_validator("min_links")
     @classmethod
@@ -420,6 +462,11 @@ class CrossModalExpectation(_StrictModel):
                 "本字段按**集合**比对（D4 禁止精确计数），重复项多半是笔误（fail-closed）"
             )
         return v
+
+    @field_validator("severity")
+    @classmethod
+    def _validate_severity(cls, v: str) -> str:
+        return _validate_severity_value(v, owner="cross_modal")
 
 
 class IntegrationExpectationSuite(_StrictModel):

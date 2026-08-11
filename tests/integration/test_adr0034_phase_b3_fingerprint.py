@@ -36,8 +36,9 @@ FINGERPRINT_PATH = (
     REPO_ROOT / "src" / "home_perception" / "integration" / "loop" / "fingerprint.py"
 )
 
-# 与 implementation-plan §2.5 对齐：Phase A=0.1.0 / B=0.2.0 / C=1.0.0
-EXPECTED_SCENARIO_INTEGRATION_VERSION = "0.2.0"
+# 与 implementation-plan §2.5 对齐：Phase A=0.1.0 / B=0.2.0 / **C=1.0.0**
+# （Phase C 各子期望新增 severity 字段属破坏性 canonical 变化，旧指纹强制失效）。
+EXPECTED_SCENARIO_INTEGRATION_VERSION = "1.0.0"
 
 
 def _suite(**kwargs):
@@ -408,7 +409,7 @@ def test_b3_fingerprint_module_does_not_import_evaluation():
 
 
 def test_b3_version_matches_plan():
-    """SCENARIO_INTEGRATION_VERSION == 0.2.0（Phase B；实施计划 §2.5）。"""
+    """SCENARIO_INTEGRATION_VERSION == 1.0.0（Phase C；实施计划 §2.5）。"""
     from home_perception.integration.loop.fingerprint import (
         SCENARIO_INTEGRATION_VERSION,
     )

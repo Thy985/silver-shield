@@ -30,9 +30,10 @@ import hashlib
 import json
 from typing import Any, Protocol, runtime_checkable
 
-# Phase A=0.1.0 / **B=0.2.0** / C=1.0.0（实施计划 §2.5）。改版本 = 强制旧指纹失效，
-# 用于"评价标准语义有破坏性变化"的场景（如新增子期望字段改变 canonical 形态）。
-SCENARIO_INTEGRATION_VERSION = "0.2.0"
+# Phase A=0.1.0 / B=0.2.0 / **C=1.0.0**（实施计划 §2.5）。改版本 = 强制旧指纹失效，
+# 用于"评价标准语义有破坏性变化"的场景（Phase C：各子期望新增 ``severity`` 字段，
+# 改变 canonical 形态；旧指纹一律作废，防"同一标准两套指纹"）。
+SCENARIO_INTEGRATION_VERSION = "1.0.0"
 
 # 本模块 loop_fingerprint 的成分清单（单一来源，供漂移守卫 + 审计）。
 LOOP_FINGERPRINT_COMPONENT_FIELDS: tuple[str, ...] = (
