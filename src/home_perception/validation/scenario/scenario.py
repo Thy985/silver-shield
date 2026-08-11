@@ -23,7 +23,10 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-from home_perception.validation.contracts import BenchmarkExpectation
+from home_perception.validation.contracts import (
+    BenchmarkExpectation,
+    IntegrationExpectationSuite,
+)
 
 # 已知 Schema 格式版本（未知版本拒绝加载，fail-closed，防旧场景被新 renderer 静默误读）。
 KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
@@ -131,6 +134,10 @@ class Scenario(BaseModel):
     # ADR-0033：可选安全评价标签（向后兼容缺省 None；ScenarioValidator 不消费此字段，
     # 验证 ≠ 评价，职责分离）。benchmark.expected_alarm 由场景作者显式声明。
     benchmark: BenchmarkExpectation | None = None
+    # ADR-0034 D4：可选闭环集成期望（opt-in，缺省 None；ScenarioValidator 同样**不消费**，
+    # 只有 IntegrationValidator 消费）。与 benchmark 语义分离：benchmark 测"感知该不该
+    # 报警"，integration 测"报警后 Memory/Decision/Notification 该不该真发生"。
+    integration: IntegrationExpectationSuite | None = None
 
 
 # ============================================================================

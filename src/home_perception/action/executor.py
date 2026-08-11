@@ -34,6 +34,7 @@ from .command import ActionCommand, assert_transition_warning
 from .dispatcher import ActionDispatcher
 from .notifier import NotificationAdapter
 from .publisher import MQTTPublisher
+from .sink import ActionSink
 
 log = get_logger(__name__)
 
@@ -56,18 +57,26 @@ class ActionExecutor:
     6. 根据执行结果翻 command.status（DONE / FAILED / GIVEN_UP）
     7. 整体翻 WarningEvent.status（CONFIRMED / PENDING / REJECTED）
     8. 记录到 `_dispatched` set（幂等）
-    9. 返回 `[ActionCommand]`（已执行 / 已记录失败）
+    9. （可选）把已派发命令写入 `sink` 观测接缝（ADR-0034 D3，失败隔离）
+    10. 返回 `[ActionCommand]`（已执行 / 已记录失败）
 
     用法：
         executor = ActionExecutor(dispatcher, publisher, notifier, max_retries=3)
         commands = executor.execute(warning)
         # commands 可能是 []（幂等已 dispatch / dispatch 返回空）或 1+ 个 ActionCommand
+
+        # 闭环集成验证时注入观测探针（默认 None ⇒ 与注入前行为完全一致）：
+        recorder = InMemoryActionRecorder()
+        executor = ActionExecutor(dispatcher, publisher, notifier, sink=recorder)
     """
 
     dispatcher: ActionDispatcher
     publisher: MQTTPublisher
     notifier: NotificationAdapter
     max_retries: int = 3
+    # 可选观测接缝（ADR-0034 D3）：默认 None ⇒ 零行为变化。
+    # 只在 `execute()` 派发完成后**只写不读**地记录命令；异常一律吞掉（失败隔离）。
+    sink: ActionSink | None = None
     # 内部状态（in-memory 幂等）
     _dispatched: set[UUID] = field(default_factory=set)
     _commands_by_warning: dict[UUID, list[UUID]] = field(default_factory=dict)
@@ -138,6 +147,15 @@ class ActionExecutor:
             )
             # 不翻 status（保持 PENDING），等 retry_pending 处理
 
+        # 7) 观测探针（ADR-0034 D3）：生产状态机**已全部跑完**后才落 sink，确保探针不可能
+        #    影响派发结果。记录 `executed` 全量（含 FAILED / GIVEN_UP），使 sink 与
+        #    `FrameResult.commands` 两条通道天然可比——这是 §0.4 F6 交叉校验的前提。
+        #    幂等命中（步骤 1 提前 return）与 dispatch 空返回（步骤 2）**不记录**：前者命令
+        #    已在首次 execute 时记过，重复记会造成双通道计数不等；故 F6 校验须按
+        #    `command_id` 做**集合**比对，而非列表逐项比对。
+        #    `retry_pending()` 同样不记录（同一 command_id 重试不产生新命令）。
+        self._record_to_sink(executed)
+
         log.info(
             "action.executed",
             warning_id=str(warning.warning_id),
@@ -202,6 +220,25 @@ class ActionExecutor:
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    def _record_to_sink(self, commands: list[ActionCommand]) -> None:
+        """把已派发命令写入可选观测 sink（ADR-0034 D3）。
+
+        **失败隔离铁律**（同 ADR-0031 T3）：sink 的任何异常都在此吞掉并降级为
+        `log.warning`，绝不外抛——观测探针坏了绝不能改变生产派发行为。逐条 try 而非整体
+        try，保证单条记录失败不影响其余命令留痕。
+        """
+        if self.sink is None:
+            return
+        for cmd in commands:
+            try:
+                self.sink.record(cmd)
+            except Exception:
+                log.warning(
+                    "action_sink_record_failed",
+                    command_id=str(cmd.command_id),
+                    exc_info=True,
+                )
 
     def _execute_command(self, cmd: ActionCommand, warning: WarningEvent) -> bool:
         """执行单个 command：调对应 publisher / notifier。返回 success。"""

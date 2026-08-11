@@ -48,6 +48,7 @@ from .dispatcher import ActionDispatcher, DispatcherConfig
 from .executor import ActionExecutor
 from .notifier import FamilyContact, MockNotifier, NotificationAdapter
 from .publisher import MockPublisher, MQTTPublisher
+from .sink import ActionSink, InMemoryActionRecorder, JsonlActionRecorder
 
 __all__ = [
     # 状态
@@ -59,9 +60,13 @@ __all__ = [
     "ActionCommand",
     "ActionDispatcher",
     "ActionExecutor",
+    # 接口（含 ADR-0034 D3 观测接缝 ActionSink）
+    "ActionSink",
     "DispatcherConfig",
     "FamilyContact",
-    # 接口
+    # 观测接缝实现（ADR-0034 D3）
+    "InMemoryActionRecorder",
+    "JsonlActionRecorder",
     "MQTTPublisher",
     "MockNotifier",
     # Mock

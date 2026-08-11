@@ -1,0 +1,41 @@
+# ADR-0034 Phase A · 最小闭环「良性」fixture（自洽，确定性可复现）。
+# 拷贝自 benchmark/quiet_hallway：无 actor → 无检测 → 无事件 → 无告警 → 无命令 → 无 episode。
+# 用于占住闭环的「合法未触发」分支（t6 不误发用例）：
+#   decision.outcome=NONE（上游无感知事件，缺失可解释）→ 不告警；
+#   action 显式声明「不发任何命令」→ 若 pipeline 误发即 F3 失败。
+# 不声明 `memory` 块：良性无上游事件，F4 静默丢弃门控（perception_events 存在 ∧ 零 episode）
+# 不触发；显式 min_records=1 反而会把「正常未落库」误判失败，故刻意留空（D4 下界语义）。
+meta:
+  schema_version: "1.0"
+  scenario_id: sw_adr0034_benign
+  version: 1
+  description: "ADR-0034 Phase A: empty hallway, no actor, expect no alarm / no command"
+  seed: 11
+  duration_frames: 60
+  owner: perception-team
+  category: negative
+  difficulty: low
+  tags: [adr0034, benign, integration]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+  static_objects: []
+actors: []
+timeline: []
+expects:
+  emitted_event_types: []
+benchmark:
+  expected_alarm: false
+  note: "空门厅静止无人，任何告警/命令都是误触发"
+integration:
+  decision:
+    outcome: NONE
+  action:
+    expected_notification: false
+    expected_command_types: []
