@@ -96,6 +96,28 @@ class EventGroundTruth(BaseModel):
     type: str
 
 
+class AudioEventSpec(BaseModel):
+    """跨模态集成场景的音频感知事件声明（ADR-0034 Phase B.2：让闭环驱动音频会话）。
+
+    仅描述「一段音频会话里有哪些声学感知事件」，由 ``ScenarioCompiler`` 编译为
+    正式 ``AudioPerceptionEvent``（``created_at`` 由 ``timestamp`` 推导，确定性）。
+    不新增音频模型 / 契约——完全复用 ``home_perception.audio.event`` 既有事件。
+
+    时间约束（关联边成立的物理前提，ADR-0028 D1/D3）：``timestamp`` 必须落在会话窗口
+    内（``>= clock_start`` 且 ``<= clock_start + duration_frames * frame_interval``）。
+    建议声明「首帧 + 末帧」两枚事件，使音频 episode 时间窗跨度覆盖全会话，
+    与视觉 episode 时间窗严格重叠，保证 ``CrossModalLinker`` 建边。
+    """
+
+    kind: str  # AudioPerceptionKind 值，如 ``audio_telephone_persistent``
+    timestamp: float  # Unix 秒，落在会话窗口内（决定 episode 时间窗与重叠）
+    score: float = 0.9  # 规则强度 0~1（非诈骗概率）
+    confidence: float = 0.9  # 检测可信度 0~1
+    source_segment_ids: list[str] = Field(default_factory=list)
+    labels: list[str] = Field(default_factory=list)
+    event_id: str | None = None  # 缺省由编译器确定性生成（``aev-{i}``）
+
+
 class ExpectsSpec(BaseModel):
     """``ScenarioValidator`` 的机器可校验期望（D1 / T6）。"""
 
@@ -131,6 +153,10 @@ class Scenario(BaseModel):
     actors: list[ActorSpec] = Field(default_factory=list)
     timeline: list[EventGroundTruth] = Field(default_factory=list)
     expects: ExpectsSpec = Field(default_factory=ExpectsSpec)
+    # ADR-0034 Phase B.2：可选音频通道（跨模态关联来源）。缺省空 = 无音频会话驱动；
+    # 仅当声明且闭环 cross_modal_enabled=True 时，loop 才会驱动 AudioSessionRecorder
+    # 产出纯音频 episode 并与视觉 episode 建跨模态边。向后兼容：旧场景无此字段。
+    audio: list[AudioEventSpec] = Field(default_factory=list)
     # ADR-0033：可选安全评价标签（向后兼容缺省 None；ScenarioValidator 不消费此字段，
     # 验证 ≠ 评价，职责分离）。benchmark.expected_alarm 由场景作者显式声明。
     benchmark: BenchmarkExpectation | None = None

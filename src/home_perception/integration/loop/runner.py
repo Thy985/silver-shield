@@ -145,8 +145,8 @@ class IntegrationRunner:
         ctx = context or IntegrationContext.build(self.config)  # L1 建探针
         synth = self.compiler.compile(scenario, mode=scenario.mode)  # L3 输入（编译产物）
         pipeline = self._assemble(ctx, synth.detector)  # L2 注入 runtime
-        frame_results = self._drive(pipeline, synth, ctx)  # L3 执行 Scenario
-        return self._collect(ctx, synth, frame_results)  # L4 + L5
+        frame_results, audio_summary = self._drive(pipeline, synth, ctx)  # L3 执行 Scenario
+        return self._collect(ctx, synth, frame_results, audio_summary)  # L4 + L5
 
     # ------------------------------------------------------------------ L2
     def _assemble(self, ctx: IntegrationContext, detector: Any) -> Any:
@@ -208,13 +208,56 @@ class IntegrationRunner:
         # metrics，落库计数会分裂到两个对象，审计口径不一致。
         metrics = PipelineMetrics()
         episode_builder = DefaultEpisodeBuilder()
+        # device_id（ADR-0028 D1）不在此传：MemoryHook 不接受构造期 device_id，
+        # 而是在 record() 时透传——视觉路径由 pipeline.process_frame 取
+        # rule_engine.device_id（本装配中 == self.device_id），音频路径由
+        # AudioSessionRecorder 内部 _device_id 透传（见下）。两路同值，保证
+        # 跨模态同设备关联（CrossModalLinker 共享 device_id 前置条件）。
         memory_hook = MemoryHook(
             episode_builder,
             ctx.memory_store,  # 探针③：Memory
             True,  # enabled：闭环验证必须落库，否则 Memory Stage 无从判定
             metrics,
-            cross_modal_runtime=ctx.cross_modal_runtime,  # Phase A 恒 None
+            cross_modal_runtime=ctx.cross_modal_runtime,  # Phase B.2：启用时真实注入
         )
+
+        # ADR-0034 Phase B.2：跨模态启用时，构造 AudioSessionRecorder 并挂到 pipeline。
+        # 复用同一 decision_engine / executor / memory_hook（与视觉共享 MemoryStore +
+        # cross_modal_runtime，落库后自动建边）；device_id 与视觉一致，保证同设备关联。
+        # 未启用（cross_modal_enabled=False）则不挂，pipeline 行为与 Phase A 完全一致
+        # （process_audio_session 因 _audio_recorder is None 直接返回 None，零行为变化）。
+        if self.config.cross_modal_enabled:
+            from home_perception.runtime.audio_session_recorder import (
+                AudioSessionRecorder,
+            )
+
+            audio_recorder = AudioSessionRecorder(
+                decision_engine=decision_engine,
+                executor=executor,
+                memory_hook=memory_hook,
+                device_id=self.device_id,
+                session_id_factory=lambda: "integration_audio_session",
+                enabled=True,
+            )
+            pipeline = PerceptionPipeline(  # 占位，下行立即覆盖 _audio_recorder
+                detector=detector,
+                tracker=tracker,
+                event_builder=event_builder,
+                feature_extractor=feature_extractor,
+                rule_engine=rule_engine,
+                decision_engine=decision_engine,
+                executor=executor,
+                metrics=metrics,
+                now_provider=clock,
+                frame_interval_s=self.config.frame_interval_s,
+                memory_store=ctx.memory_store,
+                episode_builder=episode_builder,
+                episodic_shadow=True,
+                memory_hook=memory_hook,
+            )
+            pipeline._audio_recorder = audio_recorder  # 与 from_settings 同款接线
+            return pipeline
+
         return PerceptionPipeline(
             detector=detector,
             tracker=tracker,
@@ -234,12 +277,19 @@ class IntegrationRunner:
 
     # ------------------------------------------------------------------ L3
     @staticmethod
-    def _drive(pipeline: Any, synth: Any, ctx: IntegrationContext) -> list[Any]:
-        """逐帧推进 pipeline，返回 ``FrameResult`` 序列。
+    def _drive(
+        pipeline: Any, synth: Any, ctx: IntegrationContext
+    ) -> tuple[list[Any], Any]:
+        """逐帧推进 pipeline，返回 ``(FrameResult 序列, audio_summary)``。
 
         帧驱动语义与 ``ScenarioRunner.run`` **逐行对齐**（占位帧 / 时钟推进 / 帧序），
         唯一差异是本方法返回完整 ``FrameResult``（含 ``commands``）而非只抽事件。
         ``ScenarioRunner`` 若变更驱动语义，此处须同步（契约测试守护等价性）。
+
+        ``audio_summary``（ADR-0034 Phase B.2）：音频会话结束后
+        ``process_audio_session`` 的返回（未装配 / 无音频声明时为 ``None``）。
+        音频是独立 Loop（ADR-0026 §8），其产物只出现在 summary、不进 FrameResult；
+        ``_collect`` 据此把音频 warning/command 并入生产侧自报通道（F6 交叉校验）。
         """
         import numpy as np
 
@@ -258,11 +308,28 @@ class IntegrationRunner:
             if interval > 0 and tickable:
                 clock.tick(interval)
             results.append(pipeline.process_frame(frame, frame_index=i))
-        return results
+
+        # ADR-0034 Phase B.2：帧循环结束后，若存在音频会话声明且已装配 AudioSessionRecorder，
+        # 驱动一次音频会话（独立 Audio Loop，不随视频帧同步，ADR-0026 §8）。音频事件经决策链
+        # 产出纯音频 EpisodicRecord，与视觉 episode 共享 device_id + 时间窗重叠 → 自动建跨模态边。
+        # 未装配（_audio_recorder is None，即 cross_modal_enabled=False）或无音频声明时跳过，
+        # 与 Phase A 行为完全一致（零行为变化）。
+        audio_summary: Any = None
+        audio_recorder = getattr(pipeline, "_audio_recorder", None)
+        if audio_recorder is not None and getattr(synth, "audio_events", None):
+            audio_summary = pipeline.process_audio_session(
+                list(synth.audio_events),
+                audio_session_id="integration_audio_session",
+            )
+        return results, audio_summary
 
     # ------------------------------------------------------------------ L4 + L5
     def _collect(
-        self, ctx: IntegrationContext, synth: Any, frame_results: list[Any]
+        self,
+        ctx: IntegrationContext,
+        synth: Any,
+        frame_results: list[Any],
+        audio_summary: Any = None,
     ) -> IntegrationRunResult:
         """从探针**只读**读回六类 artifacts 并封装为 ``IntegrationRunResult``。
 
@@ -276,6 +343,16 @@ class IntegrationRunner:
             perception_events.extend(fr.perception_events)
             warnings.extend(fr.warnings)
             commands.extend(fr.commands)
+
+        # ADR-0034 Phase B.2：音频 Loop 的产出并入**生产侧自报通道**。音频是独立通道
+        # （ADR-0026 §8），其 warning/command 只出现在 AudioSessionSummary、不进
+        # FrameResult；若不并入，F6 会把「探针（sink/trace）观测到、生产通道缺失」
+        # 误判为 Observability Drop——尽管命令真实执行了、告警真实产出了。
+        # 并入后 F6 三通道（sink↔commands、WARN trace↔warnings、episode↔commands）
+        # 两侧同源，交叉校验恢复自洽。
+        if audio_summary is not None:
+            warnings.extend(getattr(audio_summary, "warnings", ()) or ())
+            commands.extend(getattr(audio_summary, "commands", ()) or ())
 
         # 探针读回（fail-closed：读不回即报错，不伪装成下游 Drop）
         ctx.action_sink.flush()
