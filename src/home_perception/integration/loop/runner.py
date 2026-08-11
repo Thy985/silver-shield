@@ -182,23 +182,27 @@ class IntegrationRunner:
     # ------------------------------------------------------------------ L2
     @staticmethod
     def _policy_fingerprint(pipeline: Any) -> str:
-        """决策策略指纹（loop_fingerprint 成分②，ADR-0031 compute_policy_fingerprint）。
+        """决策策略指纹（loop_fingerprint 成分②，经 ``PolicyFingerprintProvider`` 协议）。
 
-        鸭子取 ``pipeline.decision_engine.policy.routing_table``；缺失即 raise
+        ADR-0034 **不绑定** ``decision_engine.policy.routing_table`` 内部结构（评审 #4）：
+        只依赖引擎公开的 ``policy_fingerprint()`` 协议方法（生产侧
+        ``DecisionEngine`` 已实现）；协议不满足或返回空即 raise
         （fail-closed：指纹缺成分 = 无法复述"这次怎么跑的"，不静默降级）。
         """
-        from home_perception.analysis.decision_trace import (
-            compute_policy_fingerprint,
-        )
+        from .fingerprint import PolicyFingerprintProvider
 
-        policy = getattr(getattr(pipeline, "decision_engine", None), "policy", None)
-        routing_table = getattr(policy, "routing_table", None)
-        if routing_table is None:
+        engine = getattr(pipeline, "decision_engine", None)
+        if not isinstance(engine, PolicyFingerprintProvider):
             raise IntegrationConfigError(
-                "decision_engine.policy.routing_table 缺失，无法计算 "
-                "loop_fingerprint 的策略成分（fail-closed）"
+                "decision_engine 不满足 PolicyFingerprintProvider 协议（缺 "
+                "policy_fingerprint() 方法），无法计算 loop_fingerprint（fail-closed）"
             )
-        return compute_policy_fingerprint(routing_table)
+        fingerprint = engine.policy_fingerprint()
+        if not fingerprint:
+            raise IntegrationConfigError(
+                "policy_fingerprint() 返回空，无法计算 loop_fingerprint（fail-closed）"
+            )
+        return fingerprint
 
     def _assemble(self, ctx: IntegrationContext, detector: Any) -> Any:
         """装配注入了三枚探针的 ``PerceptionPipeline``（**唯一注入点**）。

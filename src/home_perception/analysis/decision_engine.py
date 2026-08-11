@@ -22,6 +22,7 @@ from .decision_trace import (
     DecisionTraceSpan,
     build_suppress_trace,
     build_warning_trace,
+    compute_policy_fingerprint,
 )
 from .perception import PerceptionEvent
 from .warning import WarningEvent
@@ -155,3 +156,22 @@ class DecisionEngine:
                 except Exception:  # 失败隔离（T3）：决策层不因 trace 故障而丢结果
                     log.exception("decision.trace_failed", warning_id=None)
         return warning
+
+    # ------------------------------------------------------------------
+    # ADR-0034 Phase B.3 探针协议：PolicyFingerprintProvider
+    # ------------------------------------------------------------------
+    def policy_fingerprint(self) -> str:
+        """决策策略指纹（供闭环指纹 ``loop_fingerprint`` 的 ``policy_fp`` 成分）。
+
+        把"策略指纹怎么取"固化到引擎**公开 API**：外部（ADR-0034 闭环指纹）经
+        ``PolicyFingerprintProvider`` 协议调用本方法，**不**直接触碰
+        ``policy.routing_table`` 内部结构——未来策略从 ``RuleBasedDecisionPolicy``
+        演化为 ``PolicyProvider`` / ``RuleRegistry`` 时，本方法内部实现可换，
+        协议方法签名不变（ADR-0034 零改动）。
+
+        计算语义与 ADR-0031 ``compute_policy_fingerprint`` 完全一致（同一纯函数，
+        规范化序列化 + sha256）；``routing_table`` 缺失（子类未提供）按空 dict 参与
+        计算——本方法只负责"取"，"非空校验"由调用方 fail-closed 负责。
+        """
+        routing_table = getattr(self.policy, "routing_table", {})
+        return compute_policy_fingerprint(routing_table)

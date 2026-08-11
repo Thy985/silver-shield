@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 # Phase A=0.1.0 / **B=0.2.0** / C=1.0.0（实施计划 §2.5）。改版本 = 强制旧指纹失效，
 # 用于"评价标准语义有破坏性变化"的场景（如新增子期望字段改变 canonical 形态）。
@@ -43,6 +43,26 @@ LOOP_FINGERPRINT_COMPONENT_FIELDS: tuple[str, ...] = (
     "cross_modal_enabled",
     "expectation_fp",
 )
+
+
+class IntegrationFingerprintError(ValueError):
+    """闭环指纹域异常（成分缺失 / 非法值；T5 精确捕获用）。
+
+    只用于"值非法"（空字符串 / 成分缺失）；类型错误（传了非 str / 非 bool）仍抛
+    ``TypeError``（语义区分：类型错 = 调用方 bug，值错 = 数据问题）。
+    """
+
+
+@runtime_checkable
+class PolicyFingerprintProvider(Protocol):
+    """闭环指纹的决策策略指纹提供者（ADR-0034 不绑定 DecisionEngine 内部结构）。
+
+    实现：``DecisionEngine.policy_fingerprint()``（生产侧公开 API，内部取
+    ``policy.routing_table`` 算 ADR-0031 策略指纹）。外部只依赖本协议方法，
+    未来策略内部结构演化为 ``PolicyProvider`` / ``RuleRegistry`` 时本协议不变。
+    """
+
+    def policy_fingerprint(self) -> str: ...
 
 # 未声明期望时的空标准（与 ``IntegrationValidator.validate`` 的
 # ``scenario.integration or IntegrationExpectationSuite()`` 同款语义——「没写标准」
@@ -81,6 +101,12 @@ def compute_expectation_fingerprint(suite: Any | None) -> str:
     确定性：canonical JSON 只含**声明的约束**（``exclude_none=True`` 剔除
     显式 None = 未声明约束；默认值保留 = 显式契约）。同标准必同指纹；
     改任一子期望必变（t15 变异验证）。
+
+    > **冻结语义（评审 #5）**：``None`` 与空套件（``{}``）刻意等价——validator 的
+    > ``scenario.integration or IntegrationExpectationSuite()`` 已把「未声明期望」与
+    > 「声明空期望」判为同一空标准，指纹若区分二者会造成"同一标准两个指纹"的语义
+    > 分裂。等价性由 ``test_b3_none_suite_equals_empty_suite`` 锁死；若未来 YAML 加载
+    > 分化两种形态的语义，须同步放开该测试并引入显式"标准声明"标志。
     """
     from home_perception.validation.contracts import IntegrationExpectationSuite
 
@@ -110,10 +136,11 @@ def compute_loop_fingerprint(
     """计算闭环运行指纹（``loop_fingerprint``，t15/t16）。
 
     6 成分**全非空** fail-closed：5 个字符串成分须为非空 ``str``（类型错误抛
-    ``TypeError``、空值抛 ``ValueError``）；``cross_modal_enabled`` 为 bool 成分，
-    须是显式 ``bool``（``False`` 是合法配置「未启用跨模态」，不得与"缺失"混淆——
-    ``None``/``0``/``""`` 均拒绝）。缺任一成分 raise，绝不静默降级。漂移守卫：
-    入参集合与 ``LOOP_FINGERPRINT_COMPONENT_FIELDS`` 必须一致（防新增成分只改一处）。
+    ``TypeError``、空值抛 ``IntegrationFingerprintError``（T5））；
+    ``cross_modal_enabled`` 为 bool 成分，须是显式 ``bool``（``False`` 是合法配置
+    「未启用跨模态」，不得与"缺失"混淆——``None``/``0``/``""`` 均拒绝）。
+    缺任一成分 raise，绝不静默降级。漂移守卫：入参集合与
+    ``LOOP_FINGERPRINT_COMPONENT_FIELDS`` 必须一致（防新增成分只改一处）。
     """
     str_components: dict[str, str] = {
         "harness_fp": harness_fp,
@@ -128,7 +155,9 @@ def compute_loop_fingerprint(
                 f"loop_fingerprint 成分 {name} 必须是 str，收到 {value!r}（fail-closed）"
             )
         if not value:
-            raise ValueError(f"loop_fingerprint 成分 {name} 不能为空（fail-closed）")
+            raise IntegrationFingerprintError(
+                f"loop_fingerprint 成分 {name} 不能为空（fail-closed）"
+            )
     if not isinstance(cross_modal_enabled, bool):
         raise TypeError(
             "loop_fingerprint 成分 cross_modal_enabled 必须是 bool，"
@@ -137,7 +166,7 @@ def compute_loop_fingerprint(
     values: dict[str, Any] = {**str_components, "cross_modal_enabled": cross_modal_enabled}
     # 漂移守卫：常量与入参集合必须完全一致（防只改 signature 或只改常量）
     if set(values) != set(LOOP_FINGERPRINT_COMPONENT_FIELDS):
-        raise ValueError(
+        raise IntegrationFingerprintError(
             "compute_loop_fingerprint 入参与 LOOP_FINGERPRINT_COMPONENT_FIELDS 不一致"
             f"（实现={sorted(values)}，常量={sorted(LOOP_FINGERPRINT_COMPONENT_FIELDS)}）"
         )
@@ -185,6 +214,8 @@ def loop_fingerprint_components(
 __all__ = [
     "LOOP_FINGERPRINT_COMPONENT_FIELDS",
     "SCENARIO_INTEGRATION_VERSION",
+    "IntegrationFingerprintError",
+    "PolicyFingerprintProvider",
     "compute_expectation_fingerprint",
     "compute_loop_fingerprint",
     "loop_fingerprint_components",

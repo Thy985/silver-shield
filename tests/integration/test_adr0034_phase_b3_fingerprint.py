@@ -183,21 +183,23 @@ def test_b3_cross_modal_boolean_component_distinct():
 @pytest.mark.parametrize(
     "mutate,exc",
     [
-        ({"harness_fp": ""}, ValueError),  # 空字符串
-        ({"harness_fp": None}, TypeError),  # None（非 str）
-        ({"policy_fp": ""}, ValueError),  # 空字符串
-        ({"policy_fp": None}, TypeError),  # None
-        ({"sink_type": ""}, ValueError),  # 空字符串
-        ({"memory_backend": None}, TypeError),  # None
-        ({"expectation_fp": ""}, ValueError),  # 空字符串
+        ({"harness_fp": ""}, "IntegrationFingerprintError"),  # 空字符串 → 指纹域异常
+        ({"harness_fp": None}, "TypeError"),  # None（非 str）→ 类型异常
+        ({"policy_fp": ""}, "IntegrationFingerprintError"),
+        ({"policy_fp": None}, "TypeError"),
+        ({"sink_type": ""}, "IntegrationFingerprintError"),
+        ({"memory_backend": None}, "TypeError"),
+        ({"expectation_fp": ""}, "IntegrationFingerprintError"),
     ],
 )
 def test_b3_fail_closed_string_component_t16(mutate, exc):
     """任一字符串成分缺失（空 / None）→ raise（t16，绝不静默降级）。
 
-    空字符串 = 值非法 → ``ValueError``；``None`` = 类型非法 → ``TypeError``。
+    空字符串 = 值非法 → ``IntegrationFingerprintError``（T5 精确捕获）；
+    ``None`` = 类型非法 → ``TypeError``。
     """
     from home_perception.integration.loop.fingerprint import (
+        IntegrationFingerprintError,
         compute_expectation_fingerprint,
         compute_loop_fingerprint,
     )
@@ -205,8 +207,18 @@ def test_b3_fail_closed_string_component_t16(mutate, exc):
     fp = compute_expectation_fingerprint(None)
     kwargs = _base_loop_kwargs(fp)
     kwargs.update(mutate)
-    with pytest.raises(exc, match="fail-closed"):
+    expected = IntegrationFingerprintError if exc == "IntegrationFingerprintError" else TypeError
+    with pytest.raises(expected, match="fail-closed"):
         compute_loop_fingerprint(**kwargs)
+
+
+def test_b3_integration_fingerprint_error_is_value_error():
+    """IntegrationFingerprintError 是 ValueError 子类（既有 except ValueError 兼容）。"""
+    from home_perception.integration.loop.fingerprint import (
+        IntegrationFingerprintError,
+    )
+
+    assert issubclass(IntegrationFingerprintError, ValueError)
 
 
 @pytest.mark.parametrize("bad", [None, 1, 0, "false"])
@@ -227,6 +239,7 @@ def test_b3_fail_closed_bool_component_t16(bad):
 def test_b3_fail_closed_audit_components_t16():
     """审计视图与 compute 同校验：缺成分同样 raise（两处共用语义）。"""
     from home_perception.integration.loop.fingerprint import (
+        IntegrationFingerprintError,
         compute_expectation_fingerprint,
         loop_fingerprint_components,
     )
@@ -234,8 +247,125 @@ def test_b3_fail_closed_audit_components_t16():
     fp = compute_expectation_fingerprint(None)
     kwargs = _base_loop_kwargs(fp)
     kwargs["policy_fp"] = ""
-    with pytest.raises(ValueError):
+    with pytest.raises(IntegrationFingerprintError):
         loop_fingerprint_components(**kwargs)
+
+
+# ============================================================================
+# 验收 T2/T4：单变量运行条件漂移 → loop_fp 变、expectation_fp 与其余成分不变
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "mutate,key",
+    [
+        ({"memory_backend": "sqlite"}, "memory_backend"),  # T2：后端更换
+        ({"sink_type": "jsonl"}, "sink_type"),  # T2：sink 更换
+    ],
+)
+def test_b3_single_variable_runtime_drift_t2(mutate, key):
+    """只改一个运行条件（memory_backend / sink_type）→ loop_fp 变、期望成分不变。"""
+    from home_perception.integration.loop.fingerprint import (
+        compute_expectation_fingerprint,
+        compute_loop_fingerprint,
+        loop_fingerprint_components,
+    )
+
+    fp = compute_expectation_fingerprint(None)
+    base = _base_loop_kwargs(fp)
+    drifted = dict(base, **mutate)
+
+    assert compute_loop_fingerprint(**base) != compute_loop_fingerprint(**drifted), (
+        f"单变量 {key} 变更，loop_fingerprint 必须变（T2）"
+    )
+    # 单变量漂移定位：expectation_fp 成分与其余成分全部不变
+    c_base = loop_fingerprint_components(**base)
+    c_drift = loop_fingerprint_components(**drifted)
+    assert c_base["expectation_fp"] == c_drift["expectation_fp"], "期望标准未变"
+    for k in set(c_base) - {key}:
+        assert c_base[k] == c_drift[k], f"成分 {k} 不应随 {key} 变更而变（单变量定位）"
+
+
+def test_b3_single_variable_cross_modal_t4():
+    """只改 cross_modal_enabled → loop_fp 变、expectation_fp 本身不变（T4）。"""
+    from home_perception.integration.loop.fingerprint import (
+        compute_expectation_fingerprint,
+        compute_loop_fingerprint,
+        loop_fingerprint_components,
+    )
+
+    fp = compute_expectation_fingerprint(None)
+    off = _base_loop_kwargs(fp)
+    on = dict(_base_loop_kwargs(fp), cross_modal_enabled=True)
+
+    # 评价标准没变：expectation_fp 完全不变
+    assert compute_expectation_fingerprint(None) == fp
+    # 运行装配变了：loop_fp 变，且仅 cross_modal_enabled 成分变
+    assert compute_loop_fingerprint(**off) != compute_loop_fingerprint(**on)
+    c_off = loop_fingerprint_components(**off)
+    c_on = loop_fingerprint_components(**on)
+    assert c_off["cross_modal_enabled"] == "0" and c_on["cross_modal_enabled"] == "1"
+    for k in set(c_off) - {"cross_modal_enabled"}:
+        assert c_off[k] == c_on[k], f"成分 {k} 不应随 cross_modal_enabled 变更而变（T4）"
+
+
+def test_b3_e2e_stability_run_twice_t3():
+    """T3：标准不变、运行不变，两次 e2e 运行两枚指纹必须稳定相等。"""
+    from home_perception.integration.loop.context import (
+        IntegrationContext,
+        IntegrationRunnerConfig,
+    )
+    from home_perception.integration.loop.runner import IntegrationRunner
+    from home_perception.validation.scenario import load_scenario
+
+    scn = load_scenario(CROSS_MODAL_PATH)
+    cfg = IntegrationRunnerConfig(cross_modal_enabled=True)
+    runner = IntegrationRunner(config=cfg)
+    res1 = runner.run(scn, context=IntegrationContext.build(cfg))
+    res2 = runner.run(scn, context=IntegrationContext.build(cfg))
+    assert res1.expectation_fingerprint == res2.expectation_fingerprint, (
+        "同标准两次运行 expectation_fingerprint 必须相等（T3）"
+    )
+    assert res1.loop_fingerprint == res2.loop_fingerprint, (
+        "同标准同装配两次运行 loop_fingerprint 必须相等（T3）"
+    )
+    assert res1.fingerprint == res2.fingerprint
+
+
+# ============================================================================
+# 评审 #4：PolicyFingerprintProvider 协议（ADR-0034 不绑定策略内部结构）
+# ============================================================================
+
+
+def test_b3_decision_engine_satisfies_provider_protocol():
+    """DecisionEngine 满足 PolicyFingerprintProvider（isinstance 协议检查）。"""
+    from home_perception.analysis.decision_engine import DecisionEngine
+    from home_perception.analysis.decision_policy import RuleBasedDecisionPolicy
+    from home_perception.analysis.decision_trace import compute_policy_fingerprint
+    from home_perception.integration.loop.fingerprint import (
+        PolicyFingerprintProvider,
+    )
+
+    engine = DecisionEngine(elder_id="elder_001", policy=RuleBasedDecisionPolicy())
+    assert isinstance(engine, PolicyFingerprintProvider)
+    # 协议方法返回值 = ADR-0031 纯函数同输入（单一计算语义）
+    assert engine.policy_fingerprint() == compute_policy_fingerprint(
+        engine.policy.routing_table
+    )
+    assert len(engine.policy_fingerprint()) == 64
+
+
+def test_b3_runner_policy_fingerprint_fail_closed_non_provider():
+    """_policy_fingerprint 对非 Provider 的 engine → IntegrationConfigError（fail-closed）。"""
+    from types import SimpleNamespace
+
+    from home_perception.integration.loop.context import IntegrationConfigError
+    from home_perception.integration.loop.runner import IntegrationRunner
+
+    # 无 policy_fingerprint() 方法的"engine"（未来结构变化未实现协议 → 显式报错）
+    non_provider = SimpleNamespace(policy=SimpleNamespace(routing_table={}))
+    with pytest.raises(IntegrationConfigError, match="PolicyFingerprintProvider"):
+        IntegrationRunner._policy_fingerprint(non_provider)
 
 
 # ============================================================================
