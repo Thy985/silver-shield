@@ -8,6 +8,11 @@ torch / ultralytics 缺失，或 ``person.jpg`` / ``yolo11n.pt`` fixture 缺失�
     YOLODetector(yolo11n.pt) → VisitorTracker → VisitorEventBuilder
         → FeatureExtractor → RuleEngine → DecisionEngine → ActionExecutor
 
+此外 `DecisionEngine` 注入 ADR-0031 决策审计血缘探针（`JsonlTraceRecorder`），
+证明 **Decision → Trace** 一层也接通：本次 WARN 决策被落盘为可审计 trace
+（trigger provenance → policy fingerprint → warning_id），其 `warning_id` 即驱动
+行动层的同一个 `WarningEvent`——从而把「决策→审计血缘→行动」三节在同一闭环内绑定。
+
 关键诚实声明（评审 #2 同口径）：
 - 本测试喂的是**单张 person.jpg 的平移副本**（轻微水平位移模拟同人在摄像头下连续出现），
   不是真实视频流；分布特性不能替代真机 ``camera→YOLO`` 抖动，真机分布由 Production Demo 人工验证。
@@ -20,6 +25,8 @@ torch / ultralytics 缺失，或 ``person.jpg`` / ``yolo11n.pt`` fixture 缺失�
 
 from __future__ import annotations
 
+import json
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +42,7 @@ from home_perception.action import (
 )
 from home_perception.analysis.decision_engine import DecisionEngine
 from home_perception.analysis.decision_policy import RuleBasedDecisionPolicy
+from home_perception.analysis.decision_sink import JsonlTraceRecorder
 from home_perception.analysis.event_builder import VisitorEventBuilder
 from home_perception.analysis.feature_extractor import FeatureExtractor
 from home_perception.analysis.rule_engine import RuleEngine, ThresholdConfig
@@ -67,8 +75,14 @@ def _load_person_frames(n_person: int = 5) -> list[np.ndarray]:
     return frames
 
 
-def _build_real_pipeline(detector, clock: DemoClock) -> PerceptionPipeline:
+def _build_real_pipeline(
+    detector, clock: DemoClock, trace_recorder=None
+) -> PerceptionPipeline:
     """装配真实 YOLO 检测器 + 全下游 7 层（决策/行动层接 Mock 通道）。
+
+    ``trace_recorder``（默认 None）：注入 ADR-0031 决策审计血缘探针到 ``DecisionEngine``；
+    P2 传 ``JsonlTraceRecorder`` 以证明 Decision→Trace 一层在真实闭环内接通。传 None 时
+    与生产默认一致（零行为变化）。
 
     realtime_enabled=False：本测试只验证「逐事件」闭环（detect→…→action），
     即 ``process_frame`` 内 ``_act_on_event`` 路径——该路径无条件经过
@@ -87,7 +101,10 @@ def _build_real_pipeline(detector, clock: DemoClock) -> PerceptionPipeline:
         now_provider=clock,
     )
     decision = DecisionEngine(
-        elder_id="elder_001", policy=RuleBasedDecisionPolicy(), now_provider=clock
+        elder_id="elder_001",
+        policy=RuleBasedDecisionPolicy(),
+        now_provider=clock,
+        trace_recorder=trace_recorder,
     )
     dispatcher = ActionDispatcher(DispatcherConfig())
     publisher = MockPublisher()  # 内存收集，落盘关闭（纯单测）
@@ -110,8 +127,13 @@ def _build_real_pipeline(detector, clock: DemoClock) -> PerceptionPipeline:
     )
 
 
-def test_real_yolo_closed_loop_smoke():
-    """真实 YOLO 跑通 7 层闭环：检出 person → abnormal_dwell → 行动层下发 ActionCommand。"""
+def test_real_yolo_closed_loop_smoke(tmp_path: Path):
+    """真实 YOLO 跑通 7 层闭环：检出 person → abnormal_dwell → 决策审计 Trace → 行动层 ActionCommand。
+
+    本测试同时证明你画的链里的 **Decision → Trace** 一节：在真实模型闭环内，DecisionEngine
+    把本次 WARN 决策落盘为 ADR-0031 审计 trace（含真实 trigger 血缘 + policy fingerprint +
+    warning_id），且该 warning_id 即驱动 ActionExecutor 的同一 WarningEvent——三节同源绑定。
+    """
     pytest.importorskip("ultralytics")
     pytest.importorskip("cv2")
     from home_perception.detection.detector import YOLODetector
@@ -141,7 +163,12 @@ def test_real_yolo_closed_loop_smoke():
     empty = np.zeros_like(person_frames[0])
     frames = person_frames + [empty, empty, empty, empty]
 
-    p = _build_real_pipeline(det, clock)
+    # 注入 ADR-0031 真实审计血缘探针（本地 JSONL sink：脱敏守卫 + fsync + 逐行落盘）。
+    # 落盘即证明「Decision → Trace」一节在真实闭环内接通；provenance 绑定真实 trigger。
+    trace_path = tmp_path / "decision_trace.jsonl"
+    trace_recorder = JsonlTraceRecorder(path=trace_path)
+
+    p = _build_real_pipeline(det, clock, trace_recorder=trace_recorder)
 
     # ① 真实模型确实检出目标且跨帧 track_id 一致（证明跑的是真 YOLO+ByteTrack，非 stub）
     #    此处直接调 detector 仅作前置断言；真实闭环仍由下方 p.run() 完整走通。
@@ -173,3 +200,24 @@ def test_real_yolo_closed_loop_smoke():
         or summary.notify_community > 0
         or p.executor.dispatched_count > 0
     ), "ActionExecutor 未实际执行任何 command"
+
+    # ⑤ 补 Trace：决策审计血缘（ADR-0031）在真实闭环内接通且落盘。
+    #    DecisionEngine 把本次 WARN 决策写入 JsonlTraceRecorder（本地 JSONL），
+    #    其 warning_id 即驱动行动层的同一 WarningEvent——决策→审计→行动三节同源。
+    assert trace_path.exists(), "决策审计血缘未落盘（JsonlTraceRecorder 未写文件）"
+    lines = [
+        json.loads(ln) for ln in trace_path.read_text(encoding="utf-8").splitlines() if ln.strip()
+    ]
+    assert lines, "决策审计血缘文件为空（未记录任何 trace）"
+    warn_traces = [t for t in lines if t.get("outcome", {}).get("kind") == "WARN"]
+    assert warn_traces, "真实闭环未产出任何 WARN 审计 trace（Decision→Trace 未接通）"
+    # 任取一条 WARN trace，校验其血缘确实绑定到真实决策（非虚构）：
+    #   - warning_id 为合法 UUID（证明落盘的是真实 WarningEvent，而非占位）
+    #   - provenance.trigger_refs 非空（证明血缘回溯到真实 trigger，而非凭空）
+    #   - policy.name 为实际生效的 RuleBasedDecisionPolicy
+    wt = warn_traces[0]
+    w_id = wt.get("outcome", {}).get("warning_id") or ""
+    assert w_id, "WARN trace 缺少 warning_id（血缘断裂）"
+    uuid.UUID(w_id)  # 合法 UUID 格式 → 真实 WarningEvent 被审计
+    assert wt.get("provenance", {}).get("trigger_refs"), "WARN trace 无 trigger 血缘（未回溯真实触发）"
+    assert wt.get("policy", {}).get("name") == "RuleBasedDecisionPolicy", "WARN trace 的 policy 标识异常"
