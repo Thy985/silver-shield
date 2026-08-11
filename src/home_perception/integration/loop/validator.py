@@ -372,6 +372,42 @@ class IntegrationValidator:
             if len(episodes) < exp.min_records:
                 passed = False
                 details.append(f"落库 {len(episodes)} < 下界 {exp.min_records}")
+
+            # (a) 结构化断言：期望风险等级（并集包含，至少一条命中）
+            if exp.expected_risk_level is not None:
+                observed_risks = {ep.risk_level for ep in episodes}
+                details.append(
+                    "risk_level "
+                    f"{sorted(r for r in observed_risks if r is not None)} "
+                    f"⊇ {exp.expected_risk_level}?"
+                )
+                if exp.expected_risk_level not in observed_risks:
+                    passed = False
+                    details.append(f"无 episode 命中期望风险等级 {exp.expected_risk_level}")
+
+            # (b) 结构化断言：期望命令类型集合 ⊆ 各 episode action 类型并集
+            if exp.expected_action_types is not None:
+                observed_at: set[str] = set()
+                for ep in episodes:
+                    for act in getattr(ep, "actions", ()) or ():
+                        observed_at.add(act.command_type)
+                required = set(exp.expected_action_types)
+                details.append(f"action_types={sorted(observed_at)} ⊇ {sorted(required)}?")
+                if not required.issubset(observed_at):
+                    passed = False
+                    details.append(f"缺动作类型 {sorted(required - observed_at)}")
+
+            # (c) 结构化断言：期望模态集合 ⊆ 各 episode 模态并集
+            if exp.required_modalities is not None:
+                observed_mods: set[str] = set()
+                for ep in episodes:
+                    for m in getattr(ep, "modalities", ()) or ():
+                        observed_mods.add(m.value if hasattr(m, "value") else m)
+                required = set(exp.required_modalities)
+                details.append(f"modalities={sorted(observed_mods)} ⊇ {sorted(required)}?")
+                if not required.issubset(observed_mods):
+                    passed = False
+                    details.append(f"缺模态 {sorted(required - observed_mods)}")
         return StageResult(
             name="memory",
             passed=passed,
