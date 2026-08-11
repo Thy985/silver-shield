@@ -111,6 +111,11 @@ TIERS: dict[str, list[str]] = {
         "tests/test_audio_synthetic.py",
         "tests/test_audio_tier1.py",
         "tests/test_audio_units.py",
+        # ADR-0034 Phase C DoD 治理纯函数（torch-free，无 cv2 依赖）：
+        # - test_integration_baseline_check.py：loop 指纹基线漂移/文件变更策略 22 项（DoD C4 守卫本体）；
+        # - test_run_integration_validation_helpers.py：_runtime_provenance 等脚本助手 4 项（DoD C7）。
+        "tests/evaluation/test_integration_baseline_check.py",
+        "tests/evaluation/test_run_integration_validation_helpers.py",
     ],
     "integration": [
         # 运行时闭环（合成 detector 零模型，**torch-free**）：证明 Scenario→Tracker→
@@ -126,6 +131,21 @@ TIERS: dict[str, list[str]] = {
         # 音频 recorder（import 链 transitively 需 cv2，已在 requirements-ci.txt 钉死，
         # 不依赖 torch）
         "tests/runtime/test_audio_session_recorder.py",
+        # ADR-0034 Phase A–C 验收测试（DoD C6 failure injection / C3 severity / C8 生产边界）：
+        # 合成 detector 零模型 + torch-free（无 torch import，直接与传递均无）；e2e 需要 cv2
+        # （requirements-ci.txt 已钉死 opencv-python==4.13.0.92）。含：
+        # - test_integration_failure_contract.py：F2/F3/F5 注入 + 互不干扰 + observability 正例
+        #   （DoD C6：防止未来有人改 Validator 恒 passed 而 CI 仍绿）；
+        # - test_adr0034_phase_c_gate.py：severity 分级 / F6 不可降级 / 指纹联动（DoD C3）；
+        # - test_adr0034_phase_a.py：含 test_t2_production_does_not_import_loop_package
+        #   （DoD C8：loop 进不了生产 = ADR-0033 D8 豁免的依赖前提）。
+        "tests/integration/test_adr0034_phase_a.py",
+        "tests/integration/test_adr0034_phase_b1.py",
+        "tests/integration/test_adr0034_phase_b2.py",
+        "tests/integration/test_adr0034_phase_b2_audio.py",
+        "tests/integration/test_adr0034_phase_b3_fingerprint.py",
+        "tests/integration/test_adr0034_phase_c_gate.py",
+        "tests/integration/test_integration_failure_contract.py",
     ],
     "benchmark": [
         # ADR-0033 回归门禁（**需要 torch**：baseline 指纹含 torch 2.11.0，须守恒 4/7）。
