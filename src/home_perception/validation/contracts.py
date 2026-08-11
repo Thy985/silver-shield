@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from home_perception.action.command import COMMAND_TYPES
 from home_perception.analysis.decision_trace import SuppressReason, TraceOutcomeKind
 from home_perception.analysis.warning import RECOMMENDED_ACTIONS, RISK_LEVELS
+from home_perception.core.event import EvidenceModality
 
 # 期望里允许出现的决策 outcome / 抑制原因，直接派生自决策层枚举（单一事实源，
 # 决策层新增抑制路径时此处自动跟随，不会出现"契约写死、实现漂移"）。
@@ -53,6 +54,9 @@ SUPPRESS_REASON_VALUES: tuple[str, ...] = tuple(reason.value for reason in Suppr
 # 供 Phase B 音频路径与 DecisionEngine 直接单测使用。
 OUTCOME_NONE: str = "NONE"
 DECISION_EXPECTATION_OUTCOMES: tuple[str, ...] = (*DECISION_OUTCOMES, OUTCOME_NONE)
+
+# Memory 结构化断言里允许出现的证据模态（单一事实源，派生自 ``EvidenceModality``）。
+MEMORY_MODALITIES: tuple[str, ...] = tuple(m.value for m in EvidenceModality)
 
 
 class BenchmarkExpectation(BaseModel):
@@ -86,11 +90,13 @@ class BenchmarkExpectation(BaseModel):
 # money transfer 1~3 个 episode），精确计数会把测试绑死到某一版实现，催生"为过测而凑数"。
 #
 # **Phase 边界**（ADR-0034 §Phase 切片，本文件严格遵守）：
-# - Phase A（本次）：`perception` / `memory.min_records` / `decision` / `action`
-# - Phase B：`MemoryExpectation` 其余字段 + `CrossModalExpectation`
+# - Phase A（已落地）：`perception` / `memory.min_records` / `decision` / `action`
+# - Phase B.1（本次）：`MemoryExpectation` 结构化字段 `expected_risk_level` /
+#   `expected_action_types` / `required_modalities`（Memory 深度断言）
+# - Phase B.2：`CrossModalExpectation`（F5，vision+audio 真实关联）
 # - Phase C：各子期望的 `severity: Literal["blocking","warning"]` 字段
 #
-# 提前落 Phase B/C 字段 = 落一个当前无人消费的空契约，反而给"已支持"的错觉。
+# 提前落 Phase B.2/C 字段 = 落一个当前无人消费的空契约，反而给"已支持"的错觉。
 
 
 class _StrictModel(BaseModel):
@@ -118,22 +124,83 @@ class PerceptionExpectation(_StrictModel):
 
 
 class MemoryExpectation(_StrictModel):
-    """Memory 阶段期望（F4 判据 · Phase A 只含条数下界）。
+    """Memory 阶段期望（F4 判据 · Phase A 只含条数下界，Phase B.1 加结构化断言）。
 
     - ``min_records``：``InMemoryStore.all_episodic()`` 返回的 ``EpisodicRecord`` 条数下界。
       默认 1——只要声明了 ``memory`` 块，就至少要求"闭环真的往 Memory 里写了东西"。
+    - ``expected_risk_level``：期望在**至少一条** episode 上观测到的风险等级（来自
+      ``EpisodicRecord.risk_level``）。按"并集包含"判定：
+      ``exp.expected_risk_level in {ep.risk_level for ep in episodes}``——D4 禁止精确计数 /
+      要求全部相同，否则会判死正常的多 episode 场景。
+    - ``expected_action_types``：期望在 episode 的 ``actions``（Memory 投影的
+      ``ActionSummary.command_type``）中观测到的命令类型集合；按**集合**比对（不计数、
+      不计顺序），``required.issubset(union_of_episode_action_types)``。元素取自
+      ``COMMAND_TYPES``。
+    - ``required_modalities``：期望在 episode 的 ``modalities`` 中观测到的证据模态集合；
+      按集合比对，``required.issubset(union_of_modalities)``。元素取自
+      ``EvidenceModality`` 的合法值（``("vision", "audio", "identity")``）。
 
-    > ``min_risk_episodes`` / ``min_actionable_episodes`` / ``required_modalities``
-    > 属 Phase B（Memory 深度），此处刻意不提前落字段。
+    > 所有字段均 opt-in、互相正交；未声明不参与校验。结构化字段属 Phase B.1（Memory 深度）。
     """
 
     min_records: int = 1
+    expected_risk_level: str | None = None
+    expected_action_types: list[str] | None = None
+    required_modalities: list[str] | None = None
 
     @field_validator("min_records")
     @classmethod
     def _validate_min_records(cls, v: int) -> int:
         if v < 0:
             raise ValueError(f"min_records 必须 >= 0，收到 {v}（下界语义）")
+        return v
+
+    @field_validator("expected_risk_level")
+    @classmethod
+    def _validate_risk_level(cls, v: str | None) -> str | None:
+        if v is not None and v not in RISK_LEVELS:
+            raise ValueError(
+                f"memory.expected_risk_level={v!r} 非法；必须为 {RISK_LEVELS}（fail-closed）"
+            )
+        return v
+
+    @field_validator("expected_action_types")
+    @classmethod
+    def _validate_action_types(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        illegal = [t for t in v if t not in COMMAND_TYPES]
+        if illegal:
+            raise ValueError(
+                f"memory.expected_action_types 含非法类型 {illegal}；"
+                f"必须取自 {COMMAND_TYPES}（fail-closed）"
+            )
+        duplicates = sorted({t for t in v if v.count(t) > 1})
+        if duplicates:
+            raise ValueError(
+                f"memory.expected_action_types 含重复项 {duplicates}；"
+                "本字段按**集合**比对（D4 禁止精确计数），重复项无法表达'期望 N 条'，"
+                "多半是笔误（fail-closed）"
+            )
+        return v
+
+    @field_validator("required_modalities")
+    @classmethod
+    def _validate_modalities(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        illegal = [m for m in v if m not in MEMORY_MODALITIES]
+        if illegal:
+            raise ValueError(
+                f"memory.required_modalities 含非法模态 {illegal}；"
+                f"必须取自 {MEMORY_MODALITIES}（fail-closed）"
+            )
+        duplicates = sorted({m for m in v if v.count(m) > 1})
+        if duplicates:
+            raise ValueError(
+                f"memory.required_modalities 含重复项 {duplicates}；"
+                "本字段按**集合**比对（D4 禁止精确计数），重复项多半是笔误（fail-closed）"
+            )
         return v
 
 
