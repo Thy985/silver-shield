@@ -81,6 +81,13 @@ class IntegrationRunResult:
     episodes: tuple[Any, ...] = ()
     cross_modal_links: tuple[Any, ...] = ()  # Phase A 恒空（Phase B 填充）
     fingerprint: str = ""
+    # ADR-0034 Phase B.3（D7）：两枚闭环指纹。默认空 = 向后兼容（Phase A/B.1/B.2
+    # 构造不传时恒 ""，字段语义不变）。
+    # - expectation_fingerprint：评价标准（IntegrationExpectationSuite）指纹，
+    #   回答"用什么标准评价"；
+    # - loop_fingerprint：本次闭环的输入+标准+装配六成分指纹，回答"这次怎么跑的"。
+    expectation_fingerprint: str = ""
+    loop_fingerprint: str = ""
     context: IntegrationContext | None = None
 
 
@@ -145,10 +152,54 @@ class IntegrationRunner:
         ctx = context or IntegrationContext.build(self.config)  # L1 建探针
         synth = self.compiler.compile(scenario, mode=scenario.mode)  # L3 输入（编译产物）
         pipeline = self._assemble(ctx, synth.detector)  # L2 注入 runtime
+        # ADR-0034 Phase B.3（D7）：两枚闭环指纹。期望指纹只依赖场景声明的评价标准；
+        # loop 指纹依赖 输入指纹(synth) + 策略指纹(pipeline) + 装配(config)，故须在
+        # _assemble 之后计算（routing_table 已就位）。任一成分缺失即 raise（fail-closed）。
+        from .fingerprint import (
+            compute_expectation_fingerprint,
+            compute_loop_fingerprint,
+        )
+
+        expectation_fp = compute_expectation_fingerprint(scenario.integration)
+        loop_fp = compute_loop_fingerprint(
+            synth.fingerprint,
+            policy_fp=self._policy_fingerprint(pipeline),
+            sink_type=self.config.sink_kind,
+            memory_backend=self.config.memory_backend,
+            cross_modal_enabled=self.config.cross_modal_enabled,
+            expectation_fp=expectation_fp,
+        )
         frame_results, audio_summary = self._drive(pipeline, synth, ctx)  # L3 执行 Scenario
-        return self._collect(ctx, synth, frame_results, audio_summary)  # L4 + L5
+        return self._collect(  # L4 + L5
+            ctx,
+            synth,
+            frame_results,
+            audio_summary,
+            expectation_fingerprint=expectation_fp,
+            loop_fingerprint=loop_fp,
+        )
 
     # ------------------------------------------------------------------ L2
+    @staticmethod
+    def _policy_fingerprint(pipeline: Any) -> str:
+        """决策策略指纹（loop_fingerprint 成分②，ADR-0031 compute_policy_fingerprint）。
+
+        鸭子取 ``pipeline.decision_engine.policy.routing_table``；缺失即 raise
+        （fail-closed：指纹缺成分 = 无法复述"这次怎么跑的"，不静默降级）。
+        """
+        from home_perception.analysis.decision_trace import (
+            compute_policy_fingerprint,
+        )
+
+        policy = getattr(getattr(pipeline, "decision_engine", None), "policy", None)
+        routing_table = getattr(policy, "routing_table", None)
+        if routing_table is None:
+            raise IntegrationConfigError(
+                "decision_engine.policy.routing_table 缺失，无法计算 "
+                "loop_fingerprint 的策略成分（fail-closed）"
+            )
+        return compute_policy_fingerprint(routing_table)
+
     def _assemble(self, ctx: IntegrationContext, detector: Any) -> Any:
         """装配注入了三枚探针的 ``PerceptionPipeline``（**唯一注入点**）。
 
@@ -330,6 +381,9 @@ class IntegrationRunner:
         synth: Any,
         frame_results: list[Any],
         audio_summary: Any = None,
+        *,
+        expectation_fingerprint: str = "",
+        loop_fingerprint: str = "",
     ) -> IntegrationRunResult:
         """从探针**只读**读回六类 artifacts 并封装为 ``IntegrationRunResult``。
 
@@ -391,5 +445,7 @@ class IntegrationRunner:
             episodes=episodes,
             cross_modal_links=cross_modal_links,  # Phase B.2：启用时真实读回
             fingerprint=synth.fingerprint,
+            expectation_fingerprint=expectation_fingerprint,  # Phase B.3（D7）
+            loop_fingerprint=loop_fingerprint,  # Phase B.3（D7）
             context=ctx,
         )
