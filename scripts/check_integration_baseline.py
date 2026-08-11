@@ -88,7 +88,13 @@ def drift_details(
 
 
 def has_bump_marker(text: str, marker: str = BUMP_MARKER) -> bool:
-    """标记文本是否含 bump 标记（大小写不敏感，容忍 PR 描述排版）。"""
+    """标记文本是否含 bump 标记（大小写不敏感，容忍 PR 描述排版）。
+
+    与 ADR-0033 ``check_baseline_bump.py::has_bump_marker`` **完全一致**的宽松匹配
+    （``marker.lower() in text.lower()``）——两套基线治理脚本对同一份 PR 描述必须裁决
+    一致。宽松代价（任意大小写变体均算声明）在实战中无意义：绕过基线治理不会靠改
+    大小写；规范流程本就要求标记完整出现（评审 B1：保持一致性优于严格化）。
+    """
     if not text:
         return False
     return marker.lower() in text.lower()
@@ -172,8 +178,13 @@ def check_baseline_file_policy(
 # ---------------------------------------------------------------------------
 
 
-def _changed_files_since(base: str) -> list[str]:
-    """``git diff --name-only <base>...HEAD``（失败返回空列表，由调用方裁决）。"""
+def _changed_files_since(base: str) -> list[str] | None:
+    """``git diff --name-only <base>...HEAD``（评审 A3/C1：三态，杜绝 fail-open 静默跳过）。
+
+    Returns:
+        ``None`` = git 不可用（调用方必须显式告警，运维可见）；
+        ``[]`` = 无变更；非空列表 = 变更文件。
+    """
     try:
         out = subprocess.run(
             ["git", "diff", "--name-only", f"{base}...HEAD"],
@@ -182,10 +193,10 @@ def _changed_files_since(base: str) -> list[str]:
             check=False,
         )
         if out.returncode != 0:
-            return []
+            return None
         return [line for line in out.stdout.splitlines() if line.strip()]
     except OSError:
-        return []
+        return None
 
 
 def _write_baseline(current: dict[str, dict[str, str]], path: str | Path) -> None:
@@ -267,20 +278,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[ERROR] 基线文件非法：{exc}")
             return 2
 
+    # 裁决 1：指纹漂移（主闸）。[DRIFT] 前缀供 grep 定位（评审 B2）。
     ok, hint = check_drift_policy(current, baseline, marker_text)
     if ok:
-        print(f"[OK] {hint}")
+        print(f"[OK] [DRIFT] {hint}")
     else:
-        print(f"[FAIL] {hint}")
+        print(f"[FAIL] [DRIFT] {hint}")
 
-    # 基线文件变更治理（防绕过；git 不可用时跳过该项，漂移判定仍生效）
+    # 裁决 2：基线文件变更治理（防绕过；git 不可用时显式告警，漂移判定仍生效）。
+    # [BASELINE-FILE] 前缀供 grep 定位（评审 B2）。
     changed = _changed_files_since(args.base)
-    if changed:
+    if changed is None:
+        print(
+            "[WARN] [BASELINE-FILE] git 不可用，基线文件变更检测被跳过"
+            "（漂移判定[DRIFT]不受影响，仍为最终裁决）"
+        )
+    elif changed:
         file_ok, file_hint = check_baseline_file_policy(changed, marker_text)
         if not file_ok:
-            print(f"[FAIL] {file_hint}")
+            print(f"[FAIL] [BASELINE-FILE] {file_hint}")
             return 1
-        print(f"[OK] {file_hint}")
+        print(f"[OK] [BASELINE-FILE] {file_hint}")
 
     return 0 if ok else 1
 

@@ -27,6 +27,12 @@
 - **指纹可溯源（DoD C2/C5/C7）**：报告含两枚闭环指纹；provenance 填 code_version +
   python/numpy/opencv/torch 版本——回答"失败发生在哪次提交、哪套运行时"。
 
+**summary 结构约定**（评审 B4/B5）：
+- ``scenarios[].gate`` 键**仅 --gate 分支存在**（非 gate 路径无此键），消费方须
+  ``entry.get("gate")`` 而非直接下标；
+- ``provenance`` 出现在两处：summary 顶层（**汇总元数据**）与每场景 canonical 报告内
+  （**单场景溯源**）——同源不同用途，命名刻意一致（都是"这次运行的运行血缘"）。
+
 依赖延迟导入：仅在 ``main`` 内 import 运行时 / 验证链，避免加载即拉起重链。
 
 用法：
@@ -44,6 +50,7 @@ import platform
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 from home_perception.common.logging import get_logger
 
@@ -59,6 +66,18 @@ _DEFAULT_OUT = Path(__file__).resolve().parent.parent / "artifacts" / "adr0034_i
 
 # 报告 provenance 里记录的运行时依赖（缺失记 "n/a"，不因可选依赖缺失而崩）。
 _RUNTIME_PKG_NAMES: tuple[str, ...] = ("numpy", "opencv-python", "torch")
+
+
+class FingerprintArtifact(TypedDict):
+    """单场景指纹 artifact 结构（``<id>.fingerprints.json``，DoD C5）。
+
+    用 TypedDict 显式约束落盘键集（评审 A2）：未来扩展必须改类型定义，
+    防止内层 dict 静默引入未知键破坏下游消费（baseline 比较 / 审计）。
+    """
+
+    scenario_id: str
+    expectation_fingerprint: str
+    loop_fingerprint: str
 
 
 def _code_version() -> str:
@@ -205,7 +224,11 @@ def main(argv: list[str] | None = None) -> int:
         all_fingerprints[scn.meta.scenario_id] = fingerprints
         fp_path = out_dir / f"{scn.meta.scenario_id}.fingerprints.json"
         _write_guarded(
-            fp_path, {"scenario_id": scn.meta.scenario_id, **fingerprints}, who="fingerprints"
+            fp_path,
+            FingerprintArtifact(
+                scenario_id=scn.meta.scenario_id, **fingerprints  # type: ignore[arg-type]
+            ),
+            who="fingerprints",
         )
 
         entry: dict[str, object] = {
@@ -236,6 +259,12 @@ def main(argv: list[str] | None = None) -> int:
         print()
 
     summary_path = out_dir / "adr0034_summary.json"
+    # 评审 A1 实测结论：summary **不**走 _write_guarded（脱敏守卫）。
+    # summary 的排障价值恰恰在路径字段（scenarios_dir / entry.path /
+    # canonical_report / gate.path），而 assert_desensitized 的 path_or_url 规则
+    # 拒绝一切"像路径的值"→ 过守卫必炸（2026-08-11 实测 DesensitizationError）。
+    # 当前 provenance 仅含版本号（无 PII），风险低（评审 C2 同判）；若未来 summary
+    # 需承载 PII，须先剥离路径字段再引入守卫，而非原样过守卫。
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

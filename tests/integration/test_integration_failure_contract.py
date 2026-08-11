@@ -153,3 +153,29 @@ def test_injections_hit_precise_stages():
         assert other_failed == [], (
             f"{field}=() 误伤了其他业务 stage：{other_failed}"
         )
+
+
+# ============================================================================
+# Happy-path 正例：健康闭环下 observability 必须通过（评审 D4，防回归）
+# ============================================================================
+
+
+def test_observability_passes_on_healthy_loops():
+    """三场景原始闭环（无注入）observability 必须通过——防"F6 恒红"式回归。
+
+    failure injection 测试证明 validator 会抓 F2/F3/F5/F6；本条证明**健康闭环不会
+    被 observability 误伤**（F6 三通道交叉校验在真实装配下应自洽）。
+    """
+    for path, cross_modal in [
+        (ALARM_PATH, False),
+        (INTEGRATION_DIR / "adr0034_benign.yaml", False),
+        (CROSS_MODAL_PATH, True),
+    ]:
+        scn, result = _run(path, cross_modal=cross_modal)
+        val = _validate(scn, result)
+        assert val.ok is True, f"{path.name}: 健康闭环必须整体通过"
+        obs = _stage(val, "observability")
+        assert obs.passed is True, (
+            f"{path.name}: 健康闭环 observability 必须通过（三通道自洽），"
+            f"实际 failure_code={obs.failure_code}"
+        )

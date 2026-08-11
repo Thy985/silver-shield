@@ -142,6 +142,14 @@ class IntegrationReport:
     ``provenance`` 是唯一的自由字典（供调用方塞 ``code_version`` / ``scenario_set_id``
     等溯源信息）。它也因此是报告里唯一可能混入 PII 的入口——落盘守卫正是为它存在
     （t5：塞入原始媒体路径时 ``write_report`` 必须 fail-closed，而不是写出去再说）。
+
+    **两枚闭环指纹的填充契约**（评审 B3/E3）：``expectation_fingerprint`` /
+    ``loop_fingerprint`` 由 ``build()`` 从 ``run_result`` 投影（runner 保证非空）；
+    **直接构造** ``IntegrationReport(...)`` 会得到空字符串——属调用方责任。canonical
+    序列化**固定**包含这两个键（空字符串也输出，键集稳定），同 seed 两次运行的一致性
+    不受影响（空则两次皆空）。指纹成分均为确定性输入（场景/期望/装配，**不含**环境
+    版本），跨环境（本地/CI）算值一致——场景变更导致的指纹变化正是 DoD C4 基线漂移
+    治理的预期触发源，而非伪造漂移。
     """
 
     scenario_id: str
