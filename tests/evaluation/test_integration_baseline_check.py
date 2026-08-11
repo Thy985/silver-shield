@@ -282,3 +282,26 @@ def test_cli_baseline_file_change_without_marker_fails(tmp_path, monkeypatch):
     )
     rc = mod.main(["--current", str(cur), "--baseline", str(base)])
     assert rc == 1
+
+
+def test_cli_skip_file_policy_push_event(tmp_path, monkeypatch, capsys):
+    """push 到 main 场景（--skip-file-policy）：文件治理跳过，漂移判定仍生效。
+
+    复现 2026-08-11 线上事故：main push 时 git 检测到合并引入的基线文件变更 +
+    marker 为空（无 PR number + git log 为空）→ 文件治理误拦。--skip-file-policy
+    后：无漂移 → PASS（漂移判定仍是最终裁决）。
+    """
+    cur, base = _write_pair(tmp_path, drift=False)  # 指纹一致
+    # 即使 git 会报告基线文件变更，--skip-file-policy 也不拦截
+    monkeypatch.setattr(
+        mod,
+        "_changed_files_since",
+        lambda base_ref: [f"{mod.BASELINES_REL}/{BASELINE_FILENAME}"],
+    )
+    rc = mod.main(
+        ["--current", str(cur), "--baseline", str(base), "--skip-file-policy"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "SKIP" in out and "skip-file-policy" in out
+    assert "[DRIFT]" in out and "OK" in out

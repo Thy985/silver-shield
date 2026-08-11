@@ -136,11 +136,17 @@ jobs:
             git log origin/main..HEAD --pretty=%B 2>/dev/null || true
           } > /tmp/pr_marker.txt
       - name: Check loop fingerprint baseline (DoD C4 drift)
+        # push 到 main：跳过基线文件变更治理（main 的基线变更来自已评审合并，squash
+        # 提交信息/空 git log 无法承载标记，文件治理必然误拦）；漂移判定恒生效。
         run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            ARGS="--skip-file-policy"
+          fi
           python scripts/check_integration_baseline.py \
             --current artifacts/adr0034_integration/adr0034_fingerprints.json \
             --baseline src/home_perception/integration/fixtures/baselines/loop_fingerprints.json \
-            --marker-file /tmp/pr_marker.txt
+            --marker-file /tmp/pr_marker.txt $ARGS
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4

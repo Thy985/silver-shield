@@ -245,6 +245,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="用 current 生成基线文件（首次 / 显式 bump 后更新）并跳过漂移判定",
     )
+    parser.add_argument(
+        "--skip-file-policy",
+        action="store_true",
+        help="跳过基线**文件**变更治理（仅保留漂移判定）。push 到 main 用：main 上的"
+        "基线变更来自已评审合并（squash 提交信息不含标记、git log 为空），文件治理"
+        "在此场景必然误拦（2026-08-11 CI 实测），而合并本身已过 PR 级评审",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -285,10 +292,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"[FAIL] [DRIFT] {hint}")
 
-    # 裁决 2：基线文件变更治理（防绕过；git 不可用时显式告警，漂移判定仍生效）。
+    # 裁决 2：基线文件变更治理（防绕过；push 到 main 时跳过——main 上的基线变更来自
+    # 已评审合并，squash 提交信息/空 git log 无法承载标记，文件治理在此必然误拦）。
     # [BASELINE-FILE] 前缀供 grep 定位（评审 B2）。
-    changed = _changed_files_since(args.base)
-    if changed is None:
+    changed = None if args.skip_file_policy else _changed_files_since(args.base)
+    if args.skip_file_policy:
+        print(
+            "[SKIP] [BASELINE-FILE] --skip-file-policy：push 到 main 场景跳过基线文件"
+            "变更治理（合并已过 PR 评审）；漂移判定[DRIFT]仍为最终裁决"
+        )
+    elif changed is None:
         print(
             "[WARN] [BASELINE-FILE] git 不可用，基线文件变更检测被跳过"
             "（漂移判定[DRIFT]不受影响，仍为最终裁决）"
