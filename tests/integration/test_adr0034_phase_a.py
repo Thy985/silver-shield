@@ -158,24 +158,27 @@ def test_t1_canonical_determinism(tmp_path):
 
 
 def test_t2_production_does_not_import_loop_package():
+    """``src/`` 下**没有任何**生产模块导入 ``integration.loop``（合法引用者只有 scripts/ 与 tests/）。
+
+    这条守卫同时是 ADR-0033 D8 的**依赖前提**：
+    ``tests/evaluation/test_benchmark_harness.py::test_adr0033_t2_evaluation_not_wired_into_production``
+    之所以敢豁免 ``integration/loop/`` 引用 ``evaluation``，正是因为本测试保证了
+    loop 进不了生产——从而 ``evaluation`` 无法经 loop 传递性泄漏进生产运行时。
+    **删除或放宽本测试前，必须同步收回那条豁免。**
+    """
     ast = _load_ast_contract()
 
     target = "home_perception.integration.loop"
     src_root = REPO_ROOT / "src" / "home_perception"
-    importers: list[Path] = []
+    importers: list[str] = []
     for py in src_root.rglob("*.py"):
         if "integration/loop" in str(py).replace("\\", "/"):
             continue  # 评估包自身引用自身合法
-        src_text = py.read_text(encoding="utf-8")
-        mods = ast.imported_modules(src_text)
+        mods = ast.imported_modules(py.read_text(encoding="utf-8"))
         if any(m == target or m.startswith(target + ".") for m in mods):
-            importers.append(py)
+            importers.append(py.relative_to(REPO_ROOT).as_posix())
 
-    for p in importers:
-        rel = p.relative_to(REPO_ROOT).as_posix()
-        assert rel.startswith(("scripts/", "tests/")), (
-            f"生产模块 {rel} 不应导入 {target}（违反 T2 边界）"
-        )
+    assert importers == [], f"生产模块不应导入 {target}（违反 T2 边界）：{importers}"
 
 
 # ============================================================================

@@ -166,8 +166,20 @@ def test_adr0033_t2_evaluation_not_wired_into_production():
     # 允许：evaluation 自身 + scripts/run_benchmark.py（手动入口，非运行时生产路径）。
     # 注（review 5.2）：validation/scenario/scenario.py 经 BenchmarkExpectation 下移至
     # validation.contracts 后，已不再 import evaluation，故不再需要白名单豁免。
+    #
+    # 注（ADR-0034 Phase A）：integration/loop/ 是**闭环级评估同侪**，与 evaluation/
+    # （感知级）并列，同样"不进 demo/gateway 运行时"——它只被
+    # scripts/run_integration_validation.py 与 tests/ 引用。其 validator 依赖
+    # evaluation.build_scenario_score 是 ADR-0034 T3"复用不重写"的**强制要求**
+    # （F1 感知判据必须复用 ADR-0033 打分，否则等于另起一套感知评分）。
+    # D8 的实质约束（evaluation 不进生产运行时）由**传递性封堵**继续守住：
+    #   evaluation 只能经 loop 进入生产 ∧ loop 进不了生产 ⇒ evaluation 进不了生产。
+    # 后一条由 tests/integration/test_adr0034_phase_a.py::
+    # test_t2_production_does_not_import_loop_package 独立守护。
+    # 若那条守卫被删除/放宽，本豁免即刻失效，必须同步收回。
     allowed_suffixes = (
         "src/home_perception/evaluation/",
+        "src/home_perception/integration/loop/",
         "scripts/run_benchmark.py",
     )
     needle = (
