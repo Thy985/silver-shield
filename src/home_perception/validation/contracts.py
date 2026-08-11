@@ -31,6 +31,7 @@ from home_perception.action.command import COMMAND_TYPES
 from home_perception.analysis.decision_trace import SuppressReason, TraceOutcomeKind
 from home_perception.analysis.warning import RECOMMENDED_ACTIONS, RISK_LEVELS
 from home_perception.core.event import EvidenceModality
+from home_perception.memory.cross_modal_link import CROSS_MODAL_RELATIONSHIP_VALUES
 
 # 期望里允许出现的决策 outcome / 抑制原因，直接派生自决策层枚举（单一事实源，
 # 决策层新增抑制路径时此处自动跟随，不会出现"契约写死、实现漂移"）。
@@ -91,12 +92,12 @@ class BenchmarkExpectation(BaseModel):
 #
 # **Phase 边界**（ADR-0034 §Phase 切片，本文件严格遵守）：
 # - Phase A（已落地）：`perception` / `memory.min_records` / `decision` / `action`
-# - Phase B.1（本次）：`MemoryExpectation` 结构化字段 `expected_risk_level` /
+# - Phase B.1（已落地）：`MemoryExpectation` 结构化字段 `expected_risk_level` /
 #   `expected_action_types` / `required_modalities`（Memory 深度断言）
-# - Phase B.2：`CrossModalExpectation`（F5，vision+audio 真实关联）
+# - Phase B.2（本次）：`CrossModalExpectation`（F5，vision+audio 真实关联）
 # - Phase C：各子期望的 `severity: Literal["blocking","warning"]` 字段
 #
-# 提前落 Phase B.2/C 字段 = 落一个当前无人消费的空契约，反而给"已支持"的错觉。
+# 提前落 Phase C 字段 = 落一个当前无人消费的空契约，反而给"已支持"的错觉。
 
 
 class _StrictModel(BaseModel):
@@ -350,6 +351,77 @@ class ActionExpectation(_StrictModel):
         return self
 
 
+class CrossModalExpectation(_StrictModel):
+    """跨模态关联阶段期望（F5 判据 · Phase B.2）。
+
+    断言闭环跑完后 ``CrossModalLinkRuntime`` 产出的关联边（``CrossModalLink``）满足：
+
+    - ``min_links``：关联边条数**下界**（默认 1——只要声明了 ``cross_modal`` 块，就至少
+      要求"闭环真的建出了跨模态关联"）。与 D4 纪律一致：下界而非精确计数。
+    - ``expected_linked_modalities``：期望在**至少一条**关联边两端 episode 的模态并集上
+      观测到的证据模态集合（如 ``["vision", "audio"]`` 表"至少有一条链接同时覆盖视觉与
+      音频"）。按"并集包含"判定：``required.issubset(union_of_linked_episode_modalities)``
+      ——D4 禁止精确计数 / 要求全部相同。元素取自 ``MEMORY_MODALITIES``。
+    - ``required_relationships``：期望在**至少一条**关联边上观测到的关系白名单集合
+      （如 ``["supports"]`` 表"跨模态支撑"）。按**集合**比对（不计数、不计顺序），
+      ``required.issubset({link.relationship for link in links})``。元素取自
+      ``CROSS_MODAL_RELATIONSHIP_VALUES``（``co_occurs`` / ``supports``）。
+
+    > 所有字段均 opt-in、互相正交；未声明不参与校验。对应 ADR-0034 Phase B.2 的
+    > "episode A → link → episode B 真实关联" 验收——声明了期望却没注入
+    > ``cross_modal_runtime``（或根本没建出边）即 F5 不通过（t8），而非静默通过。
+    """
+
+    min_links: int = 1
+    expected_linked_modalities: list[str] | None = None
+    required_relationships: list[str] | None = None
+
+    @field_validator("min_links")
+    @classmethod
+    def _validate_min_links(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"min_links 必须 >= 1，收到 {v}（下界语义：至少建出一条关联）")
+        return v
+
+    @field_validator("expected_linked_modalities")
+    @classmethod
+    def _validate_linked_modalities(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        illegal = [m for m in v if m not in MEMORY_MODALITIES]
+        if illegal:
+            raise ValueError(
+                f"cross_modal.expected_linked_modalities 含非法模态 {illegal}；"
+                f"必须取自 {MEMORY_MODALITIES}（fail-closed）"
+            )
+        duplicates = sorted({m for m in v if v.count(m) > 1})
+        if duplicates:
+            raise ValueError(
+                f"cross_modal.expected_linked_modalities 含重复项 {duplicates}；"
+                "本字段按**集合**比对（D4 禁止精确计数），重复项多半是笔误（fail-closed）"
+            )
+        return v
+
+    @field_validator("required_relationships")
+    @classmethod
+    def _validate_relationships(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        illegal = [r for r in v if r not in CROSS_MODAL_RELATIONSHIP_VALUES]
+        if illegal:
+            raise ValueError(
+                f"cross_modal.required_relationships 含非法关系 {illegal}；"
+                f"必须取自 {CROSS_MODAL_RELATIONSHIP_VALUES}（fail-closed）"
+            )
+        duplicates = sorted({r for r in v if v.count(r) > 1})
+        if duplicates:
+            raise ValueError(
+                f"cross_modal.required_relationships 含重复项 {duplicates}；"
+                "本字段按**集合**比对（D4 禁止精确计数），重复项多半是笔误（fail-closed）"
+            )
+        return v
+
+
 class IntegrationExpectationSuite(_StrictModel):
     """闭环集成期望顶层容器（ADR-0034 D4）。
 
@@ -360,11 +432,14 @@ class IntegrationExpectationSuite(_StrictModel):
     与 ``BenchmarkExpectation`` 语义分离：后者测"感知该不该报警"，本 suite 测"报警后整条
     链该不该真落库 / 真发出通知"。
 
-    > ``cross_modal`` 子期望属 Phase B，此处尚未落字段；因基类 ``extra="forbid"``，Phase A
-    > 的场景 YAML 若误写 ``cross_modal`` 会**明确报错**而非静默忽略。
+    > ``cross_modal`` 子期望（Phase B.2，F5）已落字段 ``CrossModalExpectation``；因基类
+    > ``extra="forbid"``，场景 YAML 若误写未知键会**明确报错**而非静默忽略。声明了
+    > ``cross_modal`` 期望却没注入 ``cross_modal_runtime``（闭环未启用跨模态 / 未建出边）
+    > 即 F5 不通过（t8），而非静默通过。
     """
 
     perception: PerceptionExpectation | None = None
     memory: MemoryExpectation | None = None
     decision: DecisionExpectation | None = None
     action: ActionExpectation | None = None
+    cross_modal: CrossModalExpectation | None = None

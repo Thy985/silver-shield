@@ -9,8 +9,10 @@ ADR-0034 的核心命题是"静默丢弃 = 失败"，而判定静默丢弃依赖
 
 Phase A 边界（fail-closed，不静默降级）：
 - ``memory_backend`` 仅支持 ``"in_memory"``；
-- ``cross_modal_enabled`` 恒 ``False``（跨模态属 Phase B），显式传 ``True`` 直接报错；
-- ``cross_modal_runtime`` / ``cross_modal_retrieval`` 恒 ``None``。
+- ``cross_modal_enabled``：Phase A 恒 ``False``；**Phase B.2 起允许 ``True``**，
+  ``build()`` 会在启用时注入真实 ``CrossModalLinkRuntime``（store 与 pipeline 共用
+  同一 ``memory_store``，故落库后自动建边）；
+- ``cross_modal_retrieval`` 仍恒 ``None``（检索层属更后阶段，未启用）。
 
 依赖方向：本模块位于**评估侧**，单向 import 生产符号（``action`` / ``analysis`` /
 ``memory`` / ``runtime``），生产代码**绝不**反向 import 本包（T2 allowlist 守护）。
@@ -91,9 +93,9 @@ class IntegrationRunnerConfig:
                 f"必须属于 {TRACE_RECORDER_KINDS}"
             )
         if self.cross_modal_enabled:
-            raise IntegrationConfigError(
-                "cross_modal_enabled=True 属 ADR-0034 Phase B；Phase A 拒绝启用（fail-closed）"
-            )
+            # Phase B.2 起允许启用：build() 会据此注入真实 CrossModalLinkRuntime。
+            # 仍为 fail-closed 的其他约束（memory_backend / sink / trace）不变。
+            pass
         needs_dir = "jsonl" in (self.sink_kind, self.trace_recorder_kind)
         if needs_dir and self.artifact_dir is None:
             raise IntegrationConfigError(
@@ -176,10 +178,18 @@ class IntegrationContext:
                 f"trace_recorder={type(self.trace_recorder).__name__} "
                 "不满足 DecisionTraceRecorder 协议（需 record / flush）"
             )
-        if self.cross_modal_runtime is not None or self.cross_modal_retrieval is not None:
+        if self.cross_modal_retrieval is not None:
             raise IntegrationConfigError(
-                "cross_modal_runtime / cross_modal_retrieval 属 ADR-0034 Phase B；"
-                "Phase A 必须为 None（fail-closed）"
+                "cross_modal_retrieval 属 ADR-0034 Phase B（检索层）；"
+                "Phase B.2 尚未启用，必须为 None（fail-closed）"
+            )
+        # cross_modal_runtime 在 Phase B.2 启用：build() 注入真实 CrossModalLinkRuntime。
+        # 此处仅做协议符合性校验（鸭子读取 all_links），写错类型要在装配前暴露。
+        if self.cross_modal_runtime is not None and not hasattr(
+            self.cross_modal_runtime, "all_links"
+        ):
+            raise IntegrationConfigError(
+                "cross_modal_runtime 不满足协议（需 all_links() 方法）"
             )
 
     @classmethod
@@ -209,11 +219,23 @@ class IntegrationContext:
         else:
             trace_recorder = InMemoryRecorder()
 
+        # Phase B.2：cross_modal_enabled 时注入真实 CrossModalLinkRuntime（store 与
+        # pipeline 共用同一 memory_store，落库后自动建边）。未启用则 None（零行为变化）。
+        cross_modal_runtime: Any | None = None
+        if cfg.cross_modal_enabled:
+            from home_perception.memory.cross_modal_link import CrossModalLinkStore
+            from home_perception.memory.cross_modal_runtime import CrossModalLinkRuntime
+
+            cross_modal_runtime = CrossModalLinkRuntime(
+                store=memory_store,
+                link_store=CrossModalLinkStore(),
+            )
+
         return cls(
             memory_store=memory_store,
             trace_recorder=trace_recorder,
             action_sink=action_sink,
-            cross_modal_runtime=None,  # Phase A 恒 None
+            cross_modal_runtime=cross_modal_runtime,  # Phase B.2：启用时真实注入
             cross_modal_retrieval=None,
             clock=_LoopClock(start=cfg.clock_start, interval_s=cfg.frame_interval_s),
         )
