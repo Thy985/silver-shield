@@ -25,9 +25,6 @@ import pytest
 
 from home_perception.integration.loop.validator import StageResult
 
-# 与 gate.py 的 EXPECTED_SEVERITIES 一致性由 t18 等值断言锁死（防止两边漂移）。
-EXPECTED_SEVERITIES = ("blocking", "warning")
-
 
 def _report(stages, scenario_id: str = "scn-x"):
     from home_perception.integration.loop.report import IntegrationReport
@@ -189,14 +186,15 @@ def test_c18_observability_not_downgradable():
     assert obs.severity == "blocking"
 
 
-def test_c18_severity_values_match_contracts():
-    """gate 与 contracts 的 severity 合法取值等值（防止两边漂移）。"""
+def test_c18_severity_single_source_re_export():
+    """EXPECTED_SEVERITIES 单一来源：gate re-export contracts（A3，防双源漂移）。"""
     from home_perception.integration.loop.gate import EXPECTED_SEVERITIES as GATE_SEV
     from home_perception.validation.contracts import (
         EXPECTED_SEVERITIES as CONTRACT_SEV,
     )
 
-    assert GATE_SEV == CONTRACT_SEV == EXPECTED_SEVERITIES
+    assert GATE_SEV == CONTRACT_SEV == ("blocking", "warning")
+    assert GATE_SEV is CONTRACT_SEV  # 同一对象（re-export，非重复声明）
 
 
 # ============================================================================
@@ -204,19 +202,45 @@ def test_c18_severity_values_match_contracts():
 # ============================================================================
 
 
-def test_c19_severity_change_moves_fingerprint():
-    """memory blocking→warning → expectation_fingerprint 必变（t19）。"""
+def _suite_kwargs_for(stage: str, *, severity: str) -> dict:
+    """构造「只含单个子期望 + severity」的 suite 关键字（t19 parametrize 用）。
+
+    各子期望用最小合法声明（其余字段走默认/opt-in），保证唯一变量是 severity。
+    """
+    from home_perception.validation.contracts import (
+        ActionExpectation,
+        CrossModalExpectation,
+        DecisionExpectation,
+        MemoryExpectation,
+        PerceptionExpectation,
+    )
+
+    builders = {
+        "perception": PerceptionExpectation,
+        "memory": MemoryExpectation,
+        "decision": DecisionExpectation,
+        "action": ActionExpectation,
+        "cross_modal": CrossModalExpectation,
+    }
+    return {stage: builders[stage](severity=severity)}
+
+
+@pytest.mark.parametrize("stage", ["perception", "memory", "decision", "action", "cross_modal"])
+def test_c19_severity_change_moves_fingerprint(stage):
+    """任一子期望 severity blocking→warning → expectation_fingerprint 必变（t19，5 项全覆盖）。"""
     from home_perception.integration.loop.fingerprint import (
         compute_expectation_fingerprint,
     )
 
     fp_blocking = compute_expectation_fingerprint(
-        _suite(memory=_memory_suite(severity="blocking", min_records=2))
+        _suite(**_suite_kwargs_for(stage, severity="blocking"))
     )
     fp_warning = compute_expectation_fingerprint(
-        _suite(memory=_memory_suite(severity="warning", min_records=2))
+        _suite(**_suite_kwargs_for(stage, severity="warning"))
     )
-    assert fp_blocking != fp_warning, "severity 是评价标准的一部分，变更必须留痕"
+    assert fp_blocking != fp_warning, (
+        f"{stage}.severity 是评价标准的一部分，变更必须留痕（t19）"
+    )
 
 
 def test_c19_version_bumped_to_1_0_0():
@@ -251,7 +275,8 @@ def test_c_severity_invalid_value_fail_closed(owner, ctor):
 
 
 def test_c_gate_result_deterministic_and_desensitized():
-    """gate 结果确定性（两次 canonical 逐字节一致）+ 序列化键安全（脱敏友好）。"""
+    """gate 结果确定性 + 脱敏实战（D4：canonical_dict 直接喂 assert_desensitized）。"""
+    from home_perception.analysis.decision_sink import assert_desensitized
     from home_perception.integration.loop.gate import evaluate_integration_gate
 
     report = _report(
@@ -268,6 +293,8 @@ def test_c_gate_result_deterministic_and_desensitized():
     # "decision" 作为 verdicts[].name 的**值**是安全的。
     assert set(c1) == {"scenario_id", "passed", "degraded", "verdicts", "notices"}
     assert all(set(v) == {"name", "passed", "severity", "failure_code"} for v in c1["verdicts"])
+    # 实战守卫：落盘路径的键集若未来漂移进禁止集，这里必须先于 CI 暴露（D4）。
+    assert_desensitized(c1)
 
 
 def test_c_gate_empty_stages_fail_closed():
@@ -288,10 +315,63 @@ def test_c_gate_suite_type_error():
         evaluate_integration_gate(report, "not-a-suite")  # type: ignore[arg-type]
 
 
-def test_c_gate_severity_table_invalid_value_fail_closed():
-    """severity_table 非法值 → ValueError（fail-closed，不静默采纳）。"""
+@pytest.mark.parametrize(
+    "bad_table",
+    [
+        {"memory": "fatal"},
+        {"observability": "fatal"},  # D1：F6 键的非法值同样 fail-closed（评审 B5）
+        {"unknown_stage": "fatal"},  # D1：未知 stage 的非法值同样 fail-closed（评审 B6）
+        {"memory": "warning", "decision": "oops"},
+    ],
+)
+def test_c_gate_severity_table_invalid_value_fail_closed(bad_table):
+    """severity_table 任一非法值（含 observability/未知 stage 键）→ ValueError。"""
     from home_perception.integration.loop.gate import evaluate_integration_gate
 
     report = _report([StageResult(name="memory", passed=False, failure_code="F4")])
     with pytest.raises(ValueError, match="severity_table"):
-        evaluate_integration_gate(report, _suite(), severity_table={"memory": "fatal"})
+        evaluate_integration_gate(report, _suite(), severity_table=bad_table)
+
+
+# ============================================================================
+# stage_severity 直测（D2：不依赖 evaluate_integration_gate 的独立边界）
+# ============================================================================
+
+
+def test_c_stage_severity_none_suite_defaults_blocking():
+    """suite=None + 无 table → 任何 stage 默认 blocking（含 observability / 未知 stage）。"""
+    from home_perception.integration.loop.gate import stage_severity
+
+    assert stage_severity(None, "observability") == "blocking"
+    assert stage_severity(None, "unknown_stage") == "blocking"
+    assert stage_severity(None, "decision") == "blocking"
+
+
+def test_c_stage_severity_observability_never_downgradable_direct():
+    """observability 在 severity_table 中也被强制 blocking（合法值忽略，直测铁律 2）。"""
+    from home_perception.integration.loop.gate import stage_severity
+
+    assert stage_severity(None, "observability", severity_table={"observability": "warning"}) == "blocking"
+    assert stage_severity(None, "observability", severity_table={"memory": "warning"}) == "blocking"
+
+
+def test_c_stage_severity_from_suite_sub_expectation():
+    """suite 子期望 severity 生效；未声明子期望 → blocking。"""
+    from home_perception.integration.loop.gate import stage_severity
+
+    suite = _suite(memory=_memory_suite(severity="warning"))
+    assert stage_severity(suite, "memory") == "warning"
+    assert stage_severity(suite, "notification") == "blocking"  # 未声明 action 子期望
+    assert stage_severity(suite, "decision") == "blocking"
+
+
+def test_c_stage_severity_type_and_value_errors():
+    """suite 类型错误 → TypeError；severity_table 非法值 → ValueError（直测 B5）。"""
+    from home_perception.integration.loop.gate import stage_severity
+
+    with pytest.raises(TypeError, match="IntegrationExpectationSuite"):
+        stage_severity("not-a-suite", "memory")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="severity_table"):
+        stage_severity(None, "memory", severity_table={"memory": "fatal"})
+    with pytest.raises(ValueError, match="severity_table"):
+        stage_severity(None, "observability", severity_table={"observability": "fatal"})

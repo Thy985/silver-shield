@@ -183,7 +183,9 @@ class IntegrationValidator:
             self._check_memory(result, suite),
             # cross_modal（F5，Phase B.2）：关联边下界 + 结构化断言；未声明期望时恒通过
             self._check_cross_modal(result, suite),
-            self._check_observability(result),  # F6 恒最后跑：先有业务事实，再校验观测一致性
+            # F6 恒最后跑：先有业务事实，再校验观测一致性。observability 的 severity
+            # 由 stage_severity 包揽铁律 2（恒 blocking），与 gate 判定同源（评审 B7）。
+            self._check_observability(result, suite),
         ]
         ok = all(s.passed for s in stages)
         return IntegrationValidationResult(
@@ -501,8 +503,14 @@ class IntegrationValidator:
 
     # ------------------------------------------------------------------ F6
     @staticmethod
-    def _check_observability(result: IntegrationRunResult) -> StageResult:
+    def _check_observability(
+        result: IntegrationRunResult, suite: IntegrationExpectationSuite
+    ) -> StageResult:
         """可观测性 stage（F6）：三通道交叉校验，**severity 恒 blocking，永不可降级**。
+
+        severity 不写死：统一走 ``stage_severity``（其铁律 2 对 observability 恒返回
+        blocking）——与 gate 判定单一事实源（评审 B7），避免"validator 标 A、gate 判 B"
+        的重复源漂移。
 
         这一 stage 检查的不是"系统做得对不对"，而是"我们看到的是不是系统真正做的"。
         它一旦失败，其余所有 stage 的结论都失去证据基础——所以哪怕业务 stage 全绿，
@@ -552,6 +560,6 @@ class IntegrationValidator:
             name="observability",
             passed=passed,
             failure_code=None if passed else classify_failure("observability"),
-            severity="blocking",  # F6 永不可降级（Phase C 亦然）
+            severity=stage_severity(suite, "observability"),  # 铁律 2：恒 blocking，不可覆盖
             detail="; ".join(details),
         )

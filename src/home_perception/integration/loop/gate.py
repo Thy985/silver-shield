@@ -21,11 +21,17 @@ severity 语义（Phase C，实施计划 §2.5）：
    篡改；门禁判定必须免疫，否则"篡改报告即放行"。
 2. **observability（F6）恒 blocking，永不可降级**（t18）：F6 是「观测一致性」——降级它
    等于允许"看不见的丢弃"。任何显式表里写 ``observability: warning`` 都会被忽略并记入
-   ``notices``。
+   ``notices``（非法值则直接 ``ValueError``，见 ``_validate_severity_table``）。
 3. **未声明子期望的 stage**（suite 无对应块，但静默丢弃检测仍可能判失败）：severity
    默认 ``blocking``——没写明"可降级"就按最严处理（fail-closed）。
 4. **warning 降级必须可见**：warning 失败不拦门禁，但 ``degraded=True`` + 逐 stage 清单，
    否则降级就变成"静默放行"，与 ADR-0034 命题背道而驰。
+
+**命名差说明**：stage 名 ``notification`` 对应 suite 子期望字段 ``action``
+（``_STAGE_TO_SUITE_FIELD``）——F3 的 stage 名叫 notification，但承载它的期望模型是
+``ActionExpectation``（对照 ``ActionSink`` 收到的 ``ActionCommand``）。新增 stage 时
+必须同步这张表；``observability`` **刻意不在表内**（F6 恒 blocking，见
+``NON_DOWNGRADABLE_STAGES``），未来新增"非配置"stage 同样须显式排他。
 """
 
 from __future__ import annotations
@@ -33,11 +39,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+# 单一来源：contracts 是纯数据模型（pydantic + 枚举常量，无重链），顶层 import 安全；
+# 经 ``__all__`` re-export，外部 ``from gate import EXPECTED_SEVERITIES`` 与
+# ``from contracts import EXPECTED_SEVERITIES`` 拿到同一对象，杜绝双源漂移。
+from home_perception.validation.contracts import EXPECTED_SEVERITIES
+
 if TYPE_CHECKING:  # 仅类型标注用，加载期不拉起验证/运行时链
     from .report import IntegrationReport
 
 __all__ = [
-    "EXPECTED_SEVERITIES",
+    "EXPECTED_SEVERITIES",  # re-export（validation.contracts）
     "NON_DOWNGRADABLE_STAGES",
     "IntegrationGateResult",
     "StageVerdict",
@@ -45,14 +56,11 @@ __all__ = [
     "stage_severity",
 ]
 
-# severity 合法取值（与 ``validation.contracts.EXPECTED_SEVERITIES`` 语义一致；
-# 此处重复声明是为让本模块在加载期零 import contracts，取值差异由 t18 等值断言锁死）。
-EXPECTED_SEVERITIES: tuple[str, ...] = ("blocking", "warning")
-
 # F6（observability）永不可降级：任何显式 severity 表中出现该键都被忽略并记 notice。
 NON_DOWNGRADABLE_STAGES: tuple[str, ...] = ("observability",)
 
-# stage 名 → suite 子期望字段名（observability 无对应子期望，恒 blocking）。
+# stage 名 → suite 子期望字段名。命名差见模块 docstring（notification ↔ action）；
+# ``observability`` 不在表内（F6 恒 blocking 不可降级），新增"非配置"stage 须显式排他。
 _STAGE_TO_SUITE_FIELD: dict[str, str] = {
     "perception": "perception",
     "decision": "decision",
@@ -60,6 +68,20 @@ _STAGE_TO_SUITE_FIELD: dict[str, str] = {
     "memory": "memory",
     "cross_modal": "cross_modal",
 }
+
+
+def _validate_severity_table(severity_table: dict[str, str]) -> None:
+    """severity_table 全表校验：任一值非法（含 observability 键）→ ``ValueError``。
+
+    fail-closed 姿态：非法配置是调用方 bug，必须先暴露（评审 B5/B6），而不是被
+    "observability 恒 blocking"的早 return 静默吞掉、或只在 notice 里提"被忽略"。
+    """
+    for stage, value in severity_table.items():
+        if value not in EXPECTED_SEVERITIES:
+            raise ValueError(
+                f"severity_table[{stage!r}]={value!r} 非法；"
+                f"必须为 {EXPECTED_SEVERITIES}（fail-closed）"
+            )
 
 
 def stage_severity(
@@ -78,26 +100,20 @@ def stage_severity(
             blocking）。类型错误抛 ``TypeError``。
         stage_name: stage 名（``perception``/``decision``/``notification``/``memory``/
             ``cross_modal``/``observability``）。
-        severity_table: 可选显式覆盖表（stage → severity）。含 ``observability`` 键时
-            该键**被忽略**（返回值仍为 ``blocking``），由调用方负责记入 notices
-            （t18：忽略 + warn）。含未知 stage / 非法值抛 ``ValueError``。
+        severity_table: 可选显式覆盖表（stage → severity）。**全表**值先校验（非法值
+            抛 ``ValueError``，含 observability 键）；``observability`` 键合法值被忽略
+            （返回值仍为 ``blocking``），由调用方负责记入 notices（t18：忽略 + warn）。
 
     Returns:
         ``"blocking"`` 或 ``"warning"``。
     """
+    if severity_table is not None:
+        _validate_severity_table(severity_table)
+
     if stage_name in NON_DOWNGRADABLE_STAGES:
         return "blocking"
-
     if severity_table is not None:
-        if stage_name in severity_table:
-            value = severity_table[stage_name]
-            if value not in EXPECTED_SEVERITIES:
-                raise ValueError(
-                    f"severity_table[{stage_name!r}]={value!r} 非法；"
-                    f"必须为 {EXPECTED_SEVERITIES}（fail-closed）"
-                )
-            return value
-        return "blocking"
+        return severity_table.get(stage_name, "blocking")
 
     if suite is None:
         return "blocking"
@@ -139,6 +155,10 @@ class IntegrationGateResult:
     ``passed`` 与 ``degraded`` **独立**：可以并存（blocking 失败 + warning 失败 →
     ``passed=False, degraded=True``），也可以各自单独出现。二者都从
     ``StageVerdict`` 汇总，不额外信任任何运行时状态。
+
+    序列化入口**只有** ``canonical_dict``：本结构无易变字段（name/passed/severity/
+    failure_code/notices 均确定），不存在"人读版 vs 比对版"之分，故不提供 ``to_dict``
+    （评审 A1：避免"哪个是确定性入口"的认知负担）。
     """
 
     scenario_id: str
@@ -153,8 +173,8 @@ class IntegrationGateResult:
     def warning_failures(self) -> tuple[StageVerdict, ...]:
         return tuple(v for v in self.verdicts if not v.passed and v.severity == "warning")
 
-    def to_dict(self) -> dict[str, Any]:
-        """完整序列化（本结构无易变字段：name/passed/severity/failure_code/notices 均确定）。"""
+    def canonical_dict(self) -> dict[str, Any]:
+        """确定性序列化（门禁结论本身就是结构事实；落盘前过脱敏守卫）。"""
         return {
             "scenario_id": self.scenario_id,
             "passed": self.passed,
@@ -162,10 +182,6 @@ class IntegrationGateResult:
             "verdicts": [v.to_dict() for v in self.verdicts],
             "notices": list(self.notices),
         }
-
-    def canonical_dict(self) -> dict[str, Any]:
-        """确定性序列化（与 ``to_dict`` 等价——门禁结论本身就是结构事实）。"""
-        return self.to_dict()
 
     def render_markdown(self) -> str:
         """人类可读结论（排障用；不进任何门禁判定）。"""
@@ -198,8 +214,9 @@ def evaluate_integration_gate(
             ``stages`` 的 ``name``/``passed``/``failure_code``——**不读** stage 的
             ``severity`` 字段（t17：那是展示投影，判定只看配置来源）。
         suite: ``IntegrationExpectationSuite`` 或 ``None``（等价空套件）。
-        severity_table: 可选显式覆盖表（见 ``stage_severity``）。含
-            ``observability`` 键 → 忽略 + 记入 ``notices``（t18）。
+        severity_table: 可选显式覆盖表（见 ``stage_severity``）。**全表值先校验**
+            （非法值抛 ``ValueError``，评审 B5/B6）；``observability`` 键合法值 →
+            忽略 + 记入 ``notices``（t18）；未知 stage 合法值 → 记入 notices。
 
     Returns:
         ``IntegrationGateResult``。
@@ -215,10 +232,13 @@ def evaluate_integration_gate(
             f"suite 必须是 IntegrationExpectationSuite，收到 {type(suite).__name__}"
         )
 
-    stages = tuple(getattr(report, "stages", ()) or ())
+    if severity_table is not None:
+        _validate_severity_table(severity_table)  # 非法值先于 notices 暴露（fail-closed）
+
+    stages = tuple(report.stages)
     if not stages:
         return IntegrationGateResult(
-            scenario_id=getattr(report, "scenario_id", ""),
+            scenario_id=report.scenario_id,
             passed=False,
             degraded=False,
             notices=("空 stage 集合：无证据可判定，fail-closed 视为不通过",),
@@ -232,26 +252,27 @@ def evaluate_integration_gate(
                     f"severity_table 含 {stage!r} 被忽略："
                     "F6（observability）永不可降级（t18）"
                 )
-        unknown = sorted(set(severity_table) - set(_STAGE_TO_SUITE_FIELD) - set(NON_DOWNGRADABLE_STAGES))
+        unknown = sorted(
+            set(severity_table) - set(_STAGE_TO_SUITE_FIELD) - set(NON_DOWNGRADABLE_STAGES)
+        )
         if unknown:
             notices.append(f"severity_table 含未知 stage {unknown}，被忽略")
 
     verdicts: list[StageVerdict] = []
     for s in stages:
-        name = getattr(s, "name", "")
         verdicts.append(
             StageVerdict(
-                name=name,
-                passed=bool(getattr(s, "passed", False)),
-                severity=stage_severity(suite, name, severity_table=severity_table),
-                failure_code=getattr(s, "failure_code", None),
+                name=s.name,
+                passed=s.passed,
+                severity=stage_severity(suite, s.name, severity_table=severity_table),
+                failure_code=s.failure_code,
             )
         )
 
     blocking_failed = any(not v.passed and v.severity == "blocking" for v in verdicts)
     warning_failed = any(not v.passed and v.severity == "warning" for v in verdicts)
     return IntegrationGateResult(
-        scenario_id=getattr(report, "scenario_id", ""),
+        scenario_id=report.scenario_id,
         passed=not blocking_failed,
         degraded=warning_failed,
         verdicts=tuple(verdicts),

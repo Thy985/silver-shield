@@ -105,6 +105,9 @@ jobs:
   integration-gate:
     name: Integration gate (ADR-0034 Phase C)
     runs-on: ubuntu-latest
+    # PR 必跑 job 且执行 e2e 闭环（合成 detector + cv2 解析 + 双指纹），
+    # 默认 360 分钟过长——15 分钟兜底足够，防 runner 卡死拖垮队列（评审 B8）。
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
