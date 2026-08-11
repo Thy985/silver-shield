@@ -149,6 +149,8 @@ class IntegrationReport:
     mode: str = ""
     n_frames: int = 0
     scenario_fingerprint: str = ""
+    expectation_fingerprint: str = ""  # Phase C：评价标准指纹（run_result 投影）
+    loop_fingerprint: str = ""  # Phase C：运行血缘指纹（run_result 投影）
     failure_codes: tuple[str, ...] = ()
     stages: tuple[Any, ...] = ()  # tuple[StageResult, ...]（避免运行期循环 import）
     artifacts: LoopArtifactSummary = field(default_factory=LoopArtifactSummary)
@@ -171,6 +173,10 @@ class IntegrationReport:
         报告**不**自行推导 ``ok``——那是 ``IntegrationValidator`` 的唯一职责。这里若再算
         一遍，就会出现"报告说通过、验证器说不通过"的双事实源，而两者不一致时没人知道
         该信谁。
+
+        两枚闭环指纹（``expectation_fingerprint`` / ``loop_fingerprint``）**直接投影**
+        ``run_result`` 的已算值（B.3），不在此重算——报告是 CI 决策依据，必须能看到
+        "用什么标准 + 怎么跑的"（DoD C2/C5）。
         """
         return cls(
             scenario_id=validation.scenario_id or run_result.scenario_id,
@@ -178,6 +184,8 @@ class IntegrationReport:
             mode=run_result.mode,
             n_frames=run_result.n_frames,
             scenario_fingerprint=run_result.fingerprint,
+            expectation_fingerprint=run_result.expectation_fingerprint,
+            loop_fingerprint=run_result.loop_fingerprint,
             failure_codes=validation.failure_codes(),
             stages=tuple(validation.stages),
             artifacts=LoopArtifactSummary.from_run(run_result),
@@ -217,6 +225,8 @@ class IntegrationReport:
             "mode": self.mode,
             "n_frames": self.n_frames,
             "scenario_fingerprint": self.scenario_fingerprint,
+            "expectation_fingerprint": self.expectation_fingerprint,
+            "loop_fingerprint": self.loop_fingerprint,
             "generated_at": self.generated_at,
             "failure_codes": list(self.failure_codes),
             "stages": self._stage_dicts(include_detail=True),
