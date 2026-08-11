@@ -6,8 +6,10 @@ ADR-0033 ``build_scenario_score``（其 ``validation_ok`` 即 ``ScenarioValidato
 
 判定纪律（全部来自 ADR-0034 §0.4）：
 
-1. **全 AND**：Phase A/B 任一 blocking stage 失败即整体不通过。Stage Severity 属 Phase C，
-   此处所有 stage 的 ``severity`` 恒为 ``"blocking"``。
+1. **全 AND**：任一 blocking stage 失败即整体不通过。``StageResult.severity`` 是
+   **展示投影**（Phase C 起从 suite 对应子期望取，见 ``gate.stage_severity``），
+   只进报告标注、**不改变** ``ok`` 的算法——"warning 失败放行"是门禁层
+   （``evaluate_integration_gate``）的语义，验证层始终全 AND（Phase A 契约冻结）。
 2. **静默丢弃判定式**：``上游存在 ∧ 下游缺失 ∧ 无显式理由`` → 丢弃。三个条件缺一不可——
    尤其"上游存在"这一前提：规则未命中导致的"无告警"是**合法未触发**，把它算作
    Decision Drop 会让每个良性场景都变红，门禁随即失去意义。
@@ -37,6 +39,8 @@ from home_perception.validation.contracts import (
     OUTCOME_NONE,
     IntegrationExpectationSuite,
 )
+
+from .gate import stage_severity  # severity 单一事实源（gate 判定与报告标注同源）
 
 if TYPE_CHECKING:
     from home_perception.evaluation.metrics import ScenarioScore
@@ -94,7 +98,7 @@ class StageResult:
     name: str
     passed: bool
     failure_code: str | None = None
-    severity: str = "blocking"  # Phase C 前恒 blocking
+    severity: str = "blocking"  # Phase C：从 suite 取（observability 恒 blocking，不可覆盖）
     detail: str = ""
 
     def __str__(self) -> str:
@@ -179,7 +183,9 @@ class IntegrationValidator:
             self._check_memory(result, suite),
             # cross_modal（F5，Phase B.2）：关联边下界 + 结构化断言；未声明期望时恒通过
             self._check_cross_modal(result, suite),
-            self._check_observability(result),  # F6 恒最后跑：先有业务事实，再校验观测一致性
+            # F6 恒最后跑：先有业务事实，再校验观测一致性。observability 的 severity
+            # 由 stage_severity 包揽铁律 2（恒 blocking），与 gate 判定同源（评审 B7）。
+            self._check_observability(result, suite),
         ]
         ok = all(s.passed for s in stages)
         return IntegrationValidationResult(
@@ -207,6 +213,7 @@ class IntegrationValidator:
             name="perception",
             passed=passed,
             failure_code=None if passed else classify_failure("perception"),
+            severity=stage_severity(suite, "perception"),
             detail="; ".join(details),
         )
 
@@ -275,6 +282,7 @@ class IntegrationValidator:
             name="decision",
             passed=passed,
             failure_code=None if passed else classify_failure("decision"),
+            severity=stage_severity(suite, "decision"),
             detail="; ".join(details),
         )
 
@@ -343,6 +351,7 @@ class IntegrationValidator:
             name="notification",
             passed=passed,
             failure_code=None if passed else classify_failure("notification"),
+            severity=stage_severity(suite, "notification"),
             detail="; ".join(details),
         )
 
@@ -413,6 +422,7 @@ class IntegrationValidator:
             name="memory",
             passed=passed,
             failure_code=None if passed else classify_failure("memory"),
+            severity=stage_severity(suite, "memory"),
             detail="; ".join(details),
         )
 
@@ -487,13 +497,20 @@ class IntegrationValidator:
             name="cross_modal",
             passed=passed,
             failure_code=None if passed else classify_failure("cross_modal"),
+            severity=stage_severity(suite, "cross_modal"),
             detail="; ".join(details),
         )
 
     # ------------------------------------------------------------------ F6
     @staticmethod
-    def _check_observability(result: IntegrationRunResult) -> StageResult:
+    def _check_observability(
+        result: IntegrationRunResult, suite: IntegrationExpectationSuite
+    ) -> StageResult:
         """可观测性 stage（F6）：三通道交叉校验，**severity 恒 blocking，永不可降级**。
+
+        severity 不写死：统一走 ``stage_severity``（其铁律 2 对 observability 恒返回
+        blocking）——与 gate 判定单一事实源（评审 B7），避免"validator 标 A、gate 判 B"
+        的重复源漂移。
 
         这一 stage 检查的不是"系统做得对不对"，而是"我们看到的是不是系统真正做的"。
         它一旦失败，其余所有 stage 的结论都失去证据基础——所以哪怕业务 stage 全绿，
@@ -543,6 +560,6 @@ class IntegrationValidator:
             name="observability",
             passed=passed,
             failure_code=None if passed else classify_failure("observability"),
-            severity="blocking",  # F6 永不可降级（Phase C 亦然）
+            severity=stage_severity(suite, "observability"),  # 铁律 2：恒 blocking，不可覆盖
             detail="; ".join(details),
         )
