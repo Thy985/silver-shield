@@ -177,7 +177,8 @@ class IntegrationValidator:
             self._check_decision(result, suite),
             self._check_notification(result, suite),
             self._check_memory(result, suite),
-            # cross_modal（F5）属 Phase B，Phase A 不产出该 stage（不是"通过"，是"不适用"）
+            # cross_modal（F5，Phase B.2）：关联边下界 + 结构化断言；未声明期望时恒通过
+            self._check_cross_modal(result, suite),
             self._check_observability(result),  # F6 恒最后跑：先有业务事实，再校验观测一致性
         ]
         ok = all(s.passed for s in stages)
@@ -412,6 +413,80 @@ class IntegrationValidator:
             name="memory",
             passed=passed,
             failure_code=None if passed else classify_failure("memory"),
+            detail="; ".join(details),
+        )
+
+    # ------------------------------------------------------------------ F5
+    @staticmethod
+    def _check_cross_modal(
+        result: IntegrationRunResult, suite: IntegrationExpectationSuite
+    ) -> StageResult:
+        """跨模态关联 stage（F5）：关联边下界 + 声明式结构化断言。
+
+        静默丢弃判定式在此的具体形态（t8）：``声明了 cross_modal 期望`` ∧ ``零关联边``
+        → F5 不通过。零关联边的根因通常是"没注入 cross_modal_runtime"（闭环未启用跨模态）
+        或"根本没建出边"（如只有单模态、无时间窗重叠）——无论哪种，都是"声称要验证跨模态
+        关联、却拿不出一条真实边"，必须暴露而非静默通过。
+
+        结构化断言（D4 下界+结构纪律，与 memory stage 同构）：
+        - ``min_links``：关联边条数下界；
+        - ``expected_linked_modalities``：至少一条 link 两端 episode 的模态并集 ⊇ 期望集；
+        - ``required_relationships``：至少一条 link 的 relationship ∈ 期望集。
+        """
+        links = result.cross_modal_links
+        details: list[str] = [f"links={len(links)}"]
+        passed = True
+
+        exp = suite.cross_modal
+        if exp is not None:
+            # (a) 下界
+            if len(links) < exp.min_links:
+                passed = False
+                details.append(f"关联边 {len(links)} < 下界 {exp.min_links}")
+
+            # 建 record_id → episode 索引（用于查每条 link 两端 episode 的模态）
+            ep_by_id = {getattr(ep, "record_id", None): ep for ep in result.episodes}
+
+            # (b) 结构化断言：期望关联模态覆盖（至少一条 link 连接了期望模态集合）
+            if exp.expected_linked_modalities is not None:
+                required = set(exp.expected_linked_modalities)
+                hit = False
+                for link in links:
+                    mods: set[str] = set()
+                    for eid in getattr(link, "episode_ids", ()) or ():
+                        ep = ep_by_id.get(eid)
+                        if ep is None:
+                            continue
+                        for m in getattr(ep, "modalities", ()) or ():
+                            mods.add(m.value if hasattr(m, "value") else m)
+                    if required.issubset(mods):
+                        hit = True
+                        break
+                details.append(f"linked_modalities 覆盖 {sorted(required)}?")
+                if not hit:
+                    passed = False
+                    details.append(f"无 link 覆盖期望模态 {sorted(required)}")
+
+            # (c) 结构化断言：期望关系（至少一条 link 的关系 ∈ 期望集）
+            if exp.required_relationships is not None:
+                allowed = set(exp.required_relationships)
+                hit = any(
+                    (
+                        link.relationship.value
+                        if hasattr(link.relationship, "value")
+                        else link.relationship
+                    )
+                    in allowed
+                    for link in links
+                )
+                details.append(f"relationships ⊇ {sorted(allowed)}?")
+                if not hit:
+                    passed = False
+                    details.append(f"无 link 关系命中 {sorted(allowed)}")
+        return StageResult(
+            name="cross_modal",
+            passed=passed,
+            failure_code=None if passed else classify_failure("cross_modal"),
             detail="; ".join(details),
         )
 

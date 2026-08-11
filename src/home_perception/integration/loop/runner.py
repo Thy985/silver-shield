@@ -284,6 +284,14 @@ class IntegrationRunner:
         traces = _read_traces(ctx.trace_recorder)
         episodes = tuple(ctx.memory_store.all_episodic())
 
+        # Phase B.2：cross_modal 关联边。启用时从 CrossModalLinkRuntime 只读读回真实
+        # CrossModalLink（落库后由 MemoryHook 触发建边）；未启用则恒空（零行为变化）。
+        cross_modal_links = (
+            tuple(ctx.cross_modal_runtime.all_links())
+            if ctx.cross_modal_runtime is not None
+            else ()
+        )
+
         run_result = RunResult(
             scenario_id=synth.scenario_id,
             mode=synth.mode,
@@ -304,7 +312,7 @@ class IntegrationRunner:
             sink_commands=sink_commands,
             decision_traces=traces,
             episodes=episodes,
-            cross_modal_links=(),  # Phase A 恒空
+            cross_modal_links=cross_modal_links,  # Phase B.2：启用时真实读回
             fingerprint=synth.fingerprint,
             context=ctx,
         )
