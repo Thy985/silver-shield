@@ -39,9 +39,9 @@ every blocking workflow must leave downloadable evidence behind.
 | Workflow | Trigger | Purpose | Gate |
 |---|---|---|---|
 | `ci-quality` | PR | Static quality gate: `ruff`, `black`, YAML & scenario-schema validation, phase-consistency SSOT lock | Blocking |
-| `ci-test` | PR | Contract / Unit / Integration tests (torch-free closed loop) | Blocking |
+| `ci-test` | PR | Contract / Unit / Integration tests (torch-free closed loop) + **Integration gate (ADR-0034 Phase C: report-based gate + fingerprint drift)** | Blocking |
 | `ci-benchmark` | PR | Benchmark Harness + Regression Gate (ADR-0033), baseline-bump governance | Blocking |
-| `ci-runtime` | `main` / manual | Full AI-stack runtime validation (real YOLO inference path) — ADR-0034 integration slot | Non-blocking / Release Gate |
+| `ci-runtime` | `main` / manual | Full AI-stack runtime validation (real YOLO inference path) | Non-blocking / Release Gate |
 
 > All four workflows also carry `push: [main]` and `workflow_dispatch` so they
 > can be re-run on demand. `ci-runtime` is intentionally **not** wired to
@@ -84,7 +84,7 @@ them.
 | ADR-0031 | Decision trace & audit lineage | `ci-benchmark` (gate), `ci-runtime` (IntegrationReport traces) |
 | ADR-0032 | Scenario contract & simulation layer | `ci-benchmark` (Scenario→Generator→Pipeline), `ci-quality` (schema validation) |
 | ADR-0033 | Benchmark gate & regression baseline | `ci-benchmark` |
-| ADR-0034 | Runtime integration (Scenario→Runtime→Memory→Decision→Notification) | `ci-runtime` |
+| ADR-0034 | Runtime integration + **Phase C production gate** (severity / fingerprint drift / report-based decision) | `ci-test` (`integration-gate` job + integration tier with failure-injection contract), `ci-runtime` |
 
 ## Trigger Policy
 
@@ -111,10 +111,14 @@ install on every PR would drag down the feedback loop that `ci-test` +
 Every blocking workflow uploads evidence to GitHub Artifacts. Download them from
 the run summary when a check fails.
 
-**`ci-test`** (three uploads, one per tier)
+**`ci-test`** (four uploads, one per tier + the Phase C gate)
 - `test-contract` → `artifacts/junit-contract.xml`, `artifacts/coverage-contract.xml`
 - `test-unit` → `artifacts/junit-unit.xml`, `artifacts/coverage-unit.xml`
 - `test-integration` → `artifacts/junit-integration.xml`, `artifacts/coverage-integration.xml`
+- `integration-gate` → `artifacts/adr0034_integration/`
+  (`adr0034_summary.json` / `adr0034_fingerprints.json` / per-scenario
+  `*.canonical.json` + `*.gate.json` + `*.fingerprints.json` — the evidence
+  behind the ADR-0034 gate verdict and the drift baseline comparison)
 
 **`ci-benchmark`**
 - `benchmark-gate-report` → `benchmark-gate-report.json`
@@ -126,8 +130,9 @@ the run summary when a check fails.
 **`ci-runtime`**
 - `integration-report` → `artifacts/IntegrationReport.json`
   (structured summary parsed from real pytest results), plus
-  `artifacts/junit.xml` and `artifacts/coverage.xml`, and decision/action
-  *trace artifacts* once ADR-0034 scenarios are wired in.
+  `artifacts/junit.xml` and `artifacts/coverage.xml`. The ADR-0034 report-based
+  gate itself runs in `ci-test` (`integration-gate` job, per-PR); `ci-runtime`
+  covers the full AI-stack path on `main`.
 
 ## Fail-Closed Fixture Gate (Stage 2 — anti false-green)
 
@@ -170,10 +175,10 @@ Stage roadmap (per governance decision):
 | Stage | Goal | Status |
 |---|---|---|
 | 1 | CI governance infrastructure (4 workflows + locked deps + entrypoints) | ✅ Done (#174, #175) |
-| 2 | Eliminate false-green (fail-closed fixture gate) | ✅ This change |
+| 2 | Eliminate false-green (fail-closed fixture gate) | ✅ Done |
 | 3 | Real YOLO smoke closed loop (image→YOLO→Detection→Tracker→Decision→Trace→Benchmark) | P1 |
 | 4 | CAVIAR real scenario closed loop | P2 |
-| 5 | ADR-0034 integration | P3 |
+| 5 | ADR-0034 integration (Phase C gate + fingerprint drift governance) | ✅ Done (v1.0, #180–#191) |
 
 ## Related (non-governance) workflows
 

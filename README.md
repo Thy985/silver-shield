@@ -22,6 +22,13 @@
   详见 `docs/ADR/0017` 与 `docs/DEMO-SCRIPT-P0-11-5b.md`。展示层零穿透 7 层冻结契约（ADR-0015）。
 - 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
 
+### v2 验证体系（ADR-0032/0033/0034 · 全量验收完成，v1.0 冻结）
+
+- ✅ **ADR-0032 场景仿真层**：声明式 `Scenario` → 两通道生成（`detections` 零模型 / `frames` OpenCV 程序化），确定性可复现（seed + numpy/opencv 版本入指纹）。
+- ✅ **ADR-0033 Benchmark Harness**：感知级场景回归打分 + 回归门禁（`benchmark-baseline-bump` 治理），CI `ci-benchmark` 每 PR 门控。
+- ✅ **ADR-0034 闭环集成验证（v1.0 冻结）**：`Scenario→Runtime→Memory→Decision→Notification` 完整闭环机器断言（F1–F6 失败模型 + `ActionSink` 探针 + 两枚闭环指纹）；**Phase C 生产门禁**——per-expectation severity（blocking/warning，F6 永不可降级）、`gate.passed` 决定 CI 退出码（消费 `IntegrationReport` 而非 pytest exit code）、loop 指纹基线漂移治理（`integration-baseline-bump` 标记）、F2/F3/F5 失败注入契约入 CI、T2 生产边界 AST 契约入 CI。DoD C1–C8 验收通过，详见 `docs/ADR/0034-*`。
+- ✅ **CI/验证体系（四套分离 workflow）**：`ci-quality`（静态）/ `ci-test`（contract/unit/integration 三 tier + `integration-gate` job）/ `ci-benchmark`（回归门禁）/ `ci-runtime`（main 全量 AI 栈）；环境可复现（Python 3.12 + numpy 2.4.2 / opencv 4.13.0.92 钉死），失败可溯源（artifact 全量上传 + runtime provenance 报告）。详见 `.github/workflows/README.md`。
+
 ### v2 实时风险状态流（设计完成 · 未集成 · 未启用）
 
 > **严格区分**：设计完成 ≠ 集成完成 ≠ 默认启用。
