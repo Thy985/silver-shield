@@ -34,6 +34,11 @@ from home_perception.visualizer.schema.evidence import (
     StageVerdict,
     TimelineNode,
 )
+from home_perception.visualizer.schema.graph import (
+    EvidenceGraph,
+    EvidenceGraphEdge,
+    EvidenceGraphNode,
+)
 
 # 与 run_integration_validation.py 的产物命名对称（单一命名来源）。
 SUMMARY_FILENAME = "adr0034_summary.json"
@@ -188,6 +193,8 @@ def _build_decision_evidence(canonical: dict, scenario_id: str) -> tuple[Decisio
 
     # 白名单字段投影（评审 R2-#4）：全部走 _str_tuple 强校验（非空 str 列表），
     # 缺字段视为空（该维度无证据，降级不捏造）；非 str 元素 → fail-closed。
+    # 语义分组（D1.5）：Observation Evidence（检测证据）→ Decision Reasoning
+    # （推理依据：trace outcome + 风险级别）→ Decision Outcome（结论：动作）。
     def _add_joined(key: str, kind: str, label: str, *, optional: bool = True) -> None:
         try:
             values = _str_tuple(artifacts, key, scenario_id)
@@ -198,16 +205,118 @@ def _build_decision_evidence(canonical: dict, scenario_id: str) -> tuple[Decisio
         if values:
             _add(kind, label, ", ".join(values), f"artifacts.{key}")
 
-    _add_joined("event_types", "evidence", "检测证据（事件类型）")
-    _add_joined("trace_outcome_kinds", "evidence", "决策结果（trace outcome）")
-    _add_joined("risk_levels", "outcome", "风险级别")
-    _add_joined("recommended_actions", "action", "推荐动作")
-    _add_joined("command_types", "action", "已执行命令")
-    _add_joined("suppress_reasons", "outcome", "抑制原因")
+    _add_joined("event_types", "evidence", "Observation · 检测证据（事件类型）")
+    _add_joined("trace_outcome_kinds", "reasoning", "Reasoning · 决策结果（trace outcome）")
+    _add_joined("risk_levels", "reasoning", "Reasoning · 风险级别")
+    _add_joined("recommended_actions", "outcome", "Outcome · 推荐动作")
+    _add_joined("command_types", "outcome", "Outcome · 已执行命令")
+    _add_joined("suppress_reasons", "outcome", "Outcome · 抑制原因")
     if not evidence:
         # 无任何决策证据字段（benign 空闭环）→ 降级摘要，非捏造
         _add("outcome", "决策证据", "(闭环无事件/警告——benign 场景预期)", "artifacts.counts")
     return tuple(evidence)
+
+
+def _build_evidence_graph(
+    canonical: dict,
+    scenario_id: str,
+    artifacts: dict,
+    counts: Counts,
+) -> EvidenceGraph:
+    """D1.5（D5 实体化）：从 canonical 投影**因果链图**（Scenario→Event→Decision→
+    Action→Episode→Link）。
+
+    - 节点只投影真实字段（event_types / trace_outcome_kinds / recommended_actions
+      的真实值 + counts 摘要），缺失 → 不建节点（禁 synthetic）；
+    - 每个节点/边携带 ``ref``（溯源到 canonical 具体字段）与 ``provenance_kind``；
+    - 边类型闭集（observed_from / caused_by / triggered / supports / stored_as）。
+    """
+    nodes: list[EvidenceGraphNode] = []
+    edges: list[EvidenceGraphEdge] = []
+    canon_ref = f"{scenario_id}.canonical.json"
+
+    # 节点 id 约定：当前为**单 scenario 渲染**（每场景独立容器 + 独立 ECharts 实例），
+    # 节点 id 不带 scenario 前缀（如 "scn" / "event-0"）；若未来支持多 scenario
+    # 同图合并渲染，节点 id 需加 f"{scenario_id}-" 前缀防撞名（评审 R3-#9）。
+    def _node(nid: str, ntype: str, label: str, ref: str) -> None:
+        nodes.append(
+            EvidenceGraphNode(
+                id=nid, type=ntype, label=label, ref=f"{canon_ref}#{ref}",
+                provenance_kind="SIMULATED",
+            )
+        )
+
+    def _edge(source: str, target: str, etype: str, ref: str) -> None:
+        edges.append(
+            EvidenceGraphEdge(
+                source=source, target=target, type=etype, ref=f"{canon_ref}#{ref}"
+            )
+        )
+
+    # 因果链公共投影模板（评审 R3-#5：折叠五段近似重复为 3 行调用）。
+    # 数据源 = artifacts.<key> 列表（走 _str_tuple 强校验，语义与
+    # _build_decision_evidence 完全统一——评审 R3-#1：缺字段 = 该层无证据，
+    # 非 str 元素 → EvidenceProjectionError 而非 TypeError）。
+    # 返回本层节点 id 列表；prev_ids 为空 → 本层不建节点（防孤立节点，
+    # 评审 R3-#8：无事件支撑的 Decision 不投影）。
+    def _project_chain(
+        key: str,
+        ntype: str,
+        prefix: str,
+        edge_type: str,
+        prev_ids: tuple[str, ...],
+    ) -> list[str]:
+        values = _str_tuple(artifacts, key, scenario_id)
+        ids: list[str] = []
+        for i, value in enumerate(values):
+            nid = f"{prefix}-{i}"
+            _node(nid, ntype, value, f"artifacts.{key}[{i}]")
+            ids.append(nid)
+            for prev in prev_ids:
+                _edge(prev, nid, edge_type, f"artifacts.{key}[{i}]")
+        return ids
+
+    # Scenario 锚点
+    _node("scn", "Scenario", scenario_id, "scenario_id")
+
+    # Event ← observed_from ← Scenario（无前置依赖，仅依赖自身数据）
+    event_ids = _project_chain("event_types", "Event", "event", "observed_from", ("scn",))
+
+    # Decision ← caused_by ← Event（无事件 → 决策无因，不建节点——防孤立）
+    decision_ids: list[str] = []
+    if event_ids:
+        decision_ids = _project_chain(
+            "trace_outcome_kinds", "Decision", "decision", "caused_by", tuple(event_ids)
+        )
+
+    # Action ← triggered ← Decision（无决策 → 动作无因，不建节点——防孤立）
+    action_ids: list[str] = []
+    if decision_ids:
+        action_ids = _project_chain(
+            "recommended_actions", "Action", "action", "triggered", tuple(decision_ids)
+        )
+
+    # Episode ← stored_as ← Action（仅 counts 摘要；episode_id 未落盘不渲染）
+    episode_id = "episodes"
+    if counts["episodes"] > 0:
+        _node(
+            episode_id, "Episode", f"{counts['episodes']} episodes",
+            "artifacts.counts.episodes",
+        )
+        for action_id in action_ids:
+            _edge(action_id, episode_id, "stored_as", "artifacts.counts.episodes")
+
+    # Link ← supports ← Episode（仅 counts 摘要）
+    if counts["cross_modal_links"] > 0 and counts["episodes"] > 0:
+        _node(
+            "links", "Link", f"{counts['cross_modal_links']} links",
+            "artifacts.counts.cross_modal_links",
+        )
+        _edge(episode_id, "links", "supports", "artifacts.counts.cross_modal_links")
+
+    return EvidenceGraph(
+        scenario_id=scenario_id, nodes=tuple(nodes), edges=tuple(edges)
+    )
 
 
 def _build_gate(
@@ -287,6 +396,10 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
     artifacts = canonical.get("artifacts")
     if not isinstance(artifacts, dict):
         raise EvidenceProjectionError(f"{owner}.artifacts 缺失（fail-closed）")
+    graph = _build_evidence_graph(canonical, scenario_id, artifacts, counts)
+    refs += tuple(n["ref"] for n in graph["nodes"]) + tuple(
+        e["ref"] for e in graph["edges"]
+    )
 
     return ScenarioEvidence(
         scenario_id=scenario_id,
@@ -311,6 +424,7 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         gate_degraded=gate_degraded,
         fingerprints=_build_fingerprints(scenario_id, fingerprints, owner),
         refs=refs,
+        graph=graph,
     )
 
 

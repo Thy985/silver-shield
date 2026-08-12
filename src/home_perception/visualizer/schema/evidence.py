@@ -13,7 +13,10 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
+
+if TYPE_CHECKING:  # 仅类型标注：graph.py 依赖本模块的 ProvenanceKind，避免运行期循环
+    from home_perception.visualizer.schema.graph import EvidenceGraph
 
 # provenance_kind 闭集（D2 硬规则 4 / D7b）：真实性标注，防"合成当真实"。
 # D1 数据源为 ADR-0034 仿真闭环 artifact → SIMULATED；真实设备接入后由 loader 填 REAL_SENSOR。
@@ -63,9 +66,13 @@ class FingerprintPair(TypedDict):
 
 
 class DecisionEvidence(TypedDict):
-    """Decision Explanation 视图的一步（检测证据 → 规则 → 策略 → 决策 → 动作）。"""
+    """Decision Explanation 视图的一步（Observation → Reasoning → Outcome）。
 
-    kind: str  # evidence / rule / policy / outcome / action
+    评审 R3-#19：kind 收紧为 loader 实际产出的三分组闭集（D1.5 起不再产出
+    rule/policy——renderer 的 _DECISION_KINDS 已同步删除）。
+    """
+
+    kind: Literal["evidence", "reasoning", "outcome"]
     label: str
     value: str
     ref: str  # 溯源必填（D8）
@@ -106,6 +113,12 @@ class ScenarioEvidence(TypedDict):
     gate_degraded: bool
     fingerprints: FingerprintPair
     refs: tuple[str, ...]  # 本项目所有节点的 ref 汇总（验收：provenance 可溯源）
+    # D1.5（D5 实体化）：Evidence Graph 为四视图的共享底层结构
+    # （Timeline = Graph+timestamp / Decision = Graph+decision subtree /
+    #  Cross Modal = Graph+supports edges）。
+    # 评审 R3-#18：**D1.5+ 必填**——调用方必须从 loader 的 EvidenceProjection
+    # 输出消费（loader 恒产出 graph），禁止手写构造 ScenarioEvidence 缺该字段。
+    graph: EvidenceGraph  # noqa: F821——类型见下方 forward ref
 
 
 class ProjectionMeta(TypedDict):

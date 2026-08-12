@@ -160,8 +160,8 @@ def test_render_graph_nodes_have_metadata(tmp_path):
     """graph 可视化节点带 provenance_kind + ref 溯源元数据（评审 R2-#3 方案 A）。"""
     d = make_artifacts(tmp_path / "a")  # fixture：episodes=2, links=1
     html = _render(d)
-    # Python dict → str 用单引号（JS 里呈现为 'provenance_kind': 'SIMULATED'）
-    assert "'provenance_kind': 'SIMULATED'" in html
+    # 评审 R3-#11：nodes 走 json.dumps 输出（双引号 JSON），断言按实际格式
+    assert '"provenance_kind": "SIMULATED"' in html
     assert "artifacts.counts.episodes" in html  # ref 溯源到 counts
     assert "ep-0" in html  # 节点 id（ep-0）作为 JS 节点 id 出现
 
@@ -190,8 +190,8 @@ def test_render_scenario_id_with_quotes_safe(tmp_path):
     """
     d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1'alert(1)",))
     html = _render(d)
-    # JS 层：getElementById 参数是 JSON 包裹的完整字符串（无裸闭合）
-    assert "getElementById(&quot;sw_t1'alert(1)&quot;)".replace("&quot;", '"') in html
+    # JS 层：getElementById 参数是 JSON 包裹的完整字符串（主图容器 id = graph-{sid}）
+    assert 'getElementById("graph-sw_t1\'alert(1)")' in html
     # 无独立 alert 语句（alert(1); 不会出现在任何位置）
     assert "alert(1);" not in html
 
@@ -205,3 +205,62 @@ def test_render_n_frames_zero_valid(tmp_path):
     canon.write_text(json.dumps(data), encoding="utf-8")
     html = _render(d)
     assert "frames=0" in html
+
+
+def test_render_evidence_graph_main(tmp_path):
+    """D1.5 主视图：Evidence Graph 容器 + 因果链标签 + 边类型（验收 2 扩展）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    assert 'data-nodes="6"' in html  # Scenario+Event+Decision+Action+Episode+Link
+    assert 'data-edges="5"' in html  # observed_from/caused_by/triggered/stored_as/supports
+    # 因果链标签出现在主图说明
+    assert "observed_from" in html
+    assert "caused_by" in html
+    assert "triggered" in html
+    assert "stored_as" in html
+    # 主图容器 id 唯一（graph-sw_t1 仅主图，cross modal 用 crossmodal-sw_t1）
+    assert len(re.findall(r'id="graph-sw_t1"', html)) == 1
+    assert len(re.findall(r'id="crossmodal-sw_t1"', html)) == 1
+
+
+def test_render_decision_three_groups(tmp_path):
+    """Decision Explanation 三分组语义（Observation/Reasoning/Outcome，D1.5）。
+
+    评审 R3-#13：断言必须验证**分组归属**——abnormal_dwell（事件类型）在
+    Observation 卡片、WARN（trace outcome）在 Reasoning 卡片，防回归到
+    "WARN 混排为检测证据"的旧语义。
+    """
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    assert "Observation Evidence" in html
+    assert "Decision Reasoning" in html
+    assert "Decision Outcome" in html
+    # 卡片结构：<div class="dc-label">...</div><div class="dc-value">...</div>
+    # 同一展示组可有多个卡片（如 Reasoning 含 trace outcome + risk level）——
+    # 按列表断言"组内任一卡片命中"，不用 dict 覆盖（评审 R3-#13）。
+    cards = re.findall(
+        r'<div class="dc-label"[^>]*>([^<]+)</div>\s*<div class="dc-value">([^<]*)</div>',
+        html,
+    )
+    obs_values = [v.strip() for label, v in cards if label.strip() == "Observation Evidence"]
+    reason_values = [v.strip() for label, v in cards if label.strip() == "Decision Reasoning"]
+    assert any("abnormal_dwell" in v for v in obs_values), f"abnormal_dwell 应归 Observation，实际 {obs_values!r}"
+    assert any("WARN" in v for v in reason_values), f"WARN 应归 Reasoning，实际 {reason_values!r}"
+    assert all("WARN" not in v for v in obs_values), "WARN 不得混入检测证据（Observation）"
+
+
+def test_render_evidence_graph_js_data_includes_refs(tmp_path):
+    """主图 ECharts JS 数据里节点/边的 ref 真实存在（评审 R3-#16，bug #6 回归防线）。
+
+    bug #6：edge dict 曾漏序列化 ref，tooltip 渲染 "undefined"——此测试直接
+    断言 artifact 溯源 ref 字符串出现在 <script> 段的 ECharts data/links 中。
+    """
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    # 节点 ref（event_types[0]）与边 ref（trace_outcome_kinds[0] 等）都进入 JS 数据
+    assert "artifacts.event_types[0]" in html
+    assert "artifacts.trace_outcome_kinds[0]" in html
+    assert "artifacts.recommended_actions[0]" in html
+    # 边 ref 必须出现在 JS 段（tooltip p.data.ref 依赖）——且不在 "undefined" 形态
+    assert '"ref": "sw_t1.canonical.json#artifacts.trace_outcome_kinds[0]"' in html
+    assert "p.data.ref" in html  # tooltip edge 分支仍引用 ref
