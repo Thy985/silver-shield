@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import json
+import re
+
 from home_perception.visualizer import load_evidence_projection, render_projection
 
 from .conftest import make_artifacts
@@ -121,7 +124,8 @@ def test_render_graph_large_episode_count_bounded(tmp_path):
     html = _render(d)
     assert 'data-episodes="10000"' in html
     assert "Episode #10000" in html  # 最大节点名存在
-    assert len(html) < 3_000_000  # 有界（正常 ~1MB 含 echarts；10k 节点脚本 <2MB）
+    # 有界：~1MB echarts + 10k 节点（含 provenance_kind/ref 元数据）< 4MB
+    assert len(html) < 4_000_000
 
 
 def test_render_empty_projection_raises():
@@ -141,3 +145,63 @@ def test_render_unicode_scenario_id_safe(tmp_path):
     d = make_artifacts(tmp_path / "a", scenario_ids=("sw_场景_α",))
     html = _render(d)
     assert "sw_场景_α" in html  # 原样呈现（scenario_id 来自 fixture，属白名单字段）
+
+
+def test_render_graph_id_unique(tmp_path):
+    """HTML id 唯一性：graph 容器 div 与视图标题 h3 不得共用 id（评审 R2-#2）。"""
+    d = make_artifacts(tmp_path / "a")  # fixture 默认 links=1
+    html = _render(d)
+    # 容器 div 的 id="graph-sw_t1" 必须唯一（h3 已改 id="view-graph-sw_t1"）
+    assert len(re.findall(r'id="graph-sw_t1"', html)) == 1
+    assert len(re.findall(r'id="view-graph-sw_t1"', html)) == 1
+
+
+def test_render_graph_nodes_have_metadata(tmp_path):
+    """graph 可视化节点带 provenance_kind + ref 溯源元数据（评审 R2-#3 方案 A）。"""
+    d = make_artifacts(tmp_path / "a")  # fixture：episodes=2, links=1
+    html = _render(d)
+    # Python dict → str 用单引号（JS 里呈现为 'provenance_kind': 'SIMULATED'）
+    assert "'provenance_kind': 'SIMULATED'" in html
+    assert "artifacts.counts.episodes" in html  # ref 溯源到 counts
+    assert "ep-0" in html  # 节点 id（ep-0）作为 JS 节点 id 出现
+
+
+def test_render_gate_failure_code_none_renders_empty(tmp_path):
+    """failure_code=None → 渲染为空而非 "None"（评审 R2-#5）。"""
+    d = make_artifacts(tmp_path / "a")
+    import json as _json
+
+    gate = d / "sw_t1.gate.json"
+    data = _json.loads(gate.read_text(encoding="utf-8"))
+    data["verdicts"][0]["passed"] = False
+    data["verdicts"][0]["failure_code"] = None
+    gate.write_text(_json.dumps(data), encoding="utf-8")
+    html = _render(d)
+    assert "❌ None" not in html
+    assert "❌" in html  # 失败标记仍显示
+
+
+def test_render_scenario_id_with_quotes_safe(tmp_path):
+    """引号 scenario_id：HTML 层转义 + JS 层 json 转义，不破坏文档（评审 R2-#6）。
+
+    注入向量：单引号 + 括号（Windows 文件名禁 ``"`` ``<`` 等字符）。
+    json.dumps 以双引号包裹 sid，单引号在 JSON 字符串内不闭合——渲染后
+    ``getElementById("sw_t1'alert(1)")`` 是完整字符串，alert( 不执行。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1'alert(1)",))
+    html = _render(d)
+    # JS 层：getElementById 参数是 JSON 包裹的完整字符串（无裸闭合）
+    assert "getElementById(&quot;sw_t1'alert(1)&quot;)".replace("&quot;", '"') in html
+    # 无独立 alert 语句（alert(1); 不会出现在任何位置）
+    assert "alert(1);" not in html
+
+
+def test_render_n_frames_zero_valid(tmp_path):
+    """n_frames=0 是合法边界（非负即通过；评审 R2-#11）。"""
+    d = make_artifacts(tmp_path / "a")
+    canon = d / "sw_t1.canonical.json"
+    data = json.loads(canon.read_text(encoding="utf-8"))
+    data["n_frames"] = 0
+    canon.write_text(json.dumps(data), encoding="utf-8")
+    html = _render(d)
+    assert "frames=0" in html

@@ -11,8 +11,10 @@ from pathlib import Path
 
 import pytest
 
-# 与 run_integration_validation.py 产物命名对称。
-SUMMARY = "adr0034_summary.json"
+# 单一来源（评审 R2-#7）：文件名常量复用 loader 定义，防双源漂移。
+from home_perception.visualizer.loader import SUMMARY_FILENAME
+
+SUMMARY = SUMMARY_FILENAME
 
 
 def _canonical(scenario_id: str) -> dict:

@@ -60,6 +60,11 @@ audio = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# ADR-0035 D1：vendored ECharts 随包发布（评审 R2-#8）——否则 pip install 后
+# _echarts_inline() 读不到资产，graph 视图空白。
+"home_perception.visualizer" = ["assets/*.js", "assets/*.md"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

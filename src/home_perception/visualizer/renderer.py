@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import html
+import json
 from pathlib import Path
 
 from home_perception.visualizer.schema.evidence import (
@@ -38,9 +39,27 @@ _STAGE_COLOR = {
     "observability": "#8a8a8a",
 }
 
+# Decision Explanation 卡片类型 → (展示标签, 色值)（评审 R2-#10：模块级常量）。
+_DECISION_KINDS = {
+    "evidence": ("检测证据", "#4a90d9"),
+    "rule": ("规则", "#7b5cd6"),
+    "policy": ("策略", "#2e9e6b"),
+    "outcome": ("决策结果", "#d97b29"),
+    "action": ("动作", "#c2408a"),
+}
+
 
 def _esc(value: object) -> str:
     return html.escape(str(value))
+
+
+def _esc_js(sid: str) -> str:
+    """JS 字符串层转义（评审 R2-#6）：json.dumps 自动转义引号/反斜杠/换行。
+
+    HTML 层用 ``_esc``（html.escape），JS 层必须用 JSON 字符串语义——
+    同一 sid 在两层的转义策略不同，禁止混用。
+    """
+    return json.dumps(sid)
 
 
 def _echarts_inline() -> str:
@@ -94,16 +113,9 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
     evidence = scenario["decision_evidence"]
     if not evidence:
         return "<p class='muted'>无决策证据</p>"
-    kinds = {
-        "evidence": ("检测证据", "#4a90d9"),
-        "rule": ("规则", "#7b5cd6"),
-        "policy": ("策略", "#2e9e6b"),
-        "outcome": ("决策结果", "#d97b29"),
-        "action": ("动作", "#c2408a"),
-    }
     cards = []
     for item in evidence:
-        label, color = kinds.get(item["kind"], (item["kind"], "#666666"))
+        label, color = _DECISION_KINDS.get(item["kind"], (item["kind"], "#666666"))
         cards.append(
             f"""
             <div class="dc-card">
@@ -133,9 +145,9 @@ def _render_graph(scenario: ScenarioEvidence) -> str:
             f"仅显示 link 计数：{n_links}。</p>"
         )
     # 从真实 counts 投影（D1 canonical 无 link 级 detail → 节点用计数摘要，不捏造 id）
-    graph_id = f"graph-{scenario['scenario_id']}"
+    sid_html = _esc(scenario["scenario_id"])  # HTML 层转义（评审 R2-#6）
     return f"""
-      <div id="{graph_id}" class="graph-box" style="height:320px"
+      <div id="graph-{sid_html}" class="graph-box" style="height:320px"
            data-links="{n_links}" data-episodes="{n_episodes}"></div>
       <p class="muted">图由真实 counts 投影：{n_episodes} 个 episode 节点 ·
         {n_links} 条 supports 关联（D1 降级：canonical 无 link 级 detail，
@@ -146,7 +158,8 @@ def _render_gate(scenario: ScenarioEvidence) -> str:
     fp = scenario["fingerprints"]
     rows = []
     for verdict in scenario["gate"]:
-        mark = "✅" if verdict["passed"] else f"❌ {verdict['failure_code']}"
+        # failure_code 与 name/severity 同纪律走 _esc（评审 R2-#5）
+        mark = "✅" if verdict["passed"] else f"❌ {_esc(verdict['failure_code'] or '')}"
         rows.append(
             f"<tr><td>{_esc(verdict['name'])}</td>"
             f"<td>{_esc(verdict['severity'])}</td>"
@@ -190,7 +203,7 @@ def _render_scenario(scenario: ScenarioEvidence) -> str:
       <h3 id="decision-{_esc(scenario['scenario_id'])}" class="view-anchor">② Decision Explanation</h3>
       {_render_decision(scenario)}
 
-      <h3 id="graph-{_esc(scenario['scenario_id'])}" class="view-anchor">③ Cross Modal Graph</h3>
+      <h3 id="view-graph-{_esc(scenario['scenario_id'])}" class="view-anchor">③ Cross Modal Graph</h3>
       {_render_graph(scenario)}
 
       <h3 id="gate-{_esc(scenario['scenario_id'])}" class="view-anchor">④ Fingerprint / Gate</h3>
@@ -212,9 +225,15 @@ def _render_graph_script(projection: EvidenceProjection) -> str:
         if n_links <= 0 or n_episodes <= 0:
             continue
         sid = scenario["scenario_id"]
+        sid_js = _esc_js(sid)  # JS 字符串层转义（评审 R2-#6）
+        # 节点 = 真实 episode 计数；每个可视化节点带溯源元数据（评审 R2-#3 方案 A）：
+        # provenance_kind="SIMULATED" + ref 指向 counts（与 timeline 节点同语义，
+        # 防"合成的可视化节点无证据视角"——episode_id 等未落盘字段仍不渲染）。
         nodes = [
             {"id": f"ep-{i}", "name": f"Episode #{i + 1}", "symbolSize": 48,
-             "category": "episode"}
+             "category": "episode",
+             "provenance_kind": "SIMULATED",
+             "ref": f"{sid}.canonical.json#artifacts.counts.episodes"}
             for i in range(n_episodes)
         ]
         # 边数 = min(link 计数, 节点可容纳的支撑边数)——如实反映，不伪造多余边
@@ -226,7 +245,7 @@ def _render_graph_script(projection: EvidenceProjection) -> str:
         init_blocks.append(
             f"""
   (function() {{
-    var dom = document.getElementById('graph-{sid}');
+    var dom = document.getElementById({sid_js});
     if (!dom) return;
     var chart = echarts.init(dom);
     chart.setOption({{

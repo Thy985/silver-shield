@@ -186,24 +186,24 @@ def _build_decision_evidence(canonical: dict, scenario_id: str) -> tuple[Decisio
             )
         )
 
-    event_types = artifacts.get("event_types")
-    if isinstance(event_types, list) and event_types:
-        _add("evidence", "检测证据（事件类型）", ", ".join(event_types), "artifacts.event_types")
-    trace_kinds = artifacts.get("trace_outcome_kinds")
-    if isinstance(trace_kinds, list) and trace_kinds:
-        _add("evidence", "决策结果（trace outcome）", ", ".join(trace_kinds), "artifacts.trace_outcome_kinds")
-    risk_levels = artifacts.get("risk_levels")
-    if isinstance(risk_levels, list) and risk_levels:
-        _add("outcome", "风险级别", ", ".join(risk_levels), "artifacts.risk_levels")
-    actions = artifacts.get("recommended_actions")
-    if isinstance(actions, list) and actions:
-        _add("action", "推荐动作", ", ".join(actions), "artifacts.recommended_actions")
-    commands = artifacts.get("command_types")
-    if isinstance(commands, list) and commands:
-        _add("action", "已执行命令", ", ".join(commands), "artifacts.command_types")
-    suppress = artifacts.get("suppress_reasons")
-    if isinstance(suppress, list) and suppress:
-        _add("outcome", "抑制原因", ", ".join(suppress), "artifacts.suppress_reasons")
+    # 白名单字段投影（评审 R2-#4）：全部走 _str_tuple 强校验（非空 str 列表），
+    # 缺字段视为空（该维度无证据，降级不捏造）；非 str 元素 → fail-closed。
+    def _add_joined(key: str, kind: str, label: str, *, optional: bool = True) -> None:
+        try:
+            values = _str_tuple(artifacts, key, scenario_id)
+        except EvidenceProjectionError:
+            if optional and key not in artifacts:
+                return  # 字段缺失 = 该维度无证据（可选），不报错
+            raise
+        if values:
+            _add(kind, label, ", ".join(values), f"artifacts.{key}")
+
+    _add_joined("event_types", "evidence", "检测证据（事件类型）")
+    _add_joined("trace_outcome_kinds", "evidence", "决策结果（trace outcome）")
+    _add_joined("risk_levels", "outcome", "风险级别")
+    _add_joined("recommended_actions", "action", "推荐动作")
+    _add_joined("command_types", "action", "已执行命令")
+    _add_joined("suppress_reasons", "outcome", "抑制原因")
     if not evidence:
         # 无任何决策证据字段（benign 空闭环）→ 降级摘要，非捏造
         _add("outcome", "决策证据", "(闭环无事件/警告——benign 场景预期)", "artifacts.counts")
@@ -227,12 +227,19 @@ def _build_gate(
         severity = _require(v, "severity", f"{owner}.verdicts[{idx}]")
         if not isinstance(name, str) or not isinstance(passed, bool) or not isinstance(severity, str):
             raise EvidenceProjectionError(f"{owner}.verdicts[{idx}] 字段类型非法（fail-closed）")
+        # failure_code 类型校验（评审 R2-#9）：str | None，否则 fail-closed——
+        # 防 schema 演化引入 dict/int 等破坏渲染层 f-string 语义。
+        failure_code = v.get("failure_code")
+        if not isinstance(failure_code, (str, type(None))):
+            raise EvidenceProjectionError(
+                f"{owner}.verdicts[{idx}].failure_code 必须是 str|None（fail-closed）"
+            )
         verdicts.append(
             StageVerdict(
                 name=name,
                 passed=passed,
                 severity=severity,
-                failure_code=v.get("failure_code"),
+                failure_code=failure_code,
             )
         )
     passed = _require(gate_data, "passed", owner)

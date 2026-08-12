@@ -19,6 +19,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from home_perception.common.logging import get_logger
+
+logger = get_logger(__name__)
+
 _DEFAULT_ARTIFACTS = (
     Path(__file__).resolve().parent.parent
     / "artifacts"
@@ -53,10 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         projection = load_evidence_projection(args.artifacts)
     except FileNotFoundError as exc:
-        print(f"[ERROR] {exc}")
+        logger.error("artifact 目录不存在", path=str(args.artifacts), error=str(exc))
         return 2
     except EvidenceProjectionError as exc:
-        print(f"[FAIL-CLOSED] 投影契约违规，拒绝生成：{exc}")
+        logger.error("投影契约违规，拒绝生成（fail-closed）", error=str(exc))
         return 1
 
     # render_projection 的 ValueError 是**第二道防御层**（评审 #10）：loader 已保证
@@ -65,21 +69,26 @@ def main(argv: list[str] | None = None) -> int:
     try:
         html_doc = render_projection(projection)
     except ValueError as exc:
-        print(f"[FAIL-CLOSED] 渲染拒绝：{exc}")
+        logger.error("渲染拒绝（fail-closed）", error=str(exc))
         return 1
 
     out: Path = args.output
     try:
         out.write_text(html_doc, encoding="utf-8")
     except OSError as exc:
-        print(f"[ERROR] 写输出失败：{exc}")
+        logger.error("写输出失败", path=str(out), error=str(exc))
         return 2
 
     n_scenarios = projection["meta"]["scenario_count"]
-    print(f"[OK] Runtime Evidence Explorer 已生成：{out}")
-    print(f"     场景 {n_scenarios} 个 · HTML {out.stat().st_size / 1024:.0f} KB（自包含，浏览器直开）")
+    logger.info(
+        "Runtime Evidence Explorer 已生成",
+        path=str(out),
+        scenarios=n_scenarios,
+        kb=round(out.stat().st_size / 1024),
+    )
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
