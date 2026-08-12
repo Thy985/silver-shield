@@ -635,3 +635,150 @@ def test_replay_js_degradation_paths(tmp_path):
         f"replay.js 降级行为测试失败:\n{res.stdout}\n{res.stderr}"
     )
 
+
+# ---------------------------------------------------------------------------
+# D2.2 graph 联动高亮：行为级验证（Node 真实执行 IIFE，CI 无 node 时跳过）
+# ---------------------------------------------------------------------------
+
+_D22_LINKAGE_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const htmlPath = process.argv[2];
+const html = fs.readFileSync(htmlPath, 'utf8');
+
+// 收集所有 replay-data 场景 id
+const pre = 'id="replay-data-';
+let p = html.indexOf(pre);
+const ids = [];
+while (p !== -1) {
+  const s = p + pre.length;
+  const e = html.indexOf('"', s);
+  ids.push(html.slice(s, e));
+  p = html.indexOf(pre, e);
+}
+if (!ids.length) { console.error('FAIL: 无 replay-data 数据岛'); process.exit(1); }
+
+// 拆出所有 <script>...</script> 块（非贪婪，匹配诊断可用实现）
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+const replayJs = scripts.find(s => s.includes('global.__Replay = {'));
+
+// 选第一个同时具备 graph IIFE（含 stepForCategory）与 init 调用的场景
+let sid = null, graphScript = null, replayInits = null;
+for (const cand of ids) {
+  const g = scripts.find(s => s.includes('get("' + cand + '")') && s.includes('stepForCategory'));
+  const i = scripts.find(s => s.includes('window.__Replay.init("' + cand + '")'));
+  if (g && i) { sid = cand; graphScript = g; replayInits = i; break; }
+}
+if (!sid) { console.error('FAIL: 无具备 graph IIFE 的场景'); process.exit(1); }
+
+// 取该场景的 replay-data JSON
+const pre2 = 'id="replay-data-' + sid + '"';
+const t0 = html.indexOf(pre2) + pre2.length;
+const open = html.indexOf('>', t0) + 1;
+const close = html.indexOf('</script>', open);
+const replayData = html.slice(open, close);
+
+const dispatchCalls = [];
+const clickHandlers = [];
+function mockEl(id) {
+  return {
+    _id: id,
+    textContent: id.indexOf('replay-data-') !== -1 ? replayData : '',
+    style: {},
+    classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+    getAttribute(a) { return a === 'data-idx' ? '0' : null; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    scrollIntoView() {},
+    set onclick(f) {}, set onchange(f) {},
+  };
+}
+const mockDoc = { getElementById: (id) => mockEl(id) };
+const echarts = {
+  init() {
+    return {
+      setOption() {},
+      on(ev, cb) { if (ev === 'click') clickHandlers.push(cb); },
+      dispatchAction(a) { dispatchCalls.push(a); },
+      resize() {},
+    };
+  },
+};
+const ctx = { console, setTimeout, clearTimeout, Math, JSON, isNaN, parseInt, Infinity, document: mockDoc, echarts };
+ctx.window = ctx;
+vm.createContext(ctx);
+function run(label, code) {
+  try { vm.runInContext(code, ctx); }
+  catch (e) { console.error('FAIL ' + label + ' 抛错: ' + e.message); process.exit(1); }
+}
+run('replayJs', replayJs);
+run('replayInits', replayInits);
+run('graphScript', graphScript);
+
+// 断言 1：graph 节点 click→seek 联动已注册
+if (clickHandlers.length < 1) { console.error('FAIL: chart.on(click) 未注册'); process.exit(1); }
+// 断言 2：初始态高亮已触发 dispatchAction highlight
+const initHi = dispatchCalls.filter(a => a.type === 'highlight' && a.dataIndex != null);
+if (initHi.length < 1) { console.error('FAIL: 初始态未触发高亮'); process.exit(1); }
+
+// 提取 graphNodes（括号平衡），用于校验高亮的目标类别正确
+const gstart = graphScript.indexOf('var graphNodes = ') + 'var graphNodes = '.length;
+let depth = 0, gend = -1;
+for (let i = gstart; i < graphScript.length; i++) {
+  const c = graphScript[i];
+  if (c === '[') depth++;
+  else if (c === ']') { depth--; if (depth === 0) { gend = i + 1; break; } }
+}
+const graphNodes = JSON.parse(graphScript.slice(gstart, gend));
+
+// 断言 3：seek 到某 step 后，触发的高亮节点 ntype 与该 step 的 stage→category 一致
+const rp = ctx.window.__Replay.get(sid);
+const targetIdx = Math.min(2, rp.nodes.length - 1);
+const expectedCat = rp.nodes[targetIdx].category;
+dispatchCalls.length = 0;
+rp.seek(targetIdx);
+const seekHi = dispatchCalls.filter(a => a.type === 'highlight' && a.dataIndex != null);
+if (seekHi.length < 1) { console.error('FAIL: seek 未触发高亮'); process.exit(1); }
+const expectedCount = graphNodes.filter(n => n.ntype === expectedCat).length;
+if (seekHi.length !== expectedCount) {
+  console.error('FAIL: 高亮数 ' + seekHi.length + ' != 期望 ' + expectedCount + ' (cat=' + expectedCat + ')');
+  process.exit(1);
+}
+const mism = seekHi.filter(a => !graphNodes[a.dataIndex] || graphNodes[a.dataIndex].ntype !== expectedCat);
+if (mism.length > 0) { console.error('FAIL: 高亮节点 ntype 与桥接类别不符'); process.exit(1); }
+console.log('OK sid=' + sid + ' clicks=' + clickHandlers.length + ' initHi=' + initHi.length + ' seekHi=' + seekHi.length + ' cat=' + expectedCat);
+"""
+
+
+def test_render_d22_graph_linkage_fires_dispatch(tmp_path):
+    """D2.2 行为级回归：graph IIFE 必须真正触发联动高亮（非字符串断言）。
+
+    历史 bug：highlightCategory 引用了未定义的 JS 变量 ``nodes``（Python 列表仅内联进
+    ``data:`` 字段），导致每次 step 变更 / 初始高亮都抛 ``ReferenceError``——既不高亮，
+    也因 IIFE 中途中断而未注册 ``chart.on('click')``。静态字符串断言（grep / ``in js``）
+    无法捕获此类**运行时**错误。
+
+    故用 Node 真实执行 replay.js + graph IIFE（mock echarts/document），断言：
+      - ``chart.on('click')`` 已注册（click→seek 联动存在）；
+      - 初始态与 ``seek(idx)`` 均触发 ``dispatchAction highlight``；
+      - 被高亮 graph 节点的 ``ntype`` 与当前 step 的 stage→category 桥接键一致（映射正确）。
+    CI 无 node 时跳过。
+    """
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 D2.2 graph 联动行为级测试")
+
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    html_file = tmp_path / "explorer.html"
+    html_file.write_text(html, encoding="utf-8")
+    harness = tmp_path / "linkage_harness.js"
+    harness.write_text(_D22_LINKAGE_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(html_file)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"D2.2 graph 联动行为测试失败:\n{res.stdout}\n{res.stderr}"
+    )
+

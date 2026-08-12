@@ -381,7 +381,12 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
       legend: [{{data: {json.dumps(categories, ensure_ascii=False)}}}],
       series: [{{
         type: 'graph', layout: 'force', roam: true,
-        emphasis: {{ focus: 'adjacency' }},
+        emphasis: {{
+          focus: 'adjacency',
+          itemStyle: {{ borderColor: '#ff4d4f', borderWidth: 3,
+                       shadowBlur: 14, shadowColor: 'rgba(255,77,79,0.65)' }},
+          label: {{ fontWeight: 'bold', color: '#cf1322' }}
+        }},
         categories: {json.dumps(categories, ensure_ascii=False)},
         data: {json.dumps(nodes, ensure_ascii=False)},
         links: {json.dumps(edges, ensure_ascii=False)},
@@ -415,12 +420,13 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
       }}
       return best;
     }}
+    var graphNodes = {json.dumps(nodes, ensure_ascii=False)};
     function highlightCategory(cat) {{
       if (!chart) return;
       chart.dispatchAction({{type: 'downplay', seriesIndex: 0}});
       if (!cat) return;
-      for (var ni = 0; ni < {len(nodes)}; ni++) {{
-        if (nodes[ni].ntype === cat) chart.dispatchAction({{type: 'highlight', seriesIndex: 0, dataIndex: ni}});
+      for (var ni = 0; ni < graphNodes.length; ni++) {{
+        if (graphNodes[ni].ntype === cat) chart.dispatchAction({{type: 'highlight', seriesIndex: 0, dataIndex: ni}});
       }}
     }}
     if (rp && window.__Replay && window.__Replay.linkHighlight) {{
