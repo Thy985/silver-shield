@@ -121,6 +121,7 @@ TIERS: dict[str, list[str]] = {
         "tests/visualizer/test_loader.py",
         "tests/visualizer/test_renderer.py",
         "tests/visualizer/test_ast_contract.py",
+        "tests/visualizer/test_cli.py",
     ],
     "integration": [
         # 运行时闭环（合成 detector 零模型，**torch-free**）：证明 Scenario→Tracker→
