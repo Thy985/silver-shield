@@ -6,7 +6,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
+
+import pytest
 
 from home_perception.visualizer import load_evidence_projection, render_projection
 
@@ -546,4 +551,87 @@ def test_render_d22_replay_js_link_highlight_and_bind_timeline():
     # linkHighlight 基于 onStep 实现（复用 D2.1 契约），回调传当前 step 的 category
     assert "onStep" in js
     assert "category" in js
+
+
+# ---------------------------------------------------------------------------
+# D2.2 replay.js 降级路径：行为级验证（Node 运行，CI 无 node 时跳过）
+# ---------------------------------------------------------------------------
+
+_REPLAY_DEGRADATION_HARNESS = r"""
+const fs = require('fs');
+const srcPath = process.argv[2];
+const src = fs.readFileSync(srcPath, 'utf8');
+const noop = () => {};
+function makeEl() {
+  let _onclick = null;
+  return {
+    style: {},
+    set onclick(f) { _onclick = f; },
+    get onclick() { return _onclick; },
+    getAttribute() { return '0'; },
+    querySelectorAll() { return []; },
+    classList: { toggle: noop },
+    textContent: '',
+  };
+}
+const els = {};
+global.document = { getElementById: (id) => (id in els ? els[id] : null) };
+global.window = { document: global.document };
+new Function('window', src)(global.window);
+const R = global.window.__Replay;
+if (!R || typeof R.linkHighlight !== 'function') {
+  console.error('FAIL: __Replay.linkHighlight 未定义'); process.exit(1);
+}
+// 1) 实例缺失 -> 返回空句柄 {off}，回调绝不触发（fail-closed）
+let called = false;
+const h = R.linkHighlight('__missing__', () => { called = true; });
+if (typeof h !== 'object' || typeof h.off !== 'function') {
+  console.error('FAIL: linkHighlight 缺失实例时未返回 {off} 空句柄'); process.exit(1);
+}
+h.off();
+if (called) { console.error('FAIL: 缺失实例时回调被误触发'); process.exit(1); }
+// 2) init 时 timeline-list 缺失（listEl=null）-> bindTimeline 静默返回、不抛错
+els['replay-data-x'] = { textContent: '[]' };
+['reset','toggle','next','prev','speed','progress','progress-label'].forEach((k) => {
+  els['rp-' + k + '-x'] = makeEl();
+});
+const inst = R.init('x');
+if (!inst) { console.error('FAIL: init 返回空'); process.exit(1); }
+if (inst.listEl !== null) { console.error('FAIL: 期望 listEl 为 null'); process.exit(1); }
+inst.listEl = null;
+inst.bindTimeline();
+console.log('OK');
+"""
+
+
+def _node_exe() -> str | None:
+    cand = r"C:/Users/lenovo/.workbuddy/binaries/node/versions/22.22.2/node.exe"
+    if os.path.exists(cand):
+        return cand
+    return shutil.which("node")
+
+
+def test_replay_js_degradation_paths(tmp_path):
+    """replay.js 降级路径行为级验证（非字符串断言）：
+
+    - linkHighlight 在 replay 实例缺失时返回 fail-closed 空句柄 {off}，回调绝不触发；
+    - init 时 timeline-list 缺失（listEl=null）→ bindTimeline 静默返回、不抛错。
+    需要 Node 运行时；CI 若无 node 则跳过（不影响 pytest 绿）。
+    """
+    import home_perception.visualizer.renderer as R
+
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 replay.js 行为级降级测试")
+    src_file = tmp_path / "replay_src.js"
+    src_file.write_text(R._replay_inline(), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(_REPLAY_DEGRADATION_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(src_file)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"replay.js 降级行为测试失败:\n{res.stdout}\n{res.stderr}"
+    )
 

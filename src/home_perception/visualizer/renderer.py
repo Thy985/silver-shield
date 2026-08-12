@@ -402,13 +402,15 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
     // 「最接近当前 step」的那个（而非机械取首个），更符合直觉。受 stage 粒度限制：
     // 若时间轴该 category 仅一个 step，则所有同 category 图节点都指向它——stage 级
     // 时间轴无法区分实体级多个事件，这是 D2.2 范围内的已知权衡，不在此扩展实体级桥接。
+    // 平局策略（距离相等时）：优先取「更靠后」的 step（ci > rp.index），契合重放语境
+    // 下「跳到未来最近一次」的直觉；故用 `d < bestDist || (d === bestDist && ci > rp.index)`。
     function stepForCategory(cat) {{
       if (!rp || !rp.nodes || !cat) return null;
       var best = null, bestDist = Infinity;
       for (var ci = 0; ci < rp.nodes.length; ci++) {{
         if (rp.nodes[ci].category === cat) {{
           var d = Math.abs(ci - rp.index);
-          if (d < bestDist) {{ bestDist = d; best = ci; }}
+          if (d < bestDist || (d === bestDist && ci > rp.index)) {{ bestDist = d; best = ci; }}
         }}
       }}
       return best;
@@ -767,12 +769,6 @@ def render_projection(projection: EvidenceProjection) -> str:
 </script>
 <script>
 {graph_script}
-</script>
-<script>
-{replay_js}
-</script>
-<script>
-{replay_inits}
 </script>
 </body>
 </html>
