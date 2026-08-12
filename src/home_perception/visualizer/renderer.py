@@ -69,6 +69,19 @@ _STAGE_ZH = {
     "observability": "observability 可观测",
 }
 
+# D2.2 Causal Highlight：timeline 的 stage 级时间轴 与 Evidence Graph 的实体级
+# 因果图 之间唯一的桥接键（二者无共享 id）。timeline 每个节点按 stage 映射到一个
+# graph 实体类别，play/点击 step 时高亮该类别的 graph 节点（及其因果边）。
+# 键集合与 _STAGE_COLOR / _STAGE_ZH 严格一致；值集合与 _CAT_TYPES（graph 类别）一致。
+_STAGE_TO_GRAPH_CATEGORY = {
+    "perception": "Event",
+    "decision": "Decision",
+    "notification": "Action",
+    "memory": "Episode",
+    "cross_modal": "Link",
+    "observability": "Scenario",
+}
+
 # 感知事件枚举 → 通俗中文（与 ADR-0031/0034 语义一致，仅翻译枚举值）。
 _EVENT_ZH = {
     "abnormal_dwell": "异常停留",
@@ -321,6 +334,7 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
 
     sid = scenario["scenario_id"]
     sid_js = _esc_js(f"graph-{sid}")  # 主图容器 id = graph-{sid}（评审 R2-#6 JS 转义）
+    sid_scen_js = _esc_js(sid)        # 场景 id：供 window.__Replay.get(sid) 取回 replay 实例
     # 评审 R3-#7：ECharts node.category 必须是 categories 数组的**索引**（字符串
     # 会被解释为 NaN 落到默认色）——显式索引映射 + 保留 ntype 供 tooltip 显示。
     _CAT_TYPES = ("Scenario", "Event", "Decision", "Action", "Episode", "Link")
@@ -367,12 +381,54 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
       legend: [{{data: {json.dumps(categories, ensure_ascii=False)}}}],
       series: [{{
         type: 'graph', layout: 'force', roam: true,
+        emphasis: {{ focus: 'adjacency' }},
         categories: {json.dumps(categories, ensure_ascii=False)},
         data: {json.dumps(nodes, ensure_ascii=False)},
         links: {json.dumps(edges, ensure_ascii=False)},
         label: {{show: true, position: 'bottom'}},
         force: {{repulsion: 220, edgeLength: 110}}
       }}]
+    }});
+    // D2.2 Causal Highlight：timeline step ↔ Evidence Graph 实体类别联动高亮。
+    // 复用 D2.1 的 onStep()（经 window.__Replay.linkHighlight 订阅）：时间轴播放/点击
+    // step 变更时，高亮 graph 中对应实体类别（Event/Decision/…）的节点及其因果边；
+    // 反向：点击 graph 节点 → seek 时间轴到该类别对应 step。fail-closed：缺 replay
+    // 实例 / 缺 linkHighlight 时静默跳过（图仍静态可读 + 可 hover 高亮，不崩）。
+    var rp = (window.__Replay && window.__Replay.get({sid_scen_js})) || null;
+    var catToStep = {{}};
+    if (rp && rp.nodes) {{
+      for (var ci = 0; ci < rp.nodes.length; ci++) {{
+        var cc = rp.nodes[ci].category;
+        if (cc && !(cc in catToStep)) catToStep[cc] = ci;
+      }}
+    }}
+    function highlightCategory(cat) {{
+      if (!chart) return;
+      chart.dispatchAction({{type: 'downplay', seriesIndex: 0}});
+      if (!cat) return;
+      for (var ni = 0; ni < {len(nodes)}; ni++) {{
+        if (nodes[ni].ntype === cat) chart.dispatchAction({{type: 'highlight', seriesIndex: 0, dataIndex: ni}});
+      }}
+    }}
+    if (rp && window.__Replay && window.__Replay.linkHighlight) {{
+      window.__Replay.linkHighlight({sid_scen_js}, function (cat) {{
+        highlightCategory(cat);
+      }});
+      // 初始态：高亮当前 step（index=0）对应类别，与时间轴初始高亮一致。
+      var cur = rp.nodes[rp.index];
+      highlightCategory(cur ? cur.category : null);
+    }}
+    chart.on('click', function (p) {{
+      if (!p || p.dataType !== 'node' || !rp) return;
+      var cat = p.data && p.data.ntype;
+      if (!cat) return;
+      var idx = catToStep[cat];
+      if (idx == null) return;
+      rp.seek(idx);
+      if (rp.listEl) {{
+        var li = rp.listEl.querySelector('.tl-item[data-idx="' + idx + '"]');
+        if (li) li.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+      }}
     }});
   }})();"""
     return html_block, js_block
@@ -561,7 +617,16 @@ def render_projection(projection: EvidenceProjection) -> str:
         '<script type="application/json" id="replay-data-{sid}">{data}</script>'.format(
             sid=_esc(s["scenario_id"]),
             data=_sanitize_for_js(
-                json.dumps([dict(n) for n in s["timeline"]], ensure_ascii=False)
+                json.dumps(
+                    # D2.2：为每个 timeline 节点附加 stage→graph 类别桥接键，
+                    # 供 replay.js onStep→graph 联动高亮（stage 级时间轴 与
+                    # 实体级因果图 的桥接；未知 stage 落 null，高亮路径 fail-open）。
+                    [
+                        {**dict(n), "category": _STAGE_TO_GRAPH_CATEGORY.get(n["stage"])}
+                        for n in s["timeline"]
+                    ],
+                    ensure_ascii=False,
+                )
             ),
         )
         for s in scenarios
@@ -684,13 +749,13 @@ def render_projection(projection: EvidenceProjection) -> str:
 {echarts}
 </script>
 <script>
-{graph_script}
-</script>
-<script>
 {replay_js}
 </script>
 <script>
 {replay_inits}
+</script>
+<script>
+{graph_script}
 </script>
 </body>
 </html>

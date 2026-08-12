@@ -133,6 +133,24 @@
     this._render();
   };
 
+  // D2.2 Causal Highlight：timeline 节点可点击 → seek 到该 step
+  // （并触发 onStep → 订阅方 graph 联动高亮）。与控制条绑定解耦：即便控制条
+  // 缺件（降级路径）也能点击时间轴跳转；listEl 缺失则直接跳过（静默不崩）。
+  Replay.prototype.bindTimeline = function () {
+    var self = this;
+    if (!this.listEl) return;
+    var items = this.listEl.querySelectorAll('.tl-item');
+    for (var i = 0; i < items.length; i++) {
+      (function (el) {
+        el.style.cursor = 'pointer';
+        el.onclick = function () {
+          var d = parseInt(el.getAttribute('data-idx'), 10);
+          if (!isNaN(d)) { self.pause(); self.seek(d); }
+        };
+      })(items[i]);
+    }
+  };
+
   function byId(id) { return document.getElementById(id); }
 
   var registry = {};
@@ -162,9 +180,20 @@
         : null;
       // 既无 timeline 列表又无控制条 → 无重放对象，直接返回（不 bind）。
       if (!r.listEl && !r.bar) return r;
+      r.bindTimeline();  // D2.2：时间轴点击跳转（独立于控制条）
       r.bind();
       return r;
     },
-    get: function (sid) { return registry[sid]; }
+    get: function (sid) { return registry[sid]; },
+    // D2.2 Causal Highlight：订阅 timeline step 变更，回调传当前 step 的 graph 类别
+    // （stage→category 桥接键，已由 renderer 注入数据岛）。replay 实例不存在时返回
+    // 空句柄（fail-closed，图仍静态可读）。基于 D2.1 的 onStep() 实现。
+    linkHighlight: function (sid, fn) {
+      var r = registry[sid];
+      if (!r) return { off: function () {} };
+      return r.onStep(function (i, cur) {
+        fn(cur ? cur.category : null);
+      });
+    }
   };
 })(window);

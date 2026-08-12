@@ -465,3 +465,81 @@ def test_render_replay_js_missing_no_crash(tmp_path):
     # 但无 init 调用（未绑定）-> 点击不会因 __Replay 未定义而抛错
     assert "window.__Replay.init" not in html
 
+
+# ---------------------------------------------------------------------------
+# D2.2 Causal Highlight：timeline step ↔ Evidence Graph 类别联动高亮
+# ---------------------------------------------------------------------------
+
+
+def test_render_d22_stage_to_graph_category_constant():
+    """D2.2：stage→graph 类别桥接表键/值与 _STAGE_* / _CAT_TYPES 严格一致。"""
+    import home_perception.visualizer.renderer as R
+    assert R._STAGE_TO_GRAPH_CATEGORY == {
+        "perception": "Event",
+        "decision": "Decision",
+        "notification": "Action",
+        "memory": "Episode",
+        "cross_modal": "Link",
+        "observability": "Scenario",
+    }
+
+
+def test_render_d22_island_carries_category(tmp_path):
+    """D2.2：replay 数据岛每个节点携带 category（stage→graph 桥接键）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    m = re.search(
+        r'<script type="application/json" id="replay-data-sw_t1">(.*?)</script>', html, re.DOTALL
+    )
+    assert m, "replay-data-sw_t1 数据岛缺失"
+    nodes = json.loads(m.group(1))
+    assert nodes, "数据岛无节点"
+    for n in nodes:
+        assert "category" in n, f"节点缺 category: {n}"
+        assert n["category"] in (
+            "Event", "Decision", "Action", "Episode", "Link", "Scenario", None
+        )
+
+
+def test_render_d22_graph_script_wires_highlight_and_click(tmp_path):
+    """D2.2：graph 脚本订阅 linkHighlight + 高亮 + 点击节点 seek（step↔graph 双向）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    # 订阅链路：graph IIFE 经 linkHighlight 订阅 timeline step
+    assert "window.__Replay.linkHighlight(" in html
+    # 高亮实现：downplay + 按类别 dispatchAction highlight
+    assert "function highlightCategory" in html
+    assert "dispatchAction" in html
+    # 反向：点击 graph 节点 → rp.seek 对应 step
+    assert "chart.on('click'" in html
+    assert "rp.seek" in html
+    # emphasis.focus=adjacency 让高亮节点及其因果边突出
+    assert "focus: 'adjacency'" in html
+
+
+def test_render_d22_script_order_init_before_graph(tmp_path):
+    """D2.2：replay 引擎（init）必须在 graph IIFE 之前，否则图取不到 replay 实例。
+
+    顺序铁律：echarts → replay_js(定义) → replay_inits(init 调用) → graph_script。
+    graph IIFE 内部依赖 window.__Replay.get(sid)（由 init 注册），故必须在 init 之后。
+    用真实调用形态 `window.__Replay.init("sw_t1")` 排除 replay.js 注释里的同名 docstring。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    i_replay_def = html.find("global.__Replay = {")          # replay_js 引擎定义
+    i_init = html.find('window.__Replay.init("sw_t1")')      # 真实 init 调用
+    i_graph = html.find("function highlightCategory")         # graph IIFE
+    assert i_replay_def > 0 and i_init > 0 and i_graph > 0
+    assert i_replay_def < i_init < i_graph, "脚本顺序违规：graph 必须在 replay init 之后"
+
+
+def test_render_d22_replay_js_link_highlight_and_bind_timeline():
+    """D2.2：vendored replay.js 暴露 linkHighlight + 时间轴节点可点击 seek。"""
+    import home_perception.visualizer.renderer as R
+    js = R._replay_inline()
+    assert "linkHighlight" in js, "replay.js 缺 linkHighlight（D2.2 订阅入口）"
+    assert "bindTimeline" in js, "replay.js 缺 bindTimeline（时间轴点击 seek）"
+    # linkHighlight 基于 onStep 实现（复用 D2.1 契约），回调传当前 step 的 category
+    assert "onStep" in js
+    assert "category" in js
+
