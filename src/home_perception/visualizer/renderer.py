@@ -9,6 +9,9 @@
 - **脱敏**：只渲染 projection 白名单字段（D7：无路径 / 无设备序列号 / 无 PII）；
 - **四视图**：Timeline（CSS 垂直时间轴）/ Decision Explanation（卡片）/
   Cross Modal Graph（ECharts graph，links>0 时）/ Fingerprint-Gate（表格）；
+- **自解释层**（D1.5 补丁）：每场景「一句话结论」先行、全局仿真横幅、
+  术语对照表（中英）、stage/事件/决策值中文翻译、图例——**只翻译、不编造**，
+  翻译表是纯展示常量，翻译不到的值回退原文；
 - 视图块带稳定 id 锚点（``timeline-<sid>`` / ``decision-<sid>`` / ``graph-<sid>`` /
   ``gate-<sid>``），供验收测试断言。
 
@@ -45,10 +48,67 @@ _STAGE_COLOR = {
 # 评审 R3-#2：loader 自 D1.5 起只产出 evidence/reasoning/outcome 三种 kind，
 # rule/policy 已不可达，删除防阅读歧义。
 _DECISION_KINDS = {
-    "evidence": ("Observation Evidence", "#378ADD"),
-    "reasoning": ("Decision Reasoning", "#7F77DD"),
-    "outcome": ("Decision Outcome", "#D85A30"),
+    "evidence": ("观测证据 Observation Evidence", "#378ADD"),
+    "reasoning": ("决策推理 Decision Reasoning", "#7F77DD"),
+    "outcome": ("决策结论 Decision Outcome", "#D85A30"),
 }
+
+# ---------------------------------------------------------------------------
+# 自解释层（D1.5 补丁）：把 machine 枚举翻译成人话，**只翻译、不新增事实**。
+# 纯展示层常量——不改变证据内容，翻译不到的值回退原文（fail-open 于展示层）。
+# ---------------------------------------------------------------------------
+
+# stage → 中文注释（追加式：保留英文标识，供测试/审计继续引用原文）。
+_STAGE_ZH = {
+    "perception": "perception 感知",
+    "decision": "decision 决策",
+    "notification": "notification 通知",
+    "memory": "memory 记忆",
+    "cross_modal": "cross_modal 跨模态",
+    "observability": "observability 可观测",
+}
+
+# 感知事件枚举 → 通俗中文（与 ADR-0031/0034 语义一致，仅翻译枚举值）。
+_EVENT_ZH = {
+    "abnormal_dwell": "异常停留",
+    "elderly_dwell": "老人停留异常",
+    "fall": "跌倒",
+    "abnormal_audio": "异常声音",
+}
+
+# 决策值（reasoning/outcome 枚举）→ 通俗中文。
+_VALUE_ZH = {
+    "WARN": "需关注（WARN）",
+    "SUPPRESS": "已抑制（SUPPRESS）",
+    "LOW": "低风险（LOW）",
+    "HIGH": "高风险（HIGH）",
+    "NOTIFY_FAMILY": "通知家属（NOTIFY_FAMILY）",
+    "LOG_ONLY": "仅记录（LOG_ONLY）",
+    "MONITOR": "持续关注（MONITOR）",
+    "CREATE_COMMUNITY_TASK": "创建社区任务（CREATE_COMMUNITY_TASK）",
+}
+
+# 全局仿真横幅（醒目提示，防把演示数据误读为真实报警）。
+_SIM_BANNER = (
+    "<div class='sim-banner'>注意：本页为仿真（SIMULATED）演示数据——"
+    "全部事件由测试场景生成，非真实设备实时报警。</div>"
+)
+
+# 页面底部术语对照表（中英对照，供非技术读者查阅）。
+_GLOSSARY = [
+    ("SIMULATED", "仿真数据（由测试场景生成，非真实设备）"),
+    ("provenance / source", "证据出处（每条结论可追溯到的原始数据位置）"),
+    ("Fingerprint", "数据指纹（同一输入必产出同一指纹，用于校验版本一致性）"),
+    ("Gate verdict", "门禁判定（整体是否通过验收）"),
+    ("blocking", "阻断级（该项不通过则整体不通过）"),
+    ("degraded", "降级（部分非关键项未达标但未阻断）"),
+    ("observed_from", "由……观测到（事件来自哪个感知源）"),
+    ("caused_by", "由……导致（决策由哪个事件触发）"),
+    ("triggered", "触发（动作由哪个决策引发）"),
+    ("stored_as", "存入（结果如何写入记忆）"),
+    ("supports", "佐证（跨模态证据之间的相互印证）"),
+    ("Decision / Episode / Link", "决策 / 记忆片段 / 关联"),
+]
 
 
 def _esc(value: object) -> str:
@@ -98,7 +158,7 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
               <div class="tl-body">
                 <div class="tl-head">
                   <span class="tl-step">{_esc(node['timestamp'])}</span>
-                  <span class="tl-stage" style="color:{color}">{_esc(node['stage'])}</span>
+                  <span class="tl-stage" style="color:{color}">{_esc(_STAGE_ZH.get(node['stage'], node['stage']))}</span>
                   <span class="tl-kind">{_esc(kind)}</span>
                   <span class="tl-verdict {verdict_class}">{_esc(node['summary'])}</span>
                 </div>
@@ -109,6 +169,65 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
             </li>"""
         )
     return f"<ul class='timeline'>{''.join(items)}</ul>"
+
+
+def _translate_value(v: str) -> str:
+    """决策值翻译：整体命中直接翻译；逗号分隔枚举（如 ``MONITOR, NOTIFY_FAMILY``）
+    逐项拆分翻译；均未命中回退原文（fail-open 于展示层，不编造）。"""
+    if v in _VALUE_ZH:
+        return _VALUE_ZH[v]
+    parts = [p.strip() for p in v.split(",") if p.strip()]
+    if len(parts) > 1 and all(p in _VALUE_ZH for p in parts):
+        return "、".join(_VALUE_ZH[p] for p in parts)
+    return v
+
+
+def _render_conclusion(scenario: ScenarioEvidence) -> str:
+    """自解释层：一句话结论行（先给结论，再给证据）。
+
+    数据驱动拼接，**不编造**：观测/判定/处置各片段全部来自
+    ``decision_evidence`` 的已有值 + 纯展示翻译表；无证据 → 不渲染。
+    outcome 片段按 ref 区分「建议动作（recommended_actions）」与
+    「实际命令（command_types）」——如实呈现"推荐通知家属但实际仅记录"
+    这类契约细节，防非技术读者误读。
+    """
+    evidence = scenario["decision_evidence"]
+    if not evidence:
+        return ""
+    obs: list[str] = []
+    reason: list[str] = []
+    recommended: list[str] = []
+    commands: list[str] = []
+    other_outcome: list[str] = []
+    for item in evidence:
+        v = str(item["value"])
+        kind = item["kind"]
+        ref = str(item.get("ref", ""))
+        if kind == "evidence":
+            obs.append(f"{_EVENT_ZH.get(v, v)}（{v}）" if v in _EVENT_ZH else v)
+        elif kind == "reasoning":
+            reason.append(_translate_value(v))
+        elif "recommended_actions" in ref:
+            recommended.append(_translate_value(v))
+        elif "command_types" in ref:
+            commands.append(_translate_value(v))
+        else:
+            other_outcome.append(_translate_value(v))
+    segs: list[str] = []
+    if obs:
+        segs.append(f"检测到 {_esc('、'.join(obs))}")
+    if reason:
+        segs.append(f"判定 {_esc('、'.join(reason))}")
+    if recommended:
+        segs.append(f"建议动作 {_esc('、'.join(recommended))}")
+    if commands:
+        segs.append(f"实际命令 {_esc('、'.join(commands))}")
+    if other_outcome:
+        segs.append(_esc('、'.join(other_outcome)))
+    if not segs:
+        # 观测与判定均空、outcome 为纯说明文案（如 benign 场景）→ 直接呈现原文。
+        return f"<div class='conclusion'>结论：{_esc(evidence[0]['value'])}</div>"
+    return "<div class='conclusion'>结论：" + " → ".join(segs) + "</div>"
 
 
 def _render_decision(scenario: ScenarioEvidence) -> str:
@@ -125,7 +244,7 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
             f"""
             <div class="dc-card">
               <div class="dc-label" style="color:{color}">{_esc(label)}</div>
-              <div class="dc-value">{_esc(item['value'])}</div>
+              <div class="dc-value">{_esc(_translate_value(item['value']))}</div>
               <div class="tl-meta muted">source: {_esc(item['ref'])}</div>
             </div>"""
         )
@@ -151,9 +270,10 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
     html_block = f"""
       <div id="graph-{sid_html}" class="graph-box" style="height:420px"
            data-nodes="{len(graph['nodes'])}" data-edges="{len(graph['edges'])}"></div>
-      <p class="muted">Evidence Graph：Scenario → Event（observed_from）→ Decision
-        （caused_by）→ Action（triggered）→ Episode（stored_as）→ Link（supports）。
-        点击节点查看 provenance（ref 溯源 + 真实性标注）。</p>"""
+      <p class="muted">Evidence Graph（因果链图）：Scenario 场景 → Event 事件
+        （observed_from 由…观测到）→ Decision 决策（caused_by 由…导致）→
+        Action 动作（triggered 触发）→ Episode 记忆片段（stored_as 存入）→
+        Link 关联（supports 佐证）。点击节点查看详情（数据来源 + 真实性标注）。</p>"""
 
     sid = scenario["scenario_id"]
     sid_js = _esc_js(f"graph-{sid}")  # 主图容器 id = graph-{sid}（评审 R2-#6 JS 转义）
@@ -296,7 +416,7 @@ def _render_gate(scenario: ScenarioEvidence) -> str:
         # failure_code 与 name/severity 同纪律走 _esc（评审 R2-#5）
         mark = "✅" if verdict["passed"] else f"❌ {_esc(verdict['failure_code'] or '')}"
         rows.append(
-            f"<tr><td>{_esc(verdict['name'])}</td>"
+            f"<tr><td>{_esc(_STAGE_ZH.get(verdict['name'], verdict['name']))}</td>"
             f"<td>{_esc(verdict['severity'])}</td>"
             f"<td>{mark}</td></tr>"
         )
@@ -334,6 +454,8 @@ def _render_scenario(scenario: ScenarioEvidence) -> tuple[str, str]:
         <code>{_esc(scenario['scenario_id'])}</code>
         <span class="muted">mode={_esc(scenario['mode'])} · frames={scenario['n_frames']}</span>
       </h2>
+
+      {_render_conclusion(scenario)}
 
       <h3 id="view-graph-{_esc(scenario['scenario_id'])}" class="view-anchor">① Evidence Graph（因果链）</h3>
       {graph_html}
@@ -398,6 +520,17 @@ def render_projection(projection: EvidenceProjection) -> str:
                     padding-left: 8px; margin: 20px 0 10px; }}
   .subtitle {{ color:#3b4a5a; font-weight:600; }}
   .muted {{ color:#6b7a8a; font-size: 12px; }}
+  .sim-banner {{ background:#fff7e6; border:1px solid #f0c36d; color:#7a5a00;
+                 border-radius:8px; padding:10px 16px; margin:12px 0;
+                 font-size:14px; font-weight:600; }}
+  .conclusion {{ background:#eef6ff; border-left:4px solid #4a90d9;
+                 border-radius:6px; padding:10px 14px; margin:12px 0;
+                 font-size:15px; line-height:1.6; }}
+  .glossary {{ margin:24px 0 8px; background:#fff; border:1px solid #e3e8ee;
+               border-radius:8px; padding:10px 16px; }}
+  .glossary summary {{ cursor:pointer; font-weight:600; color:#3b4a5a; }}
+  .glossary ul {{ margin:8px 0 0; padding-left:20px; font-size:13px; }}
+  .glossary li {{ margin:3px 0; }}
   .badge {{ display:inline-block; padding:2px 10px; border-radius:10px;
             font-size:12px; color:#fff; }}
   .badge.ok {{ background:#2e9e6b; }}
@@ -443,12 +576,19 @@ def render_projection(projection: EvidenceProjection) -> str:
 <div class="wrap">
   <h1>Runtime Evidence Explorer</h1>
   <p class="muted">SilverShield · ADR-0035 Evidence Presentation Layer · 运行证据探索器</p>
+  {_SIM_BANNER}
   <div class="meta-card">
     generated_at: <code>{_esc(meta.get('generated_at', '(unknown)'))}</code> ·
     scenarios: {meta.get('scenario_count', 0)} ·
     数据源: ADR-0034 IntegrationReport artifact（只读投影，禁 synthetic node）
   </div>
   {''.join(scenario_blocks)}
+  <details class="glossary">
+    <summary>术语对照表（点开查看）</summary>
+    <ul>
+      {''.join(f'<li><code>{_esc(k)}</code> — {_esc(v)}</li>' for k, v in _GLOSSARY)}
+    </ul>
+  </details>
 </div>
 <script>
 {echarts}
