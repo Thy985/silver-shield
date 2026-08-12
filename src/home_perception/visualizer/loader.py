@@ -235,6 +235,9 @@ def _build_evidence_graph(
     edges: list[EvidenceGraphEdge] = []
     canon_ref = f"{scenario_id}.canonical.json"
 
+    # 节点 id 约定：当前为**单 scenario 渲染**（每场景独立容器 + 独立 ECharts 实例），
+    # 节点 id 不带 scenario 前缀（如 "scn" / "event-0"）；若未来支持多 scenario
+    # 同图合并渲染，节点 id 需加 f"{scenario_id}-" 前缀防撞名（评审 R3-#9）。
     def _node(nid: str, ntype: str, label: str, ref: str) -> None:
         nodes.append(
             EvidenceGraphNode(
@@ -250,52 +253,48 @@ def _build_evidence_graph(
             )
         )
 
+    # 因果链公共投影模板（评审 R3-#5：折叠五段近似重复为 3 行调用）。
+    # 数据源 = artifacts.<key> 列表（走 _str_tuple 强校验，语义与
+    # _build_decision_evidence 完全统一——评审 R3-#1：缺字段 = 该层无证据，
+    # 非 str 元素 → EvidenceProjectionError 而非 TypeError）。
+    # 返回本层节点 id 列表；prev_ids 为空 → 本层不建节点（防孤立节点，
+    # 评审 R3-#8：无事件支撑的 Decision 不投影）。
+    def _project_chain(
+        key: str,
+        ntype: str,
+        prefix: str,
+        edge_type: str,
+        prev_ids: tuple[str, ...],
+    ) -> list[str]:
+        values = _str_tuple(artifacts, key, scenario_id)
+        ids: list[str] = []
+        for i, value in enumerate(values):
+            nid = f"{prefix}-{i}"
+            _node(nid, ntype, value, f"artifacts.{key}[{i}]")
+            ids.append(nid)
+            for prev in prev_ids:
+                _edge(prev, nid, edge_type, f"artifacts.{key}[{i}]")
+        return ids
+
     # Scenario 锚点
     _node("scn", "Scenario", scenario_id, "scenario_id")
 
-    # Event ← observed_from ← Scenario
-    event_types = artifacts.get("event_types")
-    event_ids: list[str] = []
-    if isinstance(event_types, list):
-        for i, etype in enumerate(event_types):
-            if not isinstance(etype, str):
-                raise EvidenceProjectionError(
-                    f"{scenario_id}.artifacts.event_types[{i}] 非 str（fail-closed）"
-                )
-            nid = f"event-{i}"
-            _node(nid, "Event", etype, f"artifacts.event_types[{i}]")
-            event_ids.append(nid)
-            _edge("scn", nid, "observed_from", f"artifacts.event_types[{i}]")
+    # Event ← observed_from ← Scenario（无前置依赖，仅依赖自身数据）
+    event_ids = _project_chain("event_types", "Event", "event", "observed_from", ("scn",))
 
-    # Decision ← caused_by ← Event
-    trace_kinds = artifacts.get("trace_outcome_kinds")
+    # Decision ← caused_by ← Event（无事件 → 决策无因，不建节点——防孤立）
     decision_ids: list[str] = []
-    if isinstance(trace_kinds, list):
-        for i, outcome in enumerate(trace_kinds):
-            if not isinstance(outcome, str):
-                raise EvidenceProjectionError(
-                    f"{scenario_id}.artifacts.trace_outcome_kinds[{i}] 非 str（fail-closed）"
-                )
-            nid = f"decision-{i}"
-            _node(nid, "Decision", outcome, f"artifacts.trace_outcome_kinds[{i}]")
-            decision_ids.append(nid)
-            for event_id in event_ids:
-                _edge(event_id, nid, "caused_by", f"artifacts.trace_outcome_kinds[{i}]")
+    if event_ids:
+        decision_ids = _project_chain(
+            "trace_outcome_kinds", "Decision", "decision", "caused_by", tuple(event_ids)
+        )
 
-    # Action ← triggered ← Decision
-    actions = artifacts.get("recommended_actions")
+    # Action ← triggered ← Decision（无决策 → 动作无因，不建节点——防孤立）
     action_ids: list[str] = []
-    if isinstance(actions, list):
-        for i, action in enumerate(actions):
-            if not isinstance(action, str):
-                raise EvidenceProjectionError(
-                    f"{scenario_id}.artifacts.recommended_actions[{i}] 非 str（fail-closed）"
-                )
-            nid = f"action-{i}"
-            _node(nid, "Action", action, f"artifacts.recommended_actions[{i}]")
-            action_ids.append(nid)
-            for decision_id in decision_ids:
-                _edge(decision_id, nid, "triggered", f"artifacts.recommended_actions[{i}]")
+    if decision_ids:
+        action_ids = _project_chain(
+            "recommended_actions", "Action", "action", "triggered", tuple(decision_ids)
+        )
 
     # Episode ← stored_as ← Action（仅 counts 摘要；episode_id 未落盘不渲染）
     episode_id = "episodes"

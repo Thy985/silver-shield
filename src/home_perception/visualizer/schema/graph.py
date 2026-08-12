@@ -25,6 +25,11 @@ from typing import Literal, TypedDict
 from home_perception.visualizer.schema.evidence import ProvenanceKind
 
 # Node 类型闭集（D5 白名单）。
+# 评审 R3-#4：**Frame / Detection 为预留位**——D1.5 数据源（ADR-0034 canonical）
+# 无帧级/检测级 detail，loader 当前只投影 6 类（Scenario/Event/Decision/Action/
+# Episode/Link）；Frame/Detection 留待真实设备接入（provenance_kind=REAL_SENSOR）
+# 或 D2 Replay 引入帧级 trace 时启用，**不是漏实现**。实现侧约束：loader 新增
+# 节点类型前必须先在此登记 + 更新 schema 闭集，禁止自由字符串。
 NodeType = Literal[
     "Scenario", "Frame", "Detection", "Event", "Decision", "Action", "Episode", "Link"
 ]
