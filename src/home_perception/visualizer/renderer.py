@@ -12,8 +12,8 @@
 - **自解释层**（D1.5 补丁）：每场景「一句话结论」先行、全局仿真横幅、
   术语对照表（中英）、stage/事件/决策值中文翻译、图例——**只翻译、不编造**，
   翻译表是纯展示常量，翻译不到的值回退原文；
-- 视图块带稳定 id 锚点（``timeline-<sid>`` / ``decision-<sid>`` / ``graph-<sid>`` /
-  ``gate-<sid>``），供验收测试断言。
+- 视图块带稳定 id 锚点（``timeline-<sid>`` 视图锚点 / ``timeline-list-<sid>`` 重放目标 ul /
+  ``decision-<sid>`` / ``graph-<sid>`` / ``gate-<sid>``），供验收测试断言。
 
 本模块只依赖 stdlib（html / pathlib），**不 import 任何生产/验证代码**（D3 AST 契约）。
 """
@@ -125,6 +125,18 @@ def _esc_js(sid: str) -> str:
     return json.dumps(sid)
 
 
+def _sanitize_for_js(s: str) -> str:
+    """HTML ``<script>`` 解析期安全清洗（评审 R4-安全）：
+
+    浏览器在解析 ``<script>`` 内容时按字面 ``</script`` 终结，无论它出现在
+    JS 字符串还是 ``<script type="application/json">`` 的数据里。``json.dumps``
+    只转义引号/反斜杠，不碰 ``</``，故这里把 ``</`` 改写成 ``<\\/``——
+    HTML 解析期不再命中脚本终结，``JSON.parse`` 又能把 ``\\/`` 还原成 ``/``，
+    实现「嵌入安全 + 解码无损」双赢。
+    """
+    return s.replace("</", "<\\/")
+
+
 def _echarts_inline() -> str:
     """内联 ECharts（缺失时降级为空串——图视图显示降级提示而非崩溃）。"""
     p = _ASSETS_DIR / _ECHARTS_FILENAME
@@ -200,7 +212,7 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
           </select>
         </label>
       </div>"""
-    return bar + f"<ul class='timeline' id='timeline-{sid_html}'>{''.join(items)}</ul>"
+    return bar + f"<ul class='timeline' id='timeline-list-{sid_html}'>{''.join(items)}</ul>"
 
 
 def _translate_value(v: str) -> str:
@@ -537,15 +549,31 @@ def render_projection(projection: EvidenceProjection) -> str:
     graph_script = "\n".join(graph_blocks)
     echarts = _echarts_inline()
     replay_js = _replay_inline()
-    # D2.1：每场景 timeline 数据内联，交由 vendored replay.js 驱动重放。
-    # 数据来自 projection（确定性），初始态固定（index=0/暂停）→ 同 artifact
-    # 两次渲染逐字节一致（D8）。json.dumps 自动转义，防 JS 注入（评审 R3-#11 同纪律）。
-    replay_inits = "\n".join(
-        "window.__Replay.init({}, {});".format(
-            _esc_js(s["scenario_id"]),
-            json.dumps([dict(n) for n in s["timeline"]], ensure_ascii=False),
+    # D2.1：每场景 timeline 数据内联为 ``<script type="application/json">`` 数据岛，
+    # 交由 vendored replay.js 在客户端 JSON.parse 驱动重放。
+    # - 数据岛隔离：timeline 字符串字段里的 ``</script`` 会提前终结脚本，
+    #   故经 ``_sanitize_for_js`` 把 ``</`` 改写为 ``<\\/``（JSON.parse 能无损还原）；
+    # - 数据来自 projection（确定性），初始态固定（index=0/暂停）→ 同 artifact
+    #   两次渲染逐字节一致（D8）；
+    # - sid 在 JS 上下文必须经 json.dumps（``_esc_js``），HTML 属性层用 ``_esc``，
+    #   两层转义策略不同、禁止混用（评审 R2-#6 / R4-安全）。
+    replay_data_tags = "\n".join(
+        '<script type="application/json" id="replay-data-{sid}">{data}</script>'.format(
+            sid=_esc(s["scenario_id"]),
+            data=_sanitize_for_js(
+                json.dumps([dict(n) for n in s["timeline"]], ensure_ascii=False)
+            ),
         )
         for s in scenarios
+    )
+    # 仅在 replay 引擎存在时才发 init 调用：replay.js 缺失（降级路径）时不绑定，
+    # 控制条仍静态可读、页面加载不抛 ReferenceError（评审 R4-测试缺口 3 / 降级纪律）。
+    replay_inits = (
+        "\n".join(
+            "window.__Replay.init({});".format(_esc_js(s["scenario_id"]))
+            for s in scenarios
+        )
+        if replay_js else ""
     )
 
     return f"""<!DOCTYPE html>
@@ -624,14 +652,12 @@ def render_projection(projection: EvidenceProjection) -> str:
   .rp-progress-label {{ font-size:12px; color:#3b4a5a; font-family:monospace; }}
   .rp-speed-label {{ font-size:12px; color:#3b4a5a; }}
   .rp-speed {{ font-size:12px; }}
-  .timeline .tl-item {{ transition: background .25s; opacity:.55; }}
+  .timeline .tl-item {{ transition: background .25s, opacity .25s; opacity:.55; }}
   .timeline .tl-item.played {{ opacity:1; }}
   .timeline .tl-item.played > .tl-body {{ background:#f4f8fd; border-radius:6px; }}
   .timeline .tl-item.active {{ opacity:1; }}
   .timeline .tl-item.active > .tl-body {{ background:#fff7e6; border-radius:6px; }}
   .timeline .tl-item.active .tl-dot {{ box-shadow:0 0 0 3px #f0c36d; }}
-  .timeline .tl-item.active {{ animation: rp-pulse 1s ease; }}
-  @keyframes rp-pulse {{ from {{ opacity:.4; }} to {{ opacity:1; }} }}
   code {{ background:#eef2f7; border-radius:4px; padding:1px 5px; font-size:12px; }}
 </style>
 </head>
@@ -653,6 +679,7 @@ def render_projection(projection: EvidenceProjection) -> str:
     </ul>
   </details>
 </div>
+{replay_data_tags}
 <script>
 {echarts}
 </script>
