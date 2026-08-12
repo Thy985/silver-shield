@@ -348,3 +348,44 @@ def test_render_self_explanation_comma_list_translation(tmp_path):
     assert "持续关注（MONITOR）" in html
     assert "通知家属（NOTIFY_FAMILY）" in html
     assert "建议动作 持续关注（MONITOR）、通知家属（NOTIFY_FAMILY）" in html
+
+
+def test_render_replay_bar_present(tmp_path):
+    """D2.1：每场景含重放控制条 DOM（按钮 id 带 sid 后缀）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    assert 'id="rp-toggle-sw_t1"' in html
+    assert 'id="rp-reset-sw_t1"' in html
+    assert 'id="rp-prev-sw_t1"' in html
+    assert 'id="rp-next-sw_t1"' in html
+    assert 'id="rp-speed-sw_t1"' in html
+    assert 'id="rp-progress-sw_t1"' in html
+
+
+def test_render_replay_inline_data(tmp_path):
+    """D2.1：timeline 数据内联为 __Replay.init(sid, [...])，含确定性 step 锚点。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    assert 'window.__Replay.init("sw_t1"' in html
+    # 内联数据含确定性 step 锚点 S1 + 真实性标注（来自 loader 投影，非拼装）
+    assert '"timestamp": "S1"' in html
+    assert '"provenance_kind": "SIMULATED"' in html
+
+
+def test_render_replay_js_vendored(tmp_path):
+    """D2.1：replay.js 已 vendored 并内联（含 __Replay 定义），零外部网络依赖。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    # replay 引擎定义内联进 HTML（global.__Replay = {...} 由 IIFE 挂载到 window）
+    assert "global.__Replay = {" in html
+
+
+def test_render_replay_timeline_data_idx(tmp_path):
+    """D2.1：timeline 节点带 data-idx/data-step，供 replay.js 高亮（不丢溯源）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    assert 'class="tl-item"' in html
+    assert 'data-idx="0"' in html
+    assert 'data-step="S1"' in html
+    # 溯源信息仍在（D2.4 前置：重放态下 ref 不丢）
+    assert "provenance:" in html and "source:" in html

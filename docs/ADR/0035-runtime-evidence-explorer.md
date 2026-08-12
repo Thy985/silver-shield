@@ -159,7 +159,7 @@ visualizer/
 | 阶段 | 后端 | 前端 | 理由 |
 |---|---|---|---|
 | **D1 MVP** | Python stdlib 静态生成**自包含单页 HTML**（零服务器） | **ECharts 单框架**（vendored 到 `visualizer/assets/`，~1MB；graph 系列已覆盖关系图需求） | "一次运行 → 可视化"；artifact 上传后浏览器直开；零服务器运维 |
-| **D2 Replay** | **FastAPI**（读 artifact + 时间轴交互/重放） | ECharts + 少量 **D3.js**（自定义动画/力导向补充） | Replay 需要交互服务；D3 只在 ECharts 力有不逮时引入 |
+| **D2 Replay** | **Python stdlib 生成静态 artifact bundle（零服务器）** | **ECharts + vanilla JS replay controller**（vendored `replay.js`：时间轴重放 / 因果链高亮） | 升级为「可播放证据文件」而非 Web 应用：保持 D1「浏览器直开」、不引重依赖；交互纯前端可达成，禁 FastAPI/D3 除非证明 ECharts 不足（2026-08-12 Owner 路线锁定） |
 | **D3 Demo** | 复用 ADR-0032 `frames` 通道 + ADR-0027 audio tts 确定性合成栈 | OpenCV 渲染（已有） | 程序化视频，零新资产 |
 
 > 决策理由：项目纪律是"不引重依赖"。D1 用静态生成 = **Python 侧零新增依赖**，前端仅 vendored 一个 JS 库；FastAPI/D3 推迟到真正需要交互的 D2，避免"D1 就背上服务器 + 双框架"。
@@ -285,7 +285,7 @@ Owner / 评委 / 投资人 / 家属 —— "为什么系统认为这里有风险
 | 阶段 | 目标 | 达成的决策 | 明令不做 |
 |---|---|---|---|
 | **D1** | Evidence Explorer MVP：一次运行 → 可视化（实现顺序：**Timeline → Decision Explanation → Graph**，由价值从高到低推进） | D1/D2/D2b/D3/D4(静态)/D5/D6/D7/D7b/D8/D9 | ❌服务器 ❌D3/D2 动画 ❌跨进程读 Memory ❌帧级合成 |
-| **D2** | Replay Engine：Scenario + Trace 重放动画 | D4(FastAPI + D3 按需) + Evidence Graph → Animation | ❌程序化视频合成 ❌真实设备 |
+| **D2** | Replay Engine：Scenario + Trace 重放动画（可播放证据文件） | D4(Client-side Evidence Replay Engine：stdlib 生成静态 bundle + 浏览器 ECharts + vanilla JS) + Evidence Graph → Animation | ❌程序化视频合成 ❌真实设备 ❌FastAPI 服务 ❌D3.js 依赖 |
 | **D3** | Product Demo：程序化视频（比赛/投资人/用户） | 复用 ADR-0032 frames + ADR-0027 audio tts | ❌真实录像 ❌实时 |
 
 ---
@@ -312,3 +312,4 @@ Owner / 评委 / 投资人 / 家属 —— "为什么系统认为这里有风险
 - **2026-08-12**：初稿（Proposed）。采纳 Owner 蓝图：命名 **Runtime Evidence Explorer**（非 Frontend）；四视图；数据源全为已落盘资产零新增采集；D1 静态单页 HTML（stdlib + ECharts 单框架）→ D2 FastAPI+D3 Replay → D3 程序化视频 Demo；`visualizer/` 与 evaluation/integration 平列；纯 JSON 消费零 import 生产代码；脱敏 + 确定性 + 零行为变化。
 - **2026-08-12（Owner 评审收紧一）**：五项收紧 + 两项新验收。(1) **定位修正**——`visualizer` 不是"第四层验证资产"（无验证能力），改 **Evidence Presentation Layer / 第四层可信工程资产**，新增 §0.4 定位声明；(2) **D2 数据投影契约**——新增 `EvidenceProjection` → `EvidenceTimelineArtifact` 投影层（loader 唯一入口、`ref` 必填、缺失粒度降级为 stage 摘要、**禁 synthetic node**），§0.3 逐节点钉死数据源（Frame/Detection 仅投影已有粒度）；(3) **D3 放宽**——禁 import 生产类不变，但允许 `visualizer/schema/` 自建 TypedDict（`DecisionEvidence`/`TimelineNode` 等）补类型安全，防 JSON 演化静默空白；(4) **D5 Evidence Graph 统一抽象**——节点（Scenario/Detection/Event/Decision/Action/Episode/Link）+ 边（caused_by/supports/derived_from/triggered/stored_as），Timeline/Decision Trace/Cross Modal/程序化视频均为其投影视角；(5) 验收 +2：**Evidence 完整性**（禁 synthetic node，注入伪造节点渲染必须拒绝）+ **Evidence provenance**（节点 `ref` 可溯源到源 artifact+记录 id）。仍 Proposed，待 Owner 定稿。
 - **2026-08-12（Owner 评审收紧二）**：五项补充（Accepted 前）。(1) **D5 派生模型边界**——Evidence Graph 明确为 **presentation-layer derived model，不属于运行时领域模型，不作为 runtime 状态交换协议**（防 runtime→visualizer 反向污染，与 D3 零 import 镜像）；(2) **D2 `provenance_kind` 必填**——每节点标注 `REAL_SENSOR`/`SIMULATED`/`FIXTURE`，防观看者把合成/夹具帧误认为真实录像，未来真实设备接入无需重构；(3) **D2b + D8 Schema Evolution Fail-Closed**——artifact 关键字段演化缺失 → 投影必须抛错拒绝，绝不产出 `undefined` 空白页面（与 ADR-0034 fail-closed 同纪律）；(4) **D7b Presentation Identity Policy**——身份一律脱敏为角色标签（允许 `Resident-A`/`Visitor-B`/`Device-01`，禁止真实姓名/手机号/家庭地址/设备序列号），从结构上拒绝 demo 阶段"显示真实身份更真实"的突破边界诉求；(5) **验收 +1（共 10 条）**——Projection compatibility：删关键字段 → 投影必须失败。另：D1 实现顺序定为 **Timeline → Decision Explanation → Graph**（价值从高到低）。仍 Proposed，待 Owner 定稿。
+- **2026-08-12（D2 路线锁定 · Owner）**：D4 技术栈表 D2 行修订——从「FastAPI + D3.js」改为「Client-side Evidence Replay Engine（Python stdlib 生成静态 artifact bundle；浏览器 ECharts + vanilla JS replay controller；禁 FastAPI/D3 除非证明 ECharts 不足）」。理由：Evidence Explorer 本质是「可播放证据文件」（类 TensorBoard event viewer / Chrome trace viewer / MLflow artifact viewer），不是 Web 应用；FastAPI 会让 presentation layer 重新拥有 runtime-like 生命周期，与 ADR-0031/0034/0035 治理思想冲突，且削弱 D1「artifact 自带证据、任何人拿到就能打开」的核心价值。FastAPI 留待 Phase E（真实设备 / 实时事件流 / 账号 / 权限）才合理。实施切片表 D2 行同步明令不做「❌FastAPI 服务 ❌D3.js 依赖」。

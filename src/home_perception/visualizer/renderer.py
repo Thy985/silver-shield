@@ -31,6 +31,7 @@ from home_perception.visualizer.schema.evidence import (
 
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _ECHARTS_FILENAME = "echarts.min.js"
+_REPLAY_FILENAME = "replay.js"
 
 # 时间轴配色（浅色主题，stage → 色值）。
 _STAGE_COLOR = {
@@ -132,17 +133,32 @@ def _echarts_inline() -> str:
     return p.read_text(encoding="utf-8")
 
 
+def _replay_inline() -> str:
+    """内联 D2.1 Replay 引擎（缺失时降级为空串——控制条不绑定，时间轴仍静态可读）。"""
+    p = _ASSETS_DIR / _REPLAY_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # 视图块
 # ---------------------------------------------------------------------------
 
 
 def _render_timeline(scenario: ScenarioEvidence) -> str:
+    """D2.1 Replay：Timeline 改为「控制条 + 数据驱动 DOM 骨架」。
+
+    控制条按钮（id 带 scenario_id 后缀）由 vendored ``replay.js`` 绑定；每个节点带
+    ``data-idx`` 供 replay.js 高亮。节点文本仍由 projection 数据渲染（只翻译、不编造，
+    同 D1.5 纪律）。replay.js 缺失时控制条按钮无效、时间轴仍静态可读（降级不崩溃）。
+    """
     nodes = scenario["timeline"]
+    sid_html = _esc(scenario["scenario_id"])
     if not nodes:
         return "<p class='muted'>无时间轴节点（artifact 无 stage 数据）</p>"
     items = []
-    for node in nodes:
+    for idx, node in enumerate(nodes):
         color = _STAGE_COLOR.get(node["stage"], "#666666")
         kind = node["type"]
         # 结构化 verdict 着色（评审 #4：不靠 summary 子串匹配）
@@ -153,7 +169,7 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
         }.get(node["verdict"], "node-neutral")
         items.append(
             f"""
-            <li class="tl-item">
+            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}">
               <span class="tl-dot" style="background:{color}"></span>
               <div class="tl-body">
                 <div class="tl-head">
@@ -168,7 +184,23 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
               </div>
             </li>"""
         )
-    return f"<ul class='timeline'>{''.join(items)}</ul>"
+    bar = f"""
+      <div class="replay-bar" role="group" aria-label="重放控制">
+        <button id="rp-reset-{sid_html}" class="rp-btn" title="重置">⏮</button>
+        <button id="rp-prev-{sid_html}" class="rp-btn" title="上一步">◀</button>
+        <button id="rp-toggle-{sid_html}" class="rp-btn rp-toggle" title="播放/暂停">▶</button>
+        <button id="rp-next-{sid_html}" class="rp-btn" title="下一步">▶▶</button>
+        <span class="rp-progress-wrap"><span id="rp-progress-{sid_html}" class="rp-progress"></span></span>
+        <span id="rp-progress-label-{sid_html}" class="rp-progress-label">0 / 0</span>
+        <label class="rp-speed-label">速度
+          <select id="rp-speed-{sid_html}" class="rp-speed">
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+          </select>
+        </label>
+      </div>"""
+    return bar + f"<ul class='timeline' id='timeline-{sid_html}'>{''.join(items)}</ul>"
 
 
 def _translate_value(v: str) -> str:
@@ -504,6 +536,17 @@ def render_projection(projection: EvidenceProjection) -> str:
             graph_blocks.append(js_block)
     graph_script = "\n".join(graph_blocks)
     echarts = _echarts_inline()
+    replay_js = _replay_inline()
+    # D2.1：每场景 timeline 数据内联，交由 vendored replay.js 驱动重放。
+    # 数据来自 projection（确定性），初始态固定（index=0/暂停）→ 同 artifact
+    # 两次渲染逐字节一致（D8）。json.dumps 自动转义，防 JS 注入（评审 R3-#11 同纪律）。
+    replay_inits = "\n".join(
+        "window.__Replay.init({}, {});".format(
+            _esc_js(s["scenario_id"]),
+            json.dumps([dict(n) for n in s["timeline"]], ensure_ascii=False),
+        )
+        for s in scenarios
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="zh">
@@ -569,6 +612,26 @@ def render_projection(projection: EvidenceProjection) -> str:
   .gate-table th, .gate-table td {{ border:1px solid #e3e8ee; padding:6px 10px;
                                      text-align:left; font-size:13px; }}
   .gate-table th {{ background:#f0f4f9; }}
+  /* D2.1 Replay 控制条 + 高亮 */
+  .replay-bar {{ display:flex; gap:8px; align-items:center; margin:8px 0 14px;
+                 background:#f0f4f9; border:1px solid #e3e8ee; border-radius:8px; padding:8px 12px; }}
+  .rp-btn {{ cursor:pointer; border:1px solid #cdd6e0; background:#fff; border-radius:6px;
+             padding:4px 10px; font-size:14px; line-height:1; }}
+  .rp-btn:hover {{ background:#e8f0fa; }}
+  .rp-toggle {{ font-weight:700; min-width:38px; }}
+  .rp-progress-wrap {{ flex:1; height:8px; background:#dde4ec; border-radius:4px; overflow:hidden; }}
+  .rp-progress {{ display:block; height:100%; width:0; background:#4a90d9; transition:width .25s; }}
+  .rp-progress-label {{ font-size:12px; color:#3b4a5a; font-family:monospace; }}
+  .rp-speed-label {{ font-size:12px; color:#3b4a5a; }}
+  .rp-speed {{ font-size:12px; }}
+  .timeline .tl-item {{ transition: background .25s; opacity:.55; }}
+  .timeline .tl-item.played {{ opacity:1; }}
+  .timeline .tl-item.played > .tl-body {{ background:#f4f8fd; border-radius:6px; }}
+  .timeline .tl-item.active {{ opacity:1; }}
+  .timeline .tl-item.active > .tl-body {{ background:#fff7e6; border-radius:6px; }}
+  .timeline .tl-item.active .tl-dot {{ box-shadow:0 0 0 3px #f0c36d; }}
+  .timeline .tl-item.active {{ animation: rp-pulse 1s ease; }}
+  @keyframes rp-pulse {{ from {{ opacity:.4; }} to {{ opacity:1; }} }}
   code {{ background:#eef2f7; border-radius:4px; padding:1px 5px; font-size:12px; }}
 </style>
 </head>
@@ -595,6 +658,12 @@ def render_projection(projection: EvidenceProjection) -> str:
 </script>
 <script>
 {graph_script}
+</script>
+<script>
+{replay_js}
+</script>
+<script>
+{replay_inits}
 </script>
 </body>
 </html>
