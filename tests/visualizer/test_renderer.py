@@ -6,7 +6,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
+
+import pytest
 
 from home_perception.visualizer import load_evidence_projection, render_projection
 
@@ -464,4 +469,169 @@ def test_render_replay_js_missing_no_crash(tmp_path):
     assert 'id="rp-toggle-sw_t1"' in html
     # 但无 init 调用（未绑定）-> 点击不会因 __Replay 未定义而抛错
     assert "window.__Replay.init" not in html
+
+
+# ---------------------------------------------------------------------------
+# D2.2 Causal Highlight：timeline step ↔ Evidence Graph 类别联动高亮
+# ---------------------------------------------------------------------------
+
+
+def test_render_d22_stage_to_graph_category_constant():
+    """D2.2：stage→graph 类别桥接表键/值与 _STAGE_* / _CAT_TYPES 严格一致。"""
+    import home_perception.visualizer.renderer as R
+    assert R._STAGE_TO_GRAPH_CATEGORY == {
+        "perception": "Event",
+        "decision": "Decision",
+        "notification": "Action",
+        "memory": "Episode",
+        "cross_modal": "Link",
+        "observability": "Scenario",
+    }
+
+
+def test_render_d22_island_carries_category(tmp_path):
+    """D2.2：replay 数据岛每个节点携带 category（stage→graph 桥接键）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    m = re.search(
+        r'<script type="application/json" id="replay-data-sw_t1">(.*?)</script>', html, re.DOTALL
+    )
+    assert m, "replay-data-sw_t1 数据岛缺失"
+    nodes = json.loads(m.group(1))
+    assert nodes, "数据岛无节点"
+    for n in nodes:
+        assert "category" in n, f"节点缺 category: {n}"
+        assert n["category"] in (
+            "Event", "Decision", "Action", "Episode", "Link", "Scenario", None
+        )
+
+
+def test_render_d22_graph_script_wires_highlight_and_click(tmp_path):
+    """D2.2：graph 脚本订阅 linkHighlight + 高亮 + 点击节点 seek（step↔graph 双向）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    # 订阅链路：graph IIFE 经 linkHighlight 订阅 timeline step
+    assert "window.__Replay.linkHighlight(" in html
+    # 高亮实现：downplay + 按类别 dispatchAction highlight
+    assert "function highlightCategory" in html
+    assert "dispatchAction" in html
+    # 反向：点击 graph 节点 → rp.seek 对应 step
+    assert "chart.on('click'" in html
+    assert "rp.seek" in html
+    # emphasis.focus=adjacency 让高亮节点及其因果边突出
+    assert "focus: 'adjacency'" in html
+
+
+def test_render_d22_script_order_init_before_graph(tmp_path):
+    """D2.2：replay 引擎（init）必须在 graph IIFE 之前，否则图取不到 replay 实例。
+
+    顺序铁律：echarts → replay_js(定义) → replay_inits(init 调用) → graph_script。
+    graph IIFE 内部依赖 window.__Replay.get(sid)（由 init 注册），故必须在 init 之后。
+    用真实调用形态 `window.__Replay.init("sw_t1")` 排除 replay.js 注释里的同名 docstring。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    i_replay_def = html.find("global.__Replay = {")          # replay_js 引擎定义
+    i_init = html.find('window.__Replay.init("sw_t1")')      # 真实 init 调用
+    i_graph = html.find("function highlightCategory")         # graph IIFE
+    assert i_replay_def > 0 and i_init > 0 and i_graph > 0
+    assert i_replay_def < i_init < i_graph, "脚本顺序违规：graph 必须在 replay init 之后"
+    # 防回归（用户报告 #1）：replay_js 引擎定义 global.__Replay = { 必须整篇只注入
+    # 一次。若 D2.2 与 main 合并时双侧保留导致重复注入，会出现第二次 init 覆盖
+    # registry、二次 bindTimeline 重复绑定 onclick 等状态污染。此处铁律：恰好 1 次。
+    assert html.count("global.__Replay = {") == 1
+
+
+def test_render_d22_replay_js_link_highlight_and_bind_timeline():
+    """D2.2：vendored replay.js 暴露 linkHighlight + 时间轴节点可点击 seek。"""
+    import home_perception.visualizer.renderer as R
+    js = R._replay_inline()
+    assert "linkHighlight" in js, "replay.js 缺 linkHighlight（D2.2 订阅入口）"
+    assert "bindTimeline" in js, "replay.js 缺 bindTimeline（时间轴点击 seek）"
+    # linkHighlight 基于 onStep 实现（复用 D2.1 契约），回调传当前 step 的 category
+    assert "onStep" in js
+    assert "category" in js
+
+
+# ---------------------------------------------------------------------------
+# D2.2 replay.js 降级路径：行为级验证（Node 运行，CI 无 node 时跳过）
+# ---------------------------------------------------------------------------
+
+_REPLAY_DEGRADATION_HARNESS = r"""
+const fs = require('fs');
+const srcPath = process.argv[2];
+const src = fs.readFileSync(srcPath, 'utf8');
+const noop = () => {};
+function makeEl() {
+  let _onclick = null;
+  return {
+    style: {},
+    set onclick(f) { _onclick = f; },
+    get onclick() { return _onclick; },
+    getAttribute() { return '0'; },
+    querySelectorAll() { return []; },
+    classList: { toggle: noop },
+    textContent: '',
+  };
+}
+const els = {};
+global.document = { getElementById: (id) => (id in els ? els[id] : null) };
+global.window = { document: global.document };
+new Function('window', src)(global.window);
+const R = global.window.__Replay;
+if (!R || typeof R.linkHighlight !== 'function') {
+  console.error('FAIL: __Replay.linkHighlight 未定义'); process.exit(1);
+}
+// 1) 实例缺失 -> 返回空句柄 {off}，回调绝不触发（fail-closed）
+let called = false;
+const h = R.linkHighlight('__missing__', () => { called = true; });
+if (typeof h !== 'object' || typeof h.off !== 'function') {
+  console.error('FAIL: linkHighlight 缺失实例时未返回 {off} 空句柄'); process.exit(1);
+}
+h.off();
+if (called) { console.error('FAIL: 缺失实例时回调被误触发'); process.exit(1); }
+// 2) init 时 timeline-list 缺失（listEl=null）-> bindTimeline 静默返回、不抛错
+els['replay-data-x'] = { textContent: '[]' };
+['reset','toggle','next','prev','speed','progress','progress-label'].forEach((k) => {
+  els['rp-' + k + '-x'] = makeEl();
+});
+const inst = R.init('x');
+if (!inst) { console.error('FAIL: init 返回空'); process.exit(1); }
+if (inst.listEl !== null) { console.error('FAIL: 期望 listEl 为 null'); process.exit(1); }
+inst.listEl = null;
+inst.bindTimeline();
+console.log('OK');
+"""
+
+
+def _node_exe() -> str | None:
+    cand = r"C:/Users/lenovo/.workbuddy/binaries/node/versions/22.22.2/node.exe"
+    if os.path.exists(cand):
+        return cand
+    return shutil.which("node")
+
+
+def test_replay_js_degradation_paths(tmp_path):
+    """replay.js 降级路径行为级验证（非字符串断言）：
+
+    - linkHighlight 在 replay 实例缺失时返回 fail-closed 空句柄 {off}，回调绝不触发；
+    - init 时 timeline-list 缺失（listEl=null）→ bindTimeline 静默返回、不抛错。
+    需要 Node 运行时；CI 若无 node 则跳过（不影响 pytest 绿）。
+    """
+    import home_perception.visualizer.renderer as R
+
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 replay.js 行为级降级测试")
+    src_file = tmp_path / "replay_src.js"
+    src_file.write_text(R._replay_inline(), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(_REPLAY_DEGRADATION_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(src_file)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"replay.js 降级行为测试失败:\n{res.stdout}\n{res.stderr}"
+    )
 
