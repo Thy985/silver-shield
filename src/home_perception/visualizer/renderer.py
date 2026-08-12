@@ -82,6 +82,16 @@ _STAGE_TO_GRAPH_CATEGORY = {
     "observability": "Scenario",
 }
 
+# D2.3 Trace Replay：Decision Explanation 的 evidence/reasoning/outcome 三分组 与
+# Evidence Graph 的实体类别 之间的桥接键（与 D2.2 的 stage→category 桥接对称）。
+# 把「为什么报警」卡片重放（trace track）与 causal 高亮打通：播放/点击 trace 卡片时
+# 高亮 graph 中对应实体类别（Event/Decision/Action）的节点及其因果边。
+_DECISION_KIND_TO_GRAPH_CATEGORY = {
+    "evidence": "Event",
+    "reasoning": "Decision",
+    "outcome": "Action",
+}
+
 # 感知事件枚举 → 通俗中文（与 ADR-0031/0034 语义一致，仅翻译枚举值）。
 _EVENT_ZH = {
     "abnormal_dwell": "异常停留",
@@ -291,23 +301,43 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
     evidence = scenario["decision_evidence"]
     if not evidence:
         return "<p class='muted'>无决策证据</p>"
+    sid_html = _esc(scenario["scenario_id"])
     cards = []
-    for item in evidence:
+    for i, item in enumerate(evidence):
         # 评审 R3-#20：schema 已收紧 kind 为三分组闭集（evidence/reasoning/outcome），
         # 兜底路径理论上不可达——保留为"灰色卡片（容错）"，仅防 loader/renderer
         # 契约漂移（与 fail-closed 主路径互补，不掩盖漂移：漂移时会显示原始 kind 灰卡）。
         label, color = _DECISION_KINDS.get(item["kind"], (item["kind"], "#666666"))
         cards.append(
             f"""
-            <div class="dc-card">
+            <li class="dc-card" data-idx="{i}">
               <div class="dc-label" style="color:{color}">{_esc(label)}</div>
               <div class="dc-value">{_esc(_translate_value(item['value']))}</div>
               <div class="tl-meta muted">source: {_esc(item['ref'])}</div>
-            </div>"""
+            </li>"""
         )
+    # D2.3 Trace Replay：把「为什么报警」卡片升级为可重放轨道（trace track）。
+    # 列表项用 <li class="dc-card" data-idx> 承载（replay.js 按 .dc-card + data-idx 驱动
+    # 播放/点击跳转），控制条用 rp-trace-* 前缀（与主时间轴 rp-* 互不干扰、id 唯一）。
+    # 控制条缺件时 replay.js 自动不绑定（降级路径：卡片仍静态可读、不抛错）。
+    bar = f"""
+      <div class="replay-bar" id="rp-trace-bar-{sid_html}">
+        <button class="rp-btn rp-reset" id="rp-trace-reset-{sid_html}" title="重置">⏮</button>
+        <button class="rp-btn rp-toggle" id="rp-trace-toggle-{sid_html}" title="播放/暂停">▶</button>
+        <button class="rp-btn rp-prev" id="rp-trace-prev-{sid_html}" title="上一步">◀</button>
+        <button class="rp-btn rp-next" id="rp-trace-next-{sid_html}" title="下一步">▶</button>
+        <input class="rp-speed" id="rp-trace-speed-{sid_html}" type="range" min="1" max="4" step="1" value="1" title="速度 1x–4x">
+        <div class="rp-progress-wrap"><div class="rp-progress" id="rp-trace-progress-{sid_html}"></div></div>
+        <span class="rp-progress-label" id="rp-trace-progress-label-{sid_html}">1 / {len(evidence)}</span>
+      </div>"""
+    trace_list = (
+        f'<ul class="trace-list dc-grid" id="trace-list-{sid_html}">'
+        f"{''.join(cards)}</ul>"
+    )
     return (
-        "<p class='subtitle'>为什么报警？</p>"
-        f"<div class='dc-grid'>{''.join(cards)}</div>"
+        "<p class='subtitle'>为什么报警？（可重放：点击卡片 / 播放，联动高亮 Evidence Graph）</p>"
+        + bar
+        + trace_list
     )
 
 
@@ -401,6 +431,10 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
     // fail-closed：缺 replay 实例 / 缺 linkHighlight 时静默跳过（图仍静态可读 +
     // 可 hover 高亮，不崩）。
     var rp = (window.__Replay && window.__Replay.get({sid_scen_js})) || null;
+    // D2.3 Trace 轨道：Decision Explanation 卡片重放实例（有 decision_evidence 时存在，
+    // 否则为 null，linkHighlight('trace') 自动 fail-closed 空句柄）。点击 graph 节点时
+    // 同步把对应类别（Event/Decision/Action）的「为什么报警」卡片也 seek 过去。
+    var rpTrace = (window.__Replay && window.__Replay.get({sid_scen_js}, 'trace')) || null;
     // D2.2 桥接权衡说明（stage 级时间轴 ↔ 实体级因果图）：
     // 时间轴每 stage 一个 step，graph 同 category 可有多个节点；二者以 category 为
     // 唯一桥接键（无共享 id）。当某 category 在时间轴出现多次时，click→step 取
@@ -409,13 +443,15 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
     // 时间轴无法区分实体级多个事件，这是 D2.2 范围内的已知权衡，不在此扩展实体级桥接。
     // 平局策略（距离相等时）：优先取「更靠后」的 step（ci > rp.index），契合重放语境
     // 下「跳到未来最近一次」的直觉；故用 `d < bestDist || (d === bestDist && ci > rp.index)`。
-    function stepForCategory(cat) {{
-      if (!rp || !rp.nodes || !cat) return null;
+    // 通用：给定某重放实例，找到该类别「最接近当前 step」的那一步（D2.2 平局策略：
+    // 距离相等时优先更靠后，契合重放语境）。timeline / trace 两条轨道共用此函数。
+    function stepForCategory(rpInst, cat) {{
+      if (!rpInst || !rpInst.nodes || !cat) return null;
       var best = null, bestDist = Infinity;
-      for (var ci = 0; ci < rp.nodes.length; ci++) {{
-        if (rp.nodes[ci].category === cat) {{
-          var d = Math.abs(ci - rp.index);
-          if (d < bestDist || (d === bestDist && ci > rp.index)) {{ bestDist = d; best = ci; }}
+      for (var ci = 0; ci < rpInst.nodes.length; ci++) {{
+        if (rpInst.nodes[ci].category === cat) {{
+          var d = Math.abs(ci - rpInst.index);
+          if (d < bestDist || (d === bestDist && ci > rpInst.index)) {{ bestDist = d; best = ci; }}
         }}
       }}
       return best;
@@ -429,24 +465,46 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
         if (graphNodes[ni].ntype === cat) chart.dispatchAction({{type: 'highlight', seriesIndex: 0, dataIndex: ni}});
       }}
     }}
-    if (rp && window.__Replay && window.__Replay.linkHighlight) {{
+    // D2.2/D2.3 联动订阅：两条重放轨道都驱动同一 highlightCategory——
+    // 主时间轴（D2.2 stage→category）与 trace（D2.3 kind→category）共用图高亮能力。
+    if (window.__Replay && window.__Replay.linkHighlight) {{
       window.__Replay.linkHighlight({sid_scen_js}, function (cat) {{
         highlightCategory(cat);
       }});
-      // 初始态：高亮当前 step（index=0）对应类别，与时间轴初始高亮一致。
-      var cur = rp.nodes[rp.index];
-      highlightCategory(cur ? cur.category : null);
+      window.__Replay.linkHighlight({sid_scen_js}, function (cat) {{
+        highlightCategory(cat);
+      }}, 'trace');
+      // 初始态：高亮 timeline 当前 step（index=0）对应类别，与重放初始高亮一致。
+      if (rp && rp.nodes && rp.nodes[rp.index]) {{
+        highlightCategory(rp.nodes[rp.index].category);
+      }}
     }}
     chart.on('click', function (p) {{
-      if (!p || p.dataType !== 'node' || !rp) return;
+      if (!p || p.dataType !== 'node') return;
       var cat = p.data && p.data.ntype;
       if (!cat) return;
-      var idx = stepForCategory(cat);
-      if (idx == null) return;
-      rp.seek(idx);
-      if (rp.listEl) {{
-        var li = rp.listEl.querySelector('.tl-item[data-idx="' + idx + '"]');
-        if (li) li.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+      // 主时间轴轨道：seek 到该类别「最接近当前 step」的那一步（D2.2）。
+      if (rp) {{
+        var idx = stepForCategory(rp, cat);
+        if (idx != null) {{
+          rp.seek(idx);
+          if (rp.listEl) {{
+            var li = rp.listEl.querySelector('.tl-item[data-idx="' + idx + '"]');
+            if (li) li.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+          }}
+        }}
+      }}
+      // D2.3 Trace 轨道：把同类别的「为什么报警」卡片也 seek 过去（evidence→Event /
+      // reasoning→Decision / outcome→Action），让两个控制条同步联动。
+      if (rpTrace) {{
+        var tIdx = stepForCategory(rpTrace, cat);
+        if (tIdx != null) {{
+          rpTrace.seek(tIdx);
+          if (rpTrace.listEl) {{
+            var tli = rpTrace.listEl.querySelector('.dc-card[data-idx="' + tIdx + '"]');
+            if (tli) tli.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+          }}
+        }}
       }}
     }});
   }})();"""
@@ -650,11 +708,36 @@ def render_projection(projection: EvidenceProjection) -> str:
         )
         for s in scenarios
     )
+    # D2.3 Trace Replay：第二条重放轨道（trace）的数据岛——Decision Explanation 的
+    # evidence/reasoning/outcome 三分组卡片，按 kind→graph 类别桥接键注入 category，
+    # 供 replay.js init(sid,'trace') 驱动「为什么报警」卡片重放 + graph 联动高亮。
+    # 仅在有决策证据时生成（无证据场景不产 trace 轨道，缺件降级不崩）。
+    replay_trace_data_tags = "\n".join(
+        '<script type="application/json" id="replay-trace-data-{sid}">{data}</script>'.format(
+            sid=_esc(s["scenario_id"]),
+            data=_sanitize_for_js(
+                json.dumps(
+                    [
+                        {**dict(item), "category": _DECISION_KIND_TO_GRAPH_CATEGORY.get(item["kind"])}
+                        for item in s["decision_evidence"]
+                    ],
+                    ensure_ascii=False,
+                )
+            ),
+        )
+        for s in scenarios
+        if s.get("decision_evidence")
+    )
     # 仅在 replay 引擎存在时才发 init 调用：replay.js 缺失（降级路径）时不绑定，
     # 控制条仍静态可读、页面加载不抛 ReferenceError（评审 R4-测试缺口 3 / 降级纪律）。
+    # D2.3：每个有决策证据的场景额外发 init(sid,'trace') 初始化第二条重放轨道。
     replay_inits = (
         "\n".join(
             "window.__Replay.init({});".format(_esc_js(s["scenario_id"]))
+            + (
+                "\nwindow.__Replay.init({}, 'trace');".format(_esc_js(s["scenario_id"]))
+                if s.get("decision_evidence") else ""
+            )
             for s in scenarios
         )
         if replay_js else ""
@@ -742,6 +825,13 @@ def render_projection(projection: EvidenceProjection) -> str:
   .timeline .tl-item.active {{ opacity:1; }}
   .timeline .tl-item.active > .tl-body {{ background:#fff7e6; border-radius:6px; }}
   .timeline .tl-item.active .tl-dot {{ box-shadow:0 0 0 3px #f0c36d; }}
+  /* D2.3 Trace Replay：决策解释卡片（.dc-card，承载于 trace-list <ul>）重放高亮态，
+     与主时间轴 .tl-item 高亮对称；列表项 class 为 .dc-card（由 replay.js 按轨道切换）。 */
+  .trace-list {{ list-style:none; margin:10px 0 0; padding:0; }}
+  .trace-list .dc-card {{ transition: background .25s, opacity .25s, border-color .25s; opacity:.55; }}
+  .trace-list .dc-card.played {{ opacity:1; }}
+  .trace-list .dc-card.active {{ opacity:1; background:#fff7e6; border-color:#f0c36d;
+                       box-shadow:0 0 0 3px #f0c36d; cursor:pointer; }}
   code {{ background:#eef2f7; border-radius:4px; padding:1px 5px; font-size:12px; }}
 </style>
 </head>
@@ -764,6 +854,7 @@ def render_projection(projection: EvidenceProjection) -> str:
   </details>
 </div>
 {replay_data_tags}
+{replay_trace_data_tags}
 <script>
 {echarts}
 </script>
