@@ -392,15 +392,26 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
     // D2.2 Causal Highlight：timeline step ↔ Evidence Graph 实体类别联动高亮。
     // 复用 D2.1 的 onStep()（经 window.__Replay.linkHighlight 订阅）：时间轴播放/点击
     // step 变更时，高亮 graph 中对应实体类别（Event/Decision/…）的节点及其因果边；
-    // 反向：点击 graph 节点 → seek 时间轴到该类别对应 step。fail-closed：缺 replay
-    // 实例 / 缺 linkHighlight 时静默跳过（图仍静态可读 + 可 hover 高亮，不崩）。
+    // 反向：点击 graph 节点 → seek 时间轴到该类别「最接近当前 step」的那一步。
+    // fail-closed：缺 replay 实例 / 缺 linkHighlight 时静默跳过（图仍静态可读 +
+    // 可 hover 高亮，不崩）。
     var rp = (window.__Replay && window.__Replay.get({sid_scen_js})) || null;
-    var catToStep = {{}};
-    if (rp && rp.nodes) {{
+    // D2.2 桥接权衡说明（stage 级时间轴 ↔ 实体级因果图）：
+    // 时间轴每 stage 一个 step，graph 同 category 可有多个节点；二者以 category 为
+    // 唯一桥接键（无共享 id）。当某 category 在时间轴出现多次时，click→step 取
+    // 「最接近当前 step」的那个（而非机械取首个），更符合直觉。受 stage 粒度限制：
+    // 若时间轴该 category 仅一个 step，则所有同 category 图节点都指向它——stage 级
+    // 时间轴无法区分实体级多个事件，这是 D2.2 范围内的已知权衡，不在此扩展实体级桥接。
+    function stepForCategory(cat) {{
+      if (!rp || !rp.nodes || !cat) return null;
+      var best = null, bestDist = Infinity;
       for (var ci = 0; ci < rp.nodes.length; ci++) {{
-        var cc = rp.nodes[ci].category;
-        if (cc && !(cc in catToStep)) catToStep[cc] = ci;
+        if (rp.nodes[ci].category === cat) {{
+          var d = Math.abs(ci - rp.index);
+          if (d < bestDist) {{ bestDist = d; best = ci; }}
+        }}
       }}
+      return best;
     }}
     function highlightCategory(cat) {{
       if (!chart) return;
@@ -422,7 +433,7 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
       if (!p || p.dataType !== 'node' || !rp) return;
       var cat = p.data && p.data.ntype;
       if (!cat) return;
-      var idx = catToStep[cat];
+      var idx = stepForCategory(cat);
       if (idx == null) return;
       rp.seek(idx);
       if (rp.listEl) {{

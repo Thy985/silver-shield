@@ -531,6 +531,10 @@ def test_render_d22_script_order_init_before_graph(tmp_path):
     i_graph = html.find("function highlightCategory")         # graph IIFE
     assert i_replay_def > 0 and i_init > 0 and i_graph > 0
     assert i_replay_def < i_init < i_graph, "脚本顺序违规：graph 必须在 replay init 之后"
+    # 防回归（用户报告 #1）：replay_js 引擎定义 global.__Replay = { 必须整篇只注入
+    # 一次。若 D2.2 与 main 合并时双侧保留导致重复注入，会出现第二次 init 覆盖
+    # registry、二次 bindTimeline 重复绑定 onclick 等状态污染。此处铁律：恰好 1 次。
+    assert html.count("global.__Replay = {") == 1
 
 
 def test_render_d22_replay_js_link_highlight_and_bind_timeline():
