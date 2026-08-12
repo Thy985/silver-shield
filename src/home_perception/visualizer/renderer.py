@@ -40,12 +40,14 @@ _STAGE_COLOR = {
 }
 
 # Decision Explanation 卡片类型 → (展示标签, 色值)（评审 R2-#10：模块级常量）。
+# D1.5 三分组语义：Observation Evidence（检测）→ Decision Reasoning（推理）→
+# Decision Outcome（结论）——WARN 是推理结果而非检测证据（修正混排）。
 _DECISION_KINDS = {
-    "evidence": ("检测证据", "#4a90d9"),
-    "rule": ("规则", "#7b5cd6"),
-    "policy": ("策略", "#2e9e6b"),
-    "outcome": ("决策结果", "#d97b29"),
-    "action": ("动作", "#c2408a"),
+    "evidence": ("Observation Evidence", "#378ADD"),
+    "reasoning": ("Decision Reasoning", "#7F77DD"),
+    "outcome": ("Decision Outcome", "#D85A30"),
+    "rule": ("Rule", "#7B5CD6"),
+    "policy": ("Policy", "#2E9E6B"),
 }
 
 
@@ -130,6 +132,77 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
     )
 
 
+def _render_evidence_graph(scenario: ScenarioEvidence) -> str:
+    """D1.5 主视图：Evidence Graph 因果链（ECharts graph）。
+
+    - 节点/边全部来自 projection 的 ``graph``（loader 已带 ref/provenance_kind）；
+    - tooltip 展开 provenance（ref / provenance_kind），边显示关系类型；
+    - 无节点（artifact 空）→ 降级提示（禁 synthetic）。
+    """
+    graph = scenario["graph"]
+    if not graph["nodes"]:
+        return "<p class='muted'>无证据图节点（artifact 无数据，降级）</p>"
+    sid_html = _esc(scenario["scenario_id"])
+    return f"""
+      <div id="graph-{sid_html}" class="graph-box" style="height:420px"
+           data-nodes="{len(graph['nodes'])}" data-edges="{len(graph['edges'])}"></div>
+      <p class="muted">Evidence Graph：Scenario → Event（observed_from）→ Decision
+        （caused_by）→ Action（triggered）→ Episode（stored_as）→ Link（supports）。
+        点击节点查看 provenance（ref 溯源 + 真实性标注）。</p>"""
+
+
+def _render_evidence_graph_script(projection: EvidenceProjection) -> str:
+    """生成 Evidence Graph 的 ECharts 初始化脚本（数据全部来自 projection）。"""
+    init_blocks = []
+    for scenario in projection["scenarios"]:
+        graph = scenario["graph"]
+        if not graph["nodes"]:
+            continue
+        sid = scenario["scenario_id"]
+        sid_js = _esc_js(f"graph-{sid}")  # 主图容器 id = graph-{sid}（评审 R2-#6 JS 转义）
+        nodes = [
+            {"id": n["id"], "name": n["label"], "category": n["type"],
+             "symbolSize": {"Scenario": 60, "Event": 48, "Decision": 48,
+                            "Action": 48, "Episode": 56, "Link": 56}.get(n["type"], 44),
+             "ref": n["ref"], "provenance_kind": n["provenance_kind"]}
+            for n in graph["nodes"]
+        ]
+        edges = [
+            {"source": e["source"], "target": e["target"], "label": {"show": True, "formatter": e["type"]}}
+            for e in graph["edges"]
+        ]
+        categories = [{"name": t} for t in
+                      ("Scenario", "Event", "Decision", "Action", "Episode", "Link")]
+        init_blocks.append(
+            f"""
+  (function() {{
+    var dom = document.getElementById({sid_js});
+    if (!dom) return;
+    var chart = echarts.init(dom);
+    chart.setOption({{
+      tooltip: {{
+        formatter: function (p) {{
+          if (p.dataType === 'edge') return p.data.label.formatter + ' · ' + p.data.ref;
+          var d = p.data;
+          return '<b>' + d.name + '</b><br/>type: ' + d.category +
+            '<br/>provenance: ' + d.provenance_kind + '<br/>source: ' + d.ref;
+        }}
+      }},
+      legend: [{{data: {categories}}}],
+      series: [{{
+        type: 'graph', layout: 'force', roam: true,
+        categories: {categories},
+        data: {nodes},
+        links: {edges},
+        label: {{show: true, position: 'bottom'}},
+        force: {{repulsion: 220, edgeLength: 110}}
+      }}]
+    }});
+  }})();"""
+        )
+    return "\n".join(init_blocks)
+
+
 def _render_graph(scenario: ScenarioEvidence) -> str:
     n_links = scenario["counts"]["cross_modal_links"]
     n_episodes = scenario["counts"]["episodes"]
@@ -147,11 +220,11 @@ def _render_graph(scenario: ScenarioEvidence) -> str:
     # 从真实 counts 投影（D1 canonical 无 link 级 detail → 节点用计数摘要，不捏造 id）
     sid_html = _esc(scenario["scenario_id"])  # HTML 层转义（评审 R2-#6）
     return f"""
-      <div id="graph-{sid_html}" class="graph-box" style="height:320px"
+      <div id="crossmodal-{sid_html}" class="graph-box" style="height:320px"
            data-links="{n_links}" data-episodes="{n_episodes}"></div>
-      <p class="muted">图由真实 counts 投影：{n_episodes} 个 episode 节点 ·
-        {n_links} 条 supports 关联（D1 降级：canonical 无 link 级 detail，
-        不渲染 episode_id 等未落盘字段）。</p>"""
+      <p class="muted">Cross Modal 子图（Evidence Graph 的 supports 视角）：{n_episodes} 个 episode
+        节点 · {n_links} 条 supports 关联。D1 降级：canonical 无 link 级 detail
+        （confidence/time_overlap 未落盘，不渲染），完整关系见 Memory 层。</p>"""
 
 
 def _render_gate(scenario: ScenarioEvidence) -> str:
@@ -197,16 +270,19 @@ def _render_scenario(scenario: ScenarioEvidence) -> str:
         <span class="muted">mode={_esc(scenario['mode'])} · frames={scenario['n_frames']}</span>
       </h2>
 
-      <h3 id="timeline-{_esc(scenario['scenario_id'])}" class="view-anchor">① Scenario Replay Timeline</h3>
+      <h3 id="view-graph-{_esc(scenario['scenario_id'])}" class="view-anchor">① Evidence Graph（因果链）</h3>
+      {_render_evidence_graph(scenario)}
+
+      <h3 id="timeline-{_esc(scenario['scenario_id'])}" class="view-anchor">② Scenario Replay Timeline</h3>
       {_render_timeline(scenario)}
 
-      <h3 id="decision-{_esc(scenario['scenario_id'])}" class="view-anchor">② Decision Explanation</h3>
+      <h3 id="decision-{_esc(scenario['scenario_id'])}" class="view-anchor">③ Decision Explanation（为什么报警）</h3>
       {_render_decision(scenario)}
 
-      <h3 id="view-graph-{_esc(scenario['scenario_id'])}" class="view-anchor">③ Cross Modal Graph</h3>
+      <h3 id="view-crossmodal-{_esc(scenario['scenario_id'])}" class="view-anchor">④ Cross Modal Graph（supports 子图）</h3>
       {_render_graph(scenario)}
 
-      <h3 id="gate-{_esc(scenario['scenario_id'])}" class="view-anchor">④ Fingerprint / Gate</h3>
+      <h3 id="gate-{_esc(scenario['scenario_id'])}" class="view-anchor">⑤ Fingerprint / Gate</h3>
       {_render_gate(scenario)}
     </section>"""
 
@@ -225,7 +301,7 @@ def _render_graph_script(projection: EvidenceProjection) -> str:
         if n_links <= 0 or n_episodes <= 0:
             continue
         sid = scenario["scenario_id"]
-        sid_js = _esc_js(sid)  # JS 字符串层转义（评审 R2-#6）
+        sid_js = _esc_js(f"crossmodal-{sid}")  # Cross Modal 子图容器（评审 R2-#6 JS 转义）
         # 节点 = 真实 episode 计数；每个可视化节点带溯源元数据（评审 R2-#3 方案 A）：
         # provenance_kind="SIMULATED" + ref 指向 counts（与 timeline 节点同语义，
         # 防"合成的可视化节点无证据视角"——episode_id 等未落盘字段仍不渲染）。
@@ -281,7 +357,15 @@ def render_projection(projection: EvidenceProjection) -> str:
         raise ValueError("EvidenceProjection.scenarios 为空或非法（fail-closed）")
     meta = projection.get("meta", {})
     scenario_blocks = "".join(_render_scenario(s) for s in scenarios)
-    graph_script = _render_graph_script(projection)
+    graph_script = "\n".join(
+        filter(
+            None,
+            (
+                _render_evidence_graph_script(projection),
+                _render_graph_script(projection),
+            ),
+        )
+    )
     echarts = _echarts_inline()
 
     return f"""<!DOCTYPE html>

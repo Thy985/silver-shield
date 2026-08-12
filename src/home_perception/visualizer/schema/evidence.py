@@ -13,7 +13,10 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
+
+if TYPE_CHECKING:  # 仅类型标注：graph.py 依赖本模块的 ProvenanceKind，避免运行期循环
+    from home_perception.visualizer.schema.graph import EvidenceGraph
 
 # provenance_kind 闭集（D2 硬规则 4 / D7b）：真实性标注，防"合成当真实"。
 # D1 数据源为 ADR-0034 仿真闭环 artifact → SIMULATED；真实设备接入后由 loader 填 REAL_SENSOR。
@@ -106,6 +109,10 @@ class ScenarioEvidence(TypedDict):
     gate_degraded: bool
     fingerprints: FingerprintPair
     refs: tuple[str, ...]  # 本项目所有节点的 ref 汇总（验收：provenance 可溯源）
+    # D1.5（D5 实体化）：Evidence Graph 为四视图的共享底层结构
+    # （Timeline = Graph+timestamp / Decision = Graph+decision subtree /
+    #  Cross Modal = Graph+supports edges）。
+    graph: EvidenceGraph  # noqa: F821——类型见下方 forward ref
 
 
 class ProjectionMeta(TypedDict):

@@ -158,3 +158,54 @@ def test_projection_desensitized(artifacts_dir):
     assert "canonical_report" not in text
     assert ".yaml" not in text
     assert "D:" not in text and "C:" not in text
+
+
+def test_evidence_graph_causal_chain(artifacts_dir):
+    """Evidence Graph 因果链：Scenario→Event→Decision→Action→Episode，边类型闭集（D1.5）。"""
+    scn = load_evidence_projection(artifacts_dir)["scenarios"][0]
+    graph = scn["graph"]
+    types = [n["type"] for n in graph["nodes"]]
+    # 因果链：Scenario → Event → Decision → Action → Episode（顺序与内容）
+    assert types[0] == "Scenario"
+    assert "Event" in types and "Decision" in types and "Action" in types
+    assert "Episode" in types  # fixture episodes=2 > 0
+    edge_types = [e["type"] for e in graph["edges"]]
+    assert "observed_from" in edge_types
+    assert "caused_by" in edge_types
+    assert "triggered" in edge_types
+    assert "stored_as" in edge_types
+    # 边类型闭集（D5 白名单）
+    assert set(edge_types) <= {"observed_from", "caused_by", "triggered", "supports", "stored_as"}
+    # 节点类型闭集
+    assert set(types) <= {"Scenario", "Frame", "Detection", "Event", "Decision",
+                          "Action", "Episode", "Link"}
+
+
+def test_evidence_graph_nodes_have_ref_and_kind(artifacts_dir):
+    """Evidence Graph 节点/边带 ref + provenance_kind（D2 硬规则在图上生效，D1.5）。"""
+    graph = load_evidence_projection(artifacts_dir)["scenarios"][0]["graph"]
+    for node in graph["nodes"]:
+        assert node["ref"].startswith("sw_t1.canonical.json#"), node
+        assert node["provenance_kind"] in ("REAL_SENSOR", "SIMULATED", "FIXTURE"), node
+    for edge in graph["edges"]:
+        assert edge["ref"].startswith("sw_t1.canonical.json#"), edge
+    # 节点 id 全局唯一（图结构合法性）
+    ids = [n["id"] for n in graph["nodes"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_evidence_graph_no_synthetic_nodes(tmp_path):
+    """禁 synthetic：无事件/无决策时对应节点不建（缺失粒度降级，D1.5）。"""
+    d = make_artifacts(tmp_path / "a")
+    import json
+
+    canon = d / "sw_t1.canonical.json"
+    data = json.loads(canon.read_text(encoding="utf-8"))
+    data["artifacts"]["event_types"] = []
+    data["artifacts"]["trace_outcome_kinds"] = []
+    canon.write_text(json.dumps(data), encoding="utf-8")
+    graph = load_evidence_projection(d)["scenarios"][0]["graph"]
+    types = [n["type"] for n in graph["nodes"]]
+    assert "Event" not in types and "Decision" not in types
+    # 只投影真实字段：Scenario + Action + Episode + Link（fixture links=1）
+    assert set(types) == {"Scenario", "Action", "Episode", "Link"}

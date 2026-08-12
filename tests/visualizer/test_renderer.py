@@ -190,8 +190,8 @@ def test_render_scenario_id_with_quotes_safe(tmp_path):
     """
     d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1'alert(1)",))
     html = _render(d)
-    # JS 层：getElementById 参数是 JSON 包裹的完整字符串（无裸闭合）
-    assert "getElementById(&quot;sw_t1'alert(1)&quot;)".replace("&quot;", '"') in html
+    # JS 层：getElementById 参数是 JSON 包裹的完整字符串（主图容器 id = graph-{sid}）
+    assert 'getElementById("graph-sw_t1\'alert(1)")' in html
     # 无独立 alert 语句（alert(1); 不会出现在任何位置）
     assert "alert(1);" not in html
 
@@ -205,3 +205,30 @@ def test_render_n_frames_zero_valid(tmp_path):
     canon.write_text(json.dumps(data), encoding="utf-8")
     html = _render(d)
     assert "frames=0" in html
+
+
+def test_render_evidence_graph_main(tmp_path):
+    """D1.5 主视图：Evidence Graph 容器 + 因果链标签 + 边类型（验收 2 扩展）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    assert 'data-nodes="6"' in html  # Scenario+Event+Decision+Action+Episode+Link
+    assert 'data-edges="5"' in html  # observed_from/caused_by/triggered/stored_as/supports
+    # 因果链标签出现在主图说明
+    assert "observed_from" in html
+    assert "caused_by" in html
+    assert "triggered" in html
+    assert "stored_as" in html
+    # 主图容器 id 唯一（graph-sw_t1 仅主图，cross modal 用 crossmodal-sw_t1）
+    assert len(re.findall(r'id="graph-sw_t1"', html)) == 1
+    assert len(re.findall(r'id="crossmodal-sw_t1"', html)) == 1
+
+
+def test_render_decision_three_groups(tmp_path):
+    """Decision Explanation 三分组语义（Observation/Reasoning/Outcome，D1.5）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    assert "Observation Evidence" in html
+    assert "Decision Reasoning" in html
+    assert "Decision Outcome" in html
+    # WARN 归入 Reasoning（不是检测证据）
+    assert "abnormal_dwell" in html
