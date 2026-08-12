@@ -348,3 +348,120 @@ def test_render_self_explanation_comma_list_translation(tmp_path):
     assert "持续关注（MONITOR）" in html
     assert "通知家属（NOTIFY_FAMILY）" in html
     assert "建议动作 持续关注（MONITOR）、通知家属（NOTIFY_FAMILY）" in html
+
+
+def test_render_replay_bar_present(tmp_path):
+    """D2.1：每场景含重放控制条 DOM（按钮 id 带 sid 后缀）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    assert 'id="rp-toggle-sw_t1"' in html
+    assert 'id="rp-reset-sw_t1"' in html
+    assert 'id="rp-prev-sw_t1"' in html
+    assert 'id="rp-next-sw_t1"' in html
+    assert 'id="rp-speed-sw_t1"' in html
+    assert 'id="rp-progress-sw_t1"' in html
+
+
+def test_render_replay_inline_data(tmp_path):
+    """D2.1：timeline 数据内联为 application/json 数据岛（init 仅传 sid，数据走 JSON 岛）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    # init 仅传 sid（数据从 replay-data 数据岛读取，与 <script> 终结隔离）
+    assert 'window.__Replay.init("sw_t1");' in html
+    # 数据岛存在且为 application/json
+    assert 'type="application/json" id="replay-data-sw_t1"' in html
+    # 内联数据含确定性 step 锚点 S1 + 真实性标注（来自 loader 投影，非拼装）
+    assert '"timestamp": "S1"' in html
+    assert '"provenance_kind": "SIMULATED"' in html
+
+
+def test_render_replay_js_vendored(tmp_path):
+    """D2.1：replay.js 已 vendored 并内联（含 __Replay 定义），零外部网络依赖。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    # replay 引擎定义内联进 HTML（global.__Replay = {...} 由 IIFE 挂载到 window）
+    assert "global.__Replay = {" in html
+
+
+def test_render_replay_timeline_data_idx(tmp_path):
+    """D2.1：timeline 节点带 data-idx/data-step，供 replay.js 高亮（不丢溯源）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    assert 'class="tl-item"' in html
+    assert 'data-idx="0"' in html
+    assert 'data-step="S1"' in html
+    # 溯源信息仍在（D2.4 前置：重放态下 ref 不丢）
+    assert "provenance:" in html and "source:" in html
+
+
+def test_render_replay_id_unique(tmp_path):
+    """D2.1（评审 R4-Bug 最大可用性）：timeline 视图锚点 id 与重放目标 ul id 不撞名。
+
+    回归：此前 _render_scenario 的 H3 锚点与 _render_timeline 的 <ul> 共用
+    id="timeline-{sid}"，导致 replay.js 取到 H3 而非 <ul>，querySelectorAll
+    空 -> 重放完全失效。修复后锚点为 timeline-{sid}、列表为 timeline-list-{sid}，
+    各出现恰好一次。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    html = _render(d)
+    # 视图锚点：恰好一次
+    assert len(re.findall(r'id="timeline-sw_t1"', html)) == 1
+    # 重放目标 ul：恰好一次，且确为 <ul ... id='timeline-list-sw_t1'>
+    # （ul 属性用单引号，H3 锚点用双引号，二者 id 不撞名）
+    assert len(re.findall(r"id='timeline-list-sw_t1'", html)) == 1
+    assert "<ul class='timeline' id='timeline-list-sw_t1'>" in html
+    # replay.js 绑定到 list id（非 H3 锚点）
+    assert "timeline-list-sw_t1" in html
+
+
+def test_render_replay_xss_script_termination(tmp_path):
+    """D2.1（评审 R4-安全）：timeline 字符串字段含 </script> 不得提前终结脚本。
+
+    注入恶意 summary（fixture 注释里出现 </script> 字面量），验证：
+    - HTML 中无裸 </script><img（否则脚本被切碎、后续 HTML 当 JS 跑）；
+    - 转义形态 <\\/script 出现（HTML 解析期不命中脚本终结，JSON.parse 无损还原）；
+    - 数据岛仍为合法 application/json，init 调用照常存在。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_evidence_projection(d)
+    for s in proj["scenarios"]:
+        for n in s["timeline"]:
+            n["summary"] = "</script><img src=x onerror=alert(1)>"
+    html = render_projection(proj)
+    # 防御：不得出现裸 </script><img（脚本提前终结）
+    assert "</script><img" not in html
+    # 转义形态必须出现（<\\/script）
+    assert "<\\/script" in html
+    # 数据岛与 init 仍正常
+    assert 'type="application/json" id="replay-data-sw_t1"' in html
+    assert 'window.__Replay.init("sw_t1");' in html
+
+
+def test_render_replay_unicode_sid(tmp_path):
+    """D2.1（评审 R4-测试缺口 2）：含 unicode 的 scenario_id 进入 JS init 不破脚本。"""
+    sid = "sw_场景_α"
+    d = make_artifacts(tmp_path / "a", scenario_ids=(sid,))
+    html = _render(d)
+    # 数据岛 id 用 HTML escape（无引号），JS 上下文 sid 用 json.dumps（带引号）
+    assert 'id="replay-data-sw_场景_α"' in html
+    # init 调用存在（json.dumps 把 unicode 编码为 \\uXXXX，仍是合法 JS 字符串）
+    assert "window.__Replay.init(" in html
+    # 数据岛解析无损：unicode sid 仍出现在数据岛 content 里
+    assert sid in html
+
+
+def test_render_replay_js_missing_no_crash(tmp_path):
+    """D2.1（评审 R4-测试缺口 3）：replay.js 缺失时控制条仍渲染、但不绑定（降级不崩）。"""
+    import home_perception.visualizer.renderer as R
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    orig = R._replay_inline
+    R._replay_inline = lambda: ""  # 模拟 replay.js 缺失
+    try:
+        html = _render(d)
+    finally:
+        R._replay_inline = orig
+    # 控制条按钮仍渲染（静态可读）
+    assert 'id="rp-toggle-sw_t1"' in html
+    # 但无 init 调用（未绑定）-> 点击不会因 __Replay 未定义而抛错
+    assert "window.__Replay.init" not in html
+
