@@ -757,6 +757,12 @@ def render_projection(projection: EvidenceProjection) -> str:
 <script>
 {graph_script}
 </script>
+<script>
+{replay_js}
+</script>
+<script>
+{replay_inits}
+</script>
 </body>
 </html>
 """
