@@ -249,6 +249,8 @@ def compute_loop_fingerprint(harness_fp, *, policy_fp, sink_type,
 
 ### Phase C · 生产门控
 
+> **✅ 已实现（v1.0，2026-08-12）**：`gate.py`（`evaluate_integration_gate` → `IntegrationGateResult`）、severity 随 suite 进 `expectation_fingerprint`、CI `integration-gate` job（PR 级）、loop 基线 + `integration-baseline-bump` 治理（原"可选"项已落地）全部完成；DoD C1–C8 验收通过。执行入口：`scripts/run_integration_validation.py --gate --strict`（产出 gate.json / fingerprints / canonical 报告）+ `scripts/check_integration_baseline.py`（漂移 + 基线文件变更双裁决，`--skip-file-policy` 供 main push 场景）。
+
 **MUST**
 - `gate.py`：`ExpectationSeverity` + per-category suite 的 `severity` 字段 + `evaluate_integration_gate(report, suite) -> IntegrationGateResult`
 - severity 随 suite 纳入 `expectation_fingerprint`
