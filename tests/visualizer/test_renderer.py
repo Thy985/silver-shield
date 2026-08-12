@@ -232,9 +232,9 @@ def test_render_decision_three_groups(tmp_path):
     """
     d = make_artifacts(tmp_path / "a")
     html = _render(d)
-    assert "Observation Evidence" in html
-    assert "Decision Reasoning" in html
-    assert "Decision Outcome" in html
+    assert "观测证据 Observation Evidence" in html
+    assert "决策推理 Decision Reasoning" in html
+    assert "决策结论 Decision Outcome" in html
     # 卡片结构：<div class="dc-label">...</div><div class="dc-value">...</div>
     # 同一展示组可有多个卡片（如 Reasoning 含 trace outcome + risk level）——
     # 按列表断言"组内任一卡片命中"，不用 dict 覆盖（评审 R3-#13）。
@@ -242,8 +242,8 @@ def test_render_decision_three_groups(tmp_path):
         r'<div class="dc-label"[^>]*>([^<]+)</div>\s*<div class="dc-value">([^<]*)</div>',
         html,
     )
-    obs_values = [v.strip() for label, v in cards if label.strip() == "Observation Evidence"]
-    reason_values = [v.strip() for label, v in cards if label.strip() == "Decision Reasoning"]
+    obs_values = [v.strip() for label, v in cards if label.strip() == "观测证据 Observation Evidence"]
+    reason_values = [v.strip() for label, v in cards if label.strip() == "决策推理 Decision Reasoning"]
     assert any("abnormal_dwell" in v for v in obs_values), f"abnormal_dwell 应归 Observation，实际 {obs_values!r}"
     assert any("WARN" in v for v in reason_values), f"WARN 应归 Reasoning，实际 {reason_values!r}"
     assert all("WARN" not in v for v in obs_values), "WARN 不得混入检测证据（Observation）"
@@ -264,3 +264,87 @@ def test_render_evidence_graph_js_data_includes_refs(tmp_path):
     # 边 ref 必须出现在 JS 段（tooltip p.data.ref 依赖）——且不在 "undefined" 形态
     assert '"ref": "sw_t1.canonical.json#artifacts.trace_outcome_kinds[0]"' in html
     assert "p.data.ref" in html  # tooltip edge 分支仍引用 ref
+
+
+def test_render_self_explanation_conclusion(tmp_path):
+    """自解释层：每场景顶部有一句话结论行（先给结论，再给证据）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    # 结论行存在且数据驱动（含翻译后的通俗中文 + 原文括注）
+    assert "结论：" in html
+    assert "异常停留" in html and "abnormal_dwell" in html
+    # 因果链片段齐全：检测到 → 判定 → 处置
+    assert "检测到" in html and "判定" in html and "建议动作" in html
+    # "推荐通知家属但实际仅记录"的契约细节如实呈现（防误读）
+    assert "通知家属" in html and "仅记录" in html
+
+
+def test_render_self_explanation_conclusion_data_driven(tmp_path):
+    """自解释层：结论行完全由 artifact 数据驱动（每片段带原文括注，不编造）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    # 每个通俗词都带英文原文括注 → 证明来自数据而非硬编码
+    assert "异常停留（abnormal_dwell）" in html
+    assert "需关注（WARN）" in html
+    assert "低风险（LOW）" in html
+    assert "通知家属（NOTIFY_FAMILY）" in html
+    assert "仅记录（LOG_ONLY）" in html
+    # "推荐通知家属但实际仅记录"如实呈现（防误读契约细节）
+    assert "建议动作" in html and "实际命令" in html
+
+
+def test_render_self_explanation_sim_banner(tmp_path):
+    """自解释层：全局仿真横幅（防误读为真实报警）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    assert "仿真（SIMULATED）演示数据" in html
+    assert "非真实设备实时报警" in html
+
+
+def test_render_self_explanation_glossary(tmp_path):
+    """自解释层：底部术语对照表（中英对照）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    assert "术语对照表" in html
+    assert "observed_from" in html and "由……观测到" in html
+    assert "supports" in html and "佐证" in html
+    assert "SIMULATED" in html
+
+
+def test_render_self_explanation_stage_zh(tmp_path):
+    """自解释层：timeline 与 gate 表的 stage 名带中文注释。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    assert "perception 感知" in html
+    assert "decision 决策" in html
+    assert "notification 通知" in html
+    assert "memory 记忆" in html
+    assert "observability 可观测" in html
+
+
+def test_render_self_explanation_decision_values_translated(tmp_path):
+    """自解释层：决策卡片 value 显示通俗中文（保留原文括注）。"""
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    # WARN/LOW/NOTIFY_FAMILY/LOG_ONLY 均带中文翻译
+    assert "需关注（WARN）" in html
+    assert "低风险（LOW）" in html
+    assert "通知家属（NOTIFY_FAMILY）" in html
+    assert "仅记录（LOG_ONLY）" in html
+
+
+def test_render_self_explanation_comma_list_translation(tmp_path):
+    """自解释层：逗号分隔枚举（如 recommended_actions 多值）逐项翻译。"""
+    d = make_artifacts(tmp_path / "a")
+    # 覆写 canonical：recommended_actions 用逗号多值枚举
+    import json as _json
+
+    p = d / "sw_t1.canonical.json"
+    data = _json.loads(p.read_text(encoding="utf-8"))
+    data["artifacts"]["recommended_actions"] = ["MONITOR, NOTIFY_FAMILY"]
+    p.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    html = _render(d)
+    # 逗号枚举被拆分翻译：持续关注（MONITOR）、通知家属（NOTIFY_FAMILY）
+    assert "持续关注（MONITOR）" in html
+    assert "通知家属（NOTIFY_FAMILY）" in html
+    assert "建议动作 持续关注（MONITOR）、通知家属（NOTIFY_FAMILY）" in html
