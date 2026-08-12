@@ -116,6 +116,12 @@ TIERS: dict[str, list[str]] = {
         # - test_run_integration_validation_helpers.py：_runtime_provenance 等脚本助手 4 项（DoD C7）。
         "tests/evaluation/test_integration_baseline_check.py",
         "tests/evaluation/test_run_integration_validation_helpers.py",
+        # ADR-0035 D1 Evidence Explorer（纯 stdlib：json/html/AST 扫描，无 cv2/torch）：
+        # loader fail-closed 投影契约 / renderer 确定性+脱敏+四视图 / AST 零 import 生产类。
+        "tests/visualizer/test_loader.py",
+        "tests/visualizer/test_renderer.py",
+        "tests/visualizer/test_ast_contract.py",
+        "tests/visualizer/test_cli.py",
     ],
     "integration": [
         # 运行时闭环（合成 detector 零模型，**torch-free**）：证明 Scenario→Tracker→
