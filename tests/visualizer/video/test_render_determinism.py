@@ -12,13 +12,11 @@ import numpy as np
 from home_perception.visualizer.video.compiler import render_case_frames
 from home_perception.visualizer.video.spec import CaseVideoSpec
 
-from .conftest import artifact_dir
 
-
-def _spec(output_dir: Path) -> CaseVideoSpec:
+def _spec(output_dir: Path, artifact_dir: Path) -> CaseVideoSpec:
     return CaseVideoSpec(
         scenario_id="sw_adr0034_elderly_dwell",
-        artifact_dir=artifact_dir(),
+        artifact_dir=artifact_dir,
         output_dir=output_dir,
         fps=2.0,
         resolution=(320, 180),
@@ -26,19 +24,19 @@ def _spec(output_dir: Path) -> CaseVideoSpec:
     )
 
 
-def test_visual_determinism_frames(tmp_path: Path):
-    frames_a = render_case_frames(_spec(tmp_path / "a"))
-    frames_b = render_case_frames(_spec(tmp_path / "b"))
+def test_visual_determinism_frames(tmp_path: Path, built_artifact_dir):
+    frames_a = render_case_frames(_spec(tmp_path / "a", built_artifact_dir))
+    frames_b = render_case_frames(_spec(tmp_path / "b", built_artifact_dir))
     assert len(frames_a) == len(frames_b) > 0
     for fa, fb in zip(frames_a, frames_b):
         assert np.array_equal(fa, fb)
 
 
-def test_metadata_determinism(tmp_path: Path):
+def test_metadata_determinism(tmp_path: Path, built_artifact_dir):
     from home_perception.visualizer.video.compiler import generate_case_video
 
-    out_a = generate_case_video(_spec(tmp_path / "a"))
-    out_b = generate_case_video(_spec(tmp_path / "b"))
+    out_a = generate_case_video(_spec(tmp_path / "a", built_artifact_dir))
+    out_b = generate_case_video(_spec(tmp_path / "b", built_artifact_dir))
     assert (
         out_a.storyboard_yaml.read_text(encoding="utf-8")
         == out_b.storyboard_yaml.read_text(encoding="utf-8")
