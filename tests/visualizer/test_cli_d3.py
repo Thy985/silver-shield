@@ -9,6 +9,7 @@ scripts/generate_case_video.py 退出码契约：
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -41,6 +42,19 @@ def test_cli_success_exit_0(tmp_path: Path):
     assert rc == 0
     case_mp4 = tmp_path / f"{_SCENARIO}__v1" / "case.mp4"
     assert case_mp4.exists() and case_mp4.stat().st_size > 0
+
+
+def test_cli_provenance_g2_required_keys(tmp_path: Path):
+    """验收 G2：provenance.json 必须含 scenario_id / generator_version /
+    input_hash / template_version 四键（且非空）。"""
+    rc = main(_args(tmp_path))
+    assert rc == 0
+    prov = tmp_path / f"{_SCENARIO}__v1" / "provenance.json"
+    assert prov.exists(), "provenance.json 未产出"
+    data = json.loads(prov.read_text(encoding="utf-8"))
+    for key in ("scenario_id", "generator_version", "input_hash", "template_version"):
+        assert data.get(key), f"provenance 缺 G2 必含键（或为空）: {key}"
+    assert data["scenario_id"] == _SCENARIO
 
 
 def test_cli_with_audio_exit_1(tmp_path: Path):

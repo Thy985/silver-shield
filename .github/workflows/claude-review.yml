@@ -58,19 +58,23 @@ jobs:
           if [ "$TOTAL" -le 30 ] && [ "$FILES" -le 3 ]; then
             echo "level=0" >> "$GITHUB_OUTPUT"
             echo "level_name=Level 0" >> "$GITHUB_OUTPUT"
-            echo "max_turns=20" >> "$GITHUB_OUTPUT"
+            echo "max_turns=30" >> "$GITHUB_OUTPUT"
           elif [ "$TOTAL" -le 300 ] && [ "$FILES" -le 15 ]; then
             echo "level=1" >> "$GITHUB_OUTPUT"
             echo "level_name=Level 1" >> "$GITHUB_OUTPUT"
-            echo "max_turns=30" >> "$GITHUB_OUTPUT"
+            echo "max_turns=50" >> "$GITHUB_OUTPUT"
           elif [ "$TOTAL" -le 1000 ] && [ "$FILES" -le 30 ]; then
             echo "level=2" >> "$GITHUB_OUTPUT"
             echo "level_name=Level 2" >> "$GITHUB_OUTPUT"
-            echo "max_turns=50" >> "$GITHUB_OUTPUT"
+            echo "max_turns=100" >> "$GITHUB_OUTPUT"
           else
             echo "level=3" >> "$GITHUB_OUTPUT"
             echo "level_name=Level 3" >> "$GITHUB_OUTPUT"
-            echo "max_turns=70" >> "$GITHUB_OUTPUT"
+            # 大 PR（如本分支 68 文件 / 7000+ 行）若逐文件读取会耗尽原 70 上限，
+            # 触发 "Reached maximum number of turns"。配合下方精简后的审查 prompt
+            # （优先 gh pr diff 一次性获取变更、仅必要时打开 ≤5 个关键文件），
+            # 200 步足以完成审查而不超限。
+            echo "max_turns=200" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: anthropics/claude-code-action@v1
@@ -81,27 +85,31 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           track_progress: true
           prompt: |
-            你是一个代码审查助手。请严格按以下步骤执行，不要跳过任何步骤。
+            你是一个代码审查助手。目标：在尽量少的步骤内给出高质量审查结论，避免重复读取或反复分析。
 
-            第一步：运行 `gh pr diff ${{ github.event.pull_request.number }}` 查看代码变更。
-            第二步：逐个阅读变更的文件，理解代码逻辑。
-            第三步：按以下维度审查并输出结果。
+            第一步：运行 `gh pr diff ${{ github.event.pull_request.number }}` 一次性获取完整变更——这是主要信息来源，**不要逐文件打开**。
+            第二步：基于 diff 直接审查。仅当某段关键逻辑确实无法从 diff 判断时，才用 Read 打开对应文件（**最多 5 个最关键文件**）。
+            第三步：按以下维度产出结论（中文，每条发现一个 bullet：文件:行号 — 问题 — 修改建议）。
 
             审查级别：${{ steps.analyze.outputs.level_name }}
-            变更规模：${{ steps.analyze.outputs.added }} 行新增，${{ steps.analyze.outputs.deleted }} 行删除，${{ steps.analyze.outputs.files }} 个文件
+            变更规模：${{ steps.analyze.outputs.added }} 行新增 / ${{ steps.analyze.outputs.deleted }} 行删除 / ${{ steps.analyze.outputs.files }} 个文件
+
+            若变更文件 > 12 个：只聚焦最高风险文件（入口 / 核心逻辑 / 安全敏感点 / 测试缺口），给出整体结论即可，**不要逐文件展开**。
 
             审查维度：
-            1. 代码质量：是否清晰、无重复、易维护
-            2. 潜在 Bug：是否有逻辑错误、边界问题、空指针
-            3. 安全风险：是否有注入、泄露、权限问题
-            4. 测试覆盖：关键路径是否有测试
+            1. 代码质量：清晰、无重复、易维护
+            2. 潜在 Bug：逻辑错误、边界、空值
+            3. 安全风险：注入、泄露、权限
+            4. 测试覆盖：关键路径是否覆盖
             5. 接口兼容：是否破坏已有接口
 
             输出格式（用中文）：
             ## 审查结果
-            [逐项列出发现的问题，每个问题包含文件名、行号、问题描述、修改建议]
+            - [文件:行号] 问题描述 — 修改建议
             ## 最终结论
             ✅ 可以合并 / ⚠️ 建议修改后合并 / ❌ 需要重大修改
+
+            （形成结论后立即输出并停止；不要再次读取已看过的文件或重复分析。）
           allowed_bots: '*'
           claude_args: |
             --model deepseek-v4-flash

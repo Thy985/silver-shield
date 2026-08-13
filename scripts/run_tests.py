@@ -122,6 +122,26 @@ TIERS: dict[str, list[str]] = {
         "tests/visualizer/test_renderer.py",
         "tests/visualizer/test_ast_contract.py",
         "tests/visualizer/test_cli.py",
+        # ADR-0035 D3-A Evidence Story Compiler（torch-free：cv2/PIL/numpy/pydantic/yaml，
+        # 无 torch；validation 仅延迟 import 于 ValidationBackgroundProvider.generate）。
+        # 此前整组未入任何 tier → CI 对 D3-A 变更「盲跑」。现纳入 unit 层受门禁约束：
+        # 任一视频测试（含 G2 provenance、脱敏、确定性、fail-closed）回归即 PR 阻断。
+        "tests/visualizer/video/test_text_safety.py",
+        "tests/visualizer/video/test_overlay.py",
+        "tests/visualizer/video/test_caption.py",
+        "tests/visualizer/video/test_muxer.py",
+        "tests/visualizer/video/test_font_registry.py",
+        "tests/visualizer/video/test_composer.py",
+        "tests/visualizer/video/test_rasterizer.py",
+        "tests/visualizer/video/test_adapter.py",
+        "tests/visualizer/video/test_spec.py",
+        "tests/visualizer/video/test_templates.py",
+        "tests/visualizer/video/test_scene.py",
+        "tests/visualizer/video/test_narrative.py",
+        "tests/visualizer/video/test_storyboard.py",
+        "tests/visualizer/video/test_render_determinism.py",
+        "tests/visualizer/video/test_author_override.py",
+        "tests/visualizer/test_cli_d3.py",
     ],
     "integration": [
         # 运行时闭环（合成 detector 零模型，**torch-free**）：证明 Scenario→Tracker→
