@@ -65,22 +65,20 @@ class ScenarioTemplate(BaseModel):
     default_durations_s: dict[str, float] = {}  # shot name → 默认时长（秒）
 
 
-# ── canonical 5-shot 弧线（§2.2 表格）──
-_ELDERLY_SHOTS: list[TemplateShot] = [
+# ── canonical 5-shot 弧线骨架（§2.2 表格）· 全类别共用 ──
+# 语义声明：ADR-0035 §2.2 把 canonical 弧线定为模板层的**固定结构**，所有场景类别
+# 共用同一骨架（shot 名 / kind / ref_kinds / 默认时长）；类别差异只体现在**文案**
+# （default_purposes）上。故骨架与时长显式命名为 _CANONICAL_*，由各模板直接引用——
+# 而非让 generic 去 `list(_ELDERLY_SHOTS)` 拷贝 elderly 常量（会让读者误以为
+# generic 是 elderly 的派生特例，且拷贝无任何隔离价值：pydantic 校验本就会复制）。
+_CANONICAL_SHOTS: list[TemplateShot] = [
     {"name": "context", "kind": "environment", "ref_kinds": ["scenario_meta"]},
     {"name": "detection", "kind": "detection_overlay", "ref_kinds": ["perception_event", "track_id"]},
     {"name": "reasoning", "kind": "reasoning", "ref_kinds": ["decision_evidence", "decision_node"]},
     {"name": "decision", "kind": "decision", "ref_kinds": ["action_node", "command_type"]},
     {"name": "closure", "kind": "closure", "ref_kinds": ["action_landed", "episode"]},
 ]
-_ELDERLY_PURPOSES: dict[str, str] = {
-    "context": "建立环境上下文：家门口·时间窗·脱敏角色标签",
-    "detection": "展示异常行为如何被发现（停留/重复来访/接近）",
-    "reasoning": "解释系统为何判定为风险（决策追溯）",
-    "decision": "展示风险判断与触发的动作",
-    "closure": "展示闭环完成（通知家属/社区协同确认）",
-}
-_ELDERLY_DURATIONS: dict[str, float] = {
+_CANONICAL_DURATIONS: dict[str, float] = {
     "context": 4.0,
     "detection": 5.0,
     "reasoning": 6.0,
@@ -88,9 +86,23 @@ _ELDERLY_DURATIONS: dict[str, float] = {
     "closure": 4.0,
 }
 
-_GENERIC_SHOTS: list[TemplateShot] = list(_ELDERLY_SHOTS)  # 默认复用同一弧线骨架
-_GENERIC_PURPOSES: dict[str, str] = dict(_ELDERLY_PURPOSES)
-_GENERIC_DURATIONS: dict[str, float] = dict(_ELDERLY_DURATIONS)
+# 类别文案（语义层文案常量；同一骨架下按场景类别给出不同叙事意图表述）。
+_ELDERLY_PURPOSES: dict[str, str] = {
+    "context": "建立环境上下文：家门口·时间窗·脱敏角色标签",
+    "detection": "展示异常行为如何被发现（停留/重复来访/接近）",
+    "reasoning": "解释系统为何判定为风险（决策追溯）",
+    "decision": "展示风险判断与触发的动作",
+    "closure": "展示闭环完成（通知家属/社区协同确认）",
+}
+# generic 有**自己的**中立文案：此前直接拷 elderly 文案，会让非涉老场景也说
+# 「家门口」「通知家属」，属于类别语义串台。
+_GENERIC_PURPOSES: dict[str, str] = {
+    "context": "建立场景上下文：场景标识·处理结论·闭环校验",
+    "detection": "展示系统观测到的感知事件与预警数量",
+    "reasoning": "解释判定依据链（检测证据 → 决策结果 → 风险级别）",
+    "decision": "展示决策输出与触发的指令类型",
+    "closure": "展示闭环落地（Episode 记录与已落地指令）",
+}
 
 # cross_modal 追加镜头（仅当 EvidenceGraph 含 Link 节点时由 template_for_evidence 插入）。
 _CROSS_MODAL_SHOT: TemplateShot = {
@@ -106,17 +118,17 @@ _REGISTRY: dict[str, ScenarioTemplate] = {
         name="elderly_warning_case_v1",
         intent="explain_risk_decision",
         audience_question="为什么系统认为需要关注？",
-        shots=_ELDERLY_SHOTS,
+        shots=_CANONICAL_SHOTS,
         default_purposes=_ELDERLY_PURPOSES,
-        default_durations_s=_ELDERLY_DURATIONS,
+        default_durations_s=_CANONICAL_DURATIONS,
     ),
     "generic_case_v1": ScenarioTemplate(
         name="generic_case_v1",
         intent="explain_risk_decision",
         audience_question="系统在此场景做了什么判断？",
-        shots=_GENERIC_SHOTS,
+        shots=_CANONICAL_SHOTS,
         default_purposes=_GENERIC_PURPOSES,
-        default_durations_s=_GENERIC_DURATIONS,
+        default_durations_s=_CANONICAL_DURATIONS,
     ),
 }
 

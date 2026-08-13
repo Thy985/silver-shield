@@ -56,15 +56,27 @@ def design_visual_scene(
     edge_pairs = [(e["source"], e["target"]) for e in graph["edges"]]
 
     override_all = visual_override or {}
+    _assert_override_shots_known(storyboard, override_all)
     result: dict[str, VisualSceneGraph] = {}
     for shot in storyboard.shots:
         refs = shot.evidence_refs
         ref_set = set(refs)
-        shot_ov = {ov["ref"]: ov for ov in (override_all.get(shot.name, []) or [])}
+        shot_ov = _parse_shot_override(shot.name, override_all, ref_set)
         layout: list[VisualElement] = []
         for ref in refs:
             node = node_by_id.get(ref)
-            ntype = (node or {}).get("type") or "Scenario"
+            if node is None:
+                # fail-closed：ref 必来自 EvidenceGraph（上游 generator 已断言）。
+                # 静默回退成 "Scenario" 会把「图/分镜不一致」画成一张看似正常的时间轴卡片。
+                raise KeyError(
+                    f"VisualSceneDesigner: shot={shot.name!r} 的 ref={ref!r} 不在 EvidenceGraph 节点中；"
+                    "证据图与分镜已不一致（违反 D3-12 证据所有权边界）"
+                )
+            ntype = node.get("type")
+            if not ntype:
+                raise KeyError(
+                    f"VisualSceneDesigner: 节点 {ref!r} 缺少 'type' 字段，无法确定性派生版面"
+                )
             region = shot_ov.get(ref, {}).get("region", REGION_BY_NODE_TYPE.get(ntype, "center"))
             glyph = shot_ov.get(ref, {}).get("glyph", GLYPH_BY_NODE_TYPE.get(ntype, "timeline"))
             layout.append(VisualElement(ref=ref, region=region, glyph=glyph))
@@ -75,6 +87,47 @@ def design_visual_scene(
         ]
         result[shot.name] = VisualSceneGraph(shot=shot.name, layout=layout, arrows=arrows)
     return result
+
+
+def _assert_override_shots_known(storyboard: Storyboard, override_all: dict) -> None:
+    """作者 ``visual_override`` 的 shot 名必须真实存在（fail-closed）。
+
+    拼错 shot 名此前会被静默忽略——精修覆盖悄悄失效，却仍能产出一版默认片子。
+    """
+    known = {shot.name for shot in storyboard.shots}
+    unknown = sorted(set(override_all) - known)
+    if unknown:
+        raise ValueError(
+            f"visual_override 引用了不存在的 shot：{unknown}；可用 shot：{sorted(known)}"
+        )
+
+
+def _parse_shot_override(shot_name: str, override_all: dict, ref_set: set[str]) -> dict[str, dict]:
+    """解析单 shot 的版面覆盖（fail-closed：条目非映射 / 缺 ``ref`` 键 / 图外 ref 均报错）。
+
+    ``visual_override`` 契约（见 scenarios/*.yaml 注释）：仅调版面，**不得**引入本 shot
+    ``evidence_refs`` 之外的 ref。此前缺 ``ref`` 键会抛裸 ``KeyError``（无上下文），
+    而图外 ref 则被静默忽略——两者都改为带定位信息的显式错误。
+    """
+    entries = override_all.get(shot_name) or []
+    if not isinstance(entries, list):
+        raise TypeError(
+            f"visual_override[{shot_name!r}] 须为条目列表，实际为 {type(entries).__name__}"
+        )
+    parsed: dict[str, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or "ref" not in entry:
+            raise ValueError(
+                f"visual_override[{shot_name!r}] 条目缺少必需键 'ref'：{entry!r}"
+            )
+        ref = entry["ref"]
+        if ref not in ref_set:
+            raise ValueError(
+                f"visual_override[{shot_name!r}] 引入了本 shot evidence_refs 之外的 ref={ref!r}；"
+                f"作者覆盖仅可调版面（可用 ref：{sorted(ref_set)}）"
+            )
+        parsed[ref] = entry
+    return parsed
 
 
 __all__ = ["design_visual_scene"]

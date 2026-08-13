@@ -25,6 +25,7 @@ from home_perception.visualizer.video.narrative.templates import (
     materialize_shot_refs,
 )
 from home_perception.visualizer.video.storyboard.schema import ShotSpec, Storyboard
+from home_perception.visualizer.video.text_safety import desensitize, sanitize_display_text
 
 
 def generate_storyboard(
@@ -88,7 +89,22 @@ def _build_narration(shot_name: str, refs: list[str], evidence: dict) -> list[st
     """由证据值 + 文案常量填充字幕逐句（确定性、脱敏、非自由文本）。
 
     只使用场景类别/计数/指令等系统生成字段，**绝不**引入姓名/地址/设备序列号（D3-4）。
+
+    「只填系统字段」是设计意图，不是保证：``decision_evidence[].value``、
+    ``scenario_id`` 等值最终来自 artifact（外部数据），一旦上游写入了路径或长数字串，
+    就会原样渲进帧。故此处**每条产出都过一遍脱敏**（``text_safety`` 唯一实现），
+    与渲染层的二次脱敏共同构成 D3-4 双保险。
     """
+    return [_safe(line) for line in _narration_lines(shot_name, refs, evidence)]
+
+
+def _safe(line: str) -> str:
+    """单条字幕：脱敏 + 控制字符净化（宽度截断留给渲染层，语义层不做视觉决策）。"""
+    return sanitize_display_text(desensitize(line))
+
+
+def _narration_lines(shot_name: str, refs: list[str], evidence: dict) -> list[str]:
+    """字幕原文填充（未脱敏；唯一调用方为 ``_build_narration``）。"""
     sid = evidence["scenario_id"]
     counts = evidence.get("counts") or {}
     if shot_name == "context":

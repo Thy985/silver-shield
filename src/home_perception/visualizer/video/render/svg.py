@@ -16,7 +16,21 @@ glyph → 边框色（确定性）：
 
 from __future__ import annotations
 
+from typing import Any, Protocol
+
 from home_perception.visualizer.video.scene.schema import VisualSceneGraph
+
+
+class LabelFormatter(Protocol):
+    """节点 → 显示标签的回调协议（脱敏/净化由实现方负责，见 ``render.overlay``）。
+
+    此前该回调是无类型的裸参数，签名靠约定；一旦调用方与实现方参数顺序漂移，
+    只能在渲染出错时才发现。协议化后，类型检查与 review 都能直接看出契约。
+    """
+
+    def __call__(self, node: Any | None, ref: str) -> str:
+        """``node`` 为图节点（dict 或对象，可能为 None）；``ref`` 为节点 id。"""
+        ...
 
 # 区域水平区间（占宽比例）：左-中-右三栏 + 全屏上下文。
 _REGION_X: dict[str, tuple[float, float]] = {
@@ -60,7 +74,7 @@ def build_vector_scene(
     node_by_id: dict,
     width: int,
     height: int,
-    shorten_label,  # 回调：node -> 脱敏显示标签
+    shorten_label: LabelFormatter,
 ) -> VectorScene:
     """VisualSceneGraph → VectorScene（确定性坐标计算）。
 
@@ -101,4 +115,4 @@ def build_vector_scene(
     return scene
 
 
-__all__ = ["VectorScene", "build_vector_scene"]
+__all__ = ["LabelFormatter", "VectorScene", "build_vector_scene"]

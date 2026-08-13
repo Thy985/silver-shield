@@ -60,16 +60,18 @@ def mux(
 ) -> MuxResult:
     """合成入口（D3-A：无声 mp4；D3-B 音频分支 deferred）。
 
-    D3-A 路径（``audio_track is None``）直接写无声 mp4 并交付；音频合成属 D3-B 切片，
-    本切片以 ``NotImplementedError`` 明确边界（不静默吞掉，提示 D3-B 待办）。
+    D3-A 路径（无音轨且 ``spec.with_audio`` 为假）直接写无声 mp4 并交付；音频合成属
+    D3-B 切片，凡 ``spec.with_audio`` 为真或显式传入 ``audio_track`` 都以
+    ``NotImplementedError`` 明确边界（**不静默吞掉**，也不让 with_audio=True 无声退化）。
     """
     path = Path(path)
-    if audio_track is None:
-        write_silent_mp4(frames, path, spec.fps)
-        return MuxResult(video_mp4=path)
-    raise NotImplementedError(
-        "D3-B 音频合成（ffmpeg mux + D3-3 降级）尚未落地；本切片(D3-A)仅交付无声 mp4"
-    )
+    if spec.with_audio or audio_track is not None:
+        raise NotImplementedError(
+            "D3-B 音频合成（AudioComposer + ffmpeg mux + D3-3 降级）尚未落地；"
+            "本切片(D3-A)仅交付无声 mp4，请勿设 with_audio=True 或传入 audio_track"
+        )
+    write_silent_mp4(frames, path, spec.fps)
+    return MuxResult(video_mp4=path)
 
 
 __all__ = ["MuxResult", "WarningInfo", "mux", "write_silent_mp4"]

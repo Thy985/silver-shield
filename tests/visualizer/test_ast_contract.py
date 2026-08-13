@@ -39,6 +39,9 @@ _STDLIB_TOP = {
     "ast", "html", "json", "pathlib", "typing",
     "functools", "collections", "re", "dataclasses", "enum",
     "io", "os", "sys", "math", "warnings", "logging",
+    "importlib",  # PEP 562 惰性转发（video/__init__.py 避免加载期拉 cv2/PIL）
+    "unicodedata",  # CJK 显示宽度计算（text_safety 字幕截断）
+    "traceback",  # CLI --verbose 保留栈（脚本侧，非包内）
     "__future__",  # `from __future__ import annotations` 是语言设施
 }
 

@@ -1,8 +1,13 @@
 """ADR-0035 D3 · 编排层入参 schema（CLI 入口 / 8 阶段驱动配置）。
 
-本模块只承载「编排配置」与「字幕线索」两类 pydantic 模型，**不**承载叙事语义
+本模块只承载「编排配置」这一类 pydantic 模型，**不**承载叙事语义
 （语义层见 `narrative/`·`storyboard/`·`scene/`）。所有模型 `extra="forbid"`，
 字段集硬锁，越界即 `ValidationError`（CI/review 可据此打回）。
+
+字幕的时间锚点由 ``ShotSpec.narration`` 数组 + shot 时长在渲染期直接推导
+（见 ``compiler._render_frames``），**不**存在独立的 cue 中间表示——D3-A 无需
+为「同 shot 内精确到秒的字幕时间轴」建模；D3-B 若确需时间轴（音轨对齐）再引入，
+届时必须同步落地生产者与消费者，避免留下无使用者的 schema。
 
 见设计文档 §2.8（spec.py 落点）、§3（schema 总则）、§6（输出布局）。
 """
@@ -37,21 +42,12 @@ class CaseVideoSpec(BaseModel):
     fps: float = 2.0  # 输出帧率（默认与 ADR-0032 camera.fps 默认一致）
     resolution: tuple[int, int] = (1280, 720)  # (width, height)
     version: int = Field(default=1, ge=1)  # 产物版本号（命名空间一部分）
-    with_audio: bool = False  # D3-A 默认 False；D3-B 置 True 触发旁白（默认不产出）
-    seed: int | None = None  # 确定性种子（None 时沿用 scenario.meta.seed）
+    # D3-A 默认 False。置 True 会被 compiler 主入口以 NotImplementedError 拒绝
+    # （D3-B 才落地 AudioComposer + ffmpeg mux）——绝不静默产出无声片充当有声片。
+    with_audio: bool = False
+    # 确定性种子。None 时确定性降级为 0：EvidenceProjection 投影**不含** meta/seed
+    # 字段（已对真实 artifact 实测确认），故无「沿用场景 seed」的上游可读。
+    seed: int | None = None
 
 
-# ── 字幕线索（caption 文本层的中间表示）──
-# 由 ShotSpec.narration 按 shot 时间窗展开为带时间锚点的线索，
-# 供 render/caption.py 逐帧绘制（D3-A captions-only，确定性）。
-
-
-class NarrationCue(BaseModel):
-    """带时间锚点的字幕线索（caption 文本层中间表示）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    shot: str  # 所属 shot name（与 Storyboard.shots[].name 对应）
-    text: str  # 字幕/旁白文本（由证据值 + 文案常量填充，非自由生成）
-    start_s: float  # 该线索起始秒（相对视频起点）
-    end_s: float  # 该线索结束秒
+__all__ = ["CaseVideoSpec"]

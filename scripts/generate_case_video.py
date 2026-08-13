@@ -6,14 +6,18 @@
         --scenario-id sw_adr0034_elderly_dwell \
         --output-dir generated/demo_videos
 
-退出码：0 成功 / 1 fail-closed（断言/校验失败）/ 2 参数错误。
-import 全部延迟到 ``main()`` 内，避免无参调用即拉入 cv2/PIL。
+退出码：0 成功 / 1 fail-closed（断言/校验失败）/ 2 参数错误（argparse 自动）。
+重依赖 import 延迟到 ``main()`` 内，避免无参调用即拉入 cv2/PIL。
+
+``--verbose`` 保留完整 traceback：默认只打印一行错误摘要（对演示友好），
+但排障时把栈吞掉会让 fail-closed 断言难以定位。
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 from home_perception.visualizer.video.spec import CaseVideoSpec
@@ -43,14 +47,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=float, default=2.0, help="输出帧率")
     parser.add_argument("--resolution", type=_parse_resolution, default=(1280, 720), help="WxH")
     parser.add_argument("--version", type=int, default=1, help="产物版本号")
-    parser.add_argument("--with-audio", action="store_true", help="D3-B 旁白（默认关闭）")
-    parser.add_argument("--seed", type=int, default=None, help="确定性种子（默认沿用 scenario）")
+    parser.add_argument(
+        "--with-audio", action="store_true",
+        help="D3-B 旁白（尚未实现：置位将 fail-closed 退出 1，不会静默产出无声片）",
+    )
+    parser.add_argument("--seed", type=int, default=None, help="确定性种子（默认 0）")
+    parser.add_argument(
+        "--verbose", action="store_true", help="失败时打印完整 traceback（排障用）"
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:  # argparse 参数错误 → 退出码 2（可被单测断言，不向上抛）
+        return int(getattr(exc, "code", 2) or 2)
 
     spec = CaseVideoSpec(
         scenario_id=args.scenario_id,
@@ -69,7 +82,15 @@ def main(argv: list[str] | None = None) -> int:
     # 延迟 import：仅在实际生成时才拉入 cv2/PIL/pydantic 栈。
     from home_perception.visualizer.video.compiler import generate_case_video
 
-    result = generate_case_video(spec)
+    # 异常在 main() 内收敛为退出码（而非留在 __main__ 块），使退出码契约可被单测覆盖。
+    try:
+        result = generate_case_video(spec)
+    except Exception as exc:  # noqa: BLE001——CLI 顶层兜底；--verbose 保留完整栈
+        if args.verbose:
+            traceback.print_exc()
+        print(f"[D3] fail-closed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
     print(
         f"[D3] 生成完成 scenario={result.scenario_id} "
         f"frames={result.n_frames} duration_s={result.duration_s:.1f}\n"
@@ -81,11 +102,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except (ValueError, AssertionError, FileNotFoundError, KeyError) as exc:
-        print(f"[D3] fail-closed: {exc}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as exc:  # noqa: BLE001——CLI 顶层兜底，避免栈暴露
-        print(f"[D3] 意外错误: {exc}", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(main())

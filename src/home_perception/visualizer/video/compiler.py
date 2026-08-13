@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import yaml
@@ -25,11 +26,18 @@ from home_perception.visualizer.video.evidence.adapter import (
 )
 from home_perception.visualizer.video.mux.muxer import MuxResult, mux
 from home_perception.visualizer.video.narrative.compiler import instantiate_narrative_template
-from home_perception.visualizer.video.narrative.templates import template_for_evidence
+from home_perception.visualizer.video.narrative.templates import (
+    ScenarioTemplate,
+    template_for_evidence,
+)
 from home_perception.visualizer.video.render.caption import render_caption
 from home_perception.visualizer.video.render.composer import compose_frame
 from home_perception.visualizer.video.render.font_registry import FontRegistry
-from home_perception.visualizer.video.render.overlay import render_provenance_layer, shorten_label
+from home_perception.visualizer.video.render.overlay import (
+    provenance_text,
+    render_provenance_layer,
+    shorten_label,
+)
 from home_perception.visualizer.video.render.rasterizer import rasterize_scene
 from home_perception.visualizer.video.render.svg import build_vector_scene
 from home_perception.visualizer.video.scene.designer import design_visual_scene
@@ -69,10 +77,20 @@ class CaseVideoResult:
 
 
 def _load_author_override(scenario_id: str) -> dict | None:
+    """读取作者故事板覆盖 YAML（缺文件 → None；坏 YAML → fail-closed）。
+
+    YAML 解析失败必须显式报错：静默吞掉会让「精修覆盖悄悄失效」，而 demo 仍能跑出
+    一版默认片子——这是最难发现的一类回归（§8 验收 9 的纪律精神）。
+    """
     path = _SCENARIOS_DIR / f"{scenario_id}.yaml"
     if not path.exists():
         return None
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f"作者故事板 YAML 解析失败（fail-closed）：{path} · {exc}") from exc
+    if not isinstance(data, dict):
+        raise TypeError(f"作者故事板 YAML 顶层须为映射，实际为 {type(data).__name__}：{path}")
     return data
 
 
@@ -86,24 +104,82 @@ def _build_provider(spec: CaseVideoSpec, evidence: dict) -> BackgroundProvider:
     return SyntheticBackgroundProvider()
 
 
-def render_case_frames(spec: CaseVideoSpec) -> list[np.ndarray]:
-    """完整管线「阶段 1–7」：返回逐帧 BGR 序列（确定性、零音频）。
+def _assert_audio_boundary(spec: CaseVideoSpec) -> None:
+    """D3-A 边界（fail-closed）：``with_audio=True`` 尚无实现，绝不静默产出无声片。
 
-    供测试断言视觉确定性，以及 D3-B 预览复用。写盘（阶段 8）不在此内。
+    该字段此前只被 CLI 解析、无任何消费者，``--with-audio`` 会静默得到无声 mp4。
+    音频合成属 D3-B（AudioComposer + ffmpeg mux + D3-3 降级）。
+    """
+    if spec.with_audio:
+        raise NotImplementedError(
+            "with_audio=True 需 D3-B 旁白/音频合成（AudioComposer + ffmpeg mux）；"
+            "本切片(D3-A)仅交付无声 mp4，故拒绝静默降级"
+        )
+
+
+def _provenance_fields(spec: CaseVideoSpec, evidence: dict) -> tuple[int, str]:
+    """provenance 两要素（seed / fingerprint）的**唯一**推导处。
+
+    渲染、伴生文件、结构断言三处共用，避免降级规则在多处漂移。
+    ``spec.seed is None`` → 确定性降级为 0（投影层不含 seed，见 ``CaseVideoSpec.seed``）。
+    """
+    seed = spec.seed if spec.seed is not None else 0
+    fingerprint = evidence.get("scenario_fingerprint") or "unknown"
+    return seed, fingerprint
+
+
+class _Prepared(NamedTuple):
+    """阶段 1–5 的共享产物（两条入口的唯一装配点）。"""
+
+    evidence: dict
+    template: ScenarioTemplate
+    storyboard: Storyboard
+    visual_scenes: dict
+
+
+def _build_storyboard_and_scenes(spec: CaseVideoSpec) -> _Prepared:
+    """阶段 1–5：证据投影 → 模板 → NarrativePlan → Storyboard → VisualSceneGraph。
+
+    ``render_case_frames`` 与 ``generate_case_video`` **共用**本函数。此前两者各自
+    重复了同样的前 5 阶段装配（含作者覆盖读取），任一侧改动都会造成
+    「预览帧」与「落盘产物」不一致的静默漂移。
     """
     evidence = load_scenario_evidence(spec.artifact_dir, spec.scenario_id)  # D3-12 只读
     template = template_for_evidence(evidence, spec.template_name)
     plan = instantiate_narrative_template(evidence, template, audience=spec.audience)
 
     author = _load_author_override(spec.scenario_id)
-    override_storyboard = (author or {}).get("storyboard")
-    visual_override = (author or {}).get("visual_override")
-
     storyboard = generate_storyboard(
-        plan, evidence, template, audience=spec.audience, override=override_storyboard
+        plan,
+        evidence,
+        template,
+        audience=spec.audience,
+        override=(author or {}).get("storyboard"),
     )
-    visual_scenes = design_visual_scene(storyboard, evidence, visual_override)
-    return _render_frames(spec, evidence, storyboard, visual_scenes)
+    visual_scenes = design_visual_scene(storyboard, evidence, (author or {}).get("visual_override"))
+    return _Prepared(evidence, template, storyboard, visual_scenes)
+
+
+def render_case_frames(spec: CaseVideoSpec) -> list[np.ndarray]:
+    """完整管线「阶段 1–7」：返回逐帧 BGR 序列（确定性、零音频）。
+
+    供测试断言视觉确定性，以及 D3-B 预览复用。写盘（阶段 8）不在此内。
+    """
+    _assert_audio_boundary(spec)
+    prepared = _build_storyboard_and_scenes(spec)
+    return _render_frames(spec, prepared.evidence, prepared.storyboard, prepared.visual_scenes)
+
+
+def _narration_line(narration: list[str], frame_index: int, n_frames: int) -> str:
+    """把 shot 的 narration 数组按帧序均匀铺开（末帧必命中末条）。
+
+    旧式 ``i * len // n_frames`` 在 ``n_frames >> len(narration)`` 时会让最后一条
+    字幕停留过长（例如 10 帧 / 3 条 → 4:3:3 且末帧未必落到末条）。除以
+    ``n_frames - 1`` 后，末帧索引恒 ``== len``（由 ``min`` 收敛到末条），
+    分布更均匀且「最后一句一定说完」。
+    """
+    idx = frame_index * len(narration) // max(1, n_frames - 1)
+    return narration[min(len(narration) - 1, idx)]
 
 
 def _render_frames(
@@ -117,8 +193,7 @@ def _render_frames(
     caption_h = max(28, int(height * 0.10))
     registry = FontRegistry()
     node_by_id = {n["id"]: n for n in evidence["graph"]["nodes"]}
-    seed = spec.seed if spec.seed is not None else 0
-    fingerprint = evidence.get("scenario_fingerprint") or "unknown"
+    seed, fingerprint = _provenance_fields(spec, evidence)
     provider = _build_provider(spec, evidence)
     frames: list[np.ndarray] = []
     for shot in storyboard.shots:
@@ -132,8 +207,9 @@ def _render_frames(
         )
         narration = shot.narration or [""]
         for i in range(n_frames):
-            line = narration[min(len(narration) - 1, i * len(narration) // n_frames)]
-            caption_rgba = render_caption(line, width, caption_h, registry)
+            caption_rgba = render_caption(
+                _narration_line(narration, i, n_frames), width, caption_h, registry
+            )
             composed = compose_frame(
                 bg_frames[i],
                 [
@@ -148,23 +224,14 @@ def _render_frames(
 
 def generate_case_video(spec: CaseVideoSpec) -> CaseVideoResult:
     """8 阶段编排：artifact → 叙事案例视频（确定性、零音频、离线）。"""
-    evidence = load_scenario_evidence(spec.artifact_dir, spec.scenario_id)  # D3-12 只读
-    template = template_for_evidence(evidence, spec.template_name)
-    plan = instantiate_narrative_template(evidence, template, audience=spec.audience)
+    _assert_audio_boundary(spec)
 
-    author = _load_author_override(spec.scenario_id)
-    override_storyboard = (author or {}).get("storyboard")
-    visual_override = (author or {}).get("visual_override")
-
-    storyboard = generate_storyboard(
-        plan, evidence, template, audience=spec.audience, override=override_storyboard
-    )
-    visual_scenes = design_visual_scene(storyboard, evidence, visual_override)
+    # 阶段 1–5（与 render_case_frames 共用同一装配，杜绝漂移）。
+    evidence, template, storyboard, visual_scenes = _build_storyboard_and_scenes(spec)
 
     # 阶段 6–7：逐 shot 渲染帧序列（确定性）。
     frames = _render_frames(spec, evidence, storyboard, visual_scenes)
-    seed = spec.seed if spec.seed is not None else 0
-    fingerprint = evidence.get("scenario_fingerprint") or "unknown"
+    seed, fingerprint = _provenance_fields(spec, evidence)
 
     # 阶段 8：写盘 + 伴生文件。
     out_dir = Path(spec.output_dir) / f"{spec.scenario_id}__v{spec.version}"
@@ -240,14 +307,48 @@ def _assert_consistency(
             f"Duration consistency 失败：帧数={len(frames)} 期望≈{expected_frames}"
         )
 
-    # Frame provenance：provenance 角标必须包含 scenario_id（字符串命中断言）。
-    # overlay 渲染串为 f"{scenario_id} · seed={seed} · {fingerprint[:12]}"，
-    # 该串恒含 scenario_id；此处以同一确定性串做结构断言（fail-closed）。
-    seed = spec.seed if spec.seed is not None else 0
-    fingerprint = evidence.get("scenario_fingerprint") or "unknown"
-    prov_text = f"{spec.scenario_id} · seed={seed} · {fingerprint[:12]}"
-    if not spec.scenario_id or spec.scenario_id not in prov_text:
-        raise AssertionError("Frame provenance 失败：角标未含 scenario_id")
+    # Frame provenance：走真实渲染路径断言（§8 验收 9）。
+    _assert_frame_provenance(spec, evidence)
+
+
+def _assert_frame_provenance(spec: CaseVideoSpec, evidence: dict) -> None:
+    """Frame provenance（§8 验收 9）：角标必须**真的**把 scenario_id 渲进像素。
+
+    旧实现在本函数内用 f-string 拼出角标串、再断言该串含 ``scenario_id`` —— 同义反复
+    （tautology）：断言恒成立，抓不到「overlay 实际没把 scenario_id 画上去」的回归。
+    现改为三段真实校验：
+
+    1. **共享格式化契约**：角标文本取自 overlay 的唯一格式化函数 ``provenance_text``
+       （渲染同源）。一旦格式串丢掉 scenario_id，此处立即失败；
+    2. **确有绘制**：真实渲染叠加层，断言右下角标区域存在非透明像素；
+    3. **敏感性**：换一个 scenario_id 渲染，像素必须变化——证明角标像素真的编码了
+       场景标识，而非画了个与场景无关的固定水印。
+    """
+    seed, fingerprint = _provenance_fields(spec, evidence)
+    text = provenance_text(spec.scenario_id, seed, fingerprint)
+    if not spec.scenario_id or spec.scenario_id not in text:
+        raise AssertionError(
+            f"Frame provenance 失败：角标格式串未含 scenario_id（text={text!r}）"
+        )
+
+    width, height = spec.resolution
+    registry = FontRegistry()
+    layer = np.array(
+        render_provenance_layer(width, height, spec.scenario_id, seed, fingerprint, registry)
+    )
+    corner_alpha = layer[height // 2 :, width // 2 :, 3]
+    if not corner_alpha.any():
+        raise AssertionError("Frame provenance 失败：叠加层右下角标区域无可见像素（角标未绘制）")
+
+    mutated = np.array(
+        render_provenance_layer(
+            width, height, f"{spec.scenario_id}__mutated", seed, fingerprint, registry
+        )
+    )
+    if np.array_equal(layer, mutated):
+        raise AssertionError(
+            "Frame provenance 失败：叠加层像素与 scenario_id 无关（角标未真正编码场景标识）"
+        )
 
 
 __all__ = ["CaseVideoResult", "generate_case_video", "render_case_frames"]
