@@ -1,10 +1,10 @@
-# ADR-0035 D3 · 落地实现设计文档（Design Proposal · v5 · 待 Owner 评审）
+# ADR-0035 D3 · 落地实现设计文档（Design Proposal · v6 · 待 Owner 评审）
 
 > **性质**：本文件是 ADR-0035 正文预留的「非冻结件 Implementation Plan」子文档（参见 ADR-0035 §6 实施切片 + 工作记忆约定 `docs/ADR/0035-implementation-plan.md`）。  
-> **状态**：Design Proposal **v5（v4 基础上收紧：NarrativePlanner → NarrativeTemplateCompiler 非规则引擎 + 新增 Layer Boundary Contract 防语义/表达层污染 + 结构级验收 + 子包文件结构 + D3-11 锁定）**，**未经 Owner 评审定稿**。本文档只设计、不实现；Owner 拍板「待裁决项（§9）」后，AI 再进入实现。  
+> **状态**：Design Proposal **v6（v5 基础上：补 NarrativePlan 正式 schema + 全 schema `extra="forbid"` 机械锁定层边界 + `compile_narrative` 重命名 + §1 行号核查 + §2.0 阶段计数澄清 + §2.4/§2.3/§10 指引补全 + 解决 ★★★ D3-1 与主 ADR §3 边界冲突）**，**未经 Owner 评审定稿**。本文档只设计、不实现；Owner 拍板「待裁决项（§9）」后，AI 再进入实现。  
 > **不改动**：ADR-0035 正文（仍 Proposed）、不触碰生产 runtime / 验证判定 / 基线文件。  
 > **依据**：所有复用接口均取自当前代码真实签名（见 §1 盘点），非凭空设计。  
-> **v5 变更（相对 v4）**：① **NarrativePlanner 重命名为 NarrativeTemplateCompiler**——v1 明确**不是规则引擎、不是 Planner**，只是「EvidenceGraph + ScenarioTemplate → NarrativePlan」的**模板实例化**；未来若需智能规划再升级为 `Template Compiler → Planner`（§2.2/§10）；② **新增 §2.4.1 Layer Boundary Contract**——Storyboard（语义层）禁携带 `x/y/color/layout/font/shape`，VisualSceneGraph（表达层）禁携带 `why/purpose/audience_need/explanation_order`，唯一合法耦合是 `ref` 链；③ **§8 新增结构级验收**（Story/Scene consistency 子集断言 + Frame provenance 命中 + Duration consistency），不只有逐帧 `np.array_equal`；④ **§2.8 文件结构改为子包布局**（evidence/narrative/storyboard/scene/render/audio/mux），随增长不膨胀成单大文件；⑤ **§9 D3-11 锁定**（VisualSceneGraph 必须独立，Owner 确认）。
+> **v6 变更（相对 v5 · 对应 Owner 评审 1.1–1.4 + 2.1–2.6）**：① **§3 新增 `NarrativePlan` / `ReasoningStep` 正式 Pydantic schema**——字段严格仅为 `intent: Literal[...]` / `reasoning_chain: list[ReasoningStep]` / `audience_question: str` / `audience: str`，**明确禁 `text` / `sentence` / `narration` 字段**；四个既有 schema（`ShotSpec` / `Storyboard` / `VisualElement` / `VisualSceneGraph`）全部加 `model_config = ConfigDict(extra="forbid")` + docstring 列禁用字段，使 §2.4.1 层边界契约**机械可 enforcement**（CI/review 可据此打回越界）；② **`compile_narrative` 重命名为 `instantiate_narrative_template`**（与 `NarrativeTemplateCompiler` 实体对齐，§2.2/§2.8/§7 同步）；③ **§1 行号核查**：`provider.py:52` 实为 `class EdgeTTSProvider`（`synthesize` 在 `:57`）、`scenario.py` 的 `audio` 字段实为 `:159`（非 `:99`）；补「行号已对 origin/main HEAD 核验」声明 + 漂移同步协议；④ **§2.0 阶段计数括号注明**「8 = 1 投影(EvidenceProjection) + 1 中间数据(EvidenceGraph) + 6 新建 D3 阶段」；`audio.wav` 显式标 `【D3-B only】`；⑤ **§2.4 末尾补「层边界契约见 §2.4.1」指引**、**§2.3 Storyboard 示例补 (节选) 对齐 canonical 5-shot**；⑥ **§10 开头补「升级 Planner 仍受 §0.3 红线约束」重申**；⑦ **解决 ★★★ D3-1 与主 ADR §3 边界冲突（方案 a）**——主 ADR §3 增补 D3 纯消费 import `validation`/`audio` 固定 allowlist 例外 + changelog；本文件 §9 D3-1 转「已决」、§8 验收第 7 条同步。
 
 ---
 
@@ -70,7 +70,7 @@ D3 是**编译器**，不是平台。v1 明令**不做**以下任何一项（实
 | 视觉帧生成                       | `validation/simulation/renderer.py:38` `render_frames(scenario) -> list[np.ndarray]`                                        | VisualComposer 的 background layer |
 | 静音 MP4 写出                   | `validation/simulation/renderer.py:70` `export_mp4(scenario, frames, path, fps)`                                            | VideoMuxer 参考实现                   |
 | 场景编译                        | `validation/scenario/compiler.py:27` `ScenarioCompiler.compile(scenario, mode='frames')`                                    | 提供 `frames` + `audio_events`      |
-| 在线 TTS                      | `audio/tts/provider.py:52` `EdgeTTSProvider.synthesize(text, voice, rate, pitch, out_path)`                                 | AudioComposer（仅 D3-B 旁白）              |
+| 在线 TTS                      | `audio/tts/provider.py:52`（`class EdgeTTSProvider`）/ `:57`（`def synthesize(text, voice, rate, pitch, out_path)`）                          | AudioComposer（仅 D3-B 旁白）              |
 | TTS 配方合成                    | `audio/tts/generator.py:165` `generate_scenario(sc, out_dir, provider, fixtures_root)`                                      | AudioComposer（仅 D3-B 旁白）              |
 | 既有范式                        | `scenarios/audio/*.yaml` + `scripts/run_audio_scenarios.py`                                                                 | demo 脚本约定对齐                       |
 | 落盘排除                        | `.gitignore:45 *.mp4`、`:68 out/`、`:72 generated/`                                                                           | case.mp4 天然不入库                    |
@@ -78,12 +78,14 @@ D3 是**编译器**，不是平台。v1 明令**不做**以下任何一项（实
 **关键事实**：
 
 - `EvidenceProjection` 与 `EvidenceGraph` **已在 D1/D2 落地**（loader + schema），D3 直接复用，**绝不重新建模事实层**——管线阶段 1–2，且保证与 D1/D2 视觉/高亮类别一致（`_STAGE_TO_GRAPH_CATEGORY` / `_DECISION_KIND_TO_GRAPH_CATEGORY` 同常量）。
-- `validation.Scenario.audio: list[AudioEventSpec]`（`scenario.py:99`）是**音频感知事件声明**（cross-modal 关联用，非旁白文本）；`audio/tts/generator.py:29` 的 `Scenario` 是**独立 TTS 配方模型**。D3 旁白走 TTS 配方路径。
+- `validation.Scenario.audio: list[AudioEventSpec]`（`scenario.py:159`）是**音频感知事件声明**（cross-modal 关联用，非旁白文本）；`audio/tts/generator.py:29` 的 `Scenario` 是**独立 TTS 配方模型**。D3 旁白走 TTS 配方路径。
 - `cv2.freetype` 在 opencv-python 4.13 **未编译** → `cv2.putText` **不渲染中文**（见 §9 D3-7）。
+
+> **行号核验声明（v6 新增 · 对应 Owner 评审 1.3）**：上表所有 `文件:行号` 引用均已对照 **origin/main HEAD（`1db45df`）** 于 2026-08-12 实测核验（loader:173 / renderer:38,70 / compiler:27 / generator:165 均命中；provider.py:52 实为 `class EdgeTTSProvider`，`synthesize` 在 :57；scenario.py 的 `audio` 字段在 :159）。**复用结论（复用对象与真实签名语义）以代码为准，行号仅为定位锚点**；若实现期代码已漂移导致行号失效，**仅修正本表行号**并在 §8 修订记录 v6 条目登记，不得因此改动复用结论或动摇设计。
 
 ---
 
-## 2. 架构（8 阶段管线 + 落点）
+## 2. 架构（8 阶段管线 + 落点 · 8 = 1 投影(EvidenceProjection) + 1 中间数据(EvidenceGraph) + 6 新建 D3 阶段）
 
 ### 2.0 · 管线总览（强制 Storyboard + VisualScene 双中间层）
 
@@ -107,7 +109,7 @@ generated/demo_videos/<scenario_id>__v<ver>/
    ├── case.mp4
    ├── storyboard.yaml        ← 分镜伴生（可审计：叙事是否忠于证据）
    ├── provenance.json        ← 生成溯源（scenario_id+seed+fingerprint+各阶段输入哈希）
-   └── audio.wav             ← 仅 D3-B（旁白；音效递延 D3-C，默认不做）
+   └── audio.wav             ← 【D3-B only】（旁白；音效递延 D3-C，默认不做）
 ```
 
 > **两个中间层缺一不可**（电影工业类比）：导演不会「摄像机 → 成片」，而是「剧本 → 分镜 → 拍摄计划 → 素材 → 剪辑」。D3 同理——
@@ -146,7 +148,7 @@ shots:
 **NarrativePlan 职责（解释策略，非文本）**：只决定「解释顺序与意图」——`intent` / `reasoning_chain` / `audience_question`。它**只编排证据，不撰写任何自然语言句子**（句子由下游 `storyboard/generator` 从证据值 + 文案常量填充）。
 
 ```python
-def compile_narrative(evidence: ScenarioEvidence, template: ScenarioTemplate) -> NarrativePlan:
+def instantiate_narrative_template(evidence: ScenarioEvidence, template: ScenarioTemplate) -> NarrativePlan:
     """纯函数 · 确定性 · 模板实例化。
     从 evidence.graph 取节点，按 template.shots 的 ref_kinds 填充每 shot 的
     evidence_refs；只决定顺序与意图（intent/reasoning_chain/audience_question），
@@ -157,14 +159,15 @@ def compile_narrative(evidence: ScenarioEvidence, template: ScenarioTemplate) ->
 **NarrativePlan 结构（解释策略，非文本）**：
 
 ```yaml
-narrative_plan:
-  intent: explain_risk_decision          # 解释意图（枚举：explain_risk_decision / explain_false_positive / ...）
-  reasoning_chain:                       # 解释顺序：由图拓扑 + 模板推导，非自由叙事
-    - observation:   abnormal_dwell       # 引用 Event 节点（图实证）
-    - interpretation: repeated_presence  # 引用规则/统计结论（图实证）
-    - policy_match:  abnormal_dwell_policy# 引用 policy 节点（图实证）
-    - decision:      WARN                # 引用 Decision 节点（图实证）
+narrative_plan:                          # 对应 §3 NarrativePlan schema（extra="forbid"）
+  intent: explain_risk_decision          # 解释意图枚举（见 §3）
+  reasoning_chain:                       # list[ReasoningStep]：由图拓扑 + 模板推导，非自由叙事
+    - { step_kind: observation,   ref: event_abnormal_dwell_001 }   # 引用 Event 节点（图实证）
+    - { step_kind: interpretation, ref: rule_abnormal_dwell }       # 引用规则/统计结论（图实证）
+    - { step_kind: policy_match,  ref: policy_abnormal_dwell_v3 }   # 引用 policy 节点（图实证）
+    - { step_kind: decision,      ref: decision_warn_001 }          # 引用 Decision 节点（图实证）
   audience_question: "为什么系统认为需要关注？"  # 本片要回答的观众疑问（模板常量，非生成）
+  # audience: general                    # 可选，默认 general
 ```
 
 > 注意：`reasoning_chain` 每一步都**指向 EvidenceGraph 中的真实节点/边**；编译器只做「挑选 + 排序 + 按模板填 ref」，不创造任何图外内容。这是「编排证据」与「撰写故事」的根本分野——前者可审计、可复现，后者不可控。
@@ -195,7 +198,8 @@ narrative_plan:
 - **产物伴生**：Storyboard 同时写为 `storyboard.yaml` 落盘（见 §6 输出布局）。
 
 ```yaml
-# 同一张图，judges 受众的故事板（节选）
+# 同一张图，judges 受众的故事板（节选 · 仅展示 detection 单 shot 如何带 audience_need；
+#   完整 5-shot 弧线 context→detection→reasoning→decision→closure(+cross_modal) 见 §2.2 canonical 表）
 storyboard:
   audience: judges
   shots:
@@ -241,6 +245,8 @@ visual_scene:
 - 自动产出：`design_visual_scene(storyboard, evidence) -> VisualSceneGraph`（确定性模板：reasoning shot 默认左-中-右三栏 + 红色因果箭头）。
 - 作者覆盖：`visualizer/video/scenarios/<demo_id>.yaml` 可声明 `visual_override`（仅调 region/glyph/箭头样式，不得引入图外 ref）。
 - **层边界纪律（见 §2.4.1）**：VisualSceneGraph 是**表达层**，只承载空间排布，**禁止携带任何解释语义字段**（`why` / `purpose` / `audience_need` / `explanation_order`）——这些属于 Storyboard（语义层）。
+
+> **层边界契约（Layer Boundary Contract）见 §2.4.1**——Storyboard（语义层）与 VisualSceneGraph（表达层）的字段集禁区与唯一合法耦合（`ref` 链）在该节以表格硬锁定；§3 的 schema 以 `model_config = ConfigDict(extra="forbid")` 机械 enforcement（见 §3 + Owner 评审 2.6）。
 
 ### 2.4.1 · Layer Boundary Contract（Storyboard 语义层 ↔ VisualSceneGraph 表达层 · 防职责污染）
 
@@ -325,7 +331,7 @@ visualizer/video/
 │   └── adapter.py       # EvidenceProjection adapter（复用 loader，包装成 D3 入口）
 ├── narrative/
 │   ├── templates.py     # ScenarioTemplate 声明（elderly_warning_case_v1 等固定模板，见 §2.2）
-│   └── compiler.py      # compile_narrative(evidence, template) -> NarrativePlan（模板实例化，非规则引擎）
+│   └── compiler.py      # instantiate_narrative_template(evidence, template) -> NarrativePlan（模板实例化，非规则引擎）
 ├── storyboard/
 │   ├── schema.py        # Storyboard / ShotSpec（语义层 schema；禁 x/y/color/layout/font/shape）
 │   └── generator.py     # generate_storyboard(plan, evidence, audience) -> Storyboard + YAML I/O
@@ -357,42 +363,63 @@ scripts/generate_case_video.py   # CLI 入口（替代 generate_demo_video，呼
 对齐 ADR-0032 `Scenario` 的「单一真相源 + YAML 声明」思想，Storyboard 也是**声明式 YAML**（未来「AI 宣传视频工厂」的基础素材）：
 
 ```python
+from pydantic import BaseModel, ConfigDict, Literal
+
+# ── 语义层 A：解释策略（NarrativeTemplateCompiler 产出 · 非文本 · 见 §2.2）──
+class ReasoningStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # 字段集硬锁，禁越界增字段
+    step_kind: Literal["observation", "interpretation", "policy_match",
+                       "decision", "closure", "cross_modal"]   # 步骤语义类别（来自模板，非自由生成）
+    ref: str                                    # 指向 EvidenceGraph 节点/边 id（fail-closed 解析）
+
+class NarrativePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # 字段集硬锁：严禁 text/sentence/narration
+    intent: Literal["explain_risk_decision", "explain_false_positive",
+                    "explain_normal_case", "explain_cross_modal"]   # 解释意图枚举
+    reasoning_chain: list[ReasoningStep]        # 解释顺序（图拓扑+模板推导，非自由叙事）
+    audience_question: str                      # 本片要回答的观众疑问（模板常量，非生成）
+    audience: str = "general"                   # 受众维度（general/judges/investors/family...）
+    # 禁用字段（机械可 enforcement）：text / sentence / narration 及任何自然语言文本字段
+    # —— NarrativePlan 只编排证据节点，句子由下游 storyboard/generator 从证据值+文案常量填充
+
+# ── 语义层 B：分镜（StoryboardGenerator 产出 · 时间维 · 语义层）──
+#    禁携带空间/视觉字段：x / y / color / layout / font / shape（见 §2.4.1）
 class ShotSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # 语义层：禁 x/y/color/layout/font/shape
     name: str                                   # context/detection/reasoning/decision/closure(+cross_modal)
     kind: Literal["environment","detection_overlay",
                   "reasoning","decision","cross_modal","closure"]
     duration_s: float
     purpose: str                                # 人类可读叙事意图（可解释性元数据）
-    audience_need: str = ""                     # v4：该镜头要满足观众什么信息需求
+    audience_need: str = ""                     # 该镜头要满足观众什么信息需求
     evidence_refs: list[str] = []               # 指向 EvidenceGraph 节点 id（每镜头可审计）
     narration: list[str] = []                   # 字幕/旁白逐句（由模板从证据值填充，非自由文本）
 
 class Storyboard(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # 语义层：禁 x/y/color/layout/font/shape
     demo_id: str
     title_zh: str
     scenario_ref: str                           # 关联 validation Scenario YAML（事实层来源）
-    audience: str = "general"                   # v4：受众维度（general/judges/investors/family...）
+    audience: str = "general"                   # 受众维度（general/judges/investors/family...）
     shots: list[ShotSpec]
     version: int = 1
-```
 
-- **落盘**：`visualizer/video/scenarios/<demo_id>.yaml`（作者故事板，YAML 入库可版本化）。
-- **解析纪律**：override 的 `evidence_refs` 必须能在 `evidence.graph` 解析；解析失败 → 规划器抛错（fail-closed）。
-- **VisualSceneGraph schema**（独立，仅承载表达）：
-
-```python
+# ── 表达层：视觉场景图（VisualSceneDesigner 产出 · 空间维 · 表达层）──
+#    禁携带解释语义字段：why / purpose / audience_need / explanation_order（见 §2.4.1）
 class VisualElement(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # 表达层：禁 why/purpose/audience_need/explanation_order
     ref: str                                    # 指向 EvidenceGraph 节点（fail-closed）
     region: Literal["left","center","right","full"]
     glyph: Literal["detection_box","warn_badge","message_icon","timeline","risk_score"]
 
 class VisualSceneGraph(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # 表达层：禁 why/purpose/audience_need/explanation_order
     shot: str
     layout: list[VisualElement]
     arrows: list[dict] = []                     # from/to 指向 evidence_refs；style 仅视觉
 ```
 
-- **层边界（见 §2.4.1）**：`ShotSpec`（语义层）schema **不得**新增 `x`/`y`/`color`/`layout`/`font`/`shape` 字段；`VisualSceneGraph`（表达层）schema **不得**新增 `why`/`purpose`/`audience_need`/`explanation_order` 字段。该字段集以 schema 为硬约束，review/CI 可据此打回越界。
+- **层边界（见 §2.4.1）**：`ShotSpec`/`Storyboard`（语义层）schema **不得**新增 `x`/`y`/`color`/`layout`/`font`/`shape` 字段；`VisualElement`/`VisualSceneGraph`（表达层）schema **不得**新增 `why`/`purpose`/`audience_need`/`explanation_order` 字段；`NarrativePlan` **严禁** `text`/`sentence`/`narration` 自然语言文本字段。上述字段集已由各 schema 的 `model_config = ConfigDict(extra="forbid")` **机械锁定**——越界即 `ValidationError`，review/CI 可据此打回（对应 Owner 评审 2.6）。
 
 ---
 
@@ -441,7 +468,7 @@ class VisualSceneGraph(BaseModel):
 ### D3-5 · 视觉确定性（验收口径）
 
 - **视觉帧**：`render_frames` 已确定性（ADR-0032 T1，受 `generator.fingerprint` 版本锁定）。
-- **叙事层**：`plan_narrative` 纯函数 → 同 evidence 同 NarrativePlan；`generate_storyboard` 纯函数 → 同 plan 同 Storyboard；`design_visual_scene` 纯函数 → 同 storyboard 同 VisualSceneGraph；构图/矢量叠加纯函数 → 同 shot 状态同帧。
+- **叙事层**：`instantiate_narrative_template` 纯函数 → 同 evidence 同 NarrativePlan；`generate_storyboard` 纯函数 → 同 plan 同 Storyboard；`design_visual_scene` 纯函数 → 同 storyboard 同 VisualSceneGraph；构图/矢量叠加纯函数 → 同 shot 状态同帧。
 - **字幕/水印**：确定性绘制。
 - **音频（D3-B）**：不可复现（TTS 在线）。
 - **验收仅断言视觉确定性**（逐帧 `np.array_equal` / 字节一致）。
@@ -462,7 +489,7 @@ class VisualSceneGraph(BaseModel):
 
 - **Slice D3-A（叙事骨架 + 纯视觉案例视频 · 默认路径 · 零音频）**：  
   `spec.py` + `compiler.py`（8 阶段编排）+ `evidence/adapter.py`（复用 loader）+ `narrative/templates.py` + `narrative/compiler.py`（`compile_narrative` 模板实例化，非规则引擎）+ `storyboard/schema.py` + `storyboard/generator.py`（`generate_storyboard` + audience 维度 + YAML I/O）+ `scene/schema.py` + `scene/designer.py`（`design_visual_scene` 表达层）+ `render/svg.py` + `render/rasterizer.py` + `render/caption.py` + `render/composer.py` + `render/overlay.py` + `mux/muxer.py` + `scripts/generate_case_video.py` + 1 个作者故事板（`visualizer/video/scenarios/elderly_dwell_warning.yaml`）+ 测试：
-  - **叙事层（非文本 · 模板实例化）**：`compile_narrative` 产出 canonical 5-shot，`reasoning_chain` 每一步均能在 graph 解析、`intent` 来自枚举；**断言不含任何 if-else 分支决策逻辑**（非规则引擎）；
+  - **叙事层（非文本 · 模板实例化）**：`instantiate_narrative_template` 产出 canonical 5-shot，`reasoning_chain` 每一步均能在 graph 解析、`intent` 来自枚举；**断言不含任何 if-else 分支决策逻辑**（非规则引擎）；
   - **Storyboard 强制中间层 + audience**：`generate_storyboard` 产出 yaml 且含 `audience`/`audience_need`，可 round-trip 解析为同一 Storyboard；不同 `audience` 产出不同 storyboard 但 `evidence_refs` 始终来自同一图；schema 不含空间字段（层边界契约）；
   - **VisualScene 表达层**：`design_visual_scene` 产出含 `region`/`glyph`/`arrows`，`ref` 全部可解析（fail-closed：伪造 ref 必须报错）；schema 不含语义字段（层边界契约）；
   - **视觉确定性**（同输入 → 逐帧 `np.array_equal`）；
@@ -487,7 +514,7 @@ class VisualSceneGraph(BaseModel):
 4. **零新重依赖**：音频走既有 `edge-tts`（dev 依赖）+ 系统 `ffmpeg`；若 D3-7 选 (a) 则仅新增轻量 `Pillow`；cairosvg 不默认引入；**无音效/配乐/多格式依赖**。
 5. **视觉确定性（帧级）**：同 scenario 两次生成 `case.mp4` 视觉逐帧 `np.array_equal` 一致（指纹版本锁定）。
 6. **脱敏 + provenance**：每帧含水印+角标；角色标签脱敏；产物不含 PII/真实路径/设备序列号。
-7. **零 import 边界**：AST 测试确认 `visualizer/video` 不 import `runtime/evaluation/integration/memory`（仅 `validation`/`audio` 例外，需 §9 D3-1 裁决确认）。
+7. **零 import 边界**：AST 测试确认 `visualizer/video` 不 import `runtime/evaluation/integration/memory`；`validation`/`audio` 纯消费例外已见**主 ADR §3 授权条款**（D3-1 已决，方案 a），由零 import 边界 AST 测试守护——`visualizer/video` 仅在 `narrative/evidence/audio` 子包内 import `validation`/`audio` 既有栈，且仅读取、不触发验证判定、不反向依赖生产决策。
 8. **非目标守住**：无真实录像、无实时、不入库 mp4、不接 CI 门禁、不改 production 行为、非「HTML 录屏」、无音效/配乐、无 Web 栈。
 9. **结构级一致性（artifact-level · 防「逻辑正确但视频错」）**：逐帧一致**不足以**证明叙事忠于证据，必须额外断言：
    - **Story consistency**：`Storyboard.evidence_refs` 的每个 id 必须 ∈ `EvidenceGraph.nodes`（断言 ⊆）；否则即便逐帧一致，叙事已偏离证据。
@@ -502,7 +529,7 @@ class VisualSceneGraph(BaseModel):
 
 | #                | 决策点                                         | 推荐                                                                                           | 影响落点/依赖                                      |
 | ---------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **D3-1**         | 导入边界（visualizer 能否 import validation/audio） | 授权（ADR-0035 D3 已显式许可复用这两栈）                                                                   | 决定 D3 落 `visualizer/video/` 还是 `validation/` |
+| **D3-1（v6 已决 · 方案 a）** | 导入边界（visualizer 能否 import validation/audio） | **已授权**：D3 仅在 `visualizer/video/` 子包内，为纯消费目的 import `validation`/`audio` 既有栈（`render_frames`/`export_mp4`/`audio.tts` 等），仅读取、不触发验证判定、不反向依赖生产决策；主 ADR §3 已增补对应例外条款 | 决定 D3 落 `visualizer/video/` |
 | **D3-2**         | 音频默认策略                                      | 默认 D3-A 纯视觉字幕，`--with-audio` 在线 TTS（D3-B）；D3-C 音效/配乐默认不做                                         | 决定是否走网络                                      |
 | **D3-3**         | ffmpeg 封装缺失降级                               | 降级双文件交付                                                                                      | 无新依赖                                         |
 | **D3-7**         | 中文叠加字体                                      | 声明 Pillow + 捆绑子集 CJK 字体                                                                      | 新增轻量依赖 + 字体资产                                |
@@ -511,13 +538,15 @@ class VisualSceneGraph(BaseModel):
 | **D3-10（v3 新增）** | 伴生文件默认产出                                | 默认产出 `storyboard.yaml` + `provenance.json`（审计必需）                                         | 输出布局                                         |
 | **D3-11（v5 已决 · Owner 确认）** | VisualSceneGraph 是否独立成层              | **必须独立**（EvidenceGraph 不直接控制 SVG；表达层与事实层分离，是「同图多受众不同视觉」的正确扩展点，见 §2.4.1） | 落点 `scene/schema.py` + `scene/designer.py`；Storyboard/VisualScene 职责由 §2.4.1 契约锁定 |
 
-> **已决项（本版确认，无需再裁决）**：D3-9（固定模板 / 非规则引擎 / 非 Planner）、D3-11（VisualSceneGraph 必须独立）。  
-> **仍待 Owner 拍板**：D3-1（导入边界）/ D3-2（音频默认）/ D3-3（ffmpeg 降级）/ D3-7（中文叠加字体）/ D3-8（矢量光栅化默认）/ D3-10（伴生文件，已默认建议）。  
+> **已决项（本版确认，无需再裁决）**：D3-1（导入边界：D3 纯消费 import `validation`/`audio`，已见主 ADR §3 授权例外）、D3-9（固定模板 / 非规则引擎 / 非 Planner）、D3-11（VisualSceneGraph 必须独立）。  
+> **仍待 Owner 拍板**：D3-2（音频默认）/ D3-3（ffmpeg 降级）/ D3-7（中文叠加字体）/ D3-8（矢量光栅化默认）/ D3-10（伴生文件，已默认建议）。  
 > 待上述待裁决项拍板后，本文件升级为「Implementation Plan（定稿）」，AI 进入实现（独立 PR + Owner 评审）。
 
 ---
 
 ## 10. 未来方向（v4 降级 · 仅模块边界预留，非路线图承诺）
+
+> **红线重申（对应 Owner 评审 2.4 · 与 §0.3 同）**：无论未来是否将阶段 3 升级为 `Planner`，**始终受 §0.3 红线约束——禁 LLM 自由生成叙事，叙事只能在既有模板空间内做选择**（选模板 / 选 shot 顺序 / 选 audience），绝不允许模型脱离模板自由撰写解说词或编造证据外文本。升级 Planner 只是「在模板空间内做更智能的选择」，不改变「确定性映射」与「离线」本质。
 
 D3 跑通后，其 `NarrativeTemplateCompiler → Storyboard → VisualScene` 三段纯函数链路在**模块边界**上为「叙事层」预留了扩展位：
 
