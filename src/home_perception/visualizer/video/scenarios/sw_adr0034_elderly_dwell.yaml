@@ -1,0 +1,32 @@
+# ADR-0035 D3 · 作者故事板覆盖示例（scenario: sw_adr0034_elderly_dwell）
+#
+# 文件名约定：visualizer/video/scenarios/<scenario_id>.yaml（orchestrator 按 scenario_id 加载）。
+# 用途：赛前精修 demo 的可声明式覆盖（对齐 ADR-0032 Scenario 单一真相源思想）。
+#
+# 纪律：
+# - storyboard 段可覆盖 audience / audience_need / purpose / evidence_refs；
+#   覆盖的 evidence_refs 必须能在 EvidenceGraph 解析（fail-closed，见 §8 验收 9）。
+# - visual_override 段仅调版面（region/glyph），不得引入图外 ref
+#   （ref 必须 ∈ 对应 shot 的 Storyboard.evidence_refs）。
+#
+# 本示例只覆盖受众维度（judges）与 audience_need，并微调两个真实 ref 的版面。
+
+storyboard:
+  audience: judges
+  shots:
+    - name: detection
+      audience_need: "评委需要知道异常在哪里、如何被稳定发现"
+    - name: reasoning
+      audience_need: "评委需要看清风险判定依据链（检测→决策→动作）"
+    - name: closure
+      audience_need: "评委需要确认闭环已落地（通知家属）"
+
+visual_override:
+  reasoning:
+    - ref: decision-0
+      region: center
+      glyph: warn_badge
+  decision:
+    - ref: action-0
+      region: right
+      glyph: message_icon
