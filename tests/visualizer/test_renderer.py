@@ -635,3 +635,347 @@ def test_replay_js_degradation_paths(tmp_path):
         f"replay.js 降级行为测试失败:\n{res.stdout}\n{res.stderr}"
     )
 
+
+# ---------------------------------------------------------------------------
+# D2.2 graph 联动高亮：行为级验证（Node 真实执行 IIFE，CI 无 node 时跳过）
+# ---------------------------------------------------------------------------
+
+_D22_LINKAGE_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const htmlPath = process.argv[2];
+const html = fs.readFileSync(htmlPath, 'utf8');
+
+// 收集所有 replay-data 场景 id
+const pre = 'id="replay-data-';
+let p = html.indexOf(pre);
+const ids = [];
+while (p !== -1) {
+  const s = p + pre.length;
+  const e = html.indexOf('"', s);
+  ids.push(html.slice(s, e));
+  p = html.indexOf(pre, e);
+}
+if (!ids.length) { console.error('FAIL: 无 replay-data 数据岛'); process.exit(1); }
+
+// 拆出所有 <script>...</script> 块（非贪婪，匹配诊断可用实现）
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+const replayJs = scripts.find(s => s.includes('global.__Replay = {'));
+
+// 选第一个同时具备 graph IIFE（含 stepForCategory）与 init 调用的场景
+let sid = null, graphScript = null, replayInits = null;
+for (const cand of ids) {
+  const g = scripts.find(s => s.includes('get("' + cand + '")') && s.includes('stepForCategory'));
+  const i = scripts.find(s => s.includes('window.__Replay.init("' + cand + '")'));
+  if (g && i) { sid = cand; graphScript = g; replayInits = i; break; }
+}
+if (!sid) { console.error('FAIL: 无具备 graph IIFE 的场景'); process.exit(1); }
+
+// 取该场景的 replay-data JSON
+const pre2 = 'id="replay-data-' + sid + '"';
+const t0 = html.indexOf(pre2) + pre2.length;
+const open = html.indexOf('>', t0) + 1;
+const close = html.indexOf('</script>', open);
+const replayData = html.slice(open, close);
+
+const dispatchCalls = [];
+const clickHandlers = [];
+function mockEl(id) {
+  return {
+    _id: id,
+    textContent: id.indexOf('replay-data-') !== -1 ? replayData : '',
+    style: {},
+    classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+    getAttribute(a) { return a === 'data-idx' ? '0' : null; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    scrollIntoView() {},
+    set onclick(f) {}, set onchange(f) {},
+  };
+}
+const mockDoc = { getElementById: (id) => mockEl(id) };
+const echarts = {
+  init() {
+    return {
+      setOption() {},
+      on(ev, cb) { if (ev === 'click') clickHandlers.push(cb); },
+      dispatchAction(a) { dispatchCalls.push(a); },
+      resize() {},
+    };
+  },
+};
+const ctx = { console, setTimeout, clearTimeout, Math, JSON, isNaN, parseInt, Infinity, document: mockDoc, echarts };
+ctx.window = ctx;
+vm.createContext(ctx);
+function run(label, code) {
+  try { vm.runInContext(code, ctx); }
+  catch (e) { console.error('FAIL ' + label + ' 抛错: ' + e.message); process.exit(1); }
+}
+run('replayJs', replayJs);
+run('replayInits', replayInits);
+run('graphScript', graphScript);
+
+// 断言 1：graph 节点 click→seek 联动已注册
+if (clickHandlers.length < 1) { console.error('FAIL: chart.on(click) 未注册'); process.exit(1); }
+// 断言 2：初始态高亮已触发 dispatchAction highlight
+const initHi = dispatchCalls.filter(a => a.type === 'highlight' && a.dataIndex != null);
+if (initHi.length < 1) { console.error('FAIL: 初始态未触发高亮'); process.exit(1); }
+
+// 提取 graphNodes（括号平衡），用于校验高亮的目标类别正确
+const gstart = graphScript.indexOf('var graphNodes = ') + 'var graphNodes = '.length;
+let depth = 0, gend = -1;
+for (let i = gstart; i < graphScript.length; i++) {
+  const c = graphScript[i];
+  if (c === '[') depth++;
+  else if (c === ']') { depth--; if (depth === 0) { gend = i + 1; break; } }
+}
+const graphNodes = JSON.parse(graphScript.slice(gstart, gend));
+
+// 断言 3：seek 到某 step 后，触发的高亮节点 ntype 与该 step 的 stage→category 一致
+const rp = ctx.window.__Replay.get(sid);
+const targetIdx = Math.min(2, rp.nodes.length - 1);
+const expectedCat = rp.nodes[targetIdx].category;
+dispatchCalls.length = 0;
+rp.seek(targetIdx);
+const seekHi = dispatchCalls.filter(a => a.type === 'highlight' && a.dataIndex != null);
+if (seekHi.length < 1) { console.error('FAIL: seek 未触发高亮'); process.exit(1); }
+const expectedCount = graphNodes.filter(n => n.ntype === expectedCat).length;
+if (seekHi.length !== expectedCount) {
+  console.error('FAIL: 高亮数 ' + seekHi.length + ' != 期望 ' + expectedCount + ' (cat=' + expectedCat + ')');
+  process.exit(1);
+}
+const mism = seekHi.filter(a => !graphNodes[a.dataIndex] || graphNodes[a.dataIndex].ntype !== expectedCat);
+if (mism.length > 0) { console.error('FAIL: 高亮节点 ntype 与桥接类别不符'); process.exit(1); }
+console.log('OK sid=' + sid + ' clicks=' + clickHandlers.length + ' initHi=' + initHi.length + ' seekHi=' + seekHi.length + ' cat=' + expectedCat);
+"""
+
+
+def test_render_d22_graph_linkage_fires_dispatch(tmp_path):
+    """D2.2 行为级回归：graph IIFE 必须真正触发联动高亮（非字符串断言）。
+
+    历史 bug：highlightCategory 引用了未定义的 JS 变量 ``nodes``（Python 列表仅内联进
+    ``data:`` 字段），导致每次 step 变更 / 初始高亮都抛 ``ReferenceError``——既不高亮，
+    也因 IIFE 中途中断而未注册 ``chart.on('click')``。静态字符串断言（grep / ``in js``）
+    无法捕获此类**运行时**错误。
+
+    故用 Node 真实执行 replay.js + graph IIFE（mock echarts/document），断言：
+      - ``chart.on('click')`` 已注册（click→seek 联动存在）；
+      - 初始态与 ``seek(idx)`` 均触发 ``dispatchAction highlight``；
+      - 被高亮 graph 节点的 ``ntype`` 与当前 step 的 stage→category 桥接键一致（映射正确）。
+    CI 无 node 时跳过。
+    """
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 D2.2 graph 联动行为级测试")
+
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    html_file = tmp_path / "explorer.html"
+    html_file.write_text(html, encoding="utf-8")
+    harness = tmp_path / "linkage_harness.js"
+    harness.write_text(_D22_LINKAGE_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(html_file)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"D2.2 graph 联动行为测试失败:\n{res.stdout}\n{res.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# D2.3 Trace Replay：Decision Explanation 卡片重放（第二条重放轨道）
+# ---------------------------------------------------------------------------
+
+def test_render_d23_trace_replay_wired(tmp_path):
+    """D2.3 静态接线：Decision Explanation 升级为可重放 trace 轨道。
+
+    断言：
+    - 控制条 rp-trace-* 七控件齐全（与主时间轴 rp-* 互不干扰）；
+    - trace 列表容器 trace-list-{sid} 存在且为 <ul class="trace-list dc-grid">；
+    - replay-trace-data-{sid} 数据岛存在，每个卡片带 kind→graph 类别桥接键
+      （Event/Decision/Action，与 _DECISION_KIND_TO_GRAPH_CATEGORY 一致）；
+    - replay_inits 含 init(sid, 'trace') 第二轨道初始化调用；
+    - 常量与桥接映射一致（防漂移）。
+    """
+    import home_perception.visualizer.renderer as R
+
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    sid = "sw_t1"
+    # 控制条七控件（rp-trace-* 前缀，与主时间轴 rp-* 同形但 id 唯一）
+    for suffix in ("reset", "toggle", "prev", "next", "speed", "progress", "progress-label"):
+        assert f'id="rp-trace-{suffix}-{sid}"' in html, f"缺 trace 控制条控件 rp-trace-{suffix}-{sid}"
+    # trace 列表容器
+    assert f'id="trace-list-{sid}"' in html
+    assert 'class="trace-list dc-grid"' in html
+    # trace 数据岛（含 category 桥接键）
+    m = re.search(
+        r'<script type="application/json" id="replay-trace-data-' + sid + r'">(.*?)</script>',
+        html, re.DOTALL,
+    )
+    assert m, "缺 replay-trace-data 数据岛"
+    trace = json.loads(m.group(1))
+    assert isinstance(trace, list) and trace, "trace 数据应为非空列表"
+    cats = {n.get("category") for n in trace}
+    assert cats == {"Event", "Decision", "Action"}, f"trace 类别桥接错误: {cats}"
+    # 第二轨道初始化调用
+    assert f'window.__Replay.init("{sid}", \'trace\');' in html
+    # 常量与桥接一致（防漂移）
+    assert R._DECISION_KIND_TO_GRAPH_CATEGORY == {
+        "evidence": "Event", "reasoning": "Decision", "outcome": "Action"
+    }
+
+
+# D2.3 行为级回归：trace 轨道真实驱动 graph 高亮（Node 执行 replay.js + graph IIFE）。
+_D23_TRACE_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const htmlPath = process.argv[2];
+const html = fs.readFileSync(htmlPath, 'utf8');
+
+// 1) 找带 trace 数据岛的场景 id
+const tracePre = 'id="replay-trace-data-';
+const tp = html.indexOf(tracePre);
+if (tp === -1) { console.error('FAIL: 无 replay-trace-data 数据岛（D2.3 trace 未接线）'); process.exit(1); }
+const sid = html.slice(tp + tracePre.length, html.indexOf('"', tp + tracePre.length));
+
+// 2) 拆出所有 <script>...</script> 块（非贪婪，匹配诊断可用实现）
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+const replayJs = scripts.find(s => s.includes('global.__Replay = {'));
+if (!replayJs) { console.error('FAIL: 未找到 replay.js'); process.exit(1); }
+const replayInits = scripts.find(s => s.includes('window.__Replay.init("' + sid + '")'));
+if (!replayInits) { console.error('FAIL: 未找到 replay_inits'); process.exit(1); }
+const graphScript = scripts.find(s => s.includes("get(\"" + sid + "\", 'trace')"));
+if (!graphScript) { console.error('FAIL: 未找到含 trace 订阅的 graph IIFE'); process.exit(1); }
+
+// 3) 提取 trace / timeline 数据岛 JSON（供 mock document 回填）
+function islandRaw(pre) {
+  const p = html.indexOf(pre);
+  const open = html.indexOf('>', p) + 1;
+  const close = html.indexOf('</script>', open);
+  return html.slice(open, close);
+}
+const traceRaw = islandRaw(tracePre);
+const tlRaw = islandRaw('id="replay-data-' + sid + '"');
+let traceData;
+try { traceData = JSON.parse(traceRaw); }
+catch (e) { console.error('FAIL: trace 数据岛 JSON 非法: ' + e.message); process.exit(1); }
+if (!Array.isArray(traceData) || traceData.length === 0) { console.error('FAIL: trace 数据为空'); process.exit(1); }
+const want = ['Event', 'Decision', 'Action'];
+const got = traceData.map(n => n.category);
+if (!want.every(c => got.includes(c))) { console.error('FAIL: trace 类别不完整 ' + JSON.stringify(got)); process.exit(1); }
+
+// 4) mock document / echarts
+const dispatchCalls = [];
+const clickHandlers = [];
+function mockEl(id) {
+  return {
+    _id: id,
+    textContent: id.indexOf('replay-trace-data-') !== -1 ? traceRaw
+               : (id.indexOf('replay-data-') !== -1 ? tlRaw : ''),
+    style: {},
+    classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+    getAttribute(a) { return a === 'data-idx' ? '0' : null; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    scrollIntoView() {},
+    set onclick(f) {}, set onchange(f) {},
+  };
+}
+const mockDoc = { getElementById: (id) => mockEl(id) };
+const echarts = {
+  init() {
+    return {
+      setOption() {},
+      on(ev, cb) { if (ev === 'click') clickHandlers.push(cb); },
+      dispatchAction(a) { dispatchCalls.push(a); },
+      resize() {},
+    };
+  },
+};
+const ctx = { console, setTimeout, clearTimeout, Math, JSON, isNaN, parseInt, Infinity, document: mockDoc, echarts };
+ctx.window = ctx;
+vm.createContext(ctx);
+function run(label, code) {
+  try { vm.runInContext(code, ctx); }
+  catch (e) { console.error('FAIL ' + label + ' 抛错: ' + e.message); process.exit(1); }
+}
+run('replayJs', replayJs);
+run('replayInits', replayInits);
+run('graphScript', graphScript);
+
+// 5) 断言：两条独立重放实例（timeline 与 trace 互不干扰）
+const rp = ctx.window.__Replay.get(sid);
+const rpTrace = ctx.window.__Replay.get(sid, 'trace');
+if (!rp) { console.error('FAIL: timeline 实例缺失'); process.exit(1); }
+if (!rpTrace) { console.error('FAIL: trace 实例缺失'); process.exit(1); }
+if (rp === rpTrace) { console.error('FAIL: timeline 与 trace 实例不可区分'); process.exit(1); }
+
+// 6) 提取 graphNodes 用于校验高亮目标
+const gstart = graphScript.indexOf('var graphNodes = ') + 'var graphNodes = '.length;
+let depth = 0, gend = -1;
+for (let i = gstart; i < graphScript.length; i++) {
+  const c = graphScript[i];
+  if (c === '[') depth++;
+  else if (c === ']') { depth--; if (depth === 0) { gend = i + 1; break; } }
+}
+const graphNodes = JSON.parse(graphScript.slice(gstart, gend));
+
+// 断言：trace seek 到 Action 类别卡片 → graph 高亮对应节点
+let actIdx = -1;
+for (let i = 0; i < rpTrace.nodes.length; i++) {
+  if (rpTrace.nodes[i].category === 'Action') { actIdx = i; break; }
+}
+if (actIdx === -1) { console.error('FAIL: trace 无 Action 类别卡片'); process.exit(1); }
+dispatchCalls.length = 0;
+rpTrace.seek(actIdx);
+const seekHi = dispatchCalls.filter(a => a.type === 'highlight' && a.dataIndex != null);
+if (seekHi.length < 1) { console.error('FAIL: trace seek 未触发高亮'); process.exit(1); }
+const expCount = graphNodes.filter(n => n.ntype === 'Action').length;
+if (seekHi.length !== expCount) { console.error('FAIL: 高亮数 ' + seekHi.length + ' != 期望 ' + expCount); process.exit(1); }
+const mism = seekHi.filter(a => !graphNodes[a.dataIndex] || graphNodes[a.dataIndex].ntype !== 'Action');
+if (mism.length > 0) { console.error('FAIL: 高亮节点类别错误'); process.exit(1); }
+
+// 7) 断言：点击 graph 节点（Action）→ trace 轨道被 seek（反向联动）
+let traceSeekCalls = 0;
+const origSeek = rpTrace.seek.bind(rpTrace);
+rpTrace.seek = function (i) { traceSeekCalls++; return origSeek(i); };
+if (!clickHandlers.length) { console.error('FAIL: chart.on(click) 未注册'); process.exit(1); }
+clickHandlers[0]({ dataType: 'node', data: { ntype: 'Action' } });
+if (traceSeekCalls < 1) { console.error('FAIL: 点击 graph Action 节点未联动 trace seek'); process.exit(1); }
+
+console.log('OK sid=' + sid + ' timelineNodes=' + rp.nodes.length + ' traceNodes=' + rpTrace.nodes.length + ' seekHi=' + seekHi.length + ' traceSeekCalls=' + traceSeekCalls);
+"""
+
+
+def test_render_d23_trace_replay_fires_dispatch(tmp_path):
+    """D2.3 行为级回归：trace 轨道必须真正驱动 graph 联动高亮（非字符串断言）。
+
+    历史教训（D2.2）：highlightCategory 曾引用未定义 JS 变量导致运行时 ReferenceError，
+    静态字符串断言无法捕获。故用 Node 真实执行 replay.js + graph IIFE（mock
+    echarts/document），断言：
+      - timeline 与 trace 是两条**独立**重放实例（注册键 `sid::timeline` / `sid::trace`）；
+      - trace seek 到 Action 类别卡片 → 触发 dispatchAction highlight，且高亮节点 ntype
+        与 trace kind→category 桥接键一致（Event/Decision/Action）；
+      - 点击 graph 节点（Action）→ trace 轨道被 seek（反向联动同样打通）。
+    CI 无 node 时跳过。
+    """
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 D2.3 trace 联动行为级测试")
+
+    d = make_artifacts(tmp_path / "a")
+    html = _render(d)
+    html_file = tmp_path / "explorer.html"
+    html_file.write_text(html, encoding="utf-8")
+    harness = tmp_path / "d23_trace_harness.js"
+    harness.write_text(_D23_TRACE_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(html_file)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"D2.3 trace 联动行为测试失败:\n{res.stdout}\n{res.stderr}"
+    )
+

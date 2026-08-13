@@ -18,10 +18,15 @@
 (function (global) {
   'use strict';
 
-  function Replay(sid, nodes) {
+  // D2.3 Trace Replay：同一引擎驱动「主时间轴」(timeline) 与「决策解释」(trace)
+  // 两条重放轨道。track 参数化使两条轨道互不干扰：注册键 `sid::track`、
+  // 数据岛 / 列表容器 / 控制条前缀 / 列表项 class 全按轨道区分（id 唯一、向后兼容）。
+  function Replay(sid, nodes, track) {
     this.sid = sid;
     this.nodes = nodes || [];
+    this.track = track || 'timeline';
     this.index = 0;
+    this.itemClass = 'tl-item';  // timeline→.tl-item；trace→.dc-card（init 时按轨道覆盖）
     this.playing = false;
     this.timer = null;
     this.speed = 1;            // 1x / 2x / 4x
@@ -52,7 +57,7 @@
   };
 
   Replay.prototype._render = function () {
-    var items = this.listEl ? this.listEl.querySelectorAll('.tl-item') : [];
+    var items = this.listEl ? this.listEl.querySelectorAll('.' + this.itemClass) : [];
     for (var i = 0; i < items.length; i++) {
       items[i].classList.toggle('active', i === this.index);
       items[i].classList.toggle('played', i <= this.index);
@@ -139,7 +144,7 @@
   Replay.prototype.bindTimeline = function () {
     var self = this;
     if (!this.listEl) return;
-    var items = this.listEl.querySelectorAll('.tl-item');
+    var items = this.listEl.querySelectorAll('.' + this.itemClass);
     for (var i = 0; i < items.length; i++) {
       (function (el) {
         el.style.cursor = 'pointer';
@@ -155,41 +160,54 @@
 
   var registry = {};
   global.__Replay = {
-    init: function (sid) {
-      var r = new Replay(sid, []);
-      registry[sid] = r;
-      // 数据来自 application/json 数据岛（renderer 内联，已做 </ 安全清洗）。
-      var dataEl = byId('replay-data-' + sid);
+    // D2.3：track 区分主时间轴（'timeline'）与决策解释（'trace'）两条重放轨道；
+    // 注册键 = `sid::track`，同一页面可并行存在 trace（why-alarm 卡片）与 timeline。
+    init: function (sid, track) {
+      var trackName = track || 'timeline';
+      var key = sid + '::' + trackName;
+      var r = new Replay(sid, [], trackName);
+      registry[key] = r;
+      // 数据岛 id 按轨道区分：timeline→replay-data-{sid}，trace→replay-trace-data-{sid}
+      // （客户端 JSON.parse，与脚本闭合标签隔离，评审 R4-安全）。
+      var dataEl = byId(trackName === 'trace' ? 'replay-trace-data-' + sid : 'replay-data-' + sid);
       if (dataEl) {
         try { r.nodes = JSON.parse(dataEl.textContent); }
         catch (e) { r.nodes = []; }
       }
-      // 必须是 <ul>（重放目标），而非视图锚点 H3（评审 R4-Bug：此前 id 撞名）。
-      r.listEl = byId('timeline-list-' + sid);
-      var reset = byId('rp-reset-' + sid),
-          toggle = byId('rp-toggle-' + sid),
-          next = byId('rp-next-' + sid),
-          prev = byId('rp-prev-' + sid),
-          speed = byId('rp-speed-' + sid),
-          progress = byId('rp-progress-' + sid),
-          label = byId('rp-progress-label-' + sid);
+      // 列表容器：timeline→timeline-list-{sid}（<ul>），trace→trace-list-{sid}（<ul>）。
+      // 必须是列表容器（而非视图锚点 H3），评审 R4-Bug：此前 id 撞名。
+      var listId = (trackName === 'trace' ? 'trace-list-' : 'timeline-list-') + sid;
+      r.listEl = byId(listId);
+      // 列表项 class：timeline→.tl-item；trace（Decision Explanation 卡片）→.dc-card。
+      r.itemClass = trackName === 'trace' ? 'dc-card' : 'tl-item';
+      // 控制条前缀：trace 轨道用 rp-trace-*，与主轨道 rp-* 互不干扰（id 唯一）。
+      var prefix = trackName === 'trace' ? 'rp-trace-' : 'rp-';
+      var reset = byId(prefix + 'reset-' + sid),
+          toggle = byId(prefix + 'toggle-' + sid),
+          next = byId(prefix + 'next-' + sid),
+          prev = byId(prefix + 'prev-' + sid),
+          speed = byId(prefix + 'speed-' + sid),
+          progress = byId(prefix + 'progress-' + sid),
+          label = byId(prefix + 'progress-label-' + sid);
       // 控制条任一控件缺失 → 整体不绑定（防 null 解引用）。
       r.bar = (reset && toggle && next && prev && speed && progress && label)
         ? { reset: reset, toggle: toggle, next: next, prev: prev,
             speed: speed, progress: progress, label: label }
         : null;
-      // 既无 timeline 列表又无控制条 → 无重放对象，直接返回（不 bind）。
+      // 既无列表又无控制条 → 无重放对象，直接返回（不 bind）。
       if (!r.listEl && !r.bar) return r;
-      r.bindTimeline();  // D2.2：时间轴点击跳转（独立于控制条）
+      r.bindTimeline();  // 列表项点击跳转（独立于控制条）
       r.bind();
       return r;
     },
-    get: function (sid) { return registry[sid]; },
-    // D2.2 Causal Highlight：订阅 timeline step 变更，回调传当前 step 的 graph 类别
-    // （stage→category 桥接键，已由 renderer 注入数据岛）。replay 实例不存在时返回
-    // 空句柄（fail-closed，图仍静态可读）。基于 D2.1 的 onStep() 实现。
-    linkHighlight: function (sid, fn) {
-      var r = registry[sid];
+    get: function (sid, track) {
+      return registry[sid + '::' + (track || 'timeline')];
+    },
+    // D2.2/D2.3 Causal Highlight：订阅某轨道 step 变更，回调传当前 step 的 graph 类别
+    // （桥接键，已由 renderer 注入数据岛）。实例不存在（降级/未初始化的 trace 轨道）
+    // 时返回空句柄（fail-closed，图仍静态可读）。基于 onStep() 实现。
+    linkHighlight: function (sid, fn, track) {
+      var r = registry[sid + '::' + (track || 'timeline')];
       if (!r) return { off: function () {} };
       return r.onStep(function (i, cur) {
         fn(cur ? cur.category : null);
