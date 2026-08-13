@@ -66,11 +66,9 @@ def test_validation_provider_falls_back_to_synthetic(monkeypatch):
     assert frames[0].shape == (180, 320, 3)
 
 
-def test_load_scenario_evidence_missing_fail_closed():
+def test_load_scenario_evidence_missing_fail_closed(built_artifact_dir):
     import pytest
-
-    from .conftest import artifact_dir
 
     # artifact 目录存在但 scenario 不在投影中 → KeyError（fail-closed，不静默返回）
     with pytest.raises(KeyError):
-        load_scenario_evidence(artifact_dir(), "sw_no_such_scenario")
+        load_scenario_evidence(built_artifact_dir, "sw_no_such_scenario")

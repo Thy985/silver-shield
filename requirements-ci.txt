@@ -36,6 +36,10 @@ mypy==1.13.0
 # —— 运行时基础依赖（下限约束；非基线指纹成分，允许小版本浮动）——
 pydantic>=2.6.0
 pyyaml>=6.0.1
+# Pillow：visualizer/video 渲染管线（composer/caption/rasterizer/overlay/font_registry）
+# 模块顶层 import PIL；D3-A 案例视频测试（torch-free unit tier）必须可导入。钉死精确版本
+# 保证 CI 与本地渲染行为一致（PIL 版本间 ImageFont/resize 行为有细微差异）。
+pillow==11.3.0
 structlog>=24.1.0
 requests>=2.31.0
 paho-mqtt>=2.0.0

@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import json
 from pathlib import Path
 from typing import NamedTuple
@@ -128,6 +130,40 @@ def _provenance_fields(spec: CaseVideoSpec, evidence: dict) -> tuple[int, str]:
     return seed, fingerprint
 
 
+# D3-A Evidence Story Compiler 生成器标识（provenance.generator_version）。
+# 与包版本绑定，保证每次产出可追溯到具体的生成器实现。
+ADR0035_D3A_GENERATOR_TAG = "ADR-0035-D3-A"
+
+
+def _resolve_generator_version() -> str:
+    """provenance.generator_version：D3-A 生成器版本标识。
+
+    经 ``importlib.metadata`` 读取已安装包版本（**不** import ``home_perception`` 包体，
+    避免破坏 visualizer → 业务包的 import 边界，见 test_ast_contract）。版本缺失时
+    fail-closed（不静默降级为空串）。
+    """
+    try:
+        pkg_version = importlib.metadata.version("home_perception")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise AssertionError("无法解析生成器版本（home_perception 包未安装）") from exc
+    if not pkg_version:
+        raise AssertionError("无法解析生成器版本（home_perception 版本为空）")
+    return f"{ADR0035_D3A_GENERATOR_TAG}@{pkg_version}"
+
+
+def _evidence_hash(evidence: dict) -> str:
+    """provenance.input_hash：输入（ScenarioEvidence 投影）的稳定指纹。
+
+    同一输入必产生同一哈希（确定性）；序列化失败即 fail-closed 报错，
+    不静默降级为常量。用于验收 G2「provenance 必须存在 input_hash」。
+    """
+    try:
+        canonical = json.dumps(evidence, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError) as exc:
+        raise AssertionError(f"输入证据不可序列化（provenance.input_hash 计算失败）：{exc}") from exc
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 class _Prepared(NamedTuple):
     """阶段 1–5 的共享产物（两条入口的唯一装配点）。"""
 
@@ -232,6 +268,8 @@ def generate_case_video(spec: CaseVideoSpec) -> CaseVideoResult:
     # 阶段 6–7：逐 shot 渲染帧序列（确定性）。
     frames = _render_frames(spec, evidence, storyboard, visual_scenes)
     seed, fingerprint = _provenance_fields(spec, evidence)
+    generator_version = _resolve_generator_version()
+    input_hash = _evidence_hash(evidence)
 
     # 阶段 8：写盘 + 伴生文件。
     out_dir = Path(spec.output_dir) / f"{spec.scenario_id}__v{spec.version}"
@@ -245,7 +283,12 @@ def generate_case_video(spec: CaseVideoSpec) -> CaseVideoResult:
     storyboard_path.write_text(storyboard_to_yaml(storyboard), encoding="utf-8")
     duration_s = sum(s.duration_s for s in storyboard.shots)
     provenance = {
+        # 验收 G2 必备四键（scenario_id / generator_version / input_hash / template_version）。
         "scenario_id": spec.scenario_id,
+        "generator_version": generator_version,
+        "input_hash": input_hash,
+        "template_version": template.name,
+        # 诊断/审计辅助字段。
         "seed": seed,
         "fingerprint": fingerprint,
         "template": template.name,

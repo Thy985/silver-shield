@@ -21,8 +21,6 @@ from home_perception.visualizer.video.narrative.templates import template_for_ev
 from home_perception.visualizer.video.spec import CaseVideoSpec
 from home_perception.visualizer.video.storyboard.generator import generate_storyboard
 
-from .conftest import artifact_dir
-
 
 def _rebuild_storyboard(spec: CaseVideoSpec):
     evidence = load_scenario_evidence(spec.artifact_dir, spec.scenario_id)
@@ -33,7 +31,7 @@ def _rebuild_storyboard(spec: CaseVideoSpec):
     return generate_storyboard(plan, evidence, template, audience=spec.audience, override=override)
 
 
-def test_caption_hits_correct_shot_interval(tmp_path: Path, monkeypatch):
+def test_caption_hits_correct_shot_interval(tmp_path: Path, monkeypatch, built_artifact_dir):
     captured: list[str] = []
     original = compiler_mod.render_caption
 
@@ -47,7 +45,7 @@ def test_caption_hits_correct_shot_interval(tmp_path: Path, monkeypatch):
 
     spec = CaseVideoSpec(
         scenario_id="sw_adr0034_elderly_dwell",
-        artifact_dir=artifact_dir(),
+        artifact_dir=built_artifact_dir,
         output_dir=tmp_path / "out",
         fps=2.0,
         resolution=(320, 180),
@@ -70,10 +68,10 @@ def test_caption_hits_correct_shot_interval(tmp_path: Path, monkeypatch):
         assert text in shot.narration, f"帧 {idx} 字幕 {text!r} 不属于 shot {shot.name!r}"
 
 
-def test_every_shot_has_nonempty_narration(tmp_path: Path):
+def test_every_shot_has_nonempty_narration(tmp_path: Path, built_artifact_dir):
     spec = CaseVideoSpec(
         scenario_id="sw_adr0034_elderly_dwell",
-        artifact_dir=artifact_dir(),
+        artifact_dir=built_artifact_dir,
         output_dir=tmp_path / "out",
         fps=2.0,
         version=1,
