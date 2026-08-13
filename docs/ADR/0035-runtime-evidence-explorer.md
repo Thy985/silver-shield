@@ -1,6 +1,6 @@
 # ADR-0035: Runtime Evidence Explorer（运行证据探索器 · Evidence Presentation Layer）
 
-- **Status**: Proposed（2026-08-12 起草 + 两轮 Owner 评审收紧，待 Owner 定稿）
+- **Status**: Proposed（2026-08-12 起草 + 三轮 Owner 评审收紧；**D3 设计已进入「可实现架构冻结前」的 Owner Decision Record 阶段（12 项决策全决），待 Owner 定稿冻结正文**）
 - **Date**: 2026-08-12
 - **Owner**: SilverShield 技术负责人
 - **Implementation Plan**: 本 ADR 定稿后随 D1 启动补充（非冻结件）
@@ -160,7 +160,7 @@ visualizer/
 |---|---|---|---|
 | **D1 MVP** | Python stdlib 静态生成**自包含单页 HTML**（零服务器） | **ECharts 单框架**（vendored 到 `visualizer/assets/`，~1MB；graph 系列已覆盖关系图需求） | "一次运行 → 可视化"；artifact 上传后浏览器直开；零服务器运维 |
 | **D2 Replay** | **Python stdlib 生成静态 artifact bundle（零服务器）** | **ECharts + vanilla JS replay controller**（vendored `replay.js`：时间轴重放 / 因果链高亮） | 升级为「可播放证据文件」而非 Web 应用：保持 D1「浏览器直开」、不引重依赖；交互纯前端可达成，禁 FastAPI/D3 除非证明 ECharts 不足（2026-08-12 Owner 路线锁定） |
-| **D3 Demo** | 复用 ADR-0032 `frames` 通道 + ADR-0027 audio tts 确定性合成栈 | OpenCV 渲染（已有） | 程序化视频，零新资产 |
+| **D3 Evidence Story Compiler** | 复用 ADR-0032 `frames` 通道 + ADR-0027 audio tts 确定性合成栈；**8 阶段管线**（EvidenceProjection→EvidenceGraph→NarrativeTemplateCompiler→StoryboardGenerator→VisualSceneDesigner→Renderer→AudioComposer→VideoMuxer），**Storyboard + VisualScene 双中间层强制** | OpenCV + Pillow + SVG renderer + ffmpeg + TTS(可选)，**非 Web 栈** | 证据→叙事案例视频（case video）；**非「HTML 录屏」、非纯视频导出器、非「小型 AI 视频平台」** |
 
 > 决策理由：项目纪律是"不引重依赖"。D1 用静态生成 = **Python 侧零新增依赖**，前端仅 vendored 一个 JS 库；FastAPI/D3 推迟到真正需要交互的 D2，避免"D1 就背上服务器 + 双框架"。
 
@@ -180,7 +180,7 @@ Timeline / Decision Trace / Cross Modal Graph 三个视图**共享同一底层�
 | Scenario Replay Timeline | 时间戳排序（Evidence Graph + timestamp） |
 | Decision Trace | 决策子树（Evidence Graph + decision subtree） |
 | Cross Modal Graph | 关系边（Evidence Graph + relationship edges） |
-| D3 程序化视频 | 动画（Evidence Graph → Animation） |
+| D3 Evidence Story Compiler | 叙事视频（Evidence Graph → Narrative → Storyboard → VisualScene → Video） |
 
 > **派生模型边界（评审收紧）**：**Evidence Graph 是展示层派生模型（presentation-layer derived model），不属于运行时领域模型，不作为 runtime 状态交换协议**。它只由 `EvidenceProjection` 从已落盘 artifact 构造，runtime 完全不知晓其存在——防止未来出现 "runtime 写 EvidenceGraph 供 visualizer 读" 的反向污染（同 D3 零 import 边界的镜像约束）。
 
@@ -251,7 +251,7 @@ Owner / 评委 / 投资人 / 家属 —— "为什么系统认为这里有风险
 - ❌ **不捏造节点**：artifact 缺失粒度一律降级为 stage 摘要或省略，绝不合成（D2 硬规则）；
 - ❌ 不引入 LLM 解释（v2 才做，AGENTS.md §6.1 禁区）；
 - ❌ 不接 CI 门禁（展示层不是闸）；
-- ❌ 不 import 生产/验证代码（D3 硬边界；`visualizer/schema/` 自建类型例外）；
+- ❌ 不 import 生产/验证代码（D3 硬边界；`visualizer/schema/` 自建类型例外）；**唯一例外：D3 Evidence Story Compiler（仅在 `visualizer/video/` 子包内）经 §9 D3-1（已决 · v7 锁定单向依赖）授权后，可为纯消费目的 import `validation`/`audio` 既有栈（`render_frames`/`export_mp4`/`audio.tts` 等）——仅读取、不触发验证判定、不反向依赖生产决策、不引入其运行期副作用**。该依赖性质属「**presentation adapter dependency，不得成为业务依赖**」——**单向且仅限**：允许 `visualizer.video → validation.simulation.renderer` 与 `visualizer.video → audio.tts`；**严格禁止** `validation → visualizer.video`、`audio → visualizer.video`（否则 Explainability Compiler 会污染被解释对象）。其余 `runtime`/`evaluation`/`integration`/`memory` 仍一律禁止 import（零 import 边界 AST 测试**双向**守护：仅上述两条单向边存在，无任何反向边）。**对应非冻结件 `docs/ADR/0035-d3-implementation-plan.md` v7**；
 - ❌ 不重写既有时间轴/图表组件（ECharts 配置式覆盖，不手写 D3 除非 D2 力有不逮）；
 - ❌ 不把程序化视频当"真实监控录像"宣传（沿用 ADR-0015 数据真实性声明精神）。
 
@@ -286,7 +286,7 @@ Owner / 评委 / 投资人 / 家属 —— "为什么系统认为这里有风险
 |---|---|---|---|
 | **D1** | Evidence Explorer MVP：一次运行 → 可视化（实现顺序：**Timeline → Decision Explanation → Graph**，由价值从高到低推进） | D1/D2/D2b/D3/D4(静态)/D5/D6/D7/D7b/D8/D9 | ❌服务器 ❌D3/D2 动画 ❌跨进程读 Memory ❌帧级合成 |
 | **D2** | Replay Engine：Scenario + Trace 重放动画（可播放证据文件） | D4(Client-side Evidence Replay Engine：stdlib 生成静态 bundle + 浏览器 ECharts + vanilla JS) + Evidence Graph → Animation | ❌程序化视频合成 ❌真实设备 ❌FastAPI 服务 ❌D3.js 依赖 |
-| **D3** | Product Demo：程序化视频（比赛/投资人/用户） | 复用 ADR-0032 frames + ADR-0027 audio tts | ❌真实录像 ❌实时 |
+| **D3** | Evidence Story Compiler：证据→叙事案例视频（artifact 编译为人类可懂案例；**非 HTML 录屏**） | 复用 ADR-0032 frames + ADR-0027 audio tts；8 阶段管线 + 强制 Storyboard/VisualScene 双中间层 | ❌真实录像 ❌实时 ❌HTML 录屏 ❌LLM 生成叙事 ❌音效/配乐(v1 不做) ❌Web 栈 |
 
 ---
 
@@ -313,3 +313,13 @@ Owner / 评委 / 投资人 / 家属 —— "为什么系统认为这里有风险
 - **2026-08-12（Owner 评审收紧一）**：五项收紧 + 两项新验收。(1) **定位修正**——`visualizer` 不是"第四层验证资产"（无验证能力），改 **Evidence Presentation Layer / 第四层可信工程资产**，新增 §0.4 定位声明；(2) **D2 数据投影契约**——新增 `EvidenceProjection` → `EvidenceTimelineArtifact` 投影层（loader 唯一入口、`ref` 必填、缺失粒度降级为 stage 摘要、**禁 synthetic node**），§0.3 逐节点钉死数据源（Frame/Detection 仅投影已有粒度）；(3) **D3 放宽**——禁 import 生产类不变，但允许 `visualizer/schema/` 自建 TypedDict（`DecisionEvidence`/`TimelineNode` 等）补类型安全，防 JSON 演化静默空白；(4) **D5 Evidence Graph 统一抽象**——节点（Scenario/Detection/Event/Decision/Action/Episode/Link）+ 边（caused_by/supports/derived_from/triggered/stored_as），Timeline/Decision Trace/Cross Modal/程序化视频均为其投影视角；(5) 验收 +2：**Evidence 完整性**（禁 synthetic node，注入伪造节点渲染必须拒绝）+ **Evidence provenance**（节点 `ref` 可溯源到源 artifact+记录 id）。仍 Proposed，待 Owner 定稿。
 - **2026-08-12（Owner 评审收紧二）**：五项补充（Accepted 前）。(1) **D5 派生模型边界**——Evidence Graph 明确为 **presentation-layer derived model，不属于运行时领域模型，不作为 runtime 状态交换协议**（防 runtime→visualizer 反向污染，与 D3 零 import 镜像）；(2) **D2 `provenance_kind` 必填**——每节点标注 `REAL_SENSOR`/`SIMULATED`/`FIXTURE`，防观看者把合成/夹具帧误认为真实录像，未来真实设备接入无需重构；(3) **D2b + D8 Schema Evolution Fail-Closed**——artifact 关键字段演化缺失 → 投影必须抛错拒绝，绝不产出 `undefined` 空白页面（与 ADR-0034 fail-closed 同纪律）；(4) **D7b Presentation Identity Policy**——身份一律脱敏为角色标签（允许 `Resident-A`/`Visitor-B`/`Device-01`，禁止真实姓名/手机号/家庭地址/设备序列号），从结构上拒绝 demo 阶段"显示真实身份更真实"的突破边界诉求；(5) **验收 +1（共 10 条）**——Projection compatibility：删关键字段 → 投影必须失败。另：D1 实现顺序定为 **Timeline → Decision Explanation → Graph**（价值从高到低）。仍 Proposed，待 Owner 定稿。
 - **2026-08-12（D2 路线锁定 · Owner）**：D4 技术栈表 D2 行修订——从「FastAPI + D3.js」改为「Client-side Evidence Replay Engine（Python stdlib 生成静态 artifact bundle；浏览器 ECharts + vanilla JS replay controller；禁 FastAPI/D3 除非证明 ECharts 不足）」。理由：Evidence Explorer 本质是「可播放证据文件」（类 TensorBoard event viewer / Chrome trace viewer / MLflow artifact viewer），不是 Web 应用；FastAPI 会让 presentation layer 重新拥有 runtime-like 生命周期，与 ADR-0031/0034/0035 治理思想冲突，且削弱 D1「artifact 自带证据、任何人拿到就能打开」的核心价值。FastAPI 留待 Phase E（真实设备 / 实时事件流 / 账号 / 权限）才合理。实施切片表 D2 行同步明令不做「❌FastAPI 服务 ❌D3.js 依赖」。
+
+- **2026-08-13（D3 重定位 · Owner）**：D3 从「Product Demo：程序化视频」**重定位为 Evidence Story Compiler（证据到叙事视频编译器）**。要点：(1) 明确 **D3 ≠ 把 HTML 录屏成 MP4**（录屏只是截图+录屏，价值有限），而是从 artifact 重新编译出叙事——`artifact → EvidenceGraph → NarrativePlanner → Storyboard → VisualComposer → AudioComposer → VideoMuxer`；(2) **Storyboard 定为强制中间层**（电影工业「剧本→分镜」，防「技术演示录像」）；(3) **NarrativePlanner 固定模板映射，禁 LLM 自由发挥**（防幻觉叙事）；(4) 信息图层采用 **SVG 矢量规划**（非全部 Pillow），MVP 用 Pillow-first 光栅化、cairosvg 仅作可选升级；(5) 输出新增 `storyboard.yaml` + `provenance.json` 伴生文件（审计叙事是否忠于证据）；(6) 新增 §10 未来方向 Semantic Narrative Layer（Runtime→Evidence→Graph→Narrative→Presentation，接近 AI Agent explainability / 自动事故分析视频）。技术栈定为 Python+OpenCV+Pillow+SVG renderer+ffmpeg+TTS(可选)，**非 Web 栈**。详细设计见非冻结件 `docs/ADR/0035-d3-implementation-plan.md`（v3）。仍 Proposed，待 Owner 定稿。
+
+- **2026-08-13（D3 v4 收紧 · Owner）**：在 v3 基础上进一步收紧，防实现膨胀为「小型 AI 视频平台」。要点：(1) **新增 VisualSceneGraph 表达层**——管线升为 **8 阶段**（EvidenceProjection→EvidenceGraph→NarrativePlanner→StoryboardGenerator→VisualSceneDesigner→VisualComposer→AudioComposer→VideoMuxer）；明确 **EvidenceGraph（事实层）≠ VisualScene（表达层/空间维）**，EvidenceGraph 不直接控制 SVG，由 `visual_scene.py` 把「事实」翻译为「版面」；(2) **收紧 NarrativePlanner**——NarrativePlan 是「解释策略（决定解释顺序/意图：intent/reasoning_chain/audience_question）」而非叙事文本，规划器只编排证据、不撰写任何自然语言句子；(3) **Storyboard 加 audience 维度**（audience + 每 shot 的 audience_need）——同一 EvidenceGraph 可派生不同受众故事板（评委/投资人/家属），但 evidence_refs 始终来自同一图；(4) **音频拆三级**——D3-A 纯视觉 / D3-B 旁白 / D3-C 音效配乐**递延默认不做**（防边界模糊与范围膨胀）；(5) **新增 §0.3 Scope Guardrails**——列明 v1 红线（不建多轨音频工作站/在线生成/交互编辑器/多格式/真实媒体/Web 栈/反哺 runtime）；(6) **降级 §10 未来承诺**为「仅模块边界预留，v1 仅落地确定性映射」，不再承诺具体未来子系统。技术栈表 D3 行、D5 投影视角表 D3 行、路线图 D3 行同步更新（8 阶段 + 双中间层 + 非「小型 AI 视频平台」）。详细设计见非冻结件 `docs/ADR/0035-d3-implementation-plan.md`（v4）。仍 Proposed，待 Owner 定稿。
+
+- **2026-08-13（D3 v5 收紧 · Owner）**：在 v4 基础上继续收紧，防 v1 过度设计与两层职责污染。要点：(1) **NarrativePlanner 重命名为 NarrativeTemplateCompiler**——v1 明确**不是规则引擎、不是 Planner**，只是「EvidenceGraph + ScenarioTemplate → NarrativePlan」的**模板实例化**（示例：elderly_warning_case_v1 固定 shot 序列 + ref_kinds）；若未来需智能规划再升级为 `Template Compiler → Planner`（管线形状不变，仅替换阶段 3 内部）；(2) **新增 §2.4.1 Layer Boundary Contract**——Storyboard（语义层）禁携带 `x/y/color/layout/font/shape`，VisualSceneGraph（表达层）禁携带 `why/purpose/audience_need/explanation_order`，唯一合法耦合是 `ref` 链（VisualSceneGraph.ref ⊆ Storyboard.evidence_refs ⊆ EvidenceGraph.nodes），以 schema 字段集为硬约束；(3) **§8 新增结构级验收**（非仅逐帧）——Story consistency / Scene consistency 子集断言 + Frame provenance 命中 `scenario_id` + Duration consistency（sum(duration) == 视频时长）；(4) **§2.8 文件结构改为子包布局**（evidence/narrative/storyboard/scene/render/audio/mux），随增长不膨胀成单大文件；(5) **§9 D3-11 锁定**——VisualSceneGraph 必须独立（是「同图多受众不同视觉」的正确扩展点）。技术栈表 D3 行同步改名为 NarrativeTemplateCompiler + Renderer。详细设计见非冻结件 `docs/ADR/0035-d3-implementation-plan.md`（v5）。仍 Proposed，待 Owner 定稿。
+
+- **2026-08-13（D3 v6 设计对齐 · Owner 评审修订）**：非冻结件 `docs/ADR/0035-d3-implementation-plan.md` 升 v6，本 ADR 同步一处边界修订以消解 ★★★ 冲突。(1) **§3 增补 D3 纯消费 import 例外**——D3 Evidence Story Compiler（仅在 `visualizer/video/` 子包内）经 D3-1（已决）授权后，可为纯消费目的 import `validation`/`audio` 既有栈（`render_frames`/`export_mp4`/`audio.tts` 等），仅读取、不触发验证判定、不反向依赖生产决策、不引入其运行期副作用；`runtime`/`evaluation`/`integration`/`memory` 仍一律禁止 import（零 import 边界 AST 测试守护）；(2) 对齐非冻结件 v6 其余修订：补 `NarrativePlan`/`ReasoningStep` 正式 schema 且全 schema `extra="forbid"` 机械锁定层边界、`compile_narrative`→`instantiate_narrative_template`、`§1` 行号核查、`§2.0` 阶段计数澄清、`§2.4/§2.3/§10` 指引补全。本 ADR 正文（Proposed）其余条目不变。仍 Proposed，待 Owner 定稿。
+
+- **2026-08-13（D3 v7 · Owner 整体认可进入 Decision Record）**：非冻结件 `docs/ADR/0035-d3-implementation-plan.md` 升 v7，**D3-1 ~ D3-11 经 Owner 逐项评审全部认可，并新增 D3-12（共 12 项决策）**，本文件从「Design Proposal」进入「可实现架构冻结前」的 **Owner Decision Record** 阶段。本 ADR 同步两处：(1) **§3 D3 导入例外升级为单向依赖锁定**——明确依赖方向：允许 `visualizer.video → validation.simulation.renderer` 与 `visualizer.video → audio.tts`，**严格禁止** `validation → visualizer.video` / `audio → visualizer.video`；确立「该依赖属 **presentation adapter dependency，不得成为业务依赖**」，零 import 边界 AST 测试**双向**守护（仅上述两条单向边存在，无任何反向边）；(2) 对齐非冻结件 v7 其余锁定：D3-3（ffmpeg 非 pipeline 核心，缺失降级 `video.mp4`+`audio.wav`+`warning.json` 而非 fail）、D3-7（受控字体资源 `assets/fonts/NotoSansCJK-Regular.ttf` + `FontRegistry → Rasterizer` 抽象，业务代码不直接加载字体路径）、D3-9（**正式废弃 `NarrativePlanner` 别名**，v1 规范名 `NarrativeTemplateCompiler`）、D3-12（**Evidence ownership boundary**：D3 不拥有 `EvidenceGraph`、只拥有 Projection View，禁止新建 `EvidenceNode`/`EvidenceEdge`，与 §3 既有「不捏造节点 / 零新 schema 写入」非目标一致）。历史 changelog 中的 `NarrativePlanner` 为演进记录，不代表现行命名。本 ADR 正文（Proposed）其余条目不变；**待 Owner 冻结主 ADR 正文后，AI 进入 D3 实现（独立 PR + 评审）**。
