@@ -1,10 +1,12 @@
-# ADR-0035 D3 · 落地实现设计文档（Design Proposal · v6 · 待 Owner 评审）
+# ADR-0035 D3 · 落地实现设计文档（Owner Decision Record · v7 · 决策已认可 · 待主 ADR 冻结后实现）
 
 > **性质**：本文件是 ADR-0035 正文预留的「非冻结件 Implementation Plan」子文档（参见 ADR-0035 §6 实施切片 + 工作记忆约定 `docs/ADR/0035-implementation-plan.md`）。  
-> **状态**：Design Proposal **v6（v5 基础上：补 NarrativePlan 正式 schema + 全 schema `extra="forbid"` 机械锁定层边界 + `compile_narrative` 重命名 + §1 行号核查 + §2.0 阶段计数澄清 + §2.4/§2.3/§10 指引补全 + 解决 ★★★ D3-1 与主 ADR §3 边界冲突）**，**未经 Owner 评审定稿**。本文档只设计、不实现；Owner 拍板「待裁决项（§9）」后，AI 再进入实现。  
+> **状态**：**Owner Decision Record · v7**——D3-1 ~ D3-11 经 Owner 逐项评审全部认可，并新增 D3-12（共 12 项决策）；本文件从「Design Proposal」进入「可实现架构冻结前」的 **Owner Decision Record** 阶段：决策已锁定，仅待主 ADR-0035 正文冻结，AI 即进入实现（独立 PR + 评审）。本文档仍只设计、不实现。  
 > **不改动**：ADR-0035 正文（仍 Proposed）、不触碰生产 runtime / 验证判定 / 基线文件。  
 > **依据**：所有复用接口均取自当前代码真实签名（见 §1 盘点），非凭空设计。  
 > **v6 变更（相对 v5 · 对应 Owner 评审 1.1–1.4 + 2.1–2.6）**：① **§3 新增 `NarrativePlan` / `ReasoningStep` 正式 Pydantic schema**——字段严格仅为 `intent: Literal[...]` / `reasoning_chain: list[ReasoningStep]` / `audience_question: str` / `audience: str`，**明确禁 `text` / `sentence` / `narration` 字段**；四个既有 schema（`ShotSpec` / `Storyboard` / `VisualElement` / `VisualSceneGraph`）全部加 `model_config = ConfigDict(extra="forbid")` + docstring 列禁用字段，使 §2.4.1 层边界契约**机械可 enforcement**（CI/review 可据此打回越界）；② **`compile_narrative` 重命名为 `instantiate_narrative_template`**（与 `NarrativeTemplateCompiler` 实体对齐，§2.2/§2.8/§7 同步）；③ **§1 行号核查**：`provider.py:52` 实为 `class EdgeTTSProvider`（`synthesize` 在 `:57`）、`scenario.py` 的 `audio` 字段实为 `:159`（非 `:99`）；补「行号已对 origin/main HEAD 核验」声明 + 漂移同步协议；④ **§2.0 阶段计数括号注明**「8 = 1 投影(EvidenceProjection) + 1 中间数据(EvidenceGraph) + 6 新建 D3 阶段」；`audio.wav` 显式标 `【D3-B only】`；⑤ **§2.4 末尾补「层边界契约见 §2.4.1」指引**、**§2.3 Storyboard 示例补 (节选) 对齐 canonical 5-shot**；⑥ **§10 开头补「升级 Planner 仍受 §0.3 红线约束」重申**；⑦ **解决 ★★★ D3-1 与主 ADR §3 边界冲突（方案 a）**——主 ADR §3 增补 D3 纯消费 import `validation`/`audio` 固定 allowlist 例外 + changelog；本文件 §9 D3-1 转「已决」、§8 验收第 7 条同步。
+
+> **v7 变更（相对 v6 · 对应 Owner 整体认可进入 Decision Record + 4 项锁定 + 新增 D3-12）**：① **D3-1 单向依赖约束锁定**——在「纯消费 import」例外上明确依赖方向：允许 `visualizer.video → validation.simulation.renderer` 与 `visualizer.video → audio.tts`，**禁止** `validation → visualizer.video` 与 `audio → visualizer.video`；并确立「`visualizer/video` 对 `validation`/`audio` 的依赖属于 **presentation adapter dependency**，不得成为业务依赖」（主 ADR §3 同步）；② **D3-3 ffmpeg 非核心降级**——明确 ffmpeg 不是 pipeline 核心，缺失时降级为 `video.mp4` + `audio.wav` + `warning.json`，而非 pipeline fail；③ **D3-7 受控字体资源抽象**——措辞由「新增轻量依赖 + 字体资产」改为「引入受控字体资源（controlled font asset）」，落点 `visualizer/video/assets/fonts/NotoSansCJK-Regular.ttf`，经 `FontRegistry → Rasterizer` 抽象，业务代码不直接加载字体路径；④ **D3-9 正式废弃 Planner 命名**——`NarrativePlanner` 列为废弃别名，v1 规范名 `NarrativeTemplateCompiler`，未来升级沿用该规范名；⑤ **新增 D3-12 Evidence ownership boundary**——D3 不拥有 `EvidenceGraph`，只拥有 Projection View，可缓存 `NarrativePlan`/`Storyboard`/`VisualSceneGraph`，**禁止新建 `EvidenceNode`/`EvidenceEdge`**（防视频有事实、系统无事实的审计破坏）；⑥ **§9 决策表全 12 项转「已决」**，进入 Decision Record 阶段。
 
 ---
 
@@ -340,14 +342,18 @@ visualizer/video/
 │   └── designer.py      # design_visual_scene(storyboard, evidence) -> VisualSceneGraph
 ├── render/
 │   ├── svg.py           # SVG/SVG-like 场景建模（节点/边/徽章，ref 来自 VisualSceneGraph）
-│   ├── rasterizer.py    # VectorScene -> RGBA（Pillow-first / cairosvg 可选）
-│   ├── caption.py       # Caption 文本层（Pillow 绘制，CJK 字体见 D3-7）
+│   ├── rasterizer.py    # VectorScene -> RGBA（Pillow-first / cairosvg 可选；经 FontRegistry 取字形）
+│   ├── font_registry.py # FontRegistry：受控字体资源注册/解析（D3-7），业务代码不直接加载字体路径
+│   ├── caption.py       # Caption 文本层（Pillow 绘制，经 FontRegistry 取 CJK 字形，见 D3-7）
 │   └── composer.py      # Frame 合成（alpha 叠加到 BGR 背景帧）
 ├── audio/
 │   └── composer.py      # 仅旁白 TTS（D3-B）；音效/配乐不在此（D3-C deferred）
 ├── mux/
 │   └── muxer.py         # ffmpeg 合成 video+audio+subtitle；降级双文件
-└── scenarios/           # 作者故事板 YAML（storyboard_override + visual_override），如 elderly_dwell_warning.yaml
+├── scenarios/           # 作者故事板 YAML（storyboard_override + visual_override），如 elderly_dwell_warning.yaml
+└── assets/
+    └── fonts/
+        └── NotoSansCJK-Regular.ttf   # 受控字体资源（D3-7 · controlled font asset；FontRegistry 加载，不进业务代码路径）
 
 scripts/generate_case_video.py   # CLI 入口（替代 generate_demo_video，呼应 case video）
 ```
@@ -446,12 +452,30 @@ class VisualSceneGraph(BaseModel):
 - **建议**：默认 D3-A，`--with-audio` 启用 D3-B。
 - **D3-C（音效/配乐）**：**v1 不做**，仅当 Owner 单独裁决补入（属宣传价值，非解释价值，边界模糊，易触发 §0.3 红线）。
 
-### D3-3 · 音视频封装（OpenCV 不写音频）
+### D3-3 · 音视频封装（OpenCV 不写音频 · ffmpeg 非 pipeline 核心）
 
-- OpenCV `VideoWriter` 仅能写无声视频。封装音频需：
-  - **(a) 系统 `ffmpeg` CLI**（无新 Py 依赖；但 CI/边缘可能无 ffmpeg）→ 缺失时**优雅降级**为「无声 mp4 + 旁白 wav 双文件」+ 告警。
+- **原则**：`VideoMuxer` 的封装能力**不是 pipeline 核心**——D3 的核心产物是「解释视频（确定性帧序列）」，媒体封装只是出口步骤；ffmpeg 缺失**不得导致 pipeline fail**。
+- OpenCV `VideoWriter` 仅能写无声视频。封装音频走：
+  - **(a) 系统 `ffmpeg` CLI**（无新 Py 依赖；但 CI/边缘可能无 ffmpeg）→ 缺失时**优雅降级**为「无声 mp4 + 旁白 wav 双文件」+ `warning.json` 说明降级原因。
   - (b) imageio-ffmpeg（捆绑 ffmpeg，新依赖，违反 ADR-0032 §3 #8 零新依赖）→ **否决**。
-- **建议**：D3-B 走 (a)，ffmpeg 缺失降级双文件交付。
+- **降级契约（伪代码，fail-soft 非 fail-hard）**：
+
+```python
+def mux(video_frames, audio_track=None) -> MuxResult:
+    if ffmpeg_available() and audio_track is not None:
+        return MuxResult(final_mp4=ffmpeg_mux(video_frames, audio_track))   # 视频+音频 → mp4
+    # 降级：pipeline 不失败，核心产物照常交付
+    result = MuxResult(video_mp4=write_silent_mp4(video_frames))
+    if audio_track is not None:
+        result.audio_wav = write_wav(audio_track)        # 旁白 wav 双文件
+        result.warning = WarningInfo(
+            code="FFMPEG_MISSING",
+            message="ffmpeg 不可用，已降级为 video.mp4 + audio.wav 双文件交付（非 pipeline 失败）",
+        )
+    return result
+```
+
+- **建议**：D3-B 走 (a)，ffmpeg 缺失按上述降级契约交付 `video.mp4` + `audio.wav` + `warning.json`，而非让 pipeline 失败。
 
 ---
 
@@ -514,7 +538,7 @@ class VisualSceneGraph(BaseModel):
 4. **零新重依赖**：音频走既有 `edge-tts`（dev 依赖）+ 系统 `ffmpeg`；若 D3-7 选 (a) 则仅新增轻量 `Pillow`；cairosvg 不默认引入；**无音效/配乐/多格式依赖**。
 5. **视觉确定性（帧级）**：同 scenario 两次生成 `case.mp4` 视觉逐帧 `np.array_equal` 一致（指纹版本锁定）。
 6. **脱敏 + provenance**：每帧含水印+角标；角色标签脱敏；产物不含 PII/真实路径/设备序列号。
-7. **零 import 边界**：AST 测试确认 `visualizer/video` 不 import `runtime/evaluation/integration/memory`；`validation`/`audio` 纯消费例外已见**主 ADR §3 授权条款**（D3-1 已决，方案 a），由零 import 边界 AST 测试守护——`visualizer/video` 仅在 `narrative/evidence/audio` 子包内 import `validation`/`audio` 既有栈，且仅读取、不触发验证判定、不反向依赖生产决策。
+7. **零 import 边界（含单向依赖锁定）**：AST 测试**双向**确认——(a) `visualizer/video` 不 import `runtime/evaluation/integration/memory`；(b) `validation`/`audio` 纯消费例外已见**主 ADR §3 授权条款**（D3-1 已决），仅 `visualizer.video → validation.simulation.renderer` 与 `visualizer.video → audio.tts` 单向存在，**不存在任何** `validation → visualizer.video` / `audio → visualizer.video` 反向 import（presentation adapter dependency，不得成为业务依赖）；(c) `visualizer/video` 仅在 `narrative/evidence/audio` 子包内 import `validation`/`audio` 既有栈，且仅读取、不触发验证判定、不反向依赖生产决策。
 8. **非目标守住**：无真实录像、无实时、不入库 mp4、不接 CI 门禁、不改 production 行为、非「HTML 录屏」、无音效/配乐、无 Web 栈。
 9. **结构级一致性（artifact-level · 防「逻辑正确但视频错」）**：逐帧一致**不足以**证明叙事忠于证据，必须额外断言：
    - **Story consistency**：`Storyboard.evidence_refs` 的每个 id 必须 ∈ `EvidenceGraph.nodes`（断言 ⊆）；否则即便逐帧一致，叙事已偏离证据。
@@ -522,35 +546,39 @@ class VisualSceneGraph(BaseModel):
    - **Frame provenance**：逐帧强制水印/角标**必须包含 `scenario_id`**（字符串命中断言），防止「逻辑正确但 provenance 漏打」。
    - **Duration consistency**：`sum(shot.duration_s)` 必须等于生成视频时长（±1 帧容差）；防止时间轴错乱（逻辑对、但视频少拍/多拍）。
 10. **文档**：本设计评审定稿后，D3 实现 PR 描述附合成视频产物清单 / 截图 / `storyboard.yaml` 快照。
+11. **证据所有权边界（D3-12）**：D3 不得新建 `EvidenceNode` / `EvidenceEdge`——证据事实的唯一真相源在 `validation`/`runtime` 既有栈；D3 仅经 `evidence/adapter.py` 做只读 Projection View（可缓存 `NarrativePlan`/`Storyboard`/`VisualSceneGraph`）。验收：静态/结构断言确认 D3 源文件**无 `EvidenceNode`/`EvidenceEdge` 构造调用**，所有证据引用均来自投影输入，杜绝「视频里有事实、系统里没事实」的审计破坏。
 
 ---
 
-## 9. 待裁决项（⚠️ Owner 一次性拍板后 AI 再实现）
+## 9. Owner Decision Record（D3-1 ~ D3-12 · 共 12 项 · 全部已决）
 
 | #                | 决策点                                         | 推荐                                                                                           | 影响落点/依赖                                      |
 | ---------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **D3-1（v6 已决 · 方案 a）** | 导入边界（visualizer 能否 import validation/audio） | **已授权**：D3 仅在 `visualizer/video/` 子包内，为纯消费目的 import `validation`/`audio` 既有栈（`render_frames`/`export_mp4`/`audio.tts` 等），仅读取、不触发验证判定、不反向依赖生产决策；主 ADR §3 已增补对应例外条款 | 决定 D3 落 `visualizer/video/` |
-| **D3-2**         | 音频默认策略                                      | 默认 D3-A 纯视觉字幕，`--with-audio` 在线 TTS（D3-B）；D3-C 音效/配乐默认不做                                         | 决定是否走网络                                      |
-| **D3-3**         | ffmpeg 封装缺失降级                               | 降级双文件交付                                                                                      | 无新依赖                                         |
-| **D3-7**         | 中文叠加字体                                      | 声明 Pillow + 捆绑子集 CJK 字体                                                                      | 新增轻量依赖 + 字体资产                                |
-| **D3-8（v3 强化）**  | 矢量信息图层光栅化默认方案                               | 信息层**用 SVG/矢量场景描述建模**（非全部 Pillow）；MVP 用 **Pillow-first** 光栅化（确定性、零原生依赖），`cairosvg` 仅作可选高保真后端 | 决定 cairosvg 是否必要 / 是否引入                     |
-| **D3-9（v3 已决 · v5 强化）** | 叙事生成方式                                  | **固定模板映射，禁 LLM 自由发挥**；v5 进一步明确为「模板实例化、非规则引擎、非 Planner」（见 §2.2）               | NarrativeTemplateCompiler 实现约束                |
-| **D3-10（v3 新增）** | 伴生文件默认产出                                | 默认产出 `storyboard.yaml` + `provenance.json`（审计必需）                                         | 输出布局                                         |
+| **D3-1（v6 已决 · v7 锁定单向依赖）** | 导入边界（visualizer 能否 import validation/audio） | **已授权（纯消费）** + **单向依赖约束**：允许 `visualizer.video → validation.simulation.renderer` 与 `visualizer.video → audio.tts`；**禁止** `validation → visualizer.video`、`audio → visualizer.video`。该依赖性质属「**presentation adapter dependency**，不得成为业务依赖」——`visualizer/video` 只在自有子包内读取 `validation`/`audio` 既有栈（`render_frames`/`export_mp4`/`audio.tts`），不触发验证判定、不反向依赖生产决策、不引入运行期副作用；主 ADR §3 已增补对应例外 + 单向约束条款 | 决定 D3 落 `visualizer/video/` |
+| **D3-2（已决）**     | 音频默认策略                                      | 默认 D3-A 纯视觉字幕，`--with-audio` 在线 TTS（D3-B）；D3-C 音效/配乐默认不做                                         | 决定是否走网络                                      |
+| **D3-3（v7 锁定非核心降级）** | ffmpeg 封装缺失降级 | **ffmpeg 不是 pipeline 核心**：缺失时 `VideoMuxer` 降级为 `video.mp4` + `audio.wav` + `warning.json`（fail-soft，非 pipeline fail）；有 ffmpeg 才合成 `final.mp4` | 无新依赖（系统 ffmpeg；imageio-ffmpeg 否决） |
+| **D3-7（v7 锁定字体资源抽象）** | 中文叠加字体 | **引入受控字体资源（controlled font asset）**：落点 `visualizer/video/assets/fonts/NotoSansCJK-Regular.ttf`，经 `FontRegistry → Rasterizer` 抽象——业务代码（caption/rasterizer）**不直接加载字体路径**，统一向 `FontRegistry` 取字形，由 `Rasterizer` 负责光栅化（防 caption.py/renderer.py/overlay.py 各自散加载字体） | 受控字体资源（非 Py 依赖；Pillow 既已存在则零新依赖） |
+| **D3-8（v3 强化 · 已决）**  | 矢量信息图层光栅化默认方案                               | 信息层**用 SVG/矢量场景描述建模**（非全部 Pillow）；MVP 用 **Pillow-first** 光栅化（确定性、零原生依赖），`cairosvg` 仅作可选高保真后端 | 决定 cairosvg 是否必要 / 是否引入                     |
+| **D3-9（v3 已决 · v5 强化 · v7 正式废弃 Planner 命名）** | 叙事生成方式 | **固定模板映射，禁 LLM 自由发挥**；v5 明确为「模板实例化、非规则引擎、非 Planner」；**v7 正式废弃 `NarrativePlanner` 别名**——v1 规范名锁定为 `NarrativeTemplateCompiler`，未来若升级为智能规划仍沿用该规范名（不复兴 Planner 命名） | NarrativeTemplateCompiler 实现约束 + 命名冻结 |
+| **D3-10（v3 新增 · 已决）** | 伴生文件默认产出                                | 默认产出 `storyboard.yaml` + `provenance.json`（审计必需）                                         | 输出布局                                         |
 | **D3-11（v5 已决 · Owner 确认）** | VisualSceneGraph 是否独立成层              | **必须独立**（EvidenceGraph 不直接控制 SVG；表达层与事实层分离，是「同图多受众不同视觉」的正确扩展点，见 §2.4.1） | 落点 `scene/schema.py` + `scene/designer.py`；Storyboard/VisualScene 职责由 §2.4.1 契约锁定 |
+| **D3-12（v7 新增 · Owner 认可）** | Evidence ownership boundary（证据所有权边界） | **D3 不拥有 `EvidenceGraph`，只拥有 Projection View**：D3 内部可缓存 `NarrativePlan` / `Storyboard` / `VisualSceneGraph`，但**禁止新建 `EvidenceNode` / `EvidenceEdge`**——否则会出现「视频里有事实、系统里没事实」的审计破坏。证据事实的唯一真相源始终在 `validation`/`runtime` 既有栈，D3 仅经 EvidenceProjection 做只读投影消费 | 落点 `evidence/adapter.py`（Projection View）；§8 验收新增「无新 EvidenceNode/Edge」断言 |
 
-> **已决项（本版确认，无需再裁决）**：D3-1（导入边界：D3 纯消费 import `validation`/`audio`，已见主 ADR §3 授权例外）、D3-9（固定模板 / 非规则引擎 / 非 Planner）、D3-11（VisualSceneGraph 必须独立）。  
-> **仍待 Owner 拍板**：D3-2（音频默认）/ D3-3（ffmpeg 降级）/ D3-7（中文叠加字体）/ D3-8（矢量光栅化默认）/ D3-10（伴生文件，已默认建议）。  
-> 待上述待裁决项拍板后，本文件升级为「Implementation Plan（定稿）」，AI 进入实现（独立 PR + Owner 评审）。
+> **全部 12 项决策已决（Owner Decision Record）**：D3-1（导入边界 + v7 单向依赖锁定）/ D3-2（音频默认）/ D3-3（ffmpeg 非核心降级）/ D3-7（受控字体资源抽象）/ D3-8（矢量光栅化默认）/ D3-9（固定模板 + v7 正式废弃 Planner 命名）/ D3-10（伴生文件）/ D3-11（VisualSceneGraph 独立）/ **D3-12（Evidence ownership boundary，v7 新增）**。  
+> 本文件已从「Design Proposal / 待裁决」升级为 **Owner Decision Record**：决策已锁定，仅待主 ADR-0035 正文冻结，AI 即进入实现（独立 PR + Owner 评审）。  
+> 仍保留的「实现期开放选择」（非架构裁决，不阻塞冻结）：D3-8 的 cairosvg 是否引入、D3-7 的具体字体子集范围——均属实现细节，按既定默认（Pillow-first / NotoSansCJK 子集）执行即可。
 
 ---
 
 ## 10. 未来方向（v4 降级 · 仅模块边界预留，非路线图承诺）
 
-> **红线重申（对应 Owner 评审 2.4 · 与 §0.3 同）**：无论未来是否将阶段 3 升级为 `Planner`，**始终受 §0.3 红线约束——禁 LLM 自由生成叙事，叙事只能在既有模板空间内做选择**（选模板 / 选 shot 顺序 / 选 audience），绝不允许模型脱离模板自由撰写解说词或编造证据外文本。升级 Planner 只是「在模板空间内做更智能的选择」，不改变「确定性映射」与「离线」本质。
+> **红线重申（对应 Owner 评审 2.4 · 与 §0.3 同）**：无论未来是否将阶段 3 升级为智能规划，**始终受 §0.3 红线约束——禁 LLM 自由生成叙事，叙事只能在既有模板空间内做选择**（选模板 / 选 shot 顺序 / 选 audience），绝不允许模型脱离模板自由撰写解说词或编造证据外文本。升级只是「在模板空间内做更智能的选择」，不改变「确定性映射」与「离线」本质。
+>
+> **命名澄清（D3-9 v7 正式废弃 Planner）**：下文「升级为 Planner」中的 **`Planner` 是已废弃的别名**（历史上曾称 `NarrativePlanner`，v5 已更名为 `NarrativeTemplateCompiler`）；v1 规范名锁定为 `NarrativeTemplateCompiler`，**任何未来升级沿用该规范名，不复活 Planner 命名**，以免与「搜索/推理/优化/决策/LLM Agent」等暗示混淆——它本质仍是「EvidenceGraph + Template → NarrativePlan」的确定性映射。
 
 D3 跑通后，其 `NarrativeTemplateCompiler → Storyboard → VisualScene` 三段纯函数链路在**模块边界**上为「叙事层」预留了扩展位：
 
 - 当前版本（v1）**仅实现确定性模板映射**：`EvidenceGraph →（ScenarioTemplate 模板实例化）→ NarrativePlan → Storyboard → VisualSceneGraph → Video`。不引入 LLM、不在线生成、不反哺 runtime。
-- **升级路径（不写入 v1）**：若某场景类别确需「智能规划」而非固定模板，可将阶段 3 的 `NarrativeTemplateCompiler` 升级为 `Planner`——但**管线形状不变**（X → Storyboard → VisualScene → Video，X = Template Compiler 或 Planner），仅替换阶段 3 内部实现，且仍受 §0.3 红线约束（禁 LLM 自由生成叙事）。
+- **升级路径（不写入 v1）**：若某场景类别确需「智能规划」而非固定模板，可将阶段 3 的 `NarrativeTemplateCompiler` 内部升级为更智能的选择逻辑——但**管线形状不变**（X → Storyboard → VisualScene → Video，X = Template Compiler 或未来的智能规划实现），仅替换阶段 3 内部实现，且仍受 §0.3 红线约束（禁 LLM 自由生成叙事）；**规范名仍为 `NarrativeTemplateCompiler`**。
 - 若未来需要更丰富的表达（多受众模板库、可解释性报告导出、事故复盘视频等），可在**不改变管线形状与模块边界**的前提下，仅扩展 `narrative/` / `storyboard/` / `scene/` 内部的模板与 schema，**受 §0.3 红线约束**（不演变为交互式平台/在线生成服务）。
 - 本设计**不承诺**任何具体未来子系统（如 AI Scientist / 自动研究报告 / 自动事故视频）；上述仅描述「边界预留」这一工程事实。
