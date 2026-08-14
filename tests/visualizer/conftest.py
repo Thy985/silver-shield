@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import struct as _struct
+import zlib as _zlib
 from pathlib import Path
 
 import pytest
@@ -141,8 +143,6 @@ def make_artifacts(
 #     不依赖 PIL/cv2，绝不 base64 内联 660 帧）---
 # 仅测试用"生产者模拟"：构造一份与 Media Source Adapter 契约对齐的媒体资产树
 # （manifest.json + frames/{idx:06d}.png）。Adapter 本身不调用本函数（只读）。
-import struct as _struct
-import zlib as _zlib
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 

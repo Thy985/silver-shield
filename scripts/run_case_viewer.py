@@ -80,7 +80,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rel_to_artifacts = os.path.relpath(args.artifacts, out_parent)
     except ValueError:
-        rel_to_artifacts = str(args.artifacts)
+        # 跨盘符（Windows）relpath 不可算 → 媒体相对 URL 无法构造，fail-closed 退出。
+        # 退化为绝对路径会让浏览器经 file:// 跨域/越权读取，故拒绝而非放行（评审 R2-#10）。
+        logger.error(
+            "媒体相对 URL 无法构造：artifact 与输出跨盘符（fail-closed）",
+            artifacts=str(args.artifacts),
+            output=str(args.output),
+        )
+        return 2
     # 关键：relpath 在 Windows 上产出原生分隔符 ``\``，而 ``PurePosixPath`` 会把它当字面量
     # 字符（posix 不视 ``\`` 为分隔符），必须先用 ``os.sep`` 归一为正斜杠再构造，否则
     # 浏览器拿到的 frame_template 含 ``..\`` 无法解析（媒体帧加载失败）。

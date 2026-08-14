@@ -979,3 +979,38 @@ def test_render_d23_trace_replay_fires_dispatch(tmp_path):
         f"D2.3 trace 联动行为测试失败:\n{res.stdout}\n{res.stderr}"
     )
 
+
+# ---------------------------------------------------------------------------
+# 转义工具安全锁定（ADR-0036 评审 R2-#6 / #367）
+# ---------------------------------------------------------------------------
+
+
+from home_perception.visualizer import renderer  # 文件末追加，避免扰动顶部 imports
+
+
+def test_renderer_esc_js_escapes_line_separators():
+    """_esc_js 必须转义 U+2028/U+2029（JS 字符串层语法换行符，会提前终结字符串/语句）。
+
+    json.dumps 默认 ensure_ascii=True 会把它们转义为 \\u2028/\\u2029，而 html.escape
+    不处理——故 JS 层必须走 _esc_js 而非 _esc（评审 R2-#6 安全锁定）。
+    """
+    s = "a\u2028b\u2029c"
+    out = renderer._esc_js(s)
+    # 原始行/段分隔符不得出现在输出（否则浏览器 JS 解析报错）。
+    assert "\u2028" not in out
+    assert "\u2029" not in out
+    # 应被转义为 \\u2028 / \\u2029（JSON 字符串内）。
+    assert "\\u2028" in out
+    assert "\\u2029" in out
+    # 对照：html.escape 不处理这两个字符，证明为何需要 _esc_js。
+    assert "\u2028" in renderer._esc(s)
+    assert "\u2029" in renderer._esc(s)
+
+
+def test_renderer_guard_script_close_rewrites_closing_tag():
+    """_guard_script_close 仅改写字面 </script（防注入 JS 提前终结脚本块）。"""
+    assert renderer._guard_script_close("a</script>b") == "a<\\/script>b"
+    assert renderer._guard_script_close("</SCRIPT>") == "<\\/script>"
+    # 无 </script 的子串应原样返回（不误伤）。
+    assert renderer._guard_script_close("var x = '</not-close';") == "var x = '</not-close';"
+

@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 from typing import TYPE_CHECKING
 
 from home_perception.visualizer import renderer as _R
@@ -69,6 +70,25 @@ _PROVENANCE_CLASS = {
 #   位于 replay_inits **之后**（保证 __Replay 实例已注册）；
 # - 纪律（VM-10/AC-14）：Media 进度（MediaPlayer 主时钟）驱动 Evidence Timeline
 #   （replay 实例）定位，二者是独立 DOM/状态，不合并为同一数组。
+
+
+# 媒体源 URL 白名单（评审 R2-#3）：``<video src>`` / 帧 URL 只放行 http(s) 绝对 URL 与
+# 相对路径；拒 ``javascript:``/``data:``/``file:`` 等伪协议，避免 XSS / 本地文件读取。
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _safe_media_src(url: str) -> str:
+    """返回经白名单校验的媒体 URL；非法 scheme 返回空串（fail-closed，不注入）。"""
+    if not url:
+        return ""
+    # 相对路径（以 / ./ ../ 开头，或无 scheme）放行——浏览器相对页面解析。
+    if url.startswith(("/", "./", "../")):
+        return url
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme in _ALLOWED_URL_SCHEMES:
+        return url
+    # 其它（javascript:/data:/file: 等）一律拒绝，返回空避免注入。
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +176,7 @@ def _render_case_video(
     ):
         media_area = (
             f'<video class="case-video-el" controls preload="metadata" '
-            f'src="{_R._esc(media_manifest["video_url"])}"></video>'
+            f'src="{_R._esc(_safe_media_src(media_manifest["video_url"]))}"></video>'
         )
     else:
         media_area = (
@@ -165,10 +185,18 @@ def _render_case_video(
         )
 
     # 绑定文案降级为脚注（方案 3）：不再占主轴 C 位。
-    binding_footnote = (
-        f'<p class="muted case-video-binding">媒体源绑定：<code>{src_kind}</code> · '
-        f'ref={ref}（字节由 Media Source Adapter 经 ref 解析，不进 View Model）</p>'
-    )
+    # 媒体缺失（Media Source Adapter 未解析到 manifest）→ 不展示孤儿 ref，标注"无媒体绑定"
+    # （评审 R1-#4：ref 只在确有媒体资产时才对应真实绑定，否则误导）。
+    if media_manifest is None:
+        binding_footnote = (
+            '<p class="muted case-video-binding">无媒体绑定（Media Source Adapter 未解析到媒体资产；'
+            '控制条仍可驱动纯 UI 进度与 Evidence Timeline）</p>'
+        )
+    else:
+        binding_footnote = (
+            f'<p class="muted case-video-binding">媒体源绑定：<code>{src_kind}</code> · '
+            f'ref={ref}（字节由 Media Source Adapter 经 ref 解析，不进 View Model）</p>'
+        )
 
     media_timeline = f"""
         <div class="media-timeline" id="media-timeline-{sid_html}">
@@ -230,7 +258,6 @@ def _render_scenario_case(
         'var cv=document.getElementById("case-video-canvas-' + sid_html + '");'
         'var mm=document.getElementById("media-manifest-' + sid_html + '");'
         "var manifest=(mm&&mm.textContent)?JSON.parse(mm.textContent):null;"
-        'var _mt=document.getElementById("media-timeline-' + sid_html + '");'
         "window.__MediaPlayer.init("
         + _R._esc_js(sid)
         + ",cv,manifest,"
@@ -413,6 +440,13 @@ def render_case_viewer(
             graph_blocks.append(js_block)
     graph_script = "\n".join(graph_blocks)
 
+    # Provenance 脚注文案：由 _PROVENANCE_TEXT 单一来源派生（评审 R2-#2：消除与
+    # HTML/CSS 三处文案漂移；改 provenance 文案只动 _PROVENANCE_TEXT 一处）。
+    prov_note = (
+        "Provenance 一等视觉（AC-7）："
+        + " / ".join(f"{k}→{v}" for k, v in _PROVENANCE_TEXT.items())
+    )
+
     replay_data_tags, replay_trace_data_tags, replay_inits = _build_replay_wiring(scenarios)
 
     echarts = _R._echarts_inline()
@@ -539,7 +573,7 @@ def render_case_viewer(
     case_id: <code>{_R._esc(descriptor['case_id'])}</code> ·
     数据源: ADR-0034 IntegrationReport artifact（只读投影，禁 synthetic node）
   </div>
-  <p class="prov-note">Provenance 一等视觉（AC-7）：SIMULATED→程序化场景·可复现 / REAL_SENSOR→真实传感器·实时数据 / FIXTURE→固定测试素材·非实时。</p>
+  <p class="prov-note">{_R._esc(prov_note)}</p>
   {''.join(scenario_blocks)}
   <details class="glossary">
     <summary>术语对照表（点开查看）</summary>
@@ -560,10 +594,10 @@ def render_case_viewer(
 {media_js}
 </script>
 <script>
-{replay_inits}
+{_R._guard_script_close(replay_inits)}
 </script>
 <script>
-{graph_script}
+{_R._guard_script_close(graph_script)}
 </script>
 </body>
 </html>

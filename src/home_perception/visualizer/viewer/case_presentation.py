@@ -112,7 +112,9 @@ def build_default_case_presentation(
     if not isinstance(scenarios, tuple) or not scenarios:
         raise ValueError("EvidenceProjection 无场景，无法派生 CasePresentationDescriptor")
     if not 0 <= scenario_index < len(scenarios):
-        scenario_index = 0
+        raise ValueError(
+            f"scenario_index 越界：{scenario_index} 不在 [0, {len(scenarios)})（fail-closed）"
+        )
     sid = scenarios[scenario_index]["scenario_id"]
     return CasePresentationDescriptor(
         case_id=sid,
@@ -147,6 +149,9 @@ def load_case_descriptor(path: str | Path) -> CasePresentationDescriptor:
     data.setdefault(
         "media_binding", {"source_kind": "SyntheticFrameSource", "ref": ""}
     )
+    # 媒体绑定 shape 校验（评审 R2-#5）：即便用户提供畸形 media_binding，也须 fail-closed
+    # 拒绝，否则下游 render 的 mb["source_kind"] 会抛 KeyError（孤儿 ref / 非法源类型）。
+    _assert_media_binding_shape(data["media_binding"])
     data.setdefault(
         "first_screen_layout", {"panels": list(_DEFAULT_FIRST_SCREEN_PANELS)}
     )
@@ -154,8 +159,33 @@ def load_case_descriptor(path: str | Path) -> CasePresentationDescriptor:
     return data  # type: ignore[return-value]
 
 
+def _assert_media_binding_shape(mb: object) -> None:
+    """媒体绑定 shape 校验（评审 R2-#5）：source_kind 须为合法枚举、ref 须为字符串。
+
+    用户可能提供畸形绑定（如 ``{"foo": "bar"}`` 缺 source_kind/ref），若放任下游
+    ``mb["source_kind"]`` 会抛 KeyError。这里 fail-closed 显式拒绝。
+    """
+    if not isinstance(mb, dict):
+        raise ValueError("media_binding 必须是对象（含 source_kind 与 ref）")  # noqa: TRY004
+    sk = mb.get("source_kind")  # type: ignore[union-attr]
+    if sk not in ("ArtifactVideoSource", "SyntheticFrameSource", "LiveFrameSource"):
+        raise ValueError(
+            f"media_binding.source_kind 非法：{sk!r}（须为 ArtifactVideoSource/"
+            f"SyntheticFrameSource/LiveFrameSource）"
+        )
+    if not isinstance(mb.get("ref", ""), str):  # type: ignore[union-attr]
+        raise ValueError("media_binding.ref 必须是字符串")  # noqa: TRY004
+
+
 def _assert_no_forbidden_fact_fields(data: object) -> None:
-    """递归扫描，拒绝任何事实型字段伪装进展示编排（AC-13 双保险）。"""
+    """递归扫描，拒绝任何事实型字段伪装进展示编排（AC-13 双保险）。
+
+    设计取舍（评审 R2-#4）：本守卫**仅比对键名**，不深校验"值"的内容——
+    即它拒绝 ``case_risk_level`` 这类键出现，但**不保证**非禁止键的值里嵌套了事实语义
+    （例如某个自定义键的值是一段风险判断）。这符合 AC-13 的「字段层面」防线；更深层的事实
+    语义污染由静态扫描（AC-13 静态）+ 投影层派生（VM-1：一切事实值仍来自 EvidenceProjection）
+    兜底，不在加载校验范围内。键名黑名单 + 值语义扫描二者分工明确，不在此合并。
+    """
 
     def _walk(node: object) -> None:
         if isinstance(node, dict):

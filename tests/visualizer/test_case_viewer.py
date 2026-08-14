@@ -26,6 +26,11 @@ from home_perception.visualizer.viewer import (
     load_case_descriptor,
     render_case_viewer,
 )
+from home_perception.visualizer.viewer.media_source import resolve_media_source
+from home_perception.visualizer.viewer.render import (
+    _render_case_video,
+    _render_provenance_banner,
+)
 
 from .conftest import make_artifacts, make_media_asset
 
@@ -173,10 +178,14 @@ def test_viewer_ac14_dual_timeline_case_time(tmp_path):
     i_init = html.find(f'window.__Replay.init("{sid}")')
     assert i_def > 0 and i_init > 0
     assert html.count("global.__Replay = {") == 1, "replay 引擎被重复注入"
-    # media IIFE（含 media-timeline 标记）必须在 init 之后。注意：media-timeline-{sid}
-    # 首次出现是在首屏 body 的 DOM 元素（早于脚本块），故取最后一次出现（JS 块内）。
-    i_media = html.rfind("media-timeline-" + sid)
-    assert i_def < i_init < i_media, "脚本顺序违规：media IIAFE 须在 replay init 之后"
+    # media IIFE 初始化（window.__MediaPlayer.init）必须在 replay init 之后。
+    # 注：移除死代码 var _mt=... 后，media-timeline-{sid} 仅出现在首屏 body 的 DOM 元素
+    # （早于脚本块），故改用 media init 调用作为 JS 块内标记（评审 R1-#1 删死代码后的对应
+    # 测试标记迁移）。注意：init 调用为 window.__MediaPlayer.init("sid",cv,...)（参数在
+    # sid 之后），故只匹配到 sid 为止的前缀。
+    i_media = html.find(f'window.__MediaPlayer.init("{sid}"')
+    assert i_media > 0, "未找到 MediaPlayer init 调用"
+    assert i_def < i_init < i_media, "脚本顺序违规：media init 须在 replay init 之后"
 
 
 # ---------------------------------------------------------------------------
@@ -482,8 +491,11 @@ Object.defineProperty(MockImage.prototype, 'src', {
   set(v){ this._src=v; if (this.onload) this.onload(); },
   get(){ return this._src; },
 });
-// setInterval 立即同步跑 60 次（驱动 media 进度到尾，确定性验证 Case Time 同步）
-global.setInterval = (cb) => { for (let i=0;i<60;i++) cb(); return 1; };
+// setInterval 立即同步跑足够多次（驱动 media 进度到尾，确定性验证 Case Time 同步）。
+// 评审 R2-#11 后 play 步长改为 fps 同步（默认 10fps → 步长 0.1s），故需足够多 tick 才能
+// 覆盖默认 media_duration_s=60s（60s/0.1s=600 步）；这里给宽裕上限，确保任意合理 duration
+// 都能驱动到尾（player 自带 time>=duration 夹取，tick 富余不会越界）。
+global.setInterval = (cb) => { for (let i=0;i<6000;i++) cb(); return 1; };
 global.clearInterval = () => {};
 const ctx = { console, setTimeout, clearTimeout, setInterval: global.setInterval,
               clearInterval: global.clearInterval, Math, JSON, isNaN, parseInt, Infinity,
@@ -598,3 +610,323 @@ def test_viewer_runtime_media_sync(tmp_path):
     assert res.returncode == 0, (
         f"Case Viewer 媒体同步运行时测试失败:\n{res.stdout}\n{res.stderr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# media.js 直接单元级测试（评审 R2-#11 / #367）：_safeUrl 白名单 + 帧绘制/同步降级
+# 真实 Node vm 执行 media.js（mock Image/canvas/document），非字符串断言。
+# ---------------------------------------------------------------------------
+
+
+_MEDIA_JS_UNIT_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const mediaPath = process.argv[2];
+const code = fs.readFileSync(mediaPath, 'utf8');
+
+// 记录最后一次 img.src 赋值，用于断言伪协议帧 URL 是否被阻断加载。
+let lastSrc = '__unset__';
+function MockImage() {
+  this.onload = null; this.onerror = null; this._src = '';
+  Object.defineProperty(this, 'src', {
+    set(v) { this._src = v; lastSrc = v; if (this.onerror) this.onerror(); },
+    get() { return this._src; }
+  });
+}
+const drawCalls = { count: 0 };
+const ctx2d = { drawImage() { drawCalls.count++; }, fillRect(){}, clearRect(){}, beginPath(){}, fill(){} };
+const canvas = { getContext() { return ctx2d; }, style:{}, width:640, height:360 };
+const mockDoc = { getElementById() { return null; } };
+
+const ctx = {
+  console, setTimeout, clearTimeout, Math, JSON, isNaN, parseInt, Infinity,
+  // setInterval 仅捕获回调、不自动跑，便于断言 play 重置逻辑（不掺入 tick 副作用）。
+  setInterval: function (cb) { ctx.__playCb = cb; return 1; },
+  clearInterval: function () {},
+  document: mockDoc, Image: MockImage,
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+try { vm.runInContext(code, ctx); } catch (e) { console.error('FAIL load: ' + e.message); process.exit(1); }
+
+const MP = ctx.window.__MediaPlayer;
+function check(cond, msg) { if (!cond) { console.error('FAIL: ' + msg); process.exit(1); } }
+
+// 1) 帧 URL 协议白名单（评审 R2-#3 / #11）：拒 javascript:/data:/file:，放行 http(s)/相对路径。
+check(MP._safeUrl('javascript:alert(1)') === '', 'javascript: 应被拒绝');
+check(MP._safeUrl('JAVASCRIPT:alert(1)') === '', '大小写 javascript: 应被拒绝');
+check(MP._safeUrl('data:text/html,foo') === '', 'data: 应被拒绝');
+check(MP._safeUrl('file:///etc/passwd') === '', 'file: 应被拒绝');
+check(MP._safeUrl('https://h/x.png') === 'https://h/x.png', 'https 应放行');
+check(MP._safeUrl('http://h/x.png') === 'http://h/x.png', 'http 应放行');
+check(MP._safeUrl('/abs/x.png') === '/abs/x.png', '绝对路径应放行');
+check(MP._safeUrl('./rel.png') === './rel.png', '相对路径 ./ 应放行');
+check(MP._safeUrl('../rel.png') === '../rel.png', '相对路径 ../ 应放行');
+check(MP._safeUrl('') === '', '空串应返回空');
+
+// 构造播放器实例（init 会调 start → _bindControls，getElementById 返回 null 安全）。
+const manifest = { source_kind:'SyntheticFrameSource', frame_count:30, fps:10,
+                   duration_sec:3, frame_template:'frames/{idx:06d}.png', video_url:'' };
+const p = MP.init('u1', canvas, manifest, { duration:3, fps:0 });
+check(p && p.sid === 'u1', 'init 应返回实例');
+
+// 2) seekByTime 边界夹取（t<0 → 0；t>duration → duration）。
+p.seekByTime(-5, false); check(p.time === 0, '负时间应夹到 0');
+p.seekByTime(999, false); check(p.time === 3, '超界时间应夹到 duration');
+
+// 3) 伪协议帧 URL 经 _safeUrl 阻断：不设置 img.src、不绘帧（fail-closed）。
+p.currentFrame = -1; drawCalls.count = 0; lastSrc = '__unset__';
+p.frameTemplate = 'javascript:alert(1)';
+p._drawFrame(0);
+check(p.currentFrame === 0, '_drawFrame 幂等标记仍更新');
+check(lastSrc === '__unset__', '伪协议帧 URL 不应加载（_safeUrl 阻断）');
+check(drawCalls.count === 0, '伪协议帧 URL 不应绘帧');
+
+// 4) seekByEvidence 退化（无 replay 实例）→ 不崩、不绘帧。
+p.frameTemplate = 'frames/{idx:06d}.png';
+p.currentFrame = -1; drawCalls.count = 0;
+p.seekByEvidence(5);
+check(p.currentFrame === -1, '无 replay 时 seekByEvidence 应退化（不绘帧）');
+
+// 5) play 重置（time>=duration → 0）且置 playing。
+p.time = 3; p.playing = false;
+p.play();
+check(p.time === 0, 'play 应重置 time 到 0（time>=duration）');
+check(p.playing === true, 'play 应置 playing=true');
+
+// 6) Image onerror 路径不崩（真实帧 URL 但加载失败 → 画布留空，非异常）。
+p.frameTemplate = 'frames/{idx:06d}.png'; p.currentFrame = -1;
+try { p._drawFrame(1); } catch (e) { console.error('FAIL: onerror 路径崩溃 ' + e.message); process.exit(1); }
+
+// 7) _renderProgress 在 duration=0 时不崩（进度 0% + 标签仍渲染）。
+p._progress = { style:{} }; p._label = { textContent:'' };
+p.duration = 0; p.time = 5;
+p._renderProgress();
+check(p._progress.style.width === '0%', 'duration=0 时进度应为 0%');
+check(p._label.textContent === '5.0s / 0.0s', 'duration=0 标签仍渲染');
+
+console.log('OK media.js unit: safeUrl/seek/play/renderProgress 全通过');
+"""
+
+
+def _media_js_path() -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "src" / "home_perception" / "visualizer" / "assets" / "media.js"
+
+
+def test_media_js_unit(tmp_path):
+    """media.js 直接单元级回归：_safeUrl 白名单 + 帧绘制/同步/play 重置/进度降级（Node 真实执行）。"""
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 media.js 单元级测试")
+    harness = tmp_path / "media_js_unit_harness.js"
+    harness.write_text(_MEDIA_JS_UNIT_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(_media_js_path())],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"media.js 单元级测试失败:\n{res.stdout}\n{res.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 评审 R2-#5：load_case_descriptor media_binding shape + build_default 越界（fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_load_case_descriptor_rejects_bad_source_kind(tmp_path):
+    """media_binding.source_kind 非法枚举 → ValueError（下游 mb["source_kind"] 会 KeyError）。"""
+    d = tmp_path / "bad.json"
+    d.write_text(
+        json.dumps({"media_binding": {"source_kind": "FooSource", "ref": "r"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_case_descriptor(d)
+
+
+def test_load_case_descriptor_rejects_nonstr_ref(tmp_path):
+    """media_binding.ref 非字符串 → ValueError（shape 校验 fail-closed）。"""
+    d = tmp_path / "bad.json"
+    d.write_text(
+        json.dumps({"media_binding": {"source_kind": "SyntheticFrameSource", "ref": 123}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_case_descriptor(d)
+
+
+def test_load_case_descriptor_rejects_malformed_binding_shape(tmp_path):
+    """畸形 media_binding（缺 source_kind/ref，如 {"foo":"bar"}）→ ValueError（评审 R2-#5）。"""
+    d = tmp_path / "bad.json"
+    d.write_text(json.dumps({"media_binding": {"foo": "bar"}}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_case_descriptor(d)
+
+
+def test_load_case_descriptor_valid_binding_ok(tmp_path):
+    """合法 media_binding（含合法枚举 + 字符串 ref）通过校验。"""
+    d = tmp_path / "ok.json"
+    d.write_text(
+        json.dumps(
+            {"media_binding": {"source_kind": "SyntheticFrameSource", "ref": "sw_t1#media"}}
+        ),
+        encoding="utf-8",
+    )
+    desc = load_case_descriptor(d)
+    assert desc["media_binding"]["source_kind"] == "SyntheticFrameSource"
+    assert desc["media_binding"]["ref"] == "sw_t1#media"
+
+
+def test_build_default_case_presentation_rejects_out_of_range_index():
+    """scenario_index 越界 → ValueError（评审 R2-#5：原静默回退 scenario_index=0 改为 fail-closed）。"""
+    proj = {
+        "meta": {"scenario_count": 1},
+        "scenarios": ({"scenario_id": "sw_t1"},),
+    }
+    with pytest.raises(ValueError):
+        build_default_case_presentation(proj, scenario_index=5)
+    # 边界值合法（不抛）。
+    build_default_case_presentation(proj, scenario_index=0)
+
+
+# ---------------------------------------------------------------------------
+# 评审 R2-#1 / #2 / #3：render.py 分支覆盖（>128 / 多 provenance / video vs canvas / 未知 panel）
+# ---------------------------------------------------------------------------
+
+
+def test_render_rejects_too_many_scenarios():
+    """scenarios > 128 → ValueError（fail-closed，评审 R3-#1）。"""
+    scenarios = tuple({"scenario_id": f"s{i}"} for i in range(129))
+    proj = {"meta": {"scenario_count": 129}, "scenarios": scenarios}
+    with pytest.raises(ValueError):
+        render_case_viewer(proj)
+
+
+def test_render_multi_provenance_mixed_banner():
+    """多 provenance_kind 场景 → MIXED 徽章 + 合并文案（评审 R2-#2 多 provenance）。"""
+    html = _render_provenance_banner(
+        {"timeline": ({"provenance_kind": "SIMULATED"}, {"provenance_kind": "REAL_SENSOR"})}
+    )
+    assert "MIXED" in html, "多 provenance 应呈现 MIXED 徽章"
+    assert "程序化场景" in html, "SIMULATED 文案缺失"
+    assert "真实传感器" in html, "REAL_SENSOR 文案缺失"
+
+
+def test_render_case_video_uses_video_element_for_artifact_video():
+    """ArtifactVideoSource + video_url → 原生 <video>，绝不用 canvas 占位（评审 R2-#3 视频 vs canvas）。"""
+    scenario = {"scenario_id": "sw_t1"}
+    descriptor = {"media_binding": {"source_kind": "SyntheticFrameSource", "ref": "r"}}
+    manifest = {
+        "source_kind": "ArtifactVideoSource",
+        "video_url": "https://example.com/case.mp4",
+        "frame_template": "x",
+    }
+    html = _render_case_video(scenario, descriptor, manifest, "")
+    assert "<video" in html, "ArtifactVideoSource 应渲染原生 <video>"
+    assert "case-video-canvas" not in html, "视频源不应回退 canvas"
+    assert "https://example.com/case.mp4" in html, "video_url 应出现在 src"
+
+
+def test_render_case_video_uses_canvas_when_no_media():
+    """无媒体（manifest=None）→ canvas 播放器 + 标注"无媒体绑定"（评审 R2-#3 / R1-#4）。"""
+    scenario = {"scenario_id": "sw_t1"}
+    descriptor = {"media_binding": {"source_kind": "SyntheticFrameSource", "ref": "r"}}
+    html = _render_case_video(scenario, descriptor, None, "")
+    assert "case-video-canvas" in html, "无媒体应渲染 canvas 播放器"
+    assert "<video" not in html, "无媒体不应渲染 <video>"
+    assert "无媒体绑定" in html, "无媒体应标注'无媒体绑定'（不显示孤儿 ref）"
+
+
+def test_render_unknown_panel_ignored_gracefully(tmp_path):
+    """编排含未知面板名 → 静默忽略、不崩，其余面板正常渲染（评审 R3-#3 前向兼容）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    desc = build_default_case_presentation(proj)
+    desc["first_screen_layout"]["panels"] = ("case_video", "ghost_panel", "current_risk")
+    html = render_case_viewer(proj, desc, media_base_dir=None)
+    # 已知面板仍正常渲染
+    assert "fs-case-video-sw_t1" in html
+    assert "fs-current-risk-sw_t1" in html
+    # 未知面板被忽略（不产出任何对应 section）
+    assert "ghost_panel" not in html
+
+
+# ---------------------------------------------------------------------------
+# 评审 R2-#10 / D9：run_case_viewer CLI 退出码路径（fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_cli_missing_artifacts_exit_2(tmp_path):
+    """--artifacts 指向不存在目录 → 退出码 2（参数/目录错误）。"""
+    cli = _load_run_case_viewer()
+    rc = cli.main(["--artifacts", str(tmp_path / "nope"), "--output", str(tmp_path / "o.html")])
+    assert rc == 2, "缺失 artifact 目录应退出 2"
+
+
+def test_cli_descriptor_with_fact_exit_1(tmp_path):
+    """--descriptor 含事实型字段 → 退出码 1（投影/展示编排契约违规，fail-closed）。"""
+    cli = _load_run_case_viewer()
+    art = make_artifacts(tmp_path / "artifacts", scenario_ids=("sw_t1",))
+    bad = tmp_path / "bad_descriptor.json"
+    bad.write_text(
+        json.dumps({"case_id": "sw_t1", "case_risk_level": "HIGH"}), encoding="utf-8"
+    )
+    out = tmp_path / "out.html"
+    rc = cli.main(["--artifacts", str(art), "--descriptor", str(bad), "--output", str(out)])
+    assert rc == 1, "含事实字段的 descriptor 应退出 1"
+
+
+def test_cli_render_valueerror_exit_1(tmp_path, monkeypatch):
+    """render_case_viewer 抛 ValueError（scenarios>128）→ 退出码 1（第二道防御层）。
+
+    main() 内部以 ``from ... import render_case_viewer`` 局部导入，故改 patch 真正的
+    viewer 包属性（调用时取值），而非 cli 模块同名属性（会被局部导入遮蔽）。
+    """
+    import home_perception.visualizer.viewer as _viewer_mod
+
+    cli = _load_run_case_viewer()
+    art = make_artifacts(tmp_path / "artifacts", scenario_ids=("sw_t1",))
+
+    def _raise_render(*a, **k):
+        raise ValueError("EvidenceProjection.scenarios 数量超上限（129>128，fail-closed）")
+
+    monkeypatch.setattr(_viewer_mod, "render_case_viewer", _raise_render)
+    out = tmp_path / "out.html"
+    rc = cli.main(["--artifacts", str(art), "--output", str(out)])
+    assert rc == 1, "render ValueError 应退出 1"
+
+
+def test_cli_cross_drive_fail_closed_exit_2(tmp_path, monkeypatch):
+    """跨盘符 relpath 不可算 → fail-closed 退出码 2（绝不退化为绝对路径放行，评审 R2-#10）。"""
+    cli = _load_run_case_viewer()
+    art = make_artifacts(tmp_path / "artifacts", scenario_ids=("sw_t1",))
+
+    def _raise(*a, **k):
+        raise ValueError("cross-drive relpath")
+
+    monkeypatch.setattr(cli.os.path, "relpath", _raise)
+    out = tmp_path / "out.html"
+    rc = cli.main(["--artifacts", str(art), "--output", str(out)])
+    assert rc == 2, "跨盘符 relpath 失败应 fail-closed 退出 2"
+
+
+# ---------------------------------------------------------------------------
+# 评审 R3-#2：make_media_asset 自身 sanity（产出可被 Media Source Adapter 只读解析）
+# ---------------------------------------------------------------------------
+
+
+def test_make_media_asset_sanity_resolvable(tmp_path):
+    """make_media_asset 产出的媒体资产树可被 resolve_media_source 解析为合法 MediaManifest。"""
+    base = tmp_path / "media_base"
+    media_dir = make_media_asset(base, "sw_t1", frame_count=30, fps=10.0)
+    assert (media_dir / "manifest.json").exists()
+    assert (media_dir / "frames" / "000000.png").exists()
+    m = resolve_media_source(base, "sw_t1", "SyntheticFrameSource")
+    assert m is not None, "resolve_media_source 应解析出 manifest"
+    assert m["source_kind"] == "SyntheticFrameSource"
+    assert m["frame_count"] == 30
+    assert m["fps"] == 10.0
+    assert m["frame_template"].endswith("{idx:06d}.png")
+    # 缺媒体场景应降级为 None（不崩）
+    assert resolve_media_source(base, "sw_absent", "SyntheticFrameSource") is None

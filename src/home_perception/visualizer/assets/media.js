@@ -49,11 +49,25 @@
     return (rp && rp.nodes) ? rp.nodes.length : 0;
   };
 
+  // 帧 URL 协议黑名单（评审 R2-#3 / R2-#11）：拒 javascript:/data:/file: 等伪协议
+  // （XSS / 本地文件读取）；放行 http(s) 与**任何相对路径**（含裸相对路径
+  // ``sw_t1/media/frames/000000.png``、``/abs``、``./``、``../``）——相对路径是 frame_template
+  // 的合法形态（manifest 只持相对 media base 的模板，渲染层再叠加 media_base_url）。
+  // 用"拒危险 scheme"而非"白名单 scheme"，避免误伤裸相对路径导致帧不绘制。
+  function _safeUrl(url) {
+    if (!url) return '';
+    // 带 scheme 但非 http(s)（如 javascript:/data:/file:/vbscript:）→ 拒绝。
+    if (/^[a-z][a-z0-9+.\-]*:/i.test(url) && !/^https?:/i.test(url)) return '';
+    return url;
+  }
+
   MediaPlayer.prototype._drawFrame = function (frameIdx) {
     if (frameIdx === this.currentFrame) return;  // 幂等：同帧不重绘
     this.currentFrame = frameIdx;
     if (!this.ctx || !this.frameTemplate) return;
-    var url = this.frameTemplate.replace('{idx:06d}', ('000000' + frameIdx).slice(-6));
+    var raw = this.frameTemplate.replace('{idx:06d}', ('000000' + frameIdx).slice(-6));
+    var url = _safeUrl(raw);
+    if (!url) return;  // 伪协议 / 非法 URL → 不加载，画布留空（fail-closed）
     var self = this;
     if (typeof Image === 'undefined') return;  // 极端降级：无 Image API 不崩
     var img = new Image();
@@ -99,11 +113,17 @@
     this.playing = true;
     var self = this;
     if (this.time >= this.duration) this.time = 0;
+    // 步长按真实帧率 1x 同步（评审 R2-#11）：每步推进 1/fps 秒、间隔 1000/fps 毫秒；
+    // fps 缺失（无媒体）→ 回退 10fps（步长 0.1s），避免 duration 很小（如 0.5s）时
+    // 固定 50 步 → 步长 10ms 触发高频 setInterval 多步累计跳帧 / 同步抖动。
+    var fps = this.fps || 10;
+    var stepSec = 1 / fps;
+    var stepMs = 1000 / fps;
     this.timer = setInterval(function () {
-      self.time += self.duration / 50;  // 50 步到尾
+      self.time += stepSec;
       if (self.time >= self.duration) { self.time = self.duration; self.pause(); }
       self.seekByTime(self.time, true);
-    }, 100);
+    }, stepMs);
   };
 
   MediaPlayer.prototype.pause = function () {
@@ -168,6 +188,8 @@
       p.start();
       return p;
     },
-    get: function (sid) { return players[sid] || null; }
+    get: function (sid) { return players[sid] || null; },
+    // 暴露给测试：帧 URL 协议白名单（评审 R2-#3 / R2-#11）。
+    _safeUrl: _safeUrl
   };
 })(window);
