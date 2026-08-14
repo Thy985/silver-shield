@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from pathlib import Path
 
 from home_perception.visualizer.schema.evidence import (
@@ -32,6 +33,7 @@ from home_perception.visualizer.schema.evidence import (
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _ECHARTS_FILENAME = "echarts.min.js"
 _REPLAY_FILENAME = "replay.js"
+_MEDIA_FILENAME = "media.js"
 
 # 时间轴配色（浅色主题，stage → 色值）。
 _STAGE_COLOR = {
@@ -144,6 +146,12 @@ def _esc_js(sid: str) -> str:
 
     HTML 层用 ``_esc``（html.escape），JS 层必须用 JSON 字符串语义——
     同一 sid 在两层的转义策略不同，禁止混用。
+
+    安全锁定（评审 R2-#6 + #367）：``json.dumps`` 默认 ``ensure_ascii=True``，
+    会把行/段分隔符 U+2028（LINE SEPARATOR）/ U+2029（PARAGRAPH SEPARATOR）转义为
+    ``\\u2028`` / ``\\u2029``——这俩字符在 JS 字符串字面量里是**语法层换行符**（会
+    提前终结字符串/语句，触发解析错误），但 HTML escape 不处理它们。故 JS 层必须走
+    ``_esc_js`` 而非 ``_esc``。``test_renderer_esc_js_escapes_line_separators`` 锁定此行为。
     """
     return json.dumps(sid)
 
@@ -160,6 +168,18 @@ def _sanitize_for_js(s: str) -> str:
     return s.replace("</", "<\\/")
 
 
+def _guard_script_close(s: str) -> str:
+    """仅重写字面 ``</script`` 序列（大小写不敏感），防御 HTML 解析期脚本提前终结。
+
+    与 ``_sanitize_for_js`` 的区别：本函数**只**改写真正会终结 ``<script>`` 块的
+    ``</script`` 令牌，绝不触碰合法的 ``</div>``/``</span>`` 等 HTML 片段或 JS 正则里的
+    ``</``——否则会破坏 ECharts tooltip 格式器、正则等。把 ``</script`` 改成
+    ``<\\/script`` 后，HTML 解析期不再命中脚本终结，JS 字符串里 ``<\\/`` 又等价 ``</``，
+    无损且安全。用于 replay_inits / graph_script 这类「整段 JS 代码」注入。
+    """
+    return re.sub(r"</script", "<\\/script", s, flags=re.IGNORECASE)
+
+
 def _echarts_inline() -> str:
     """内联 ECharts（缺失时降级为空串——图视图显示降级提示而非崩溃）。"""
     p = _ASSETS_DIR / _ECHARTS_FILENAME
@@ -171,6 +191,14 @@ def _echarts_inline() -> str:
 def _replay_inline() -> str:
     """内联 D2.1 Replay 引擎（缺失时降级为空串——控制条不绑定，时间轴仍静态可读）。"""
     p = _ASSETS_DIR / _REPLAY_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def _media_inline() -> str:
+    """内联 ADR-0036 Slice A.1 MediaPlayer 引擎（缺失时降级为空串——画布留空，不崩）。"""
+    p = _ASSETS_DIR / _MEDIA_FILENAME
     if not p.exists():
         return ""
     return p.read_text(encoding="utf-8")

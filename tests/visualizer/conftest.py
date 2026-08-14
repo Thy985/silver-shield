@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import struct as _struct
+import zlib as _zlib
 from pathlib import Path
 
 import pytest
@@ -135,6 +137,82 @@ def make_artifacts(
             json.dumps(summary, ensure_ascii=False), encoding="utf-8"
         )
     return directory
+
+
+# --- ADR-0036 Slice A.1 hermetic media asset fixture（纯 stdlib 生成合法最小 PNG，
+#     不依赖 PIL/cv2，绝不 base64 内联 660 帧）---
+# 仅测试用"生产者模拟"：构造一份与 Media Source Adapter 契约对齐的媒体资产树
+# （manifest.json + frames/{idx:06d}.png）。Adapter 本身不调用本函数（只读）。
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _write_minimal_png(path: Path, size: int, rgb: tuple[int, int, int]) -> None:
+    """纯 stdlib 写一份合法最小 RGB PNG（无 alpha、filter=0、zlib 压缩）。
+
+    不依赖 PIL/cv2；``rgb`` 为该帧统一填充色（每帧异色便于区分与调试）。
+    """
+    width = height = size
+    raw = bytearray()
+    for _ in range(height):
+        raw.append(0)  # 每行 filter type = 0（None）
+        for _ in range(width):
+            raw += bytes(rgb)
+    compressed = _zlib.compress(bytes(raw), 9)
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return (
+            _struct.pack(">I", len(data))
+            + body
+            + _struct.pack(">I", _zlib.crc32(body) & 0xFFFFFFFF)
+        )
+
+    ihdr = _struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit, RGB
+    png = (
+        _PNG_SIGNATURE
+        + _chunk(b"IHDR", ihdr)
+        + _chunk(b"IDAT", compressed)
+        + _chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
+
+
+def make_media_asset(
+    base: Path,
+    scenario_id: str,
+    frame_count: int = 30,
+    fps: float = 10.0,
+    size: int = 16,
+) -> Path:
+    """在 ``base`` 下造一份合法的媒体资产树并返回 media 目录路径。
+
+    结构（对齐 resolve_media_source 契约）：
+      {base}/{scenario_id}/media/manifest.json
+      {base}/{scenario_id}/media/frames/{idx:06d}.png   （合法最小 PNG，每帧异色）
+
+    ``frame_template`` 是相对 **media base 目录** 的 URL 模板（渲染层再叠加 media_base_url）。
+    """
+    media_dir = Path(base) / scenario_id / "media"
+    frames_dir = media_dir / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(frame_count):
+        # 每帧一种派生色（便于区分帧序，产品态用真实渲染帧替代）。
+        rgb = ((i * 7) % 256, (i * 13) % 256, (i * 29) % 256)
+        _write_minimal_png(frames_dir / f"{i:06d}.png", size, rgb)
+    manifest = {
+        "source_kind": "SyntheticFrameSource",
+        "frame_count": frame_count,
+        "fps": fps,
+        "duration_sec": round(frame_count / fps, 3),
+        # 相对 media base 目录的帧 URL 模板（{idx:06d} 由前端替换）。
+        "frame_template": f"{scenario_id}/media/frames/{{idx:06d}}.png",
+        "video_url": "",
+    }
+    (media_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return media_dir
 
 
 @pytest.fixture

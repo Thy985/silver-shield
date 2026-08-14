@@ -75,3 +75,4 @@ generated/
 reports/
 # 例外：docs/reports/ 是固化的验证报告（文本资产，入库）
 !docs/reports/
+evidence_explorer.html

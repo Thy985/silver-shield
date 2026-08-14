@@ -141,6 +141,9 @@
   // D2.2 Causal Highlight：timeline 节点可点击 → seek 到该 step
   // （并触发 onStep → 订阅方 graph 联动高亮）。与控制条绑定解耦：即便控制条
   // 缺件（降级路径）也能点击时间轴跳转；listEl 缺失则直接跳过（静默不崩）。
+  // ADR-0036 Slice A.1：仅 **timeline 轨道** 在点击后回调 window.__MediaSync
+  // .onEvidenceSeek(d)（反向同步：Evidence 节点 → Media 定位对应帧）。trace 轨道
+  // 不触发（避免决策解释卡片点击误驱动媒体）。__MediaSync 未定义时 no-op（D1/D2 安全）。
   Replay.prototype.bindTimeline = function () {
     var self = this;
     if (!this.listEl) return;
@@ -150,7 +153,15 @@
         el.style.cursor = 'pointer';
         el.onclick = function () {
           var d = parseInt(el.getAttribute('data-idx'), 10);
-          if (!isNaN(d)) { self.pause(); self.seek(d); }
+          if (!isNaN(d)) {
+            self.pause();
+            self.seek(d);
+            if (self.track === 'timeline'
+                && global.__MediaSync
+                && typeof global.__MediaSync.onEvidenceSeek === 'function') {
+              global.__MediaSync.onEvidenceSeek(d);
+            }
+          }
         };
       })(items[i]);
     }
