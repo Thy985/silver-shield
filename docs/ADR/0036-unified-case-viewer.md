@@ -477,6 +477,15 @@ FIXTURE     → 固定测试素材 · 非实时
 
 > 本 ADR 只冻结"字段必须来自真实音频符号、且哪些字段绝不能出现"的原则；最终字段集与命名在 ADR-0036 的 Implementation Plan（或 `visualizer/schema/evidence.py` 改动 PR）中定稿，并配 fail-closed 契约测试。
 
+### 实现状态（Slice C · VM-13 Phase B）
+
+`TimelineNode` 已加 `modality: TimelineModality`（AC-9 统一时间轴判别式，取值
+`VISION/AUDIO/DECISION/ACTION/MEMORY/CROSS_MODAL/OBSERVABILITY`）；`ScenarioEvidence` 已加
+`audio_evidence: tuple[AudioEvidenceNode, ...]`，`AudioEvidenceNode` 与 `AudioAcoustics` 已定稿于
+`src/home_perception/visualizer/schema/evidence.py`。AC-12 落地门槛：**Phase A/B 中 `audio_evidence`
+恒为 `()`**，仅 loader 在 Phase C 真实音频进入 canonical 后才投影产出；Phase B 仅 live_adapter 增量合并
+AUDIO modality 时间轴节点（见 `visualizer/viewer/live_adapter.py`）。
+
 ### 字段来源表（锚定仓库真实符号）
 
 | `AudioEvidenceNode` 字段 | 来源真实符号 | 说明 |

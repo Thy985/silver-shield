@@ -15,13 +15,18 @@ Case Viewer，仅 provenance 着色差异）。
     cat live_frames.jsonl | python scripts/run_live_viewer.py --output live.html
     python scripts/run_live_viewer.py --frames live_frames.jsonl --scenario-id cam-01 --window-size 128
 
-JSONL 每行一个帧对象（FrameResult 契约子集）：
+JSONL 每行一个对象（FrameResult 契约子集 / AudioPerceptionEvent 契约子集），按 ``type`` 分流：
+- 视觉帧（无 ``type`` 字段或 ``type != "audio"``）：
     {"frame_index":0,"n_detections":2,"n_visitor_events":1,
      "perception_events":[{"event_type":"stranger_loiter"}],"warnings":[],"commands":[]}
+- 音频感知（``type="audio"``，ADR-0036 Slice C Phase B 增量合并，时间轴 AUDIO 节点；
+  VM-9/AC-10 守卫：不得携带 text/transcript/FORBIDDEN_AUDIO_FIELDS/媒体字节）：
+    {"type":"audio","timestamp":"1700000000.0","kind":"audio_voice_raised",
+     "score":0.83,"confidence":0.91,"source_segment_ids":["seg-1"],"labels":["raised"]}
 
 退出码：
 - 0：成功生成 HTML；
-- 1：帧/渲染契约违规（fail-closed）；
+- 1：帧/音频/渲染契约违规（fail-closed）；
 - 2：参数/IO 错误。
 """
 
@@ -65,14 +70,23 @@ def _read_frames(path: Path | None, *, scenario_id: str, window_size: int) -> st
     acc = ProjectionAccumulator(scenario_id, window_size=window_size)
     for idx, line in enumerate(lines):
         try:
-            frame = json.loads(line)
+            entry = json.loads(line)
         except json.JSONDecodeError as exc:
-            logger.error("帧 JSON 解析失败", line=idx, error=str(exc))
+            logger.error("条目 JSON 解析失败", line=idx, error=str(exc))
             raise _ExitCode(1) from exc
+        # 按 type 分流：audio 条目 → ingest_audio（时间轴 AUDIO 节点增量合并）；
+        # 其余（无 type 或 type!="audio"）→ ingest（视觉帧）。
+        is_audio = isinstance(entry, dict) and entry.get("type") == "audio"
         try:
-            acc.ingest(frame)
+            if is_audio:
+                acc.ingest_audio(entry)
+            else:
+                acc.ingest(entry)
         except LiveIngestError as exc:
-            logger.error("帧契约违规，拒绝生成（fail-closed）", line=idx, error=str(exc))
+            label = "音频" if is_audio else "帧"
+            logger.error(
+                f"{label}契约违规，拒绝生成（fail-closed）", line=idx, error=str(exc)
+            )
             raise _ExitCode(1) from exc
 
     try:
