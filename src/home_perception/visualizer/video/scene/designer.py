@@ -19,8 +19,8 @@ from home_perception.visualizer.video.scene.schema import (
     VisualSceneGraph,
 )
 from home_perception.visualizer.video.storyboard.decision_canvas import (
-    _all_canvas_ids,
-    _canvas_node_spec,
+    canvas_node_spec,
+    collect_canvas_ids,
 )
 from home_perception.visualizer.video.storyboard.schema import Storyboard
 
@@ -104,13 +104,13 @@ def _build_decision_canvas(shot, evidence: dict) -> list[DecisionCanvasNode]:
     """由语义层 ``shot.decision_steps`` 派生决策画布节点（表达层空间排版）。
 
     仅当 shot 含 decision_steps 时调用；节点 id 取自步骤引用的 highlight/fade 全集，
-    规格（label/stage/synthetic/anchor）由语义层 ``_canvas_node_spec`` 统一派生，保证
+    规格（label/stage/synthetic/anchor）由语义层 ``canvas_node_spec`` 统一派生，保证
     语义层 ↔ 表达层单一真相源。
     """
-    ids = _all_canvas_ids(shot.decision_steps)
+    ids = collect_canvas_ids(shot.decision_steps)
     nodes: list[DecisionCanvasNode] = []
     for nid in ids:
-        spec = _canvas_node_spec(evidence, nid)
+        spec = canvas_node_spec(evidence, nid)
         nodes.append(
             DecisionCanvasNode(
                 id=spec["id"],

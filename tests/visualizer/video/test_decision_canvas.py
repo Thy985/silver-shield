@@ -13,15 +13,20 @@ from __future__ import annotations
 
 import pytest
 
+from home_perception.visualizer.video.compiler import _decision_step_index
 from home_perception.visualizer.video.evidence.adapter import load_scenario_evidence
 from home_perception.visualizer.video.narrative.compiler import instantiate_narrative_template
 from home_perception.visualizer.video.narrative.templates import template_for_evidence
-from home_perception.visualizer.video.scene.designer import design_visual_scene
+from home_perception.visualizer.video.scene.designer import (
+    _build_decision_canvas,
+    design_visual_scene,
+)
 from home_perception.visualizer.video.storyboard.decision_canvas import (
     CANONICAL_CHAIN,
     COMMAND_CANDIDATES,
     assert_decision_canvas,
     build_decision_steps,
+    canvas_node_spec,
 )
 from home_perception.visualizer.video.storyboard.generator import generate_storyboard
 
@@ -77,7 +82,9 @@ def test_benign_no_recommended_action_does_not_invent_candidate():
     assert [s.stage for s in steps] == EXPECTED_STAGES
     cand = steps[3]
     assert cand.highlight == ["dc:selected"]
-    assert all(n.startswith("dc:cand:") for n in cand.fade)  # 三个候选一并淡出
+    # 三个候选一并淡出（不编造 dc:cand:无）
+    for a in COMMAND_CANDIDATES:
+        assert f"dc:cand:{a}" in cand.fade
     assert not any(n.startswith("dc:cand:无") for n in cand.highlight + cand.fade)
     # 执行步：两者皆为『无』，不应套用 『≠』 框架
     assert "≠" not in steps[5].caption
@@ -169,3 +176,74 @@ def test_benign_real_artifact_canvas_consistent():
     dec_shot = next(s for s in sb.shots if s.name == "decision")
     assert len(dec_shot.decision_steps) == 7
     assert len(canvas) == 9
+
+
+def test_gap1_decision_step_index_deterministic():
+    """缺口 1：决策幕逐帧→步骤映射的确定性序列必须被锁定（fps=1, duration_s=9, steps=7）。
+
+    n_frames = round(9*1) = 9，lvl = max(1, 8) = 8，step_idx = min(6, i*7//8)。
+    """
+    n_frames = 9
+    seq = [_decision_step_index(i, n_frames, 7) for i in range(n_frames)]
+    assert seq == [0, 0, 1, 2, 3, 4, 5, 6, 6]
+    # 单调性 + 末帧必命中末步
+    assert seq == sorted(seq)
+    assert seq[-1] == 6
+
+
+def test_gap2_real_scenarioevidence_roundtrip():
+    """缺口 2：build_decision_steps + assert_decision_canvas 对真实 ScenarioEvidence 形态（TypedDict）生效。
+
+    落盘前一致性校验接收的是 designer 产出的 pydantic DecisionCanvasNode 列表，而
+    build_decision_steps 接收的是 loader 投影的 ScenarioEvidence（TypedDict，运行期即 dict）。
+    此前所有夹具都走简化 dict；本测试用贴合 loader 实况的字段形态（元组 + 嵌套 DecisionEvidence）
+    跑完整「语义层规格 → 表达层节点 → 锚定校验」闭环，确保 canvas_node_spec 的
+    recommended_actions/command_types 取值在生产数据形态下不 AttributeError（review #2）。
+    """
+    evidence = make_evidence(
+        scenario_id="sw_adr0034_elderly_dwell",
+        event_types=("abnormal_dwell",),
+        recommended_actions=("NOTIFY_FAMILY",),
+        command_types=("LOG_ONLY",),
+        decision_evidence=[
+            {"kind": "evidence", "label": "检测证据（事件类型）", "value": "abnormal_dwell", "ref": "d1"},
+            {"kind": "reasoning", "label": "风险级别", "value": "LOW", "ref": "d2"},
+            {"kind": "reasoning", "label": "决策结果（trace outcome）", "value": "WARN", "ref": "d3"},
+        ],
+    )
+    steps = build_decision_steps(evidence)
+    assert [s.stage for s in steps] == EXPECTED_STAGES
+    # 语义层规格 → 表达层 DecisionCanvasNode（designer 真实路径）
+    shot = type("Shot", (), {"decision_steps": steps})()
+    nodes = _build_decision_canvas(shot, evidence)
+    assert [n.id for n in nodes] == list(CANONICAL_CHAIN)
+    # 表达层节点 → 锚定校验（生产落盘前复校）
+    assert_decision_canvas(evidence, nodes)
+    # 规格锚定：选中节点 label 必须含真实推荐动作
+    selected = next(n for n in nodes if n.id == "dc:selected")
+    assert selected.label == "选中\nNOTIFY_FAMILY"
+    # canvas_node_spec 在 pydantic/真实数据形态下不抛 AttributeError
+    assert canvas_node_spec(evidence, "dc:execution")["label"] == "执行\nLOG_ONLY"
+
+
+def test_gap3_candidate_step_keeps_non_candidates_visible():
+    """缺口 3：候选步只淡出其余候选 + 尚未抵达的后续节点，决策上下文保持中性可见（review #5）。
+
+    候选步（正常场景）只淡出：① 其余两个候选；② 尚未抵达的 execution/closure（渐进揭示，
+    在各自步骤才点亮，避免 visible→faded→visible 抖动）。已揭示的决策上下文
+    observation/risk/policy/selected 保持中性可见——画布不再近乎全黑。
+    """
+    ev = make_evidence(recommended_actions=("NOTIFY_FAMILY",), command_types=("LOG_ONLY",))
+    steps = build_decision_steps(ev)
+    cand = steps[3]
+    # 决策上下文（已揭示）不得被淡出
+    context_visible = ["dc:observation", "dc:risk", "dc:policy", "dc:selected"]
+    for nid in context_visible:
+        assert nid not in cand.fade, f"决策上下文节点 {nid} 不应被淡出"
+    # 选中候选高亮、其余两个候选淡出
+    assert cand.highlight == ["dc:cand:NOTIFY_FAMILY"]
+    assert "dc:cand:MONITOR" in cand.fade
+    assert "dc:cand:ESCALATE_COMMUNITY" in cand.fade
+    # execution/closure 为渐进揭示的后续节点（候选步尚未抵达），按设计淡出
+    assert "dc:execution" in cand.fade
+    assert "dc:closure" in cand.fade

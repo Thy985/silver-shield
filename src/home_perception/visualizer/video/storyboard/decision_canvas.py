@@ -42,12 +42,15 @@ _CLOSED_CANVAS_IDS: frozenset[str] = frozenset(
 )
 
 # 画布节点在屏幕上的标准呈现顺序（同时用于 highlight/fade 的补集计算）。
+# 顺序经 review #5 修订：``dc:selected`` 置于候选动作之前——决策幕「候选步」已揭示选中动作
+# （候选步 highlight 选中的候选、dc:selected 显示同样结论），故 dc:selected 须在候选步保持
+# 中性可见，而非作为「尚未抵达节点」被淡出（否则候选步画布仍缺关键结论框）。
 CANONICAL_CHAIN: tuple[str, ...] = (
     "dc:observation",
     "dc:risk",
     "dc:policy",
-    *[f"dc:cand:{a}" for a in COMMAND_CANDIDATES],
     "dc:selected",
+    *[f"dc:cand:{a}" for a in COMMAND_CANDIDATES],
     "dc:execution",
     "dc:closure",
 )
@@ -92,7 +95,7 @@ def _category_of(evidence: object) -> str:
     return "generic"
 
 
-def _policy_name(evidence: dict) -> str:
+def _policy_name(evidence: object) -> str:
     """策略名（受控常量，由类别映射，非证据值生成）。"""
     return CATEGORY_TO_POLICY.get(_category_of(evidence), "generic_policy")
 
@@ -111,8 +114,12 @@ def _decision_value(evidence: object, *labels: str) -> str:
     return "—"
 
 
-def _all_canvas_ids(steps: list[DecisionStep]) -> list[str]:
-    """收集决策步骤引用到的全部画布节点 id（按 CANONICAL_CHAIN 排序，去重）。"""
+def collect_canvas_ids(steps: list[DecisionStep]) -> list[str]:
+    """收集决策步骤引用到的全部画布节点 id（按 CANONICAL_CHAIN 排序，去重）。
+
+    公开包装：语义层的节点收集是合法对外能力，不应以 ``_`` 私有名被表达层跨模块导入
+    （review #1 封装边界）。
+    """
     seen: set[str] = set()
     ordered: list[str] = []
     for step in steps:
@@ -124,7 +131,7 @@ def _all_canvas_ids(steps: list[DecisionStep]) -> list[str]:
     return ordered
 
 
-def _canvas_node_spec(evidence: dict, node_id: str) -> dict:
+def canvas_node_spec(evidence: object, node_id: str) -> dict:
     """画布节点 id → 表达层规格（label / stage / synthetic / anchor）。
 
     fail-closed：id 不在闭集即报错；synthetic 节点（policy / candidate）由受控常量派生，
@@ -156,11 +163,11 @@ def _canvas_node_spec(evidence: dict, node_id: str) -> dict:
         return {"id": node_id, "label": f"动作\n{action}", "stage": "candidate", "synthetic": True,
                 "anchor": f"candidate:{action}"}
     if sub == "selected":
-        recs = list(evidence.get("recommended_actions") or ()) or ["无"]
+        recs = list(_ev_get(evidence, "recommended_actions") or ()) or ["无"]
         return {"id": node_id, "label": f"选中\n{recs[0]}", "stage": "selected", "synthetic": False,
                 "anchor": f"recommended_actions:{recs[0]}"}
     if sub == "execution":
-        cmds = list(evidence.get("command_types") or ()) or ["无"]
+        cmds = list(_ev_get(evidence, "command_types") or ()) or ["无"]
         return {"id": node_id, "label": f"执行\n{cmds[0]}", "stage": "execution", "synthetic": False,
                 "anchor": f"command_types:{cmds[0]}"}
     if sub == "closure":
@@ -169,13 +176,24 @@ def _canvas_node_spec(evidence: dict, node_id: str) -> dict:
     raise AssertionError(f"未识别的决策画布节点 id：{node_id!r}")
 
 
+def _reveal_fade(chain: tuple[str, ...], active: str) -> list[str]:
+    """逐步揭示：active 节点及其之前的节点保持可见，其后的节点淡出（尚未抵达该步）。
+
+    这是「同一张决策图随时间逐步揭示」的底层规则：每一步只把 active 节点高亮、把**
+    尚未揭示**的后续节点淡出，已揭示节点以中性灰保持可见——避免旧实现把全部非 active
+    节点淡出导致步骤间画布几乎全黑、切换回看时剧烈抖动（review #5）。
+    """
+    idx = chain.index(active)
+    return [n for i, n in enumerate(chain) if i > idx]
+
+
 def _step(stage: str, caption: str, active: str, chain: tuple[str, ...]) -> DecisionStep:
-    """单步：高亮 active 节点，淡出其余（补集）。"""
+    """单步：高亮 active 节点，淡出其后的未揭示节点（之前节点保持可见）。"""
     return DecisionStep(
         stage=stage,
         caption=caption,
         highlight=[active],
-        fade=[n for n in chain if n != active],
+        fade=_reveal_fade(chain, active),
     )
 
 
@@ -210,23 +228,32 @@ def build_decision_steps(evidence: object) -> list[DecisionStep]:
     ]
     # 候选动作步：benign（无推荐动作）与正常场景分流。
     if selected in COMMAND_CANDIDATES:
-        # 正常：高亮选中项，淡出其余候选（明确「为什么不是其他动作」）。
+        cand_active = f"dc:cand:{selected}"
+        other_cands = [f"dc:cand:{a}" for a in candidates if a != selected]
+        # 候选步只淡出「其余两个候选」+「尚未抵达的后续节点（selected/execution/closure）」；
+        # 已揭示的 observation/risk/policy 保持中性可见（review #5：防全黑抖动）。
+        # 明确回答「为什么是这个动作而非其他」。
+        cand_fade = list(dict.fromkeys((*other_cands, *_reveal_fade(chain, cand_active))))
         steps.append(
             DecisionStep(
                 stage="candidate",
                 caption=f"候选动作：{[a for a in candidates]} → 选中 {selected}",
-                highlight=[f"dc:cand:{selected}"],
-                fade=[n for n in chain if n != f"dc:cand:{selected}"],
+                highlight=[cand_active],
+                fade=cand_fade,
             )
         )
     else:
         # benign：policy 跑过但未产生任何推荐动作 → 三个候选一并淡出，选中节点承接到「无」。
+        all_cands = [f"dc:cand:{a}" for a in candidates]
+        sel_idx = chain.index("dc:selected")
+        future = [n for i, n in enumerate(chain) if i > sel_idx]  # execution / closure
+        cand_fade = list(dict.fromkeys((*all_cands, *future)))
         steps.append(
             DecisionStep(
                 stage="candidate",
                 caption="候选动作：MONITOR / NOTIFY_FAMILY / ESCALATE_COMMUNITY → 本场景无推荐动作（benign 闭环）",
                 highlight=["dc:selected"],
-                fade=[f"dc:cand:{a}" for a in candidates],
+                fade=cand_fade,
             )
         )
     steps.append(_step("selected", f"Decision · 选中动作：{selected}", "dc:selected", chain))
@@ -247,7 +274,7 @@ def build_decision_steps(evidence: object) -> list[DecisionStep]:
             stage="execution",
             caption=exec_caption,
             highlight=["dc:execution"],
-            fade=[n for n in chain if n != "dc:execution"],
+            fade=_reveal_fade(chain, "dc:execution"),
         )
     )
     steps.append(_step("closure", "Closure · Memory ✓ Episode 已存；Notification ✓ 指令已下发", "dc:closure", chain))
@@ -257,7 +284,7 @@ def build_decision_steps(evidence: object) -> list[DecisionStep]:
 def assert_decision_canvas(evidence: object, canvas_nodes: list) -> None:
     """决策画布一致性（fail-closed）：节点 id 闭集 + 规格与 evidence 锚定一致。
 
-    重新派生每个节点的权威规格（``_canvas_node_spec``）并与画布节点比对 label，再校验其
+    重新派生每个节点的权威规格（``canvas_node_spec``）并与画布节点比对 label，再校验其
     ``anchor`` 能在证据中解析——例如 ``recommended_actions:NOTIFY_FAMILY`` 要求 evidence
     确实含该动作。通过「重新派生而非信任画布自带字段」避免同义反复（tautology）。
     """
@@ -274,13 +301,17 @@ def assert_decision_canvas(evidence: object, canvas_nodes: list) -> None:
             de_values.add(str(v))
     event_types = set(_ev_get(evidence, "event_types") or ())
     for node in canvas_nodes:
-        nid = getattr(node, "id", None) or (node.get("id") if isinstance(node, dict) else None)
-        if nid is None:
-            raise AssertionError("决策画布节点缺少 id")
+        # 渲染/校验边界：画布节点必须是 pydantic DecisionCanvasNode（extra='forbid'），
+        # 不接受 dict 旁路——否则绕过 schema 的测试也能通过，等于校验空转（review #4）。
+        if isinstance(node, dict):
+            raise TypeError(
+                f"决策画布节点必须是 DecisionCanvasNode，收到 dict（绕过 schema 校验）：{node!r}"
+            )
+        nid = node.id
         if nid not in _CLOSED_CANVAS_IDS:
             raise AssertionError(f"决策画布含闭集外节点 id={nid!r}（违反决策画布边界）")
-        spec = _canvas_node_spec(evidence, nid)
-        label = getattr(node, "label", None) if not isinstance(node, dict) else node.get("label")
+        spec = canvas_node_spec(evidence, nid)
+        label = node.label
         if label != spec["label"]:
             raise AssertionError(
                 f"决策画布节点标签与规格不符：id={nid!r} 画布={label!r} 规格={spec['label']!r}"
@@ -329,8 +360,8 @@ def assert_decision_canvas(evidence: object, canvas_nodes: list) -> None:
 __all__ = [
     "CANONICAL_CHAIN",
     "COMMAND_CANDIDATES",
-    "_all_canvas_ids",
-    "_canvas_node_spec",
     "assert_decision_canvas",
     "build_decision_steps",
+    "canvas_node_spec",
+    "collect_canvas_ids",
 ]

@@ -41,7 +41,7 @@ from home_perception.visualizer.video.render.overlay import (
     shorten_label,
 )
 from home_perception.visualizer.video.render.rasterizer import rasterize_scene
-from home_perception.visualizer.video.render.svg import build_vector_scene
+from home_perception.visualizer.video.render.svg import apply_canvas_highlight, build_vector_scene
 from home_perception.visualizer.video.scene.designer import design_visual_scene
 from home_perception.visualizer.video.spec import CaseVideoSpec
 from home_perception.visualizer.video.storyboard.decision_canvas import assert_decision_canvas
@@ -219,6 +219,19 @@ def _narration_line(narration: list[str], frame_index: int, n_frames: int) -> st
     return narration[min(len(narration) - 1, idx)]
 
 
+def _decision_step_index(frame_index: int, n_frames: int, n_steps: int) -> int:
+    """决策幕逐帧 → 步骤映射（确定性，末帧必命中末步）。
+
+    ``lvl = max(1, n_frames-1)`` 保证 ``n_frames`` 远大于 ``n_steps`` 时均匀分布，
+    且末帧 ``min`` 收敛到末步——「最后一步一定播完」（与 ``_narration_line`` 同律）。
+    抽出为纯函数以便锁定确定性序列（review 测试覆盖 缺口 1）。
+    """
+    if n_steps <= 0:
+        return 0
+    lvl = max(1, n_frames - 1)
+    return min(n_steps - 1, frame_index * n_steps // lvl)
+
+
 def _render_frames(
     spec: CaseVideoSpec,
     evidence: dict,
@@ -245,20 +258,20 @@ def _render_frames(
         if shot.decision_steps and scene_graph.decision_canvas:
             canvas = scene_graph.decision_canvas
             steps = shot.decision_steps
-            lvl = max(1, n_frames - 1)
+            # 几何只构建一次（坐标不随 highlight/fade 变），逐帧仅改写 alpha（review 潜在 Bug 1）。
+            vector = build_vector_scene(
+                scene_graph,
+                node_by_id,
+                width,
+                height,
+                shorten_label,
+                canvas=canvas,
+                caption_reserve=caption_h,
+            )
             for i in range(n_frames):
-                step_idx = min(len(steps) - 1, i * len(steps) // lvl)
+                step_idx = _decision_step_index(i, n_frames, len(steps))
                 step = steps[step_idx]
-                vector = build_vector_scene(
-                    scene_graph,
-                    node_by_id,
-                    width,
-                    height,
-                    shorten_label,
-                    canvas=canvas,
-                    highlight=set(step.highlight),
-                    fade=set(step.fade),
-                )
+                apply_canvas_highlight(vector, set(step.highlight), set(step.fade))
                 info_rgba = rasterize_scene(vector, registry)
                 caption_rgba = render_caption(
                     _narration_line(narration, i, n_frames), width, caption_h, registry

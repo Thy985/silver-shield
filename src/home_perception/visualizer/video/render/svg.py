@@ -73,13 +73,31 @@ class VectorScene:
         label: str,
         alpha: int = 255,
         width: int = 3,
+        nid: str | None = None,
+        font_size: int | None = None,
     ) -> None:
         self.cards.append(
-            {"x": x, "y": y, "w": w, "h": h, "border": border, "label": label, "alpha": alpha, "width": width}
+            {
+                "x": x, "y": y, "w": w, "h": h, "border": border, "label": label,
+                "alpha": alpha, "width": width, "nid": nid, "font_size": font_size,
+            }
         )
 
-    def add_arrow(self, x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int, int], width: int) -> None:
-        self.arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "color": color, "width": width})
+    def add_arrow(
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        color: tuple[int, int, int, int],
+        width: int,
+        from_id: str | None = None,
+        to_id: str | None = None,
+    ) -> None:
+        self.arrows.append(
+            {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "color": color, "width": width,
+             "from_id": from_id, "to_id": to_id}
+        )
 
 
 def build_vector_scene(
@@ -91,6 +109,7 @@ def build_vector_scene(
     canvas: list | None = None,
     highlight: set[str] | None = None,
     fade: set[str] | None = None,
+    caption_reserve: int = 0,
 ) -> VectorScene:
     """VisualSceneGraph → VectorScene（确定性坐标计算）。
 
@@ -100,10 +119,12 @@ def build_vector_scene(
     - 当传入 ``canvas``（决策画布节点列表）时，改为渲染决策解释链：节点纵向居中排列、
       相邻节点以箭头相连；``highlight`` 节点高亮（亮蓝粗边），``fade`` 节点淡出（灰低透明）。
       这是「同一张决策图随时间逐步揭示」的空间实现（ADR-0035 D3-A 决策幕）。
+    - ``caption_reserve``：底部为字幕条预留的像素高度（compiler 在 ``height - caption_h``
+      区域叠加字幕），避免决策画布末排卡片与字幕重叠（review 代码质量 #3）。
     """
     scene = VectorScene(width, height)
     if canvas is not None:
-        _render_canvas(scene, canvas, highlight or set(), fade or set(), width, height)
+        _render_canvas(scene, canvas, highlight or set(), fade or set(), width, height, caption_reserve)
         return scene
 
     grouped: dict[str, list[dict]] = {r: [] for r in _REGION_ORDER}
@@ -114,6 +135,7 @@ def build_vector_scene(
     top_y = int(height * 0.12)
     card_h = int(height * 0.15)
     gap = int(height * 0.02)
+    usable_bottom = height - caption_reserve - int(height * 0.02)
     for region in _REGION_ORDER:
         x0, x1 = _REGION_X[region]
         rx = int(x0 * width)
@@ -126,6 +148,9 @@ def build_vector_scene(
             scene.add_card(rx, y, rw, card_h, border, label)
             card_center[el.ref] = (rx + rw // 2, y + card_h // 2)
             y += card_h + gap
+            # 防止字幕条区域被卡片覆盖（review 代码质量 #3）。
+            if y > usable_bottom:
+                break
 
     for arrow in scene_graph.arrows:
         c_from = card_center.get(arrow["from"])
@@ -147,10 +172,37 @@ _ARROW_NEUTRAL = (149, 165, 166, 110)
 
 
 def _node_attr(node: object, key: str, default: object = None) -> object:
-    """决策画布节点取值（兼容 dict 与 pydantic ``DecisionCanvasNode``）。"""
+    """决策画布节点取值（仅接受 pydantic ``DecisionCanvasNode``；dict 直接 TypeError）。
+
+    渲染层是 ``extra='forbid'`` schema 的下游消费者，绝不接受 dict 旁路——否则绕过 schema
+    的测试也能渲染，等于校验空转（review 代码质量 #4）。
+    """
     if isinstance(node, dict):
-        return node.get(key, default)
+        raise TypeError(
+            f"决策画布节点必须是 DecisionCanvasNode，收到 dict（绕过 schema 校验）：{node!r}"
+        )
     return getattr(node, key, default)
+
+
+def _canvas_card_style(
+    nid: str, highlight: set[str], fade: set[str], width: int
+) -> tuple[tuple[int, int, int, int], int, int]:
+    """单卡片的（边框色, alpha, 边框宽）由 highlight/fade 决定（集中规则，供渲染与就地改写复用）。"""
+    if nid in highlight:
+        return _CANVAS_HL, 255, max(3, int(width * 0.006))
+    if nid in fade:
+        return _CANVAS_FADE, 80, 1
+    return _CANVAS_NEUTRAL, 200, 2
+
+
+def _canvas_arrow_style(a_id: str, b_id: str, fade: set[str]) -> tuple[int, int, int, int]:
+    """箭头颜色：两端均可见（未淡出）即视为因果链已连，否则中性灰。
+
+    与旧实现（要求两端都在 highlight 单点高亮）不同——单步 highlight 仅含一个节点，
+    旧逻辑下箭头恒为中性；改为「两端未淡出」后，因果链随逐步揭示自动「画出来」。
+    """
+    connected = (a_id not in fade) and (b_id not in fade)
+    return _ARROW_HL if connected else _ARROW_NEUTRAL
 
 
 def _render_canvas(
@@ -160,39 +212,63 @@ def _render_canvas(
     fade: set[str],
     width: int,
     height: int,
+    caption_reserve: int = 0,
 ) -> None:
-    """把决策画布节点渲染为纵向因果链（逐帧由 highlight/fade 控制明暗）。"""
+    """把决策画布节点渲染为纵向因果链（坐标只算一次；明暗由 highlight/fade 控制）。"""
     n = len(canvas)
     if n == 0:
         return
     rx = int(width * 0.16)
     rw = int(width * 0.68)
-    top = int(height * 0.08)
-    bottom = int(height * 0.92)
+    top = int(height * 0.06)
+    # 预留字幕条：compiler 在 height - caption_h 叠加字幕，决策画布末排不可侵入（review #3）。
+    bottom = height - caption_reserve - int(height * 0.02)
     avail = bottom - top
-    gap = int(height * 0.018)
-    card_h = max(22, (avail - gap * (n - 1)) // n)
+    gap = int(height * 0.014)
+    card_h = max(20, (avail - gap * (n - 1)) // n)
+    # 字体随卡片高度自适应，防止多行标签（如「选中\nNOTIFY_FAMILY」）裁切（review 潜在 Bug 2）。
+    max_lines = max((str(_node_attr(node, "label", "")).count("\n") + 1) for node in canvas)
+    font_size = max(11, min(int(height * 0.030), int((card_h - 24) / (1.3 * max_lines))))
     y = top
     centers: dict[str, tuple[int, int]] = {}
     for node in canvas:
         nid = _node_attr(node, "id")
-        if nid in highlight:
-            border, alpha, wdt = _CANVAS_HL, 255, max(3, int(width * 0.006))
-        elif nid in fade:
-            border, alpha, wdt = _CANVAS_FADE, 80, 1
-        else:
-            border, alpha, wdt = _CANVAS_NEUTRAL, 200, 2
+        border, alpha, wdt = _canvas_card_style(nid, highlight, fade, width)
         label = _node_attr(node, "label", nid)
-        # 卡片略矮时用单/双行截断，避免溢出（保持确定性）。
-        scene.add_card(rx, y, rw, card_h, border, label, alpha=alpha, width=wdt)
+        scene.add_card(rx, y, rw, card_h, border, label, alpha=alpha, width=wdt, nid=nid, font_size=font_size)
         centers[nid] = (rx + rw // 2, y + card_h // 2)
         y += card_h + gap
     for a, b in itertools.pairwise(canvas):
-        ca = centers[_node_attr(a, "id")]
-        cb = centers[_node_attr(b, "id")]
-        connected = (_node_attr(a, "id") in highlight) and (_node_attr(b, "id") in highlight)
-        color = _ARROW_HL if connected else _ARROW_NEUTRAL
-        scene.add_arrow(ca[0], ca[1], cb[0], cb[1], color, max(2, int(width * 0.003)))
+        a_id = _node_attr(a, "id")
+        b_id = _node_attr(b, "id")
+        color = _canvas_arrow_style(a_id, b_id, fade)
+        scene.add_arrow(centers[a_id][0], centers[a_id][1], centers[b_id][0], centers[b_id][1],
+                        color, max(2, int(width * 0.003)), from_id=a_id, to_id=b_id)
 
 
-__all__ = ["LabelFormatter", "VectorScene", "build_vector_scene"]
+def apply_canvas_highlight(scene: VectorScene, highlight: set[str] | None, fade: set[str] | None) -> None:
+    """对已构建的决策画布 ``VectorScene`` 就地改写高亮/淡出，避免逐帧重建几何（review 潜在 Bug 1）。
+
+    ``build_vector_scene(canvas=...)`` 的卡片坐标不随 highlight/fade 改变（仅边/框 alpha 变），
+    故决策幕每帧只需调用本函数改写 alpha，而非重建整张矢量场景——30s×30fps 不再重复 900 次
+    全量 add_card/add_arrow。
+    """
+    hl = highlight or set()
+    fd = fade or set()
+    for card in scene.cards:
+        nid = card.get("nid")
+        if nid is None:
+            continue
+        border, alpha, wdt = _canvas_card_style(nid, hl, fd, scene.width)
+        card["border"] = border
+        card["alpha"] = alpha
+        card["width"] = wdt
+    for arrow in scene.arrows:
+        a_id = arrow.get("from_id")
+        b_id = arrow.get("to_id")
+        if a_id is None or b_id is None:
+            continue
+        arrow["color"] = _canvas_arrow_style(a_id, b_id, fd)
+
+
+__all__ = ["LabelFormatter", "VectorScene", "apply_canvas_highlight", "build_vector_scene"]
