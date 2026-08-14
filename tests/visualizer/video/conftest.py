@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _src = Path(__file__).resolve().parents[3] / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
@@ -91,7 +93,20 @@ def make_evidence(
 
 
 def artifact_dir() -> Path:
-    return REPO_ROOT / "artifacts" / "adr0034_integration"
+    """真实 artifact 目录（端到端测试使用）。
+
+    CI 全新 checkout 不含 gitignored 的 ``artifacts/adr0034_integration`` 真实目录 → 原
+    ``load_scenario_evidence`` 会抛 ``FileNotFoundError`` 使 CI 误红。此处改为**优雅 skip**：
+    本地存在真实目录时仍跑端到端校验；CI 无该目录时跳过（端到端校验改由本地 /
+    integration-gate job 承担，不阻塞无 artifact 的单测环境）。
+    """
+    d = REPO_ROOT / "artifacts" / "adr0034_integration"
+    if not d.is_dir():
+        pytest.skip(
+            f"真实 artifact 目录缺失：{d}（gitignored，不随 CI checkout 下发；"
+            "端到端校验在本地 / integration-gate job 进行）"
+        )
+    return d
 
 
 __all__ = ["artifact_dir", "make_evidence", "template_for_evidence"]
