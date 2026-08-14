@@ -179,6 +179,17 @@ def _render_case_video(
     src_kind = _R._esc(mb["source_kind"])
     ref = _R._esc(mb["ref"])
 
+    # 防御（评审 #9）：media_base_url 经协议黑名单校验（与 _safe_media_src 同契约）。
+    # 正常来自 os.path.relpath（本地相对路径，无 scheme），此处仅防御畸形 / 不可控来源
+    # （如 javascript: 之类伪协议），避免拼接后形成隐式 XSS 面。
+    if _url_scheme(media_base_url) and _url_scheme(media_base_url) not in _ALLOWED_URL_SCHEMES:
+        media_base_url = ""
+
+    canvas_fallback = (
+        f'<canvas id="case-video-canvas-{sid_html}" class="case-video-canvas" '
+        f'width="640" height="360"></canvas>'
+    )
+
     # 媒体区：ArtifactVideoSource 用原生 <video>；其余（SyntheticFrameSource / 无媒体）
     # 用 canvas 播放器（MediaPlayer 主时钟驱动）。绝不占位空框。
     if (
@@ -186,15 +197,26 @@ def _render_case_video(
         and media_manifest.get("source_kind") == "ArtifactVideoSource"
         and media_manifest.get("video_url")
     ):
-        media_area = (
-            f'<video class="case-video-el" controls preload="metadata" '
-            f'src="{_R._esc(_safe_media_src(media_manifest["video_url"]))}"></video>'
-        )
+        # Slice D（AC-6）：导出 case.mp4 以相对 media base 的 URL 注册（如
+        # "{sid}/media/{sid}__v1/case.mp4"）。相对 URL 须叠加 media_base_url 形成最终
+        # 可解析地址（与 frame_template 同契约）；绝对 URL（http/https）原样透传。
+        raw_vurl = media_manifest["video_url"]
+        # 路径穿越防护（评审 #5，fail-closed）：media_base_url / video_url 不得含 ".."。
+        if ".." in media_base_url or ".." in raw_vurl:
+            media_area = canvas_fallback
+        else:
+            vurl = raw_vurl
+            if media_base_url and not _url_scheme(raw_vurl):
+                vurl = media_base_url.rstrip("/") + "/" + raw_vurl.lstrip("/")
+            safe_src = _safe_media_src(vurl)
+            media_area = (
+                f'<video class="case-video-el" controls preload="metadata" '
+                f'src="{_R._esc(safe_src)}"></video>'
+                if safe_src
+                else canvas_fallback
+            )
     else:
-        media_area = (
-            f'<canvas id="case-video-canvas-{sid_html}" class="case-video-canvas" '
-            f'width="640" height="360"></canvas>'
-        )
+        media_area = canvas_fallback
 
     # 绑定文案降级为脚注（方案 3）：不再占主轴 C 位。
     # 媒体缺失（Media Source Adapter 未解析到 manifest）→ 不展示孤儿 ref，标注"无媒体绑定"
