@@ -506,6 +506,8 @@ FIXTURE     → 固定测试素材 · 非实时
 
 3. **D1/D2 去重（已落地）**：`render_case_viewer` 是**唯一**渲染入口——D1（Artifact Mode，首屏证据 + timeline/decision/graph）+ D2（Replay，`window.__Replay` 引擎，双轨道 timeline/trace 联动）共用同一函数与同一 `EvidenceProjection`（VM-1 唯一事实源）。不存在第二份平行渲染器；`__Replay` 引擎经数据岛 + init 调用接线（与 renderer 的 `_render_timeline`/`_render_decision` 同契约）。
 
+> 落地快照：feat-adr0036-slice-c @ a008434（Slice D 评审修复——single-binding media_binding 设计 + 导出错误分级 + render URL 穿越防护，含 4 个新增 fail-closed 测试）。`
+
 ### 字段来源表（锚定仓库真实符号）
 
 > 第三列「canonical 中间层键」是 `LoopArtifactSummary.audio_events` 字典在 canonical artifact（`artifacts.audio_evidence`）中承载的键名。`loader._build_audio_evidence` 将这些 `audio_*` 前缀键映射回 `AudioEvidenceNode` 的同名裸键（`score`/`confidence`/...）。**前缀键是脱敏守卫 `assert_desensitized` 的硬约束**：该守卫对 `forbidden_field` 做精确字符串匹配 `"score"`，裸键 `"score"` 会触发 `DesensitizationError` 拒绝落盘；故中间层一律用 `audio_score` 等前缀键规避，投影进 `AudioEvidenceNode` 时再还原。
