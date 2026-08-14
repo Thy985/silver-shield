@@ -1,4 +1,4 @@
-"""ADR-0036 Slice B · Live Adapter（VM-13 Phase A · 视觉 Live，无音频）。
+"""ADR-0036 Slice C · Live Adapter（VM-13 Phase B · 视觉 Live + 音频增量合并）。
 
 把实时帧流（``FrameResult`` 契约输出）增量投影为 ``EvidenceProjection``，复用同一个
 Case Viewer（仅 ``provenance_kind=REAL_SENSOR`` 着色差异）。
@@ -82,6 +82,123 @@ class LiveFrame(TypedDict):
 
 
 _MISSING = object()
+
+# VM-9 / AC-10 守卫：Live 音频摄入**绝不**携带语义判定 / ASR 文本 / 媒体字节字段。
+# 镜像 home_perception.audio 的 FORBIDDEN_AUDIO_FIELDS（不得 import 生产包，VM-3）——只列
+# 禁区名，摄入时若命中即 fail-closed 拒绝，防判定/文本/字节泄漏进 View Model。
+_LIVE_AUDIO_FORBIDDEN_FIELDS = frozenset(
+    {
+        "text",
+        "transcript",
+        "fraud_result",
+        "fraud_probability",
+        "is_fraud",
+        "is_scammer",
+        "is_criminal",
+        "verdict",
+        "final_decision",
+        "crime_probability",
+        "guilt_score",
+        "deception_score",
+        "raw_audio",
+        "mp4",
+        "wav",
+    }
+)
+
+
+class LiveAudioFrame(TypedDict):
+    """单条音频感知规范化结构（AudioPerceptionEvent 契约的视觉子集，鸭子类型摄入）。
+
+    不含生产对象引用、不含媒体字节（VM-10/AC-11）、不含 ASR 文本/语义判定
+    （VM-9/AC-10）。Case Viewer 执行期间无 ASR/LLM，音频只产 perception。
+    """
+
+    timestamp: str                     # ← AudioPerceptionEvent.timestamp（Unix 秒）
+    kind: str                          # ← AudioPerceptionKind.value（五值）
+    score: float                       # ← .score (0~1)，规则强度
+    confidence: float                  # ← .confidence (0~1)，检测可信度
+    source_segment_ids: tuple[str, ...]  # ← .source_segment_ids
+    labels: tuple[str, ...]            # ← .labels / .scored_labels
+
+
+def _require_float(obj: Any, key: str, *, lo: float = 0.0, hi: float = 1.0) -> float:
+    """取必填 float（fail-closed：缺/非数/越界 [lo,hi] / 布尔 → LiveIngestError）。"""
+    value = _pick(obj, key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise LiveIngestError(f"live 音频字段 {key!r} 必须是数值，收到 {value!r}（fail-closed）")
+    fv = float(value)
+    if not (lo <= fv <= hi):
+        raise LiveIngestError(f"live 音频字段 {key!r} 超出 [{lo},{hi}]，收到 {fv!r}（fail-closed）")
+    return fv
+
+
+def _iter_of_str(obj: Any, key: str) -> list[str]:
+    """取可选 str 列表（缺省空列表；非序列/非 str 元素 → fail-closed）。"""
+    value = _pick(obj, key, default=[])
+    if not isinstance(value, (list, tuple)):
+        raise LiveIngestError(f"live 音频字段 {key!r} 必须是 list/tuple，收到 {type(value).__name__}（fail-closed）")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise LiveIngestError(f"live 音频字段 {key!r} 元素必须是 str，收到 {item!r}（fail-closed）")
+        out.append(item)
+    return out
+
+
+def _assert_no_forbidden_audio_fields(data: dict) -> None:
+    """拒绝携带语义判定 / ASR 文本 / 媒体字节字段（VM-9 / AC-10 / AC-11）。"""
+    offenders = sorted(k for k in data if k in _LIVE_AUDIO_FORBIDDEN_FIELDS)
+    if offenders:
+        raise LiveIngestError(f"live 音频摄入含禁区字段 {offenders}（VM-9/AC-10/AC-11 fail-closed）")
+
+
+def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
+    """``AudioPerceptionEvent`` 契约 → ``LiveAudioFrame``（鸭子类型映射，不 import 生产类型，VM-3）。
+
+    AC-10 / VM-9：音频只产 perception，绝不携带 ``text`` / ``transcript`` /
+    ``FORBIDDEN_AUDIO_FIELDS`` / 媒体字节字段——命中即 fail-closed 拒绝。
+
+    Args:
+        audio_result: 任何带 ``timestamp`` / ``kind`` / ``score`` / ``confidence`` /
+            ``source_segment_ids`` / ``labels`` 契约字段的对象（dict 或 dataclass 均可；
+            推荐使用 ``AudioPerceptionEvent.to_dict()`` 的 dict 形态）。
+
+    Raises:
+        LiveIngestError: 任一必填字段缺失/类型非法/越界，或命中禁区字段（fail-closed）。
+    """
+    if isinstance(audio_result, dict):
+        _assert_no_forbidden_audio_fields(audio_result)
+    kind = _require_str(audio_result, "kind")
+    timestamp = _coerce_timestamp(audio_result)
+    score = _require_float(audio_result, "score")
+    confidence = _require_float(audio_result, "confidence")
+    source_segment_ids = tuple(_iter_of_str(audio_result, "source_segment_ids"))
+    labels = tuple(_iter_of_str(audio_result, "labels"))
+    return LiveAudioFrame(
+        timestamp=timestamp,
+        kind=kind,
+        score=score,
+        confidence=confidence,
+        source_segment_ids=source_segment_ids,
+        labels=labels,
+    )
+
+
+def _coerce_timestamp(audio_result: Any) -> str:
+    """取 timestamp（Unix 秒）→ 规范字符串（fail-closed：缺/类型非法）。
+
+    ``AudioPerceptionEvent.to_dict()`` 产出数值型 Unix 秒，JSONL 人工条目可能是字符串；
+    二者都接受并归一为字符串（统一时间轴同源，AC-9）。
+    """
+    raw = _pick(audio_result, "timestamp")
+    if isinstance(raw, bool):
+        raise LiveIngestError(f"live 音频 timestamp 类型非法：{raw!r}（fail-closed）")
+    if isinstance(raw, (int, float)):
+        return str(raw)
+    if isinstance(raw, str):
+        return raw
+    raise LiveIngestError(f"live 音频 timestamp 类型非法：{raw!r}（fail-closed）")
 
 
 def _pick(obj: Any, key: str, *, default: Any = _MISSING) -> Any:
@@ -185,10 +302,14 @@ class ProjectionAccumulator:
         self.scenario_id = scenario_id
         self.window_size = window_size
         self.mode = mode
-        # 滚动窗口内的最近帧（仅用于时间轴逐帧细节）。
-        self._frames: list[LiveFrame] = []
+        # 滚动窗口内的最近事件（frame + audio 交错误现，仅用于时间轴逐帧/逐音频细节）。
+        # 每个元素：{"kind": "frame", "frame": LiveFrame} 或
+        # {"kind": "audio", "audio": LiveAudioFrame, "audio_index": int}。
+        # 摄入顺序即时间轴交错顺序（确定性），与摄入顺序无关地稳定（VM-8）。
+        self._recent_events: list[dict] = []
         # 全量累计计数（独立于滚动窗口）。
         self._total_frames = 0
+        self._total_audio = 0
         self._counts: dict[str, int] = {
             "perception_events": 0,
             "warnings": 0,
@@ -199,11 +320,24 @@ class ProjectionAccumulator:
         self._risk_levels: set[str] = set()
         self._recommended_actions: set[str] = set()
         self._command_types: set[str] = set()
+        # 音频：累计摄入序号（确定性交错标签）+ 去重 kind 集合（不进 Counts schema）。
+        self._audio_index = 0
+        self._audio_kinds: set[str] = set()
 
     @property
     def n_frames(self) -> int:
         """累计摄入帧数（独立于滚动窗口裁剪）。"""
         return self._total_frames
+
+    @property
+    def n_audio(self) -> int:
+        """累计摄入音频条数（独立于滚动窗口裁剪）。"""
+        return self._total_audio
+
+    @property
+    def audio_kinds(self) -> tuple[str, ...]:
+        """累计摄入的音频 kind 去重集合（确定性排序输出）。"""
+        return tuple(sorted(self._audio_kinds))
 
     def ingest(self, frame_result: Any) -> ProjectionAccumulator:
         """摄入一帧（FrameResult 契约对象）→ 累积；返回 self 便于链式。
@@ -215,11 +349,21 @@ class ProjectionAccumulator:
         self._accumulate(live)
         return self
 
+    def ingest_audio(self, audio_result: Any) -> ProjectionAccumulator:
+        """摄入一条音频感知（AudioPerceptionEvent 契约）→ 累积；返回 self 便于链式。
+
+        Raises:
+            LiveIngestError: 音频契约违规 / 命中禁区字段（fail-closed）。
+        """
+        live_audio = audio_result_to_live_audio(audio_result)
+        self._ingest_audio(live_audio)
+        return self
+
     def _accumulate(self, live: LiveFrame) -> None:
-        self._frames.append(live)
-        if len(self._frames) > self.window_size:
-            # 确定性裁剪：仅保留末尾 window_size 帧（滚动窗口逐帧细节）。
-            self._frames = self._frames[-self.window_size:]
+        self._recent_events.append({"kind": "frame", "frame": live})
+        if len(self._recent_events) > self.window_size:
+            # 确定性裁剪：仅保留末尾 window_size 事件（滚动窗口逐帧/逐音频细节）。
+            self._recent_events = self._recent_events[-self.window_size:]
         self._total_frames += 1
         self._counts["perception_events"] += len(live["event_types"])
         self._counts["warnings"] += len(live["risk_levels"])
@@ -229,10 +373,22 @@ class ProjectionAccumulator:
         self._recommended_actions.update(live["recommended_actions"])
         self._command_types.update(live["command_types"])
 
+    def _ingest_audio(self, live_audio: LiveAudioFrame) -> None:
+        self._audio_index += 1
+        self._total_audio += 1
+        self._audio_kinds.add(live_audio["kind"])
+        self._recent_events.append(
+            {"kind": "audio", "audio": live_audio, "audio_index": self._audio_index}
+        )
+        if len(self._recent_events) > self.window_size:
+            # 确定性裁剪：与帧同一滚动窗口（时间轴交错呈现，AC-9）。
+            self._recent_events = self._recent_events[-self.window_size:]
+
     # —— 投影构件（镜像 loader 形态，但 provenance=REAL_SENSOR、ref 走 live://） ——
 
     def _build_counts(self) -> Counts:
-        # Live 无独立 sink 分离 / 无 memory episode / 无跨模态关联（Slice B 视觉，无音频）：
+        # Live 无独立 sink 分离 / 无 memory episode / 无跨模态关联（Phase B 视觉+音频，
+        # 音频不进 Counts schema，仅时间轴 AUDIO 节点 + audio_kinds 累积）：
         # sink_commands 与 commands 同源（实时命令即被消费）；decision_traces 以 warnings 计
         # （每警告对应一条决策）；episodes / cross_modal_links 显式 0（AC-8 禁伪造）。
         return Counts(
@@ -249,31 +405,56 @@ class ProjectionAccumulator:
         sid = self.scenario_id
         nodes: list[TimelineNode] = []
         # 会话锚点：真实实时会话标识（非 synthetic 数据），保证 provenance 非空（AC-7）。
+        # modality=VISION：live 会话以视觉流为主锚（音频同会话合并），AC-9 只要求节点带
+        # modality 判别；会话根节点以 host 模态标注，帧/音频节点各自带精确 modality。
         nodes.append(
             TimelineNode(
                 timestamp="LIVE",
                 stage="live",
                 type="session",
-                summary=f"实时会话 {sid}（REAL_SENSOR · 滚动窗口 {self.window_size} 帧）",
+                summary=f"实时会话 {sid}（REAL_SENSOR · 滚动窗口 {self.window_size} 事件）",
                 verdict="INFO",
+                modality="VISION",
                 provenance_kind="REAL_SENSOR",
                 ref=f"{_LIVE_REF_PREFIX}://session/{sid}",
             )
         )
-        for lf in self._frames:
-            fi = lf["frame_index"]
-            nw = len(lf["risk_levels"])
-            nodes.append(
-                TimelineNode(
-                    timestamp=f"F{fi}",
-                    stage="perception",
-                    type="frame",
-                    summary=f"frame {fi}: {lf['n_detections']} 检测, {nw} 警告",
-                    verdict="INFO",
-                    provenance_kind="REAL_SENSOR",
-                    ref=f"{_LIVE_REF_PREFIX}://frame/{fi}",
+        # 按摄入顺序交错呈现视觉/音频（AC-9：统一时间轴，不三套独立时间轴）。
+        for ev in self._recent_events:
+            if ev["kind"] == "frame":
+                lf = ev["frame"]
+                fi = lf["frame_index"]
+                nw = len(lf["risk_levels"])
+                nodes.append(
+                    TimelineNode(
+                        timestamp=f"F{fi}",
+                        stage="perception",
+                        type="frame",
+                        summary=f"frame {fi}: {lf['n_detections']} 检测, {nw} 警告",
+                        verdict="INFO",
+                        modality="VISION",
+                        provenance_kind="REAL_SENSOR",
+                        ref=f"{_LIVE_REF_PREFIX}://frame/{fi}",
+                    )
                 )
-            )
+            else:  # audio
+                la = ev["audio"]
+                a_idx = ev["audio_index"]
+                nodes.append(
+                    TimelineNode(
+                        timestamp=f"A{a_idx}",
+                        stage="perception",
+                        type="audio",
+                        summary=(
+                            f"audio {a_idx}: {la['kind']} "
+                            f"(score={la['score']:.2f}, conf={la['confidence']:.2f})"
+                        ),
+                        verdict="INFO",
+                        modality="AUDIO",
+                        provenance_kind="REAL_SENSOR",
+                        ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
+                    )
+                )
         return tuple(nodes)
 
     def _build_decision_evidence(
@@ -373,7 +554,8 @@ class ProjectionAccumulator:
         Live 显式缺失字段（AC-8 / VM-7）：``gate=()`` / ``gate_passed=False`` /
         ``gate_degraded=False`` / ``fingerprints=None`` / ``trace_outcome_kinds=()`` /
         ``suppress_reasons=()`` / ``episode_action_command_types=()`` / ``episodes=0`` /
-        ``cross_modal_links=0`` / 无 ``audio_evidence``（Phase A 天然 absent）。
+        ``cross_modal_links=0`` / ``audio_evidence=()``（AC-12：真实音频证据在 Phase C 才由
+        loader 投影；Phase B 仅时间轴增量合并 AUDIO modality 节点，绝不编造音频证据）。
         """
         sid = self.scenario_id
         counts = self._build_counts()
@@ -413,6 +595,9 @@ class ProjectionAccumulator:
             episode_action_command_types=(),
             timeline=timeline,
             decision_evidence=decision_evidence,
+            # AC-12：Phase B 音频证据恒 ``()``（真实音频在 Phase C 由 loader 投影），
+            # 本路径仅时间轴增量合并 AUDIO modality 节点，绝不编造 audio_evidence。
+            audio_evidence=(),
             gate=(),
             gate_passed=False,
             gate_degraded=False,
@@ -463,9 +648,11 @@ def build_live_presentation(
 
 __all__ = [
     "CasePresentationDescriptor",
+    "LiveAudioFrame",
     "LiveFrame",
     "LiveIngestError",
     "ProjectionAccumulator",
+    "audio_result_to_live_audio",
     "build_live_presentation",
     "frame_result_to_live_frame",
 ]

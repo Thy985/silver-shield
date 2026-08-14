@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 if TYPE_CHECKING:  # 仅类型标注：graph.py 依赖本模块的 ProvenanceKind，避免运行期循环
     from home_perception.visualizer.schema.graph import EvidenceGraph
@@ -21,6 +21,14 @@ if TYPE_CHECKING:  # 仅类型标注：graph.py 依赖本模块的 ProvenanceKin
 # provenance_kind 闭集（D2 硬规则 4 / D7b）：真实性标注，防"合成当真实"。
 # D1 数据源为 ADR-0034 仿真闭环 artifact → SIMULATED；真实设备接入后由 loader 填 REAL_SENSOR。
 ProvenanceKind = Literal["REAL_SENSOR", "SIMULATED", "FIXTURE"]
+
+# 统一时间轴 modality 判别（AC-9：VISION/AUDIO/DECISION/ACTION/MEMORY/CROSS_MODAL 交错呈现，
+# 不得三套独立时间轴）。本枚举为视觉层展示用途，与 core/event.py 的 EvidenceModality
+# （小写 vision/audio…）**不共用**——视觉层只认投影后的字符串，不得 import 生产枚举（VM-3）。
+# 含 OBSERVABILITY（ADR-0034 闭环确含 observability stage，loader 须能投影其 modality）。
+TimelineModality = Literal[
+    "VISION", "AUDIO", "DECISION", "ACTION", "MEMORY", "CROSS_MODAL", "OBSERVABILITY"
+]
 
 # 时间轴 stage 序（canonical 无真实时间戳，D2 缺失粒度降级：用确定性 stage 序锚点）。
 TIMELINE_STAGE_ORDER: tuple[str, ...] = (
@@ -42,9 +50,10 @@ class TimelineNode(TypedDict):
 
     timestamp: str  # 确定性 step 锚点（如 "S1".."S6"），非伪造墙钟
     stage: str
-    type: str  # 节点类型（stage 判定 / count 摘要）
+    type: str  # 节点类型（stage 判定 / count 摘要 / frame / audio / session）
     summary: str
     verdict: Literal["PASS", "FAIL", "INFO"]  # stage=FAIL/PASS；count=INFO
+    modality: TimelineModality  # AC-9 统一时间轴：节点须带 modality 判别
     provenance_kind: ProvenanceKind
     ref: str  # 溯源：<artifact 文件名>#<记录定位>（D8 Evidence provenance）
 
@@ -108,6 +117,12 @@ class ScenarioEvidence(TypedDict):
     episode_action_command_types: tuple[str, ...]
     timeline: tuple[TimelineNode, ...]
     decision_evidence: tuple[DecisionEvidence, ...]
+    # ADR-0036 Slice C（VM-13 Phase B/C 预置）：音频证据节点。
+    # AC-12 落地门槛：本字段仅在真实音频证据进入 canonical artifact 后（Phase C）由
+    # loader 投影产出；Phase A/B 恒为 ``()``，绝不编造（VM-9 无 ASR/LLM、无
+    # text/transcript/FORBIDDEN_AUDIO_FIELDS）。Live Adapter（Phase B）同理恒 ``()``，
+    # 仅时间轴增量合并 AUDIO modality 节点。
+    audio_evidence: tuple[AudioEvidenceNode, ...]
     gate: tuple[StageVerdict, ...]
     gate_passed: bool
     gate_degraded: bool
@@ -132,6 +147,37 @@ class ProjectionMeta(TypedDict):
     scenario_count: int
 
 
+class AudioAcoustics(TypedDict):
+    """声学特征（可选，派生自 ``AudioSegmentEvent``，非语义判定）。"""
+
+    vad_ratio: float
+    rms: float
+    speech_rate: float
+
+
+class AudioEvidenceNode(TypedDict):
+    """音频证据节点（ADR-0036 · VM-13 Phase C 由 loader 投影产出；Phase A/B 恒 ``()``）。
+
+    字段严格来自真实音频符号（AC-10 / 附录 A），**绝不**出现 ``text`` / ``transcript`` /
+    ``FORBIDDEN_AUDIO_FIELDS``（fraud_result/verdict/is_fraud/…）/ 媒体字节
+    （raw_audio/mp4/wav）。Case Viewer 执行期间无 ASR/LLM（VM-9），音频只产 perception，
+    不产语义判定；媒体字节由 Media Source Adapter 经 ``ref`` 解析（VM-10 / AC-11）。
+    """
+
+    timestamp: str                      # ← AudioPerceptionEvent.timestamp（Unix 秒）
+    kind: str                           # ← AudioPerceptionKind.value（五值）
+    score: float                        # ← .score (0~1)，规则强度（非诈骗概率）
+    confidence: float                   # ← .confidence (0~1)，检测可信度
+    labels: tuple[str, ...]             # ← .labels / .scored_labels（声学标签透传）
+    source_segment_ids: tuple[str, ...]  # ← .source_segment_ids
+    ref: str                            # ← trace artifact 定位
+    provenance_kind: ProvenanceKind      # REAL_SENSOR / SIMULATED / FIXTURE
+    # 以下为可选字段（NotRequired：缺失即未投影，绝不占位编造）
+    acoustics: NotRequired[AudioAcoustics]   # 可选声学特征
+    signal_category: NotRequired[str]        # 可选证据分类（如 COMMUNICATION）
+    related_visual_ref: NotRequired[str]     # 可选跨模态视觉 ref（CrossModalLink 派生）
+
+
 class EvidenceProjection(TypedDict):
     """D2 投影契约的顶层产物（loader 唯一输出，renderer 唯一输入）。"""
 
@@ -141,6 +187,8 @@ class EvidenceProjection(TypedDict):
 
 __all__ = [
     "TIMELINE_STAGE_ORDER",
+    "AudioAcoustics",
+    "AudioEvidenceNode",
     "Counts",
     "DecisionEvidence",
     "EvidenceProjection",
@@ -149,5 +197,6 @@ __all__ = [
     "ProvenanceKind",
     "ScenarioEvidence",
     "StageVerdict",
+    "TimelineModality",
     "TimelineNode",
 ]

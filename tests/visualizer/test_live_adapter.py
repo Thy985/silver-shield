@@ -55,6 +55,23 @@ def _projection_json(proj):
     return json.dumps(proj, sort_keys=True, default=str)
 
 
+def _make_audio(timestamp, kind, *, score=0.8, confidence=0.9,
+                source_segment_ids=("seg-1",), labels=("raised",)):
+    """构造 AudioPerceptionEvent 契约的 dict 形态（鸭子类型摄入，不依赖生产对象）。
+
+    timestamp 数值型（对齐 AudioPerceptionEvent.to_dict() 的 Unix 秒 float），
+    与 JSONL 人工条目的字符串形态都兼容。
+    """
+    return {
+        "timestamp": timestamp,
+        "kind": kind,
+        "score": score,
+        "confidence": confidence,
+        "source_segment_ids": list(source_segment_ids),
+        "labels": list(labels),
+    }
+
+
 # —— AC-5 / VM-3：依赖方向（不 import 生产 runtime / silver_demo） ——
 
 def test_live_adapter_no_production_imports():
@@ -69,6 +86,7 @@ def test_live_adapter_no_production_imports():
         "home_perception.evaluation",
         "home_perception.integration",
         "home_perception.memory",
+        "home_perception.audio",
         "silver_demo",
     )
     offenders = []
@@ -131,7 +149,8 @@ def test_live_absent_fields_explicit():
     assert scn["counts"]["cross_modal_links"] == 0
     # 关键守卫：不得出现伪造的 gate=PASS 或假指纹。
     assert "PASS" not in scn["gate"]  # 空元组本就不含
-    # 断言 Live 无 audio_evidence 维度（Phase A 天然 absent，schema 无该字段）。
+    # AC-12：Live 音频证据维度恒 ()（Phase B 真实音频证据尚未进入 canonical，不编造）。
+    assert scn["audio_evidence"] == ()
 
 
 # —— AC-7：provenance_kind=REAL_SENSOR 一等视觉 ——
@@ -234,3 +253,111 @@ def test_build_live_presentation_rejects_empty_projection():
     empty = EvidenceProjection(meta=ProjectionMeta(generated_at="live", scenario_count=0), scenarios=())
     with pytest.raises(LiveIngestError):
         build_live_presentation(empty)
+
+
+# —— ADR-0036 Slice C（VM-13 Phase B）：音频增量合并 + AC-9 统一时间轴 + AC-12 ——
+
+
+def test_ingest_audio_emits_audio_timeline_nodes():
+    """摄入音频 → 时间轴含 AUDIO modality 节点，且 audio_kinds 累积（AC-9 / Slice C）。"""
+    acc = ProjectionAccumulator("sess-audio")
+    acc.ingest(_make_frame(0, n_detections=1, event_types=["visit_normal"]))
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised"))
+    acc.ingest_audio(_make_audio(1700000001.0, "audio_distress_cry"))
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    audio_nodes = [n for n in scn["timeline"] if n["type"] == "audio"]
+    assert len(audio_nodes) == 2
+    assert all(n["modality"] == "AUDIO" for n in audio_nodes)
+    # 音频节点与视觉节点按摄入顺序交错（AC-9：统一时间轴，非三套独立时间轴）。
+    types_in_order = [n["type"] for n in scn["timeline"]]
+    assert types_in_order[0] == "session"
+    assert "audio" in types_in_order and "frame" in types_in_order
+    # audio_kinds 累积（去重排序）
+    assert acc.audio_kinds == ("audio_distress_cry", "audio_voice_raised")
+    assert acc.n_audio == 2
+
+
+def test_ingest_audio_idempotent():
+    """含音频的同一有序流重放 N(≥2) 次，最终 EvidenceProjection 逐字段一致（AC-4b）。"""
+    def build():
+        a = ProjectionAccumulator("sess-idem", window_size=64)
+        a.ingest(_make_frame(0, n_detections=2, event_types=["stranger_loiter"]))
+        a.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised"))
+        a.ingest(_make_frame(1, risk_levels=["HIGH"], recommended_actions=["ESCALATE_COMMUNITY"]))
+        a.ingest_audio(_make_audio(1700000002.0, "audio_telephone_persistent"))
+        return a.to_evidence_projection()
+    baseline = _projection_json(build())
+    for _ in range(4):
+        assert _projection_json(build()) == baseline, "含音频流重放结果不一致（破坏 AC-4b 幂等）"
+
+
+@pytest.mark.parametrize("replays", [2, 3, 5])
+def test_idempotent_replay_with_audio(replays):
+    """含音频流重放参数化（对齐 test_idempotent_replay，覆盖音频增量合并路径）。"""
+    baselines = None
+    for _ in range(replays):
+        acc = ProjectionAccumulator("sess-p", window_size=64)
+        acc.ingest(_make_frame(0, event_types=["visit_normal"]))
+        acc.ingest_audio(_make_audio(1700000000.0, "audio_speech_rapid"))
+        acc.ingest_audio(_make_audio(1700000001.0, "audio_anomaly_other"))
+        proj = acc.to_evidence_projection()
+        dumped = _projection_json(proj)
+        if baselines is None:
+            baselines = dumped
+        else:
+            assert dumped == baselines
+
+
+def test_all_timeline_nodes_carry_modality():
+    """AC-9：所有时间轴节点（session/frame/audio）均带 modality 判别，且取值合法。"""
+    from home_perception.visualizer.schema.evidence import TimelineModality
+    acc = ProjectionAccumulator("sess-mod")
+    acc.ingest(_make_frame(0, n_detections=1, event_types=["visit_normal"]))
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised"))
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    valid = set(TimelineModality.__args__)
+    for n in scn["timeline"]:
+        assert "modality" in n, "时间轴节点必须带 modality（AC-9）"
+        assert n["modality"] in valid, f"modality 越界：{n['modality']}"
+    # session + frame 节点 modality=VISION；audio 节点 modality=AUDIO
+    by_type = {n["type"]: n["modality"] for n in scn["timeline"]}
+    assert by_type["session"] == "VISION"
+    assert by_type["frame"] == "VISION"
+    assert by_type["audio"] == "AUDIO"
+
+
+def test_ingest_audio_fail_closed_on_forbidden_fields():
+    """VM-9 / AC-10：音频摄入含语义判定/ASR 文本/媒体字节字段 → fail-closed。"""
+    acc = ProjectionAccumulator("sess-bad")
+    # 语义判定字段
+    with pytest.raises(LiveIngestError):
+        acc.ingest_audio({**_make_audio(1700000000.0, "audio_voice_raised"), "verdict": "FRAUD"})
+    # ASR 文本字段
+    with pytest.raises(LiveIngestError):
+        acc.ingest_audio({**_make_audio(1700000000.0, "audio_voice_raised"), "transcript": "通话内容"})
+    # 媒体字节字段
+    with pytest.raises(LiveIngestError):
+        acc.ingest_audio({**_make_audio(1700000000.0, "audio_voice_raised"), "raw_audio": "base64..."})
+
+
+def test_ingest_audio_fail_closed_on_bad_type():
+    """音频字段类型非法（score 越界 / timestamp 非法）→ fail-closed。"""
+    with pytest.raises(LiveIngestError):
+        acc = ProjectionAccumulator("sess-bad2")
+        acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", score=1.7))
+    with pytest.raises(LiveIngestError):
+        acc = ProjectionAccumulator("sess-bad3")
+        acc.ingest_audio({"timestamp": {"x": 1}, "kind": "audio_voice_raised",
+                          "score": 0.8, "confidence": 0.9, "source_segment_ids": [], "labels": []})
+
+
+def test_render_live_with_audio_marker():
+    """含音频的 Live 投影经 render_case_viewer 复用，时间轴渲染 AUDIO 徽章（AC-9）。"""
+    acc = ProjectionAccumulator("sess-render-audio")
+    acc.ingest(_make_frame(0, n_detections=1, event_types=["visit_normal"]))
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised"))
+    proj, desc = build_live_presentation(acc.to_evidence_projection())
+    html = render_case_viewer(proj, desc)
+    assert "🔊" in html            # AUDIO modality 徽章
+    assert "AUDIO" in html          # modality 标签
+    assert "真实传感器" in html      # AC-7 provenance 一等视觉（音频节点同为 REAL_SENSOR）

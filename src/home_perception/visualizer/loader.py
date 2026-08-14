@@ -32,6 +32,7 @@ from home_perception.visualizer.schema.evidence import (
     ProjectionMeta,
     ScenarioEvidence,
     StageVerdict,
+    TimelineModality,
     TimelineNode,
 )
 from home_perception.visualizer.schema.graph import (
@@ -54,6 +55,22 @@ STAGE_COUNT_HINTS: dict[str, tuple[str, str]] = {
     "memory": ("episodes", "episodes"),
     "cross_modal": ("cross_modal_links", "cross-modal links"),
 }
+
+# stage → 统一时间轴 modality（AC-9：每个时间轴节点须带 modality 判别，交错误现）。
+# 覆盖 ADR-0034 闭环全部 stage（含 observability，见 validator 的 StageName Literal）。
+_STAGE_MODALITY: dict[str, TimelineModality] = {
+    "perception": "VISION",
+    "decision": "DECISION",
+    "notification": "ACTION",
+    "memory": "MEMORY",
+    "cross_modal": "CROSS_MODAL",
+    "observability": "OBSERVABILITY",
+}
+
+
+def _modality_for_stage(name: str) -> TimelineModality:
+    """stage 名 → 统一时间轴 modality；未知 stage 落 OBSERVABILITY（meta 兜底，不污染语义）。"""
+    return _STAGE_MODALITY.get(name, "OBSERVABILITY")
 
 
 class EvidenceProjectionError(ValueError):
@@ -148,6 +165,7 @@ def _build_timeline(canonical: dict, scenario_id: str, counts: Counts) -> tuple[
                     else f"stage `{name}` FAIL({failure_code})"
                 ),
                 verdict=verdict,
+                modality=_modality_for_stage(name),
                 provenance_kind="SIMULATED",
                 ref=f"{scenario_id}.canonical.json#stages[{idx}]",
             )
@@ -163,6 +181,7 @@ def _build_timeline(canonical: dict, scenario_id: str, counts: Counts) -> tuple[
                     type="count",
                     summary=f"{label}: {value}",
                     verdict="INFO",
+                    modality=_modality_for_stage(name),
                     provenance_kind="SIMULATED",
                     ref=f"{scenario_id}.canonical.json#artifacts.counts.{count_key}",
                 )
@@ -419,6 +438,9 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         ),
         timeline=timeline,
         decision_evidence=decision_evidence,
+        # ADR-0036 Slice C（AC-12）：loader 在 Phase C 才投影真实音频；Phase A/B 恒 ``()``，
+        # 仅补契约默认值防 TypedDict 缺键（不扩展投影逻辑、不编造音频证据）。
+        audio_evidence=(),
         gate=verdicts,
         gate_passed=gate_passed,
         gate_degraded=gate_degraded,

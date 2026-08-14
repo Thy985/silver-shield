@@ -45,6 +45,28 @@ _STAGE_COLOR = {
     "observability": "#8a8a8a",
 }
 
+# AC-9 统一时间轴：modality 标记（emoji 徽章）+ 着色。时间轴按 timestamp 交错呈现
+# 视觉/音频/决策/行动/记忆/跨模态，每个节点带 modality 徽章（不三套独立时间轴）。
+# 着色优先级：modality 色 > stage 色（音频节点 stage=perception 仍按 AUDIO 色呈现）。
+_MODALITY_MARKER = {
+    "VISION": "🎥",
+    "AUDIO": "🔊",
+    "DECISION": "🧠",
+    "ACTION": "⚡",
+    "MEMORY": "🧱",
+    "CROSS_MODAL": "🔗",
+    "OBSERVABILITY": "🔎",
+}
+_MODALITY_COLOR = {
+    "VISION": "#4a90d9",
+    "AUDIO": "#c2408a",
+    "DECISION": "#d97b29",
+    "ACTION": "#7b5cd6",
+    "MEMORY": "#2e9e6b",
+    "CROSS_MODAL": "#b06a2c",
+    "OBSERVABILITY": "#8a8a8a",
+}
+
 # Decision Explanation 卡片类型 → (展示标签, 色值)（评审 R2-#10：模块级常量）。
 # D1.5 三分组语义：Observation Evidence（检测）→ Decision Reasoning（推理）→
 # Decision Outcome（结论）——WARN 是推理结果而非检测证据（修正混排）。
@@ -222,7 +244,11 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
         return "<p class='muted'>无时间轴节点（artifact 无 stage 数据）</p>"
     items = []
     for idx, node in enumerate(nodes):
-        color = _STAGE_COLOR.get(node["stage"], "#666666")
+        # AC-9：着色优先级 modality 色 > stage 色（音频节点 stage=perception 仍按 AUDIO 着色）。
+        modality = node["modality"]
+        color = _MODALITY_COLOR.get(modality, _STAGE_COLOR.get(node["stage"], "#666666"))
+        marker = _MODALITY_MARKER.get(modality, "")
+        modality_label = _esc(modality)
         kind = node["type"]
         # 结构化 verdict 着色（评审 #4：不靠 summary 子串匹配）
         verdict_class = {
@@ -237,6 +263,7 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
               <div class="tl-body">
                 <div class="tl-head">
                   <span class="tl-step">{_esc(node['timestamp'])}</span>
+                  <span class="tl-modality" style="color:{color}" title="{modality_label}">{marker} {modality_label}</span>
                   <span class="tl-stage" style="color:{color}">{_esc(_STAGE_ZH.get(node['stage'], node['stage']))}</span>
                   <span class="tl-kind">{_esc(kind)}</span>
                   <span class="tl-verdict {verdict_class}">{_esc(node['summary'])}</span>
@@ -837,6 +864,7 @@ def render_projection(projection: EvidenceProjection) -> str:
   .tl-step {{ font-family:monospace; color:#4a90d9; font-weight:600; }}
   .tl-stage {{ font-weight:600; }}
   .tl-kind {{ font-size:12px; background:#eef2f7; border-radius:4px; padding:0 6px; }}
+  .tl-modality {{ font-size:12px; font-weight:600; white-space:nowrap; }}
   .tl-verdict {{ font-size:13px; }}
   .tl-verdict.node-pass {{ color:#2e9e6b; }}
   .tl-verdict.node-fail {{ color:#d64541; }}

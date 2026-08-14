@@ -264,3 +264,35 @@ def test_graph_no_action_nodes(tmp_path):
     edge_types = [e["type"] for e in graph["edges"]]
     assert "observed_from" in edge_types and "caused_by" in edge_types
     assert "triggered" not in edge_types  # 无 Action → 无 triggered
+
+
+def test_timeline_nodes_carry_modality(artifacts_dir):
+    """AC-9：loader 投影的所有时间轴节点均带 modality 判别，且取值合法闭集。"""
+    from home_perception.visualizer.schema.evidence import TimelineModality
+
+    scn = load_evidence_projection(artifacts_dir)["scenarios"][0]
+    valid = set(TimelineModality.__args__)
+    mods = {n["modality"] for n in scn["timeline"]}
+    assert mods <= valid, mods
+    assert mods  # 非空
+
+
+def test_timeline_stage_to_modality_mapping(artifacts_dir):
+    """stage → modality 映射正确（perception→VISION / decision→DECISION / … / observability→OBSERVABILITY）。"""
+    expected = {
+        "perception": "VISION",
+        "decision": "DECISION",
+        "notification": "ACTION",
+        "memory": "MEMORY",
+        "cross_modal": "CROSS_MODAL",
+        "observability": "OBSERVABILITY",
+    }
+    scn = load_evidence_projection(artifacts_dir)["scenarios"][0]
+    for node in scn["timeline"]:
+        assert node["modality"] == expected[node["stage"]], node
+
+
+def test_audio_evidence_empty_in_phase_b(artifacts_dir):
+    """AC-12：loader 在 Phase B 仍不投影音频证据（真实音频尚未进入 canonical），恒 ``()``。"""
+    scn = load_evidence_projection(artifacts_dir)["scenarios"][0]
+    assert scn["audio_evidence"] == ()
