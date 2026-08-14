@@ -16,6 +16,7 @@ glyph → 边框色（确定性）：
 
 from __future__ import annotations
 
+import itertools
 from typing import Any, Protocol
 
 from home_perception.visualizer.video.scene.schema import VisualSceneGraph
@@ -62,10 +63,22 @@ class VectorScene:
         self.cards: list[dict] = []
         self.arrows: list[dict] = []
 
-    def add_card(self, x: int, y: int, w: int, h: int, border: tuple[int, int, int], label: str) -> None:
-        self.cards.append({"x": x, "y": y, "w": w, "h": h, "border": border, "label": label})
+    def add_card(
+        self,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        border: tuple[int, int, int, int],
+        label: str,
+        alpha: int = 255,
+        width: int = 3,
+    ) -> None:
+        self.cards.append(
+            {"x": x, "y": y, "w": w, "h": h, "border": border, "label": label, "alpha": alpha, "width": width}
+        )
 
-    def add_arrow(self, x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int], width: int) -> None:
+    def add_arrow(self, x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int, int], width: int) -> None:
         self.arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "color": color, "width": width})
 
 
@@ -75,14 +88,24 @@ def build_vector_scene(
     width: int,
     height: int,
     shorten_label: LabelFormatter,
+    canvas: list | None = None,
+    highlight: set[str] | None = None,
+    fade: set[str] | None = None,
 ) -> VectorScene:
     """VisualSceneGraph → VectorScene（确定性坐标计算）。
 
     - 同区域元素垂直堆叠；
     - 卡片边框色由 glyph 决定；
     - 箭头连接同 shot 内被引用的边两端（坐标取卡片中心）。
+    - 当传入 ``canvas``（决策画布节点列表）时，改为渲染决策解释链：节点纵向居中排列、
+      相邻节点以箭头相连；``highlight`` 节点高亮（亮蓝粗边），``fade`` 节点淡出（灰低透明）。
+      这是「同一张决策图随时间逐步揭示」的空间实现（ADR-0035 D3-A 决策幕）。
     """
     scene = VectorScene(width, height)
+    if canvas is not None:
+        _render_canvas(scene, canvas, highlight or set(), fade or set(), width, height)
+        return scene
+
     grouped: dict[str, list[dict]] = {r: [] for r in _REGION_ORDER}
     for el in scene_graph.layout:
         grouped.setdefault(el.region, []).append(el)
@@ -110,9 +133,66 @@ def build_vector_scene(
         if c_from and c_to:
             scene.add_arrow(
                 c_from[0], c_from[1], c_to[0], c_to[1],
-                (231, 76, 60), max(2, int(width * 0.004)),
+                (231, 76, 60, 255), max(2, int(width * 0.004)),
             )
     return scene
+
+
+# 决策画布节点配色（RGBA）。
+_CANVAS_HL = (52, 152, 219, 255)       # 高亮：亮蓝
+_CANVAS_NEUTRAL = (149, 165, 166, 200)  # 未达步骤：中性灰（仍可见）
+_CANVAS_FADE = (120, 120, 120, 70)      # 已淡出：暗灰低透明
+_ARROW_HL = (52, 152, 219, 220)
+_ARROW_NEUTRAL = (149, 165, 166, 110)
+
+
+def _node_attr(node: object, key: str, default: object = None) -> object:
+    """决策画布节点取值（兼容 dict 与 pydantic ``DecisionCanvasNode``）。"""
+    if isinstance(node, dict):
+        return node.get(key, default)
+    return getattr(node, key, default)
+
+
+def _render_canvas(
+    scene: VectorScene,
+    canvas: list,
+    highlight: set[str],
+    fade: set[str],
+    width: int,
+    height: int,
+) -> None:
+    """把决策画布节点渲染为纵向因果链（逐帧由 highlight/fade 控制明暗）。"""
+    n = len(canvas)
+    if n == 0:
+        return
+    rx = int(width * 0.16)
+    rw = int(width * 0.68)
+    top = int(height * 0.08)
+    bottom = int(height * 0.92)
+    avail = bottom - top
+    gap = int(height * 0.018)
+    card_h = max(22, (avail - gap * (n - 1)) // n)
+    y = top
+    centers: dict[str, tuple[int, int]] = {}
+    for node in canvas:
+        nid = _node_attr(node, "id")
+        if nid in highlight:
+            border, alpha, wdt = _CANVAS_HL, 255, max(3, int(width * 0.006))
+        elif nid in fade:
+            border, alpha, wdt = _CANVAS_FADE, 80, 1
+        else:
+            border, alpha, wdt = _CANVAS_NEUTRAL, 200, 2
+        label = _node_attr(node, "label", nid)
+        # 卡片略矮时用单/双行截断，避免溢出（保持确定性）。
+        scene.add_card(rx, y, rw, card_h, border, label, alpha=alpha, width=wdt)
+        centers[nid] = (rx + rw // 2, y + card_h // 2)
+        y += card_h + gap
+    for a, b in itertools.pairwise(canvas):
+        ca = centers[_node_attr(a, "id")]
+        cb = centers[_node_attr(b, "id")]
+        connected = (_node_attr(a, "id") in highlight) and (_node_attr(b, "id") in highlight)
+        color = _ARROW_HL if connected else _ARROW_NEUTRAL
+        scene.add_arrow(ca[0], ca[1], cb[0], cb[1], color, max(2, int(width * 0.003)))
 
 
 __all__ = ["LabelFormatter", "VectorScene", "build_vector_scene"]

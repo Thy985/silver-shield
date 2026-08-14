@@ -33,8 +33,11 @@ def rasterize_scene(scene: VectorScene, registry: FontRegistry) -> Image.Image:
 def _draw_card(draw: ImageDraw.ImageDraw, card: dict, font) -> None:
     x, y, w, h = card["x"], card["y"], card["w"], card["h"]
     border = card["border"]
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=8, outline=border, width=3)
-    draw.text((x + 12, y + 12), card["label"], font=font, fill=(238, 238, 238, 255))
+    alpha = card.get("alpha", 255)
+    width = card.get("width", 3)
+    border_a = (*border[:3], alpha) if len(border) == 3 else border
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=8, outline=border_a, width=width)
+    draw.text((x + 12, y + 12), card["label"], font=font, fill=(238, 238, 238, alpha))
 
 
 def _draw_arrow(draw: ImageDraw.ImageDraw, arrow: dict) -> None:

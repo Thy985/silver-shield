@@ -45,11 +45,28 @@ class VisualElement(BaseModel):
     glyph: Glyph
 
 
+class DecisionCanvasNode(BaseModel):
+    """决策画布节点（表达层 · 仅 decision shot 使用）。
+
+    由语义层 ``ShotSpec.decision_steps`` 映射而来；``synthetic`` 标记该节点是受控常量
+    合成（策略/候选动作），非真实 EvidenceGraph 节点——其合法性由 ``_assert_decision_canvas``
+    专用校验兜底（不在 §8 验收 9 的 evidence_refs 子集规则内，因本就是解释脚手架）。
+    """
+
+    model_config = ConfigDict(extra="forbid")  # 表达层：禁 why/purpose/audience_need/explanation_order
+
+    id: str  # 画布节点 id（dc:observation / dc:risk / dc:cand:MONITOR / ...）
+    label: str  # 画布节点显示文本（多行 \n）
+    stage: str  # observation/risk/policy/candidate/selected/execution/closure
+    synthetic: bool = False  # True 仅用于 policy/candidate（受控常量）
+
+
 class VisualSceneGraph(BaseModel):
     """单镜头视觉场景图（表达层 · 空间维）。
 
     ``arrows`` 由 EvidenceGraph 边映射而来（非发明）：`from`/`to` 指向 `evidence_refs`，
-    `style` 仅视觉（如 `causal_red`）。
+    `style` 仅视觉（如 `causal_red`）。``decision_canvas`` 仅 decision shot 使用，承载
+    决策解释链的空间排版（与 ``layout`` 互斥：decision shot 渲染画布而非标准版面）。
     """
 
     model_config = ConfigDict(extra="forbid")  # 表达层：禁 why/purpose/audience_need/explanation_order
@@ -57,3 +74,4 @@ class VisualSceneGraph(BaseModel):
     shot: str  # 所属 shot name（与 Storyboard.shots[].name 对应）
     layout: list[VisualElement]
     arrows: list[dict] = []  # 每项: {"from": str, "to": str, "style": str}
+    decision_canvas: list[DecisionCanvasNode] = []  # 仅 decision shot：决策解释链空间排版

@@ -38,6 +38,7 @@ _VIDEO_PRODUCER_PREFIXES = (
 _STDLIB_TOP = {
     "ast", "html", "json", "pathlib", "typing",
     "functools", "collections", "re", "dataclasses", "enum",
+    "itertools",  # 标准库（svg 画布 pairwise 渲染用）
     "io", "os", "sys", "math", "warnings", "logging",
     "importlib",  # PEP 562 惰性转发（video/__init__.py 避免加载期拉 cv2/PIL）
     "hashlib",  # provenance.input_hash 稳定指纹（sha256，强校验）

@@ -13,7 +13,15 @@
 
 from __future__ import annotations
 
-from home_perception.visualizer.video.scene.schema import VisualElement, VisualSceneGraph
+from home_perception.visualizer.video.scene.schema import (
+    DecisionCanvasNode,
+    VisualElement,
+    VisualSceneGraph,
+)
+from home_perception.visualizer.video.storyboard.decision_canvas import (
+    _all_canvas_ids,
+    _canvas_node_spec,
+)
 from home_perception.visualizer.video.storyboard.schema import Storyboard
 
 # 节点类型 → 默认版面区域（reasoning shot 默认左-中-右三栏 + 全屏上下文）。
@@ -85,8 +93,33 @@ def design_visual_scene(
             for s, t in edge_pairs
             if s in ref_set and t in ref_set
         ]
-        result[shot.name] = VisualSceneGraph(shot=shot.name, layout=layout, arrows=arrows)
+        canvas = _build_decision_canvas(shot, evidence) if shot.decision_steps else []
+        result[shot.name] = VisualSceneGraph(
+            shot=shot.name, layout=layout, arrows=arrows, decision_canvas=canvas
+        )
     return result
+
+
+def _build_decision_canvas(shot, evidence: dict) -> list[DecisionCanvasNode]:
+    """由语义层 ``shot.decision_steps`` 派生决策画布节点（表达层空间排版）。
+
+    仅当 shot 含 decision_steps 时调用；节点 id 取自步骤引用的 highlight/fade 全集，
+    规格（label/stage/synthetic/anchor）由语义层 ``_canvas_node_spec`` 统一派生，保证
+    语义层 ↔ 表达层单一真相源。
+    """
+    ids = _all_canvas_ids(shot.decision_steps)
+    nodes: list[DecisionCanvasNode] = []
+    for nid in ids:
+        spec = _canvas_node_spec(evidence, nid)
+        nodes.append(
+            DecisionCanvasNode(
+                id=spec["id"],
+                label=spec["label"],
+                stage=spec["stage"],
+                synthetic=spec["synthetic"],
+            )
+        )
+    return nodes
 
 
 def _assert_override_shots_known(storyboard: Storyboard, override_all: dict) -> None:
