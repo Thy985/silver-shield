@@ -186,9 +186,16 @@ def _render_case_video(
         and media_manifest.get("source_kind") == "ArtifactVideoSource"
         and media_manifest.get("video_url")
     ):
+        # Slice D（AC-6）：导出 case.mp4 以相对 media base 的 URL 注册（如
+        # "{sid}/media/{sid}__v1/case.mp4"）。相对 URL 须叠加 media_base_url 形成最终
+        # 可解析地址（与 frame_template 同契约）；绝对 URL（http/https）原样透传。
+        raw_vurl = media_manifest["video_url"]
+        vurl = raw_vurl
+        if media_base_url and not _url_scheme(raw_vurl):
+            vurl = media_base_url.rstrip("/") + "/" + raw_vurl.lstrip("/")
         media_area = (
             f'<video class="case-video-el" controls preload="metadata" '
-            f'src="{_R._esc(_safe_media_src(media_manifest["video_url"]))}"></video>'
+            f'src="{_R._esc(_safe_media_src(vurl))}"></video>'
         )
     else:
         media_area = (

@@ -445,7 +445,7 @@ FIXTURE     → 固定测试素材 · 非实时
   - 此阶段**不修改 `EvidenceProjection` schema**（无 `audio_evidence` 字段）；前端不建模音频维度（无 `audioData`/`audioState`，AC-1c）。`audio_evidence` 的 schema 扩展推迟到 Slice C——真实音频进入 canonical artifact 后，再经 `loader` 投影（见 VM-13 Phase C / AC-12）。Live 音频处于 VM-13 Phase A 之前（不实现）。
 - **Slice B（Live Adapter · VM-13 Phase A）**：`viewer/live_adapter.py`（增量 `ProjectionAccumulator`，视觉 Live，无音频）+ WS（FrameResult）→ REAL_SENSOR；复用同一 Case Viewer，仅 provenance 着色差异；滚动窗口参数化。
 - **Slice C（Audio Evidence 投影 · VM-13 Phase B/C）**：Phase B（Live 音频经 `live_adapter` 增量合并 AUDIO modality 时间轴节点，`REAL_SENSOR` provenance）**已落地**；Phase C（真实音频证据进入 canonical artifact 后由 `loader` 投影为 `audio_evidence` → Artifact Mode 渲染 🔊 区块）**已落地**（runner→report→loader→renderer 全链路，AC-12 严守 `()` 当无音频）。守 VM-7（缺则显式空）/ VM-9（不生成）。统一时间轴 modality 交错见 `TimelineModality`/`TimelineNode.modality`（Slice C 已含 AUDIO）。
-- **Slice D（Media Source Adapter + D3 导出 + 去重）**：抽象 `ArtifactVideoSource`/`SyntheticFrameSource`/`LiveFrameSource`；D3 导出动作接入 Case Viewer 作为 Case Video Export；D1/D2 收敛到本 ADR 的 Artifact/Replay Adapter 之下（去重）。
+- **Slice D（Media Source Adapter + D3 导出 + 去重）**：三源抽象 `ArtifactVideoSource`/`SyntheticFrameSource`/`LiveFrameSource`（Slice A.1 已落地 `viewer/media_source.py` + `MediaSourceKind`，只读解析）；D3 导出接入 Case Viewer 作为 Case Video Export（`scripts/run_case_viewer.py --export-case-video`，AC-6 已落地）；D1（Artifact Mode）/ D2（Replay）收敛到同一 `render_case_viewer` 渲染路径（去重，已落地）。
 
 ---
 
@@ -490,6 +490,21 @@ FIXTURE     → 固定测试素材 · 非实时
 4. **脱敏守卫兼容性（关键约束）**：`AudioEvidenceNode.score` 的裸键 `"score"` 会触发 `assert_desensitized` 的 `forbidden_field`（精确匹配 `"score"`）→ 在 **canonical 中间层**一律用 `audio_*` 前缀键承载（`audio_timestamp`/`audio_kind`/`audio_score`/`audio_confidence`/`audio_labels`/`audio_source_segment_ids`），`loader` 投影进 `AudioEvidenceNode` 时再还原为 `score`/`confidence` 等字段。字段级契约见下表「canonical 中间层键」列。
 
 > Phase B（Live）状态不变：live_adapter 增量合并 AUDIO modality 时间轴节点（`REAL_SENSOR` provenance，`audio_evidence` 在 Live 投影中仍是 `()`，Phase C 不引入 Live 侧变化），见 `visualizer/viewer/live_adapter.py`。
+
+### 实现状态（Slice D · Media Source Adapter + D3 导出 + D1/D2 去重 已落地）
+
+1. **Media Source Adapter（Slice A.1 已落地，`viewer/media_source.py`）**：`resolve_media_source(base_dir, sid, source_kind)` 只读解析 `{base_dir}/{sid}/media/manifest.json`，返回 `MediaManifest`（含 `source_kind`/`frame_count`/`fps`/`duration_sec`/`frame_template`/`video_url`）；媒体字节绝不进 View Model（VM-10/AC-11）。三源行为：
+   - `ArtifactVideoSource`：读 `video_url`（原生 `<video>` 播放）；
+   - `SyntheticFrameSource`：读 `frame_template`（canvas 逐帧播放，媒体字节不内联）；
+   - `LiveFrameSource`：Slice A 不实现 → `None`（未来 slice 注入运行时帧源）。
+   结构非法（字段类型/缺关键字段）→ 抛 `MediaSourceError`（fail-closed）；媒体资产缺失 → `None`（降级，不崩）。
+
+2. **D3 导出接入 Case Viewer（AC-6 已落地，`scripts/run_case_viewer.py`）**：新增 `--export-case-video`（及 `--export-fps`/`--export-resolution`/`--export-version`）。开启时对每个场景调用 D3 `generate_case_video`（经可 monkeypatch 的 `_d3_generate_case_video` 懒导入 `compiler`，隔离 cv2）产出 `case.mp4`，并在 `{artifacts}/{sid}/media/manifest.json` 登记 `source_kind=ArtifactVideoSource` + `video_url=相对 artifacts 根的 case.mp4 路径`；同时把 `descriptor.media_binding` 置为 `ArtifactVideoSource`（诚实脚注）。导出失败（含 cv2 缺失 ImportError）→ fail-closed 退出 1，绝不静默产残缺 HTML。
+
+   - **VM-12 / AC-6 严守**：导出使用 `CaseVideoSpec`（Case Video 叙事路径），`with_audio` 维持 `False`（D3-B 未实现：`compiler` 会 `NotImplementedError` fail-closed，绝不静默产"无声片冒充有声片"）；**不存在 Analysis Video 被重新产品化**的入口（D3 只做 Case Video Export，同 View Model 渲染器）。
+   - **相对 URL 契约（render 配合）**：`_render_case_video` 对 `ArtifactVideoSource` 的 `video_url`——绝对 `http(s)` 原样透传，相对路径叠加 `media_base_url` 形成最终可解析地址（与 `frame_template` 同契约），使导出的本地 `case.mp4` 可被浏览器正确解析。
+
+3. **D1/D2 去重（已落地）**：`render_case_viewer` 是**唯一**渲染入口——D1（Artifact Mode，首屏证据 + timeline/decision/graph）+ D2（Replay，`window.__Replay` 引擎，双轨道 timeline/trace 联动）共用同一函数与同一 `EvidenceProjection`（VM-1 唯一事实源）。不存在第二份平行渲染器；`__Replay` 引擎经数据岛 + init 调用接线（与 renderer 的 `_render_timeline`/`_render_decision` 同契约）。
 
 ### 字段来源表（锚定仓库真实符号）
 
