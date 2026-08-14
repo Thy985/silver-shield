@@ -491,6 +491,15 @@ FIXTURE     → 固定测试素材 · 非实时
 
 > Phase B（Live）状态不变：live_adapter 增量合并 AUDIO modality 时间轴节点（`REAL_SENSOR` provenance，`audio_evidence` 在 Live 投影中仍是 `()`，Phase C 不引入 Live 侧变化），见 `visualizer/viewer/live_adapter.py`。
 
+### 实现状态（Slice C · VM-13 Phase B）
+
+`TimelineNode` 已加 `modality: TimelineModality`（AC-9 统一时间轴判别式，取值
+`VISION/AUDIO/DECISION/ACTION/MEMORY/CROSS_MODAL/OBSERVABILITY`）；`ScenarioEvidence` 已加
+`audio_evidence: tuple[AudioEvidenceNode, ...]`，`AudioEvidenceNode` 与 `AudioAcoustics` 已定稿于
+`src/home_perception/visualizer/schema/evidence.py`。AC-12 落地门槛：**Phase A/B 中 `audio_evidence`
+恒为 `()`**，仅 loader 在 Phase C 真实音频进入 canonical 后才投影产出；Phase B 仅 live_adapter 增量合并
+AUDIO modality 时间轴节点（见 `visualizer/viewer/live_adapter.py`）。
+
 ### 字段来源表（锚定仓库真实符号）
 
 > 第三列「canonical 中间层键」是 `LoopArtifactSummary.audio_events` 字典在 canonical artifact（`artifacts.audio_evidence`）中承载的键名。`loader._build_audio_evidence` 将这些 `audio_*` 前缀键映射回 `AudioEvidenceNode` 的同名裸键（`score`/`confidence`/...）。**前缀键是脱敏守卫 `assert_desensitized` 的硬约束**：该守卫对 `forbidden_field` 做精确字符串匹配 `"score"`，裸键 `"score"` 会触发 `DesensitizationError` 拒绝落盘；故中间层一律用 `audio_score` 等前缀键规避，投影进 `AudioEvidenceNode` 时再还原。
