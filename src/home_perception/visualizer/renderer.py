@@ -32,6 +32,7 @@ from home_perception.visualizer.schema.evidence import (
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _ECHARTS_FILENAME = "echarts.min.js"
 _REPLAY_FILENAME = "replay.js"
+_MEDIA_FILENAME = "media.js"
 
 # 时间轴配色（浅色主题，stage → 色值）。
 _STAGE_COLOR = {
@@ -171,6 +172,14 @@ def _echarts_inline() -> str:
 def _replay_inline() -> str:
     """内联 D2.1 Replay 引擎（缺失时降级为空串——控制条不绑定，时间轴仍静态可读）。"""
     p = _ASSETS_DIR / _REPLAY_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def _media_inline() -> str:
+    """内联 ADR-0036 Slice A.1 MediaPlayer 引擎（缺失时降级为空串——画布留空，不崩）。"""
+    p = _ASSETS_DIR / _MEDIA_FILENAME
     if not p.exists():
         return ""
     return p.read_text(encoding="utf-8")
