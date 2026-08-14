@@ -19,7 +19,28 @@ from home_perception.visualizer.loader import SUMMARY_FILENAME
 SUMMARY = SUMMARY_FILENAME
 
 
-def _canonical(scenario_id: str) -> dict:
+def _canonical(scenario_id: str, audio_evidence: list[dict] | None = None) -> dict:
+    artifacts = {
+        "counts": {
+            "perception_events": 1,
+            "warnings": 1,
+            "commands": 1,
+            "sink_commands": 1,
+            "decision_traces": 1,
+            "episodes": 2,
+            "cross_modal_links": 1,
+        },
+        "event_types": ["abnormal_dwell"],
+        "risk_levels": ["LOW"],
+        "recommended_actions": ["NOTIFY_FAMILY"],
+        "command_types": ["LOG_ONLY"],
+        "trace_outcome_kinds": ["WARN"],
+        "suppress_reasons": [],
+        "episode_action_command_types": ["LOG_ONLY"],
+    }
+    if audio_evidence is not None:
+        # ADR-0036 VM-13 Phase C：真实音频证据（audio_* 前缀键，避脱敏禁止键 "score"）。
+        artifacts["audio_evidence"] = audio_evidence
     return {
         "scenario_id": scenario_id,
         "ok": True,
@@ -35,24 +56,7 @@ def _canonical(scenario_id: str) -> dict:
             {"name": "cross_modal", "passed": True, "failure_code": None, "severity": "blocking"},
             {"name": "observability", "passed": True, "failure_code": None, "severity": "blocking"},
         ],
-        "artifacts": {
-            "counts": {
-                "perception_events": 1,
-                "warnings": 1,
-                "commands": 1,
-                "sink_commands": 1,
-                "decision_traces": 1,
-                "episodes": 2,
-                "cross_modal_links": 1,
-            },
-            "event_types": ["abnormal_dwell"],
-            "risk_levels": ["LOW"],
-            "recommended_actions": ["NOTIFY_FAMILY"],
-            "command_types": ["LOG_ONLY"],
-            "trace_outcome_kinds": ["WARN"],
-            "suppress_reasons": [],
-            "episode_action_command_types": ["LOG_ONLY"],
-        },
+        "artifacts": artifacts,
         "perception_score": {
             "scenario_id": scenario_id,
             "expected_label": "alert",
@@ -94,17 +98,20 @@ def make_artifacts(
     *,
     drop_file: str | None = None,
     drop_field: tuple[str, str] | None = None,
+    audio_evidence: list[dict] | None = None,
 ) -> Path:
     """在 ``directory`` 生成合法 artifact 集；``drop_*`` 注入异常（fail-closed 测试）。
 
     Args:
         drop_file: 删除的 artifact 文件名（如 ``sw_t1.gate.json``）。
         drop_field: 从 canonical 中删除的字段（(owner, key) 如 ("sw_t1", "stages")）。
+        audio_evidence: 注入 canonical.artifacts 的真实音频证据（``audio_*`` 前缀键字典列表）；
+            ``None``（默认）= 不注入，对应 Phase A/B 与未声明音频场景（audio_evidence 恒 ``()``）。
     """
     directory.mkdir(parents=True, exist_ok=True)
     entries = []
     for sid in scenario_ids:
-        canonical = _canonical(sid)
+        canonical = _canonical(sid, audio_evidence=audio_evidence)
         if drop_field is not None and drop_field[0] == sid:
             canonical.pop(drop_field[1], None)
         files = {

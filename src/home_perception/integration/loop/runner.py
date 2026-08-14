@@ -80,6 +80,10 @@ class IntegrationRunResult:
     decision_traces: tuple[Any, ...] = ()
     episodes: tuple[Any, ...] = ()
     cross_modal_links: tuple[Any, ...] = ()  # Phase A 恒空（Phase B 填充）
+    # ADR-0036 VM-13 Phase C：真实音频感知符号（来自 Scenario.audio 经 compiler 编译的
+    # AudioPerceptionEvent，确定性、感知层、无 UUID/墙钟）。Phase C 由 loader 投影进
+    # canonical artifact 的 audio_evidence；此处仅如实携带，不做判定 / 兜底。
+    audio_perception_events: tuple[Any, ...] = ()
     fingerprint: str = ""
     # ADR-0034 Phase B.3（D7）：两枚闭环指纹。默认空 = 向后兼容（Phase A/B.1/B.2
     # 构造不传时恒 ""，字段语义不变）。
@@ -448,6 +452,10 @@ class IntegrationRunner:
             decision_traces=traces,
             episodes=episodes,
             cross_modal_links=cross_modal_links,  # Phase B.2：启用时真实读回
+            # ADR-0036 VM-13 Phase C：携带真实音频符号（compiler 已确定性编译，感知层）。
+            # 不依赖 AudioSessionSummary（其丢弃原始事件）；直接取 synth.audio_events，
+            # 运行期确定性、无 UUID/墙钟，符合 canonical 的确定性约束。
+            audio_perception_events=tuple(getattr(synth, "audio_events", ()) or ()),
             fingerprint=synth.fingerprint,
             expectation_fingerprint=expectation_fingerprint,  # Phase B.3（D7）
             loop_fingerprint=loop_fingerprint,  # Phase B.3（D7）

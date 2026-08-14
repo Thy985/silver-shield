@@ -296,3 +296,65 @@ def test_audio_evidence_empty_in_phase_b(artifacts_dir):
     """AC-12：loader 在 Phase B 仍不投影音频证据（真实音频尚未进入 canonical），恒 ``()``。"""
     scn = load_evidence_projection(artifacts_dir)["scenarios"][0]
     assert scn["audio_evidence"] == ()
+
+
+# ---------------------------------------------------------------------------
+# ADR-0036 VM-13 Phase C · 真实音频符号进入 canonical → loader 投影 audio_evidence
+# ---------------------------------------------------------------------------
+
+
+_SAMPLE_AUDIO_EVIDENCE = [
+    {
+        "audio_timestamp": 1752952800.0,
+        "audio_kind": "audio_telephone_persistent",
+        "audio_score": 0.9,
+        "audio_confidence": 0.9,
+        "audio_labels": ["telephone"],
+        "audio_source_segment_ids": ["seg-0"],
+    },
+]
+
+
+def test_audio_evidence_projected_from_canonical(tmp_path):
+    """VM-13 Phase C（AC-12）：真实音频符号进入 canonical → loader 投影 audio_evidence。
+
+    字段逐个映射（audio_* 前缀键 → AudioEvidenceNode 字段），ref 溯源到 canonical 具体记录，
+    provenance_kind=SIMULATED（D1 artifact 路径恒仿真闭环）。
+    """
+    d = make_artifacts(tmp_path / "a", audio_evidence=_SAMPLE_AUDIO_EVIDENCE)
+    scn = load_evidence_projection(d)["scenarios"][0]
+    audio = scn["audio_evidence"]
+    assert len(audio) == 1
+    node = audio[0]
+    assert node["timestamp"] == "1752952800.0"
+    assert node["kind"] == "audio_telephone_persistent"
+    assert node["score"] == 0.9
+    assert node["confidence"] == 0.9
+    assert node["labels"] == ("telephone",)
+    assert node["source_segment_ids"] == ("seg-0",)
+    assert node["ref"] == "sw_t1.canonical.json#artifacts.audio_evidence[0]"
+    assert node["provenance_kind"] == "SIMULATED"
+
+
+def test_audio_evidence_malformed_fails_closed(tmp_path):
+    """VM-13 Phase C：audio_evidence 结构非法（缺字段）→ fail-closed 拒绝投影（不兜底占位）。"""
+    d = make_artifacts(
+        tmp_path / "a",
+        audio_evidence=[
+            {
+                "audio_timestamp": 1752952800.0,
+                "audio_kind": "audio_telephone_persistent",
+                "audio_score": 0.9,
+                # 缺 audio_confidence / audio_labels / audio_source_segment_ids
+            }
+        ],
+    )
+    with pytest.raises(EvidenceProjectionError):
+        load_evidence_projection(d)
+
+
+def test_audio_evidence_not_injected_when_absent(tmp_path):
+    """AC-12（回归）：canonical 无 audio_evidence 键 → 投影恒 ``()``（不编造）。"""
+    d = make_artifacts(tmp_path / "a")  # 默认不注入音频
+    scn = load_evidence_projection(d)["scenarios"][0]
+    assert scn["audio_evidence"] == ()

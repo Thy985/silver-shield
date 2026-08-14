@@ -694,6 +694,41 @@ def _render_gate(scenario: ScenarioEvidence) -> str:
     </table>"""
 
 
+def _render_audio_evidence(scenario: ScenarioEvidence) -> str:
+    """🔊 音频证据区块（VM-13 Phase C：仅真实音频符号进入 canonical 后渲染）。
+
+    无音频证据（``audio_evidence`` 为空）时返回空串——绝不编造空卡片（AC-12 / VM-7）。
+    渲染只展示投影白名单字段（kind/score/confidence/labels/segments），不渲染媒体字节
+    / text / transcript（VM-9）。表格稳定锚点 ``audio-<sid>`` 供验收断言。
+    """
+    audio = scenario.get("audio_evidence") or ()
+    if not audio:
+        return ""  # AC-12：无音频证据不渲染区块
+    rows: list[str] = []
+    for a in audio:
+        ts = _esc(str(a.get("timestamp", "")))
+        kind = _esc(str(a.get("kind", "")))
+        score = float(a.get("score") or 0.0)
+        conf = float(a.get("confidence") or 0.0)
+        labels = ", ".join(_esc(str(v)) for v in (a.get("labels") or ()))
+        segs = ", ".join(_esc(str(v)) for v in (a.get("source_segment_ids") or ()))
+        rows.append(
+            f"""      <tr>
+        <td>{_MODALITY_MARKER["AUDIO"]}</td>
+        <td>{kind} <span class="muted">@ {ts}</span></td>
+        <td>score={score:.2f} · conf={conf:.2f}</td>
+        <td>{labels}</td>
+        <td>{segs}</td>
+      </tr>"""
+        )
+    return f"""
+      <h3 id="audio-{_esc(scenario['scenario_id'])}" class="view-anchor">⑥ Audio Evidence（音频感知证据）</h3>
+      <table class="audio-table">
+        <tr><th></th><th>kind</th><th>score / conf</th><th>labels</th><th>segments</th></tr>
+        {''.join(rows)}
+      </table>"""
+
+
 def _render_scenario(scenario: ScenarioEvidence) -> tuple[str, str]:
     """单场景 HTML + 该场景的图初始化 JS（评审 R3-#3：一次遍历产出两块）。"""
     status = "PASS" if scenario["ok"] else "FAIL"
@@ -721,6 +756,8 @@ def _render_scenario(scenario: ScenarioEvidence) -> tuple[str, str]:
 
       <h3 id="view-crossmodal-{_esc(scenario['scenario_id'])}" class="view-anchor">④ Cross Modal Graph（supports 子图）</h3>
       {cm_html}
+
+      {_render_audio_evidence(scenario)}
 
       <h3 id="gate-{_esc(scenario['scenario_id'])}" class="view-anchor">⑤ Fingerprint / Gate</h3>
       {_render_gate(scenario)}
