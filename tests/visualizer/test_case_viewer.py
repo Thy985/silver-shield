@@ -30,6 +30,7 @@ from home_perception.visualizer.viewer.media_source import resolve_media_source
 from home_perception.visualizer.viewer.render import (
     _render_case_video,
     _render_provenance_banner,
+    _safe_media_src,
 )
 
 from .conftest import make_artifacts, make_media_asset
@@ -836,6 +837,30 @@ def test_render_case_video_uses_canvas_when_no_media():
     assert "case-video-canvas" in html, "无媒体应渲染 canvas 播放器"
     assert "<video" not in html, "无媒体不应渲染 <video>"
     assert "无媒体绑定" in html, "无媒体应标注'无媒体绑定'（不显示孤儿 ref）"
+
+
+def test_safe_media_src_allows_http_and_relative():
+    """_safe_media_src 协议黑名单：http(s) 绝对 URL 与相对路径一律放行（评审 R2-#3）。"""
+    assert _safe_media_src("") == ""
+    assert _safe_media_src("https://example.com/case.mp4") == "https://example.com/case.mp4"
+    assert _safe_media_src("http://example.com/case.mp4") == "http://example.com/case.mp4"
+    # 相对路径（含裸相对路径，无 scheme）放行——浏览器相对页面解析（与 media.js 一致）。
+    assert _safe_media_src("/media/x.png") == "/media/x.png"
+    assert _safe_media_src("./media/x.png") == "./media/x.png"
+    assert _safe_media_src("../artifacts/sw_m1/media/frames/000000.png") == (
+        "../artifacts/sw_m1/media/frames/000000.png"
+    )
+    assert _safe_media_src("frames/000000.png") == "frames/000000.png"
+
+
+def test_safe_media_src_rejects_pseudo_schemes():
+    """_safe_media_src 拒伪协议（javascript:/data:/file: 等），fail-closed 返回空（评审 R2-#3）。"""
+    assert _safe_media_src("javascript:alert(1)") == ""
+    assert _safe_media_src("data:image/png;base64,AAAA") == ""
+    assert _safe_media_src("file:///etc/passwd") == ""
+    assert _safe_media_src("ftp://host/x") == ""
+    # 未知 scheme 同样拒绝（不能误当相对路径放行）。
+    assert _safe_media_src("weird:thing") == ""
 
 
 def test_render_unknown_panel_ignored_gracefully(tmp_path):

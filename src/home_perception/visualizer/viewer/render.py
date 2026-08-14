@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import json
-import urllib.parse
 from typing import TYPE_CHECKING
 
 from home_perception.visualizer import renderer as _R
@@ -72,23 +71,36 @@ _PROVENANCE_CLASS = {
 #   （replay 实例）定位，二者是独立 DOM/状态，不合并为同一数组。
 
 
-# 媒体源 URL 白名单（评审 R2-#3）：``<video src>`` / 帧 URL 只放行 http(s) 绝对 URL 与
-# 相对路径；拒 ``javascript:``/``data:``/``file:`` 等伪协议，避免 XSS / 本地文件读取。
+# 媒体源 URL 协议黑名单（评审 R2-#3，与前端 media.js _safeUrl 一致）：
+# ``<video src>`` / 帧 URL 只放行 http(s) 绝对 URL 与相对路径；拒
+# ``javascript:``/``data:``/``file:`` 等伪协议，避免 XSS / 本地文件读取。
+# 不引入 urllib，保持 visualizer 的 stdlib-only AST 契约（_STDLIB_TOP 未含 urllib）。
 _ALLOWED_URL_SCHEMES = ("http", "https")
 
 
+def _url_scheme(url: str) -> str:
+    """返回 URL 的 scheme（小写）；无显式 scheme（相对路径等）返回空串。
+
+    仅按 RFC 3986 前缀识别：以字母开头、后接字母数字/'+'/'-'/'.'、终于 ':'。
+    """
+    if not url or not url[0].isascii() or not url[0].isalpha():
+        return ""
+    for i, ch in enumerate(url):
+        if ch == ":":
+            return url[:i].lower()
+        if not (ch.isascii() and (ch.isalnum() or ch in "+-.")):
+            return ""
+    return ""
+
+
 def _safe_media_src(url: str) -> str:
-    """返回经白名单校验的媒体 URL；非法 scheme 返回空串（fail-closed，不注入）。"""
+    """返回经协议黑名单校验的媒体 URL；非法 scheme 返回空串（fail-closed，不注入）。"""
     if not url:
         return ""
-    # 相对路径（以 / ./ ../ 开头，或无 scheme）放行——浏览器相对页面解析。
-    if url.startswith(("/", "./", "../")):
-        return url
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme in _ALLOWED_URL_SCHEMES:
-        return url
-    # 其它（javascript:/data:/file: 等）一律拒绝，返回空避免注入。
-    return ""
+    scheme = _url_scheme(url)
+    if scheme and scheme not in _ALLOWED_URL_SCHEMES:
+        return ""
+    return url
 
 
 # ---------------------------------------------------------------------------
