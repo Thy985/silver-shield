@@ -34,14 +34,21 @@ from .conftest import make_d3a_artifact_dir, make_media_asset
 
 _SID = "sw_adr0034_elderly_dwell"
 
+# 会话级缓存：避免每个用例重复 exec_module（重复执行模块顶层 import，且 _DEFAULT_ARTIFACTS
+# 取 __file__ 解析在重复加载下行为一致但开销不必要）。
+_RC_MOD_CACHE: object | None = None
+
 
 def _load_run_case_viewer():
-    """加载 scripts/run_case_viewer.py CLI 模块（非包，按需 importlib 装配）。"""
-    cli_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "run_case_viewer.py"
-    spec = importlib.util.spec_from_file_location("run_case_viewer_cli", str(cli_path))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """加载 scripts/run_case_viewer.py CLI 模块（非包，按需 importlib 装配，会话级缓存）。"""
+    global _RC_MOD_CACHE
+    if _RC_MOD_CACHE is None:
+        cli_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "run_case_viewer.py"
+        spec = importlib.util.spec_from_file_location("run_case_viewer_cli", str(cli_path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _RC_MOD_CACHE = mod
+    return _RC_MOD_CACHE
 
 
 def _fake_d3_result(spec) -> types.SimpleNamespace:
@@ -122,6 +129,80 @@ def test_export_case_video_spec_is_case_video_with_audio_false(tmp_path, monkeyp
     assert spec.with_audio is False, "D3-B 未实现：导出必须维持 with_audio=False（fail-closed）"
     assert spec.resolution == (640, 480)
     assert spec.fps == 5.0
+
+
+# ---------------------------------------------------------------------------
+# fail-closed 路径（评审 #7）
+# ---------------------------------------------------------------------------
+
+
+def test_export_fail_closed_on_not_implemented(tmp_path, monkeypatch):
+    """D3-B 守卫：compiler 抛 NotImplementedError（with_audio 必须为 False）→ 退出 1。"""
+    artifacts = make_d3a_artifact_dir(tmp_path)
+    out = tmp_path / "out.html"
+    rc_mod = _load_run_case_viewer()
+
+    def _boom(spec):
+        raise NotImplementedError("D3-B 未实现：with_audio 必须为 False")
+
+    monkeypatch.setattr(rc_mod, "_d3_generate_case_video", _boom)
+    rc = rc_mod.main(
+        ["--artifacts", str(artifacts), "--output", str(out), "--export-case-video"]
+    )
+    assert rc == 1, "VM-12 契约违规（NotImplementedError）应 fail-closed 退出 1"
+
+
+def test_export_fail_closed_on_import_error(tmp_path, monkeypatch):
+    """cv2 缺失（ImportError）→ 退出 1，绝不静默跳过导出。"""
+    artifacts = make_d3a_artifact_dir(tmp_path)
+    out = tmp_path / "out.html"
+    rc_mod = _load_run_case_viewer()
+
+    def _boom(spec):
+        raise ImportError("No module named 'cv2'")
+
+    monkeypatch.setattr(rc_mod, "_d3_generate_case_video", _boom)
+    rc = rc_mod.main(
+        ["--artifacts", str(artifacts), "--output", str(out), "--export-case-video"]
+    )
+    assert rc == 1, "cv2 缺失（ImportError）应 fail-closed 退出 1"
+
+
+def test_export_fail_closed_on_empty_scenarios(tmp_path, monkeypatch):
+    """projection 无场景 → _export_case_videos 返回 False（fail-closed）。"""
+    rc_mod = _load_run_case_viewer()
+    args = types.SimpleNamespace(
+        artifacts=tmp_path,
+        export_fps=2.0,
+        export_resolution=(1280, 720),
+        export_version=1,
+    )
+    projection = {"scenarios": ()}
+    descriptor = {"media_binding": {"source_kind": "", "ref": ""}}
+    monkeypatch.setattr(rc_mod, "_d3_generate_case_video", _fake_d3_result)  # 不应被调用
+    assert rc_mod._export_case_videos(args, projection, descriptor) is False
+
+
+def test_export_sets_primary_scenario_ref_for_multi_scenario(tmp_path, monkeypatch):
+    """多场景下 descriptor.media_binding.ref 指向首个（主）场景，而非最后一个（评审 #1）。"""
+    rc_mod = _load_run_case_viewer()
+    sids = ["alpha", "beta"]
+    args = types.SimpleNamespace(
+        artifacts=tmp_path,
+        export_fps=2.0,
+        export_resolution=(1280, 720),
+        export_version=1,
+    )
+    projection = {"scenarios": [{"scenario_id": s} for s in sids]}
+    descriptor = {"media_binding": {"source_kind": "", "ref": ""}}
+    monkeypatch.setattr(rc_mod, "_d3_generate_case_video", _fake_d3_result)
+    assert rc_mod._export_case_videos(args, projection, descriptor) is True
+    # ref 指向主场景（首个）相对路径；逐场景视频则各写各的 manifest（解析走 manifest）。
+    expected_ref = f"{sids[0]}/media/{sids[0]}__v1/case.mp4"
+    assert descriptor["media_binding"]["ref"] == expected_ref
+    assert descriptor["media_binding"]["source_kind"] == "ArtifactVideoSource"
+    for s in sids:
+        assert (tmp_path / s / "media" / "manifest.json").exists(), f"{s} 应登记 manifest"
 
 
 # ---------------------------------------------------------------------------
