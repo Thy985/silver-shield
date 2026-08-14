@@ -27,6 +27,25 @@ ShotKind = Literal[
 ]
 
 
+class DecisionStep(BaseModel):
+    """决策幕单步（语义层 · 决策解释链）。
+
+    仅用于 ``decision`` shot，把「为什么是这个动作而非其他」拆成可逐步揭示的因果步骤。
+    每条携带：阶段语义（stage）、字幕（caption，同步进 ``ShotSpec.narration``）、
+    该步高亮/淡出的**决策画布**节点 id（``highlight``/``fade``）。空间排版由表达层
+    ``VisualSceneGraph.decision_canvas`` 负责，本模型不携带任何坐标/颜色字段。
+    """
+
+    model_config = ConfigDict(extra="forbid")  # 语义层：禁 x/y/color/layout/font/shape
+
+    stage: Literal[
+        "observation", "risk", "policy", "candidate", "selected", "execution", "closure"
+    ]
+    caption: str  # 字幕文本（与 narration 同步，确定性脱敏）
+    highlight: list[str] = Field(default_factory=list)  # 此步高亮的决策画布节点 id
+    fade: list[str] = Field(default_factory=list)  # 此步淡出的决策画布节点 id（其余保持可见）
+
+
 class ShotSpec(BaseModel):
     """单镜头分镜（语义层 · 时间维）。
 
@@ -42,6 +61,7 @@ class ShotSpec(BaseModel):
     audience_need: str = ""  # 该镜头要满足观众什么信息需求（默认空）
     evidence_refs: list[str] = Field(default_factory=list)  # 指向 EvidenceGraph 节点 id
     narration: list[str] = Field(default_factory=list)  # 字幕逐句（证据值 + 文案常量填充）
+    decision_steps: list[DecisionStep] = Field(default_factory=list)  # 仅 decision shot 使用
 
 
 class Storyboard(BaseModel):

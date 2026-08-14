@@ -81,9 +81,9 @@ _CANONICAL_SHOTS: list[TemplateShot] = [
 _CANONICAL_DURATIONS: dict[str, float] = {
     "context": 4.0,
     "detection": 5.0,
-    "reasoning": 6.0,
-    "decision": 4.0,
-    "closure": 4.0,
+    "reasoning": 7.0,
+    "decision": 9.0,
+    "closure": 5.0,
 }
 
 # 类别文案（语义层文案常量；同一骨架下按场景类别给出不同叙事意图表述）。

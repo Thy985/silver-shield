@@ -41,9 +41,10 @@ from home_perception.visualizer.video.render.overlay import (
     shorten_label,
 )
 from home_perception.visualizer.video.render.rasterizer import rasterize_scene
-from home_perception.visualizer.video.render.svg import build_vector_scene
+from home_perception.visualizer.video.render.svg import apply_canvas_highlight, build_vector_scene
 from home_perception.visualizer.video.scene.designer import design_visual_scene
 from home_perception.visualizer.video.spec import CaseVideoSpec
+from home_perception.visualizer.video.storyboard.decision_canvas import assert_decision_canvas
 from home_perception.visualizer.video.storyboard.generator import (
     generate_storyboard,
     storyboard_to_yaml,
@@ -218,6 +219,19 @@ def _narration_line(narration: list[str], frame_index: int, n_frames: int) -> st
     return narration[min(len(narration) - 1, idx)]
 
 
+def _decision_step_index(frame_index: int, n_frames: int, n_steps: int) -> int:
+    """决策幕逐帧 → 步骤映射（确定性，末帧必命中末步）。
+
+    ``lvl = max(1, n_frames-1)`` 保证 ``n_frames`` 远大于 ``n_steps`` 时均匀分布，
+    且末帧 ``min`` 收敛到末步——「最后一步一定播完」（与 ``_narration_line`` 同律）。
+    抽出为纯函数以便锁定确定性序列（review 测试覆盖 缺口 1）。
+    """
+    if n_steps <= 0:
+        return 0
+    lvl = max(1, n_frames - 1)
+    return min(n_steps - 1, frame_index * n_steps // lvl)
+
+
 def _render_frames(
     spec: CaseVideoSpec,
     evidence: dict,
@@ -236,12 +250,45 @@ def _render_frames(
         n_frames = max(1, round(shot.duration_s * spec.fps))
         bg_frames = provider.generate(shot.name, n_frames, spec.resolution)
         scene_graph = visual_scenes[shot.name]
-        vector = build_vector_scene(scene_graph, node_by_id, width, height, shorten_label)
-        info_rgba = rasterize_scene(vector, registry)
         overlay_rgba = render_provenance_layer(
             width, height, spec.scenario_id, seed, fingerprint, registry
         )
         narration = shot.narration or [""]
+        # 决策幕：同一张决策画布按时间逐步揭示（highlight/fade 由当前步驱动）。
+        if shot.decision_steps and scene_graph.decision_canvas:
+            canvas = scene_graph.decision_canvas
+            steps = shot.decision_steps
+            # 几何只构建一次（坐标不随 highlight/fade 变），逐帧仅改写 alpha（review 潜在 Bug 1）。
+            vector = build_vector_scene(
+                scene_graph,
+                node_by_id,
+                width,
+                height,
+                shorten_label,
+                canvas=canvas,
+                caption_reserve=caption_h,
+            )
+            for i in range(n_frames):
+                step_idx = _decision_step_index(i, n_frames, len(steps))
+                step = steps[step_idx]
+                apply_canvas_highlight(vector, set(step.highlight), set(step.fade))
+                info_rgba = rasterize_scene(vector, registry)
+                caption_rgba = render_caption(
+                    _narration_line(narration, i, n_frames), width, caption_h, registry
+                )
+                composed = compose_frame(
+                    bg_frames[i],
+                    [
+                        (info_rgba, (0, 0)),
+                        (caption_rgba, (0, height - caption_h)),
+                        (overlay_rgba, (0, 0)),
+                    ],
+                )
+                frames.append(composed)
+            continue
+        # 通用路径：本 shot 场景图整段复用（仅字幕随帧推进）。
+        vector = build_vector_scene(scene_graph, node_by_id, width, height, shorten_label)
+        info_rgba = rasterize_scene(vector, registry)
         for i in range(n_frames):
             caption_rgba = render_caption(
                 _narration_line(narration, i, n_frames), width, caption_h, registry
@@ -301,7 +348,7 @@ def generate_case_video(spec: CaseVideoSpec) -> CaseVideoResult:
     }
     provenance_path.write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    _assert_consistency(storyboard, visual_scenes, evidence, frames, spec, duration_s)
+    _assert_consistency(storyboard, visual_scenes, evidence, frames, spec, duration_s, template)
     return CaseVideoResult(
         scenario_id=spec.scenario_id,
         output_dir=out_dir,
@@ -321,6 +368,7 @@ def _assert_consistency(
     frames: list[np.ndarray],
     spec: CaseVideoSpec,
     duration_s: float,
+    template: ScenarioTemplate | None = None,
 ) -> None:
     """§8 验收 9 结构级一致性（fail-closed）。"""
     node_ids = {n["id"] for n in evidence["graph"]["nodes"]}
@@ -342,6 +390,13 @@ def _assert_consistency(
                 raise AssertionError(
                     f"Scene consistency 失败：VisualSceneGraph.ref={el.ref!r} 超出语义层 evidence_refs"
                 )
+
+    # Decision canvas consistency：仅 decision shot 含画布时校验（节点闭集 + anchor 锚定证据）。
+    for shot in storyboard.shots:
+        vsg = visual_scenes.get(shot.name)
+        if vsg is None or not vsg.decision_canvas:
+            continue
+        assert_decision_canvas(evidence, vsg.decision_canvas)
 
     # Duration consistency：sum(duration_s) == 帧数/fps（±1 帧容差）
     expected_frames = round(duration_s * spec.fps)

@@ -24,6 +24,7 @@ from home_perception.visualizer.video.narrative.templates import (
     ScenarioTemplate,
     materialize_shot_refs,
 )
+from home_perception.visualizer.video.storyboard.decision_canvas import build_decision_steps
 from home_perception.visualizer.video.storyboard.schema import ShotSpec, Storyboard
 from home_perception.visualizer.video.text_safety import desensitize, sanitize_display_text
 
@@ -60,7 +61,14 @@ def generate_storyboard(
         purpose = ov.get("purpose", template.default_purposes.get(name, ""))
         audience_need = ov.get("audience_need", "")
         duration_s = template.default_durations_s.get(name, 4.0)
-        narration = _build_narration(name, refs, evidence)
+        # decision shot：叙事由决策解释链（decision_steps）驱动，字幕 = 各步 caption
+        # 同步；语义层只编排步骤与 highlight/fade，空间排版交给表达层 decision_canvas。
+        if name == "decision":
+            decision_steps = build_decision_steps(evidence)
+            narration = [s.caption for s in decision_steps]
+        else:
+            decision_steps = []
+            narration = _build_narration(name, refs, evidence)
         shots.append(
             ShotSpec(
                 name=name,
@@ -70,6 +78,7 @@ def generate_storyboard(
                 audience_need=audience_need,
                 evidence_refs=refs,
                 narration=narration,
+                decision_steps=decision_steps,
             )
         )
 
