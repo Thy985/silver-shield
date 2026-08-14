@@ -186,6 +186,38 @@ def test_render_gate_failure_code_none_renders_empty(tmp_path):
     assert "❌" in html  # 失败标记仍显示
 
 
+def test_render_audio_evidence_present(tmp_path):
+    """VM-13 Phase C（AC-12）：真实音频符号进入 canonical → 渲染出 🔊 音频证据区块。"""
+    d = make_artifacts(
+        tmp_path / "a",
+        audio_evidence=[
+            {
+                "audio_timestamp": 1752952800.0,
+                "audio_kind": "audio_telephone_persistent",
+                "audio_score": 0.9,
+                "audio_confidence": 0.9,
+                "audio_labels": ["telephone"],
+                "audio_source_segment_ids": ["seg-0"],
+            }
+        ],
+    )
+    html = _render(d)
+    # 区块锚点 + 音频徽章 + 字段（仅白名单字段，无媒体字节 / text / transcript）
+    assert 'id="audio-sw_t1"' in html
+    assert "🔊" in html
+    assert "audio_telephone_persistent" in html
+    assert "score=0.90" in html and "conf=0.90" in html
+    assert "telephone" in html
+    assert "seg-0" in html
+
+
+def test_render_audio_evidence_absent_when_no_audio(tmp_path):
+    """AC-12 / VM-7：无音频证据场景不渲染音频区块（绝不编造空卡片）。"""
+    d = make_artifacts(tmp_path / "a")  # 默认无音频
+    html = _render(d)
+    assert 'id="audio-sw_t1"' not in html
+
+
 def test_render_scenario_id_with_quotes_safe(tmp_path):
     """引号 scenario_id：HTML 层转义 + JS 层 json 转义，不破坏文档（评审 R2-#6）。
 

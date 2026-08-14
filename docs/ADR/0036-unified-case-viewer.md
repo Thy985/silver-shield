@@ -65,7 +65,7 @@ ADR-0032～0035 已建成可信工程生产线（Scenario → Runtime 回放 →
 - `visualizer/schema/graph.py` 的 `EvidenceGraph` 节点闭集含 `Frame`/`Detection` 预留位（live 帧级数据无需新 schema）。
 - D3 的 `video/evidence/adapter.py` 已以 `load_evidence_projection` 为输入 → D3 与 Case Viewer 共享同一 View Model。
 - **音频真实符号（ADR-0026/0027/0028）**：`AudioPerceptionEvent`（kind=`AudioPerceptionKind` 五值、`score` 0~1 规则强度、`confidence` 0~1、`labels`/`scored_labels`、`source_segment_ids`）、`AudioSegmentEvent`（`vad_ratio`/`rms`/`speech_rate` 声学特征）、`RiskSignal(source=AUDIO, category=COMMUNICATION)`、`EvidenceItem(modality=AUDIO)`、`CrossModalLink(relationship=SUPPORTS|CO_OCCURS)`。`AudioPerceptionEvent` 含 `FORBIDDEN_AUDIO_FIELDS`（`fraud_result`/`verdict`/`is_fraud`/`crime_probability`/`deception_score` 等判定字段，结构性禁止），且 **ASR/转录不在音频感知层**（ADR-0001/0026）。
-- **诚实声明（重要）**：当前 `loader` **尚未投影任何音频证据**——ADR-0034 canonical artifact 的 `artifacts` 仍以视觉事件为主；音频经 ADR-0027/0028 落库、ADR-0034 Phase B.2 `cross_modal_runtime` 建 `CrossModalLink`，但是否进入 canonical 投影取决于后续集成。**因此 `audio_evidence` 是面向音频落地的前瞻 schema 扩展，必须由真实 artifact 字段驱动，不得凭空创造（见 VM-7 / §音频字段来源映射 / AC-16）。**
+- **诚实声明（重要）**：`audio_evidence` 必须由**真实音频符号**驱动，不得凭空创造（见 VM-7 / §音频字段来源映射 / AC-12）。当前状态（Slice C · VM-13 Phase C 已落地）：`runner` 携带 `scenario.audio` 经 `compiler` 确定性编译的 `AudioPerceptionEvent`（`synth.audio_events`）→ `IntegrationRunResult.audio_perception_events` → `LoopArtifactSummary.audio_events`（`audio_*` 前缀键，规避脱敏禁止键 `"score"` 精确匹配）→ canonical `artifacts.audio_evidence` → `loader._build_audio_evidence` 投影为 `AudioEvidenceNode` → `renderer` 渲染 🔊 区块。**未声明音频的场景（或 Phase A/B）`audio_evidence` 恒为 `()`（AC-12 严守，绝不编造）**；`AudioPerceptionEvent` 的 `FORBIDDEN_AUDIO_FIELDS` 与无 ASR/转录约束由 `live_adapter` / `loader` fail-closed 守卫（见附录 A）。
 
 ---
 
@@ -415,7 +415,7 @@ FIXTURE     → 固定测试素材 · 非实时
 
 **负面 / 技术债 / 待办**
 - **`silver_demo` 改造（若采用 WS 帧源）**：须把 `DemoAggregateState` 视图态映射移除，改为 `viewer/live_adapter` 投影映射；live 帧/音流只经冻结白名单 + 音频契约边界传递，`viewer/` 不得 import `silver_demo`。
-- **`audio_evidence` 落地前置（VM-13 Phase C）**：需先让真实音频证据进入 canonical artifact（ADR-0027/0028 + ADR-0034 Phase B.2 落库），再扩展 `visualizer/schema/evidence.py` 的 `AudioEvidenceNode` + `loader` 投影 + 契约测试（fail-closed，禁伪造）。
+- **`audio_evidence` 落地（VM-13 Phase C · 已落地）**：真实音频证据已进入 canonical artifact（ADR-0027/0028 + ADR-0034 Phase B.2 落库，并经 `scenario.audio`→`compiler`→`synth.audio_events` 确定性携带）；`visualizer/schema/evidence.py` 的 `AudioEvidenceNode` + `loader._build_audio_evidence` 投影 + fail-closed 契约测试均已落地（见附录 A 实现状态）。
 - **前端选型待定**：SPA 框架需 Owner 拍板；本 ADR 不锁框架，只锁"渲染 `EvidenceProjection` + Media Source Adapter 分离 + CasePresentationDescriptor 编排 + Case Time 同步"契约。
 - **`ProjectionAccumulator` 须确定性/幂等**：VM-8 需补契约测试（对齐 ADR-0035 D8）。
 - **首 slice 刻意压小**（见 §实施切片）。
@@ -444,7 +444,7 @@ FIXTURE     → 固定测试素材 · 非实时
   - 引入 `CasePresentationDescriptor`（仅展示编排）+ `Case Time` 同步骨架。
   - 此阶段**不修改 `EvidenceProjection` schema**（无 `audio_evidence` 字段）；前端不建模音频维度（无 `audioData`/`audioState`，AC-1c）。`audio_evidence` 的 schema 扩展推迟到 Slice C——真实音频进入 canonical artifact 后，再经 `loader` 投影（见 VM-13 Phase C / AC-12）。Live 音频处于 VM-13 Phase A 之前（不实现）。
 - **Slice B（Live Adapter · VM-13 Phase A）**：`viewer/live_adapter.py`（增量 `ProjectionAccumulator`，视觉 Live，无音频）+ WS（FrameResult）→ REAL_SENSOR；复用同一 Case Viewer，仅 provenance 着色差异；滚动窗口参数化。
-- **Slice C（Audio Evidence 投影 · VM-13 Phase B/C）**：先 Phase B（Live 音频经 `live_adapter` 增量合并）→ 再 Phase C（真实音频证据进入 canonical artifact 后扩展 `AudioEvidenceNode` + `loader` 投影 + 统一时间轴 modality 交错 + 多模态案例播放器音频面板）。守 VM-7（缺则显式空）/ VM-9（不生成）。
+- **Slice C（Audio Evidence 投影 · VM-13 Phase B/C）**：Phase B（Live 音频经 `live_adapter` 增量合并 AUDIO modality 时间轴节点，`REAL_SENSOR` provenance）**已落地**；Phase C（真实音频证据进入 canonical artifact 后由 `loader` 投影为 `audio_evidence` → Artifact Mode 渲染 🔊 区块）**已落地**（runner→report→loader→renderer 全链路，AC-12 严守 `()` 当无音频）。守 VM-7（缺则显式空）/ VM-9（不生成）。统一时间轴 modality 交错见 `TimelineModality`/`TimelineNode.modality`（Slice C 已含 AUDIO）。
 - **Slice D（Media Source Adapter + D3 导出 + 去重）**：抽象 `ArtifactVideoSource`/`SyntheticFrameSource`/`LiveFrameSource`；D3 导出动作接入 Case Viewer 作为 Case Video Export；D1/D2 收敛到本 ADR 的 Artifact/Replay Adapter 之下（去重）。
 
 ---
@@ -473,34 +473,43 @@ FIXTURE     → 固定测试素材 · 非实时
 
 ---
 
-## 附录 A：AudioEvidenceNode 字段来源映射（原则冻结 · 字段级待 Implementation Plan 定稿）
+## 附录 A：AudioEvidenceNode 字段来源映射（原则冻结 · 字段级已定稿并落地）
 
-> 本 ADR 只冻结"字段必须来自真实音频符号、且哪些字段绝不能出现"的原则；最终字段集与命名在 ADR-0036 的 Implementation Plan（或 `visualizer/schema/evidence.py` 改动 PR）中定稿，并配 fail-closed 契约测试。
+> 本 ADR 冻结"字段必须来自真实音频符号、且哪些字段绝不能出现"的原则；字段集与命名已在 `visualizer/schema/evidence.py`（`AudioEvidenceNode`/`AudioAcoustics`）及 canonical 中间层（`LoopArtifactSummary.audio_events` 的 `audio_*` 前缀键）定稿，**Phase C 已随 runner→report→loader→renderer 全链路落地**，并配 fail-closed 契约测试（`tests/visualizer/test_loader.py`、`tests/visualizer/test_renderer.py`、`tests/integration/test_adr0034_phase_c_audio.py`）。
 
-### 实现状态（Slice C · VM-13 Phase B）
+### 实现状态（Slice C · VM-13 Phase B + Phase C 已落地）
 
 `TimelineNode` 已加 `modality: TimelineModality`（AC-9 统一时间轴判别式，取值
 `VISION/AUDIO/DECISION/ACTION/MEMORY/CROSS_MODAL/OBSERVABILITY`）；`ScenarioEvidence` 已加
 `audio_evidence: tuple[AudioEvidenceNode, ...]`，`AudioEvidenceNode` 与 `AudioAcoustics` 已定稿于
-`src/home_perception/visualizer/schema/evidence.py`。AC-12 落地门槛：**Phase A/B 中 `audio_evidence`
-恒为 `()`**，仅 loader 在 Phase C 真实音频进入 canonical 后才投影产出；Phase B 仅 live_adapter 增量合并
-AUDIO modality 时间轴节点（见 `visualizer/viewer/live_adapter.py`）。
+`src/home_perception/visualizer/schema/evidence.py`。**VM-13 Phase C 已落地（runner→report→loader→renderer 全链路）**：
+
+1. **真实音频符号来源（确定性、感知层）**：`scenario.audio` → `compiler.py` 编译为 `AudioPerceptionEvent` 列表 → `SyntheticInput.audio_events`；`runner._collect` 直接取 `synth.audio_events`（运行期确定性、无 UUID/墙钟）。**不依赖 `AudioSessionSummary`**（其丢弃原始事件）。
+2. **四层投影链路**：`IntegrationRunResult.audio_perception_events` → `LoopArtifactSummary.audio_events` → canonical `artifacts.audio_evidence`（dict 形态）→ `loader._build_audio_evidence` 映射为 `AudioEvidenceNode` → `renderer._render_audio_evidence` 渲染 🔊 区块。
+3. **AC-12 严守**：未声明音频的场景（或 Phase A/B Live）`audio_evidence` 恒为 `()`；`loader._build_audio_evidence` 对 `raw is None` 返回 `()`、对任意字段缺失/类型非法 **fail-closed 抛 `EvidenceProjectionError`**，绝不编造。
+4. **脱敏守卫兼容性（关键约束）**：`AudioEvidenceNode.score` 的裸键 `"score"` 会触发 `assert_desensitized` 的 `forbidden_field`（精确匹配 `"score"`）→ 在 **canonical 中间层**一律用 `audio_*` 前缀键承载（`audio_timestamp`/`audio_kind`/`audio_score`/`audio_confidence`/`audio_labels`/`audio_source_segment_ids`），`loader` 投影进 `AudioEvidenceNode` 时再还原为 `score`/`confidence` 等字段。字段级契约见下表「canonical 中间层键」列。
+
+> Phase B（Live）状态不变：live_adapter 增量合并 AUDIO modality 时间轴节点（`REAL_SENSOR` provenance，`audio_evidence` 在 Live 投影中仍是 `()`，Phase C 不引入 Live 侧变化），见 `visualizer/viewer/live_adapter.py`。
 
 ### 字段来源表（锚定仓库真实符号）
 
-| `AudioEvidenceNode` 字段 | 来源真实符号 | 说明 |
-|---|---|---|
-| `timestamp` | `AudioPerceptionEvent.timestamp` / `AudioSegmentEvent.timestamp` | 与统一时间轴同源（Unix 秒） |
-| `kind` | `AudioPerceptionEvent.kind`（`AudioPerceptionKind.value`） | 五值：`audio_speech_rapid` / `audio_voice_raised` / `audio_telephone_persistent` / `audio_distress_cry` / `audio_anomaly_other` |
-| `score` | `AudioPerceptionEvent.score` | 0~1，规则强度（非诈骗概率） |
-| `confidence` | `AudioPerceptionEvent.confidence` | 0~1，检测可信度 |
-| `labels` | `AudioPerceptionEvent.labels` / `scored_labels` | 声学标签透传（非语义判定） |
-| `source_segment_ids` | `AudioPerceptionEvent.source_segment_ids` | 派生自哪些 `AudioSegmentEvent` |
-| `acoustics`（可选） | `AudioSegmentEvent.vad_ratio` / `rms` / `speech_rate` | 声学特征，可选 |
-| `signal_category`（可选，原名 semantic_tag，本轮改名） | `RiskSignal(source=AUDIO, category=COMMUNICATION)` | **证据/信号分类透传**：`COMMUNICATION` 是证据分类而非自然语言语义解释；音频只产 perception，不产语义判断（非 ASR 文本） |
-| `related_visual_ref`（可选） | 由 `CrossModalLink` 经 `EvidenceGraph` **两层派生**：`CrossModalLink.episode_ids → Episode → EvidenceGraph 视觉 node → ref`；**不得假设 `CrossModalLink` 存在直接视觉 node ref 字段**（当前 `CrossModalLink` 为 episode 级关联：`link_id`/`episode_ids`/`relationship`/`time_overlap`/`confidence`） | 指向视觉事件 ref（可选，依赖真实关联解析） |
-| `ref` | trace artifact 定位（如 `trace/audio.jsonl#<event_id>`） | 溯源 |
-| `provenance_kind` | `ProvenanceKind` | `REAL_SENSOR` / `SIMULATED` / `FIXTURE` |
+> 第三列「canonical 中间层键」是 `LoopArtifactSummary.audio_events` 字典在 canonical artifact（`artifacts.audio_evidence`）中承载的键名。`loader._build_audio_evidence` 将这些 `audio_*` 前缀键映射回 `AudioEvidenceNode` 的同名裸键（`score`/`confidence`/...）。**前缀键是脱敏守卫 `assert_desensitized` 的硬约束**：该守卫对 `forbidden_field` 做精确字符串匹配 `"score"`，裸键 `"score"` 会触发 `DesensitizationError` 拒绝落盘；故中间层一律用 `audio_score` 等前缀键规避，投影进 `AudioEvidenceNode` 时再还原。
+
+| `AudioEvidenceNode` 字段 | 来源真实符号 | canonical 中间层键（`LoopArtifactSummary.audio_events` → `artifacts.audio_evidence`） | 说明 |
+|---|---|---|---|
+| `timestamp` | `AudioPerceptionEvent.timestamp` / `AudioSegmentEvent.timestamp` | `audio_timestamp`（`float`，Unix 秒） | 与统一时间轴同源；loader 投影为 `str(float(...))` |
+| `kind` | `AudioPerceptionEvent.kind`（`AudioPerceptionKind.value`） | `audio_kind`（`str`，五值之一） | `audio_speech_rapid` / `audio_voice_raised` / `audio_telephone_persistent` / `audio_distress_cry` / `audio_anomaly_other` |
+| `score` | `AudioPerceptionEvent.score` | `audio_score`（`float` 0~1） | 规则强度（非诈骗概率）；**必须用 `audio_score` 前缀键规避脱敏禁止键 `"score"`** |
+| `confidence` | `AudioPerceptionEvent.confidence` | `audio_confidence`（`float` 0~1） | 检测可信度 |
+| `labels` | `AudioPerceptionEvent.labels` / `scored_labels` | `audio_labels`（`list[str]`） | 声学标签透传（非语义判定） |
+| `source_segment_ids` | `AudioPerceptionEvent.source_segment_ids` | `audio_source_segment_ids`（`list[str]`） | 派生自哪些 `AudioSegmentEvent` |
+| `acoustics`（可选） | `AudioSegmentEvent.vad_ratio` / `rms` / `speech_rate` | （Phase C 未投影；预留 `audio_vad_ratio`/`audio_rms`/`audio_speech_rate`） | 声学特征，可选；Phase C 仅投影 `AudioPerceptionEvent` 维度 |
+| `signal_category`（可选，原名 semantic_tag，本轮改名） | `RiskSignal(source=AUDIO, category=COMMUNICATION)` | （Phase C 未投影；预留 `audio_signal_category`） | **证据/信号分类透传**：`COMMUNICATION` 是证据分类而非自然语言语义解释；音频只产 perception，不产语义判断（非 ASR 文本） |
+| `related_visual_ref`（可选） | 由 `CrossModalLink` 经 `EvidenceGraph` **两层派生** | （Phase C 未投影；预留 `audio_related_visual_ref`） | 指向视觉事件 ref（可选，依赖真实关联解析） |
+| `ref` | trace artifact 定位 | loader 投影时合成 `f"{scenario_id}.canonical.json#artifacts.audio_evidence[{i}]"` | 溯源；非来自运行期，由 loader 据索引生成 |
+| `provenance_kind` | `ProvenanceKind` | （不落 canonical 中间层；loader 固定 `SIMULATED`） | `REAL_SENSOR` / `SIMULATED` / `FIXTURE`；artifact 来源固定 `SIMULATED`（与视觉事件一致） |
+
+> **loader 强校验（fail-closed）**：`_build_audio_evidence` 对每条原始 dict 校验 `audio_timestamp`(int/float) / `audio_kind`(非空 str) / `audio_score`(num) / `audio_confidence`(num) / `audio_labels`(str list) / `audio_source_segment_ids`(str list)；任一缺失或类型非法 → 抛 `EvidenceProjectionError`，绝不静默跳过或编造。
 
 ### 绝不能出现的字段（强制）
 

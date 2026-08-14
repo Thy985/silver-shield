@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Literal
 
 from home_perception.visualizer.schema.evidence import (
+    AudioEvidenceNode,
     Counts,
     DecisionEvidence,
     EvidenceProjection,
@@ -338,6 +339,87 @@ def _build_evidence_graph(
     )
 
 
+def _build_audio_evidence(
+    artifacts: dict, scenario_id: str, owner: str
+) -> tuple[AudioEvidenceNode, ...]:
+    """ADR-0036 VM-13 Phase C：从 canonical ``artifacts.audio_evidence`` 投影真实音频证据。
+
+    仅当真实音频符号已进入 canonical（由 ``IntegrationRunner`` 经 ``synth.audio_events``
+    投影、report 落盘为 ``audio_*`` 前缀键）才非空；其余恒 ``()``（AC-12：绝不编造）。
+    字段逐个强校验（fail-closed，缺字段 / 类型错误 → 拒绝，不兜底占位），与 ``_require``
+    风格一致。键名统一 ``audio_*`` 前缀，规避脱敏禁止键 ``"score"`` 精确匹配。
+
+    映射（canonical ``audio_*`` 键 → ``AudioEvidenceNode`` 字段）：
+      audio_timestamp            → timestamp (str, Unix 秒)
+      audio_kind                → kind (AudioPerceptionKind.value)
+      audio_score              → score (0~1，规则强度非诈骗概率)
+      audio_confidence         → confidence (0~1，检测可信度)
+      audio_labels             → labels
+      audio_source_segment_ids → source_segment_ids
+      ref                      → ``<sid>.canonical.json#artifacts.audio_evidence[i]``
+      provenance_kind          → SIMULATED（D1 artifact 路径恒仿真闭环）
+    """
+    raw = artifacts.get("audio_evidence")
+    if raw is None:
+        return ()  # 无音频符号：Phase A/B 与未声明音频场景恒空（AC-12）
+    if not isinstance(raw, list):
+        raise EvidenceProjectionError(
+            f"{owner}.artifacts.audio_evidence 结构非法（fail-closed）"
+        )
+    nodes: list[AudioEvidenceNode] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise EvidenceProjectionError(
+                f"{owner}.artifacts.audio_evidence[{i}] 非对象（fail-closed）"
+            )
+        timestamp = entry.get("audio_timestamp")
+        kind = entry.get("audio_kind")
+        score = entry.get("audio_score")
+        confidence = entry.get("audio_confidence")
+        labels = entry.get("audio_labels")
+        segments = entry.get("audio_source_segment_ids")
+        # 逐个字段强校验（fail-closed：缺字段 / 类型错误即拒绝，不兜底填占位）
+        if not isinstance(timestamp, (int, float)):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_timestamp 缺失/非数值（fail-closed）"
+            )
+        if not isinstance(kind, str) or not kind:
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_kind 缺失/非 str（fail-closed）"
+            )
+        if not isinstance(score, (int, float)):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_score 缺失/非数值（fail-closed）"
+            )
+        if not isinstance(confidence, (int, float)):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_confidence 缺失/非数值（fail-closed）"
+            )
+        if not isinstance(labels, list) or not all(isinstance(v, str) for v in labels):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_labels 非 str 列表（fail-closed）"
+            )
+        if not isinstance(segments, list) or not all(
+            isinstance(v, str) for v in segments
+        ):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_source_segment_ids 非 str 列表（fail-closed）"
+            )
+        nodes.append(
+            AudioEvidenceNode(
+                timestamp=str(float(timestamp)),
+                kind=kind,
+                score=float(score),
+                confidence=float(confidence),
+                labels=tuple(labels),
+                source_segment_ids=tuple(segments),
+                ref=f"{scenario_id}.canonical.json#artifacts.audio_evidence[{i}]",
+                provenance_kind="SIMULATED",
+            )
+        )
+    return tuple(nodes)
+
+
 def _build_gate(
     scenario_id: str,
     gate_data: dict,
@@ -438,9 +520,10 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         ),
         timeline=timeline,
         decision_evidence=decision_evidence,
-        # ADR-0036 Slice C（AC-12）：loader 在 Phase C 才投影真实音频；Phase A/B 恒 ``()``，
-        # 仅补契约默认值防 TypedDict 缺键（不扩展投影逻辑、不编造音频证据）。
-        audio_evidence=(),
+        # ADR-0036 VM-13 Phase C（AC-12）：真实音频符号进入 canonical 后由 loader 投影；
+        # 缺 ``audio_evidence`` / 空列表 → ``()``（绝不编造）。VM-9：无 ASR/LLM、无
+        # text/transcript/FORBIDDEN_AUDIO_FIELDS。
+        audio_evidence=_build_audio_evidence(artifacts, scenario_id, owner),
         gate=verdicts,
         gate_passed=gate_passed,
         gate_degraded=gate_degraded,

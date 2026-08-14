@@ -60,6 +60,39 @@ def _enum_value(obj: Any) -> Any:
     return getattr(obj, "value", obj)
 
 
+def _project_audio_events(result: IntegrationRunResult) -> tuple[dict, ...]:
+    """ADR-0036 VM-13 Phase C：真实音频感知符号 → 脱敏安全字典（``audio_*`` 前缀键）。
+
+    数据源 = ``result.audio_perception_events``（compiler 确定性编译的 ``AudioPerceptionEvent``，
+    感知层、无 UUID/墙钟）。纯鸭子读取，不 import 生产类（保持 report 模块 stdlib-friendly）。
+
+    键名铁律：脱敏守卫 ``assert_desensitized`` 对 ``"score"`` 是**精确匹配**禁止键，故
+    必须用 ``audio_score`` / ``audio_confidence`` / ``audio_kind`` / ``audio_timestamp`` /
+    ``audio_labels`` / ``audio_source_segment_ids`` 前缀键，绝不使用裸 ``score`` / ``confidence``
+    （否则落盘 fail-closed）。字段语义严格对齐 ``AudioEvidenceNode``，媒体字节 / text /
+    transcript / FORBIDDEN_AUDIO_FIELDS 一律不出现（VM-9）。
+    """
+    events = getattr(result, "audio_perception_events", ()) or ()
+    out: list[dict] = []
+    for ev in events:
+        kind = getattr(ev, "kind", None)
+        out.append(
+            {
+                "audio_timestamp": float(getattr(ev, "timestamp", 0.0) or 0.0),
+                "audio_kind": (
+                    getattr(kind, "value", str(kind)) if kind is not None else ""
+                ),
+                "audio_score": float(getattr(ev, "score", 0.0) or 0.0),
+                "audio_confidence": float(getattr(ev, "confidence", 0.0) or 0.0),
+                "audio_labels": list(getattr(ev, "labels", []) or []),
+                "audio_source_segment_ids": list(
+                    getattr(ev, "source_segment_ids", []) or []
+                ),
+            }
+        )
+    return tuple(out)
+
+
 @dataclass(frozen=True, slots=True)
 class LoopArtifactSummary:
     """闭环 artifacts 的**结构化**摘要：只含计数与类型集合。
@@ -82,6 +115,10 @@ class LoopArtifactSummary:
     trace_outcome_kinds: tuple[str, ...] = ()
     suppress_reasons: tuple[str, ...] = ()
     episode_action_command_types: tuple[str, ...] = ()
+    # ADR-0036 VM-13 Phase C：真实音频证据投影（来自 IntegrationRunResult.audio_perception_events）。
+    # 键统一用 ``audio_*`` 前缀，规避脱敏禁止键 ``"score"``（精确匹配）——``audio_score`` 安全。
+    # 未声明音频的场景恒 ``()``（AC-12：绝不编造）。
+    audio_events: tuple[dict, ...] = ()
 
     @classmethod
     def from_run(cls, result: IntegrationRunResult) -> LoopArtifactSummary:
@@ -112,6 +149,7 @@ class LoopArtifactSummary:
                 _enum_value(t.outcome.suppress_reason) for t in traces
             ),
             episode_action_command_types=_sorted_unique(episode_action_types),
+            audio_events=_project_audio_events(result),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -132,6 +170,9 @@ class LoopArtifactSummary:
             "trace_outcome_kinds": list(self.trace_outcome_kinds),
             "suppress_reasons": list(self.suppress_reasons),
             "episode_action_command_types": list(self.episode_action_command_types),
+            # ADR-0036 VM-13 Phase C：真实音频证据（仅当音频符号进入 canonical 后非空；
+            # 未声明音频场景恒 ``[]``，AC-12 绝不编造）。键名用 ``audio_*`` 前缀避脱敏禁止键。
+            "audio_evidence": [dict(d) for d in self.audio_events],
         }
 
 
