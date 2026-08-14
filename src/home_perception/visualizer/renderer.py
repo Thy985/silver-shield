@@ -625,20 +625,41 @@ def _render_gate(scenario: ScenarioEvidence) -> str:
             f"<td>{_esc(verdict['severity'])}</td>"
             f"<td>{mark}</td></tr>"
         )
-    status: str
-    if not scenario["gate_passed"]:
-        status = "FAIL"
-    elif scenario["gate_degraded"]:
-        status = "PASS (degraded)"
+    # Gate 状态：Live / 实时模式无集成 Gate（gate=()）→ 显式「无 Gate 评估」，
+    # 绝不伪装 FAIL（AC-8 禁伪造：缺失必须显式表达，不得填占位假判定）。
+    if scenario["gate"]:
+        if not scenario["gate_passed"]:
+            status = "FAIL"
+        elif scenario["gate_degraded"]:
+            status = "PASS (degraded)"
+        else:
+            status = "PASS"
+        gate_status_cell = (
+            f"<b>{status}</b> (degraded={scenario['gate_degraded']})"
+        )
     else:
-        status = "PASS"
+        gate_status_cell = "<b>无 Gate 评估</b>（实时模式 · REAL_SENSOR）"
+    # 集成指纹：Live / 实时模式指纹 absent（fp=None）→ 显式「无集成指纹」（AC-8），
+    # 不填占位空串或伪造指纹；artifact 路径 fp 恒为 FingerprintPair。
+    if fp is None:
+        fp_rows = (
+            "<tr><td>integration fingerprints</td>"
+            "<td><code>无（实时模式 · REAL_SENSOR）</code></td></tr>"
+        )
+    else:
+        fp_rows = (
+            f"<tr><td>expectation_fingerprint</td>"
+            f"<td><code>{_esc(fp['expectation_fingerprint'][:16])}…</code></td></tr>"
+            f"<tr><td>loop_fingerprint</td>"
+            f"<td><code>{_esc(fp['loop_fingerprint'][:16])}…</code></td></tr>"
+            f"<tr><td>scenario_fingerprint</td>"
+            f"<td><code>{_esc(scenario['scenario_fingerprint'][:16])}…</code></td></tr>"
+        )
     return f"""
     <table class="gate-table">
       <tr><th>Fingerprint / Gate</th><th></th></tr>
-      <tr><td>expectation_fingerprint</td><td><code>{_esc(fp['expectation_fingerprint'][:16])}…</code></td></tr>
-      <tr><td>loop_fingerprint</td><td><code>{_esc(fp['loop_fingerprint'][:16])}…</code></td></tr>
-      <tr><td>scenario_fingerprint</td><td><code>{_esc(scenario['scenario_fingerprint'][:16])}…</code></td></tr>
-      <tr><td>Gate verdict</td><td><b>{status}</b> (degraded={scenario['gate_degraded']})</td></tr>
+      {fp_rows}
+      <tr><td>Gate verdict</td><td>{gate_status_cell}</td></tr>
     </table>
     <table class="gate-table">
       <tr><th>stage</th><th>severity</th><th>verdict</th></tr>

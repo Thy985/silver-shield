@@ -111,14 +111,18 @@ class ScenarioEvidence(TypedDict):
     gate: tuple[StageVerdict, ...]
     gate_passed: bool
     gate_degraded: bool
-    fingerprints: FingerprintPair
+    # ADR-0036 Slice B（VM-13 Phase A）：Live / 实时模式无集成 Gate 与两枚闭环指纹
+    # （expectation/loop 由 ADR-0034 仿真闭环产出，真实传感器流不产出）→ 必须显式
+    # ``None``（AC-8 禁伪造），**不得**填占位空串或假指纹。artifact 路径（loader）仍恒
+    # 产出 ``FingerprintPair``，仅 live 路径置 ``None``。
+    fingerprints: FingerprintPair | None
     refs: tuple[str, ...]  # 本项目所有节点的 ref 汇总（验收：provenance 可溯源）
     # D1.5（D5 实体化）：Evidence Graph 为四视图的共享底层结构
     # （Timeline = Graph+timestamp / Decision = Graph+decision subtree /
     #  Cross Modal = Graph+supports edges）。
     # 评审 R3-#18：**D1.5+ 必填**——调用方必须从 loader 的 EvidenceProjection
     # 输出消费（loader 恒产出 graph），禁止手写构造 ScenarioEvidence 缺该字段。
-    graph: EvidenceGraph  # noqa: F821——类型见下方 forward ref
+    graph: EvidenceGraph  # 类型见下方 forward ref（TYPE_CHECKING 导入）
 
 
 class ProjectionMeta(TypedDict):
