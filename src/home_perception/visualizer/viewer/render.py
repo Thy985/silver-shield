@@ -136,6 +136,25 @@ def _scenario_headline(scenario: ScenarioEvidence) -> str:
     return " → ".join(parts)
 
 
+def _render_ci_badge(descriptor: CasePresentationDescriptor) -> str:
+    """P0-4.2：CI 受控生成可信徽章。
+
+    仅当 ``descriptor.generated_by == "ci"`` 时渲染"本案例由 CI 受控生成"可信标识，
+    并附 ``case_id`` 与 ``renderer_version``（与 demo/ 包 manifest 锁版本对齐）。
+
+    确定性铁律（t1）：**不含任何墙钟 / 随机值**——全部来自 descriptor 纯展示元数据，
+    同一次生成两次渲染逐字节一致。人工手动生成（generated_by="manual"，默认）不显示此徽章。
+    """
+    if descriptor.get("generated_by") != "ci":
+        return ""
+    cid = _R._esc(descriptor.get("case_id", "unknown"))
+    rv = _R._esc(descriptor.get("renderer_version", ""))
+    return (
+        f'<div class="ci-badge">本案例由 CI 受控生成 · case_id={cid} · renderer=v{rv}'
+        f'<span class="ci-badge-sub">（可信 artifact · 可溯源 · 不持媒体字节）</span></div>'
+    )
+
+
 def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
     """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。"""
     kinds = {n["provenance_kind"] for n in scenario["timeline"]}
@@ -540,6 +559,9 @@ def render_case_viewer(
         + " / ".join(f"{k}→{v}" for k, v in _PROVENANCE_TEXT.items())
     )
 
+    # P0-4.2：CI 受控生成可信徽章（确定性，无墙钟）。
+    ci_badge = _render_ci_badge(descriptor)
+
     replay_data_tags, replay_trace_data_tags, replay_inits = _build_replay_wiring(scenarios)
 
     echarts = _R._echarts_inline()
@@ -569,6 +591,11 @@ def render_case_viewer(
                 padding:12px 16px; margin:12px 0; }}
   .prov-note {{ background:#fff7e6; border:1px solid #f0c36d; color:#7a5a00;
                 border-radius:8px; padding:10px 16px; margin:12px 0; font-size:13px; }}
+  /* P0-4.2：CI 受控生成可信徽章（绿底，强调"可信 artifact · 可溯源"） */
+  .ci-badge {{ background:#e6f7ee; border:1px solid #2e9e6b; color:#15583b;
+               border-radius:8px; padding:10px 16px; margin:12px 0; font-size:14px;
+               font-weight:600; }}
+  .ci-badge-sub {{ font-weight:400; font-size:12px; color:#3a7a5d; margin-left:6px; }}
   .scenario {{ background:#fff; border:1px solid #e3e8ee; border-radius:10px;
                padding:16px 20px; margin:20px 0; }}
   .fs-panel {{ margin:16px 0; }}
@@ -660,6 +687,7 @@ def render_case_viewer(
 <div class="wrap">
   <h1>银龄盾 · 安全案例回放</h1>
   <p class="subtitle">一次运行，看懂一起安全案例：发生了什么 → 为什么值得关注 → 系统做了什么</p>
+  {ci_badge}
   <p class="prov-note">{_R._esc(prov_note)}</p>
   {''.join(scenario_blocks)}
   <details class="glossary">

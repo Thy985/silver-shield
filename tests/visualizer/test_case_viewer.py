@@ -26,9 +26,11 @@ from home_perception.visualizer.viewer import (
     load_case_descriptor,
     render_case_viewer,
 )
+from home_perception.visualizer.viewer.case_presentation import RENDERER_VERSION
 from home_perception.visualizer.viewer.media_source import resolve_media_source
 from home_perception.visualizer.viewer.render import (
     _render_case_video,
+    _render_ci_badge,
     _render_provenance_banner,
     _safe_media_src,
 )
@@ -135,6 +137,50 @@ def test_viewer_ac7_provenance_first_class(tmp_path):
     assert "prov-banner" in html, "缺 provenance banner（AC-7 一等视觉）"
     assert "程序化场景 · 可复现" in html, "缺 SIMULATED provenance 文案"
     assert "SIMULATED" in html
+
+
+# ---------------------------------------------------------------------------
+# P0-4.2（CI 受控生成可信徽章）：generated_by="ci" → 渲染"本案例由 CI 受控生成"
+# ---------------------------------------------------------------------------
+
+
+def test_render_ci_badge_shown_when_generated_by_ci(tmp_path):
+    """P0-4.2：生成方为 ci 时，HTML 必须含可信徽章（含 case_id 与 renderer 版本）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    desc = build_default_case_presentation(proj)
+    desc["generated_by"] = "ci"
+    desc["renderer_version"] = RENDERER_VERSION
+    desc["case_id"] = "sw_t1"
+    html = render_case_viewer(proj, desc)
+    assert "本案例由 CI 受控生成" in html, "CI 受控生成徽章缺失"
+    assert "ci-badge" in html, "CI 徽章 div 缺失"
+    assert "case_id=sw_t1" in html, "徽章须携带 case_id"
+    assert f"renderer=v{RENDERER_VERSION}" in html, "徽章须携带 renderer 版本"
+
+
+def test_render_ci_badge_hidden_when_manual_default(tmp_path):
+    """P0-4.2：默认 manual 生成方（人工本地生成）不显示 CI 徽章。
+
+    注：``.ci-badge`` CSS 类定义恒嵌入 ``<style>``（无论是否显示徽章），故只断言
+    徽章**文案**「本案例由 CI 受控生成」不出现——那才是徽章是否被渲染的判别依据。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    desc = build_default_case_presentation(proj)  # 默认 generated_by="manual"
+    assert desc.get("generated_by") == "manual"
+    html = render_case_viewer(proj, desc)
+    assert "本案例由 CI 受控生成" not in html, "manual 生成方不应显示 CI 徽章"
+
+
+def test_render_ci_badge_unit_deterministic():
+    """P0-4.2：_render_ci_badge 纯函数——ci 输出固定、manual/缺省返回空串（t1 确定性，无墙钟）。"""
+    ci = {"generated_by": "ci", "case_id": "sw_x", "renderer_version": "1.0.0"}
+    manual = {"generated_by": "manual", "case_id": "sw_x", "renderer_version": "1.0.0"}
+    assert _render_ci_badge(ci) == _render_ci_badge(dict(ci)), "ci 徽章须确定性"
+    assert "本案例由 CI 受控生成" in _render_ci_badge(ci)
+    assert _render_ci_badge(manual) == "", "manual 应返回空串"
+    assert _render_ci_badge({}) == "", "缺 generated_by 视为非 ci，返回空串"
 
 
 # ---------------------------------------------------------------------------
