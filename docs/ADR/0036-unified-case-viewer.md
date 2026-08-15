@@ -451,6 +451,17 @@ FIXTURE     → 固定测试素材 · 非实时
   `case_dir/canonical`（对齐 HTML 相对前缀，零改动渲染产物；缺失则自然 404 诚实降级；
   starlette 自带路径穿越防护）。契约测试 `tests/demo/test_gateway_serves_case_viewer.py` 新增
   4 条（wav 200 字节一致 / manifest 伺服 / 穿越 404 / 无 canonical 不挂载）。
+- **主轴真实视频整改（P0 验收整改 · 已落地）**：网关验收进一步发现 Case Video 主轴是空
+  canvas 黑屏（build_trusted_case 此前不准备媒体）。整改：`prepare_case_media.py` 默认映射补
+  `audio_e2e` / `high_risk`（P0 验收目标场景也须有真实主轴画面），并新增 `--missing-skip`
+  （真实演示视频 gitignore、CI 无视频 → 跳过该场景不红；媒体为**可选展示增强**，缺失不影响
+  可信 artifact 完整性）；`build_trusted_case` 新增步骤 5.6（`--media/--no-media` 默认开，传
+  `--missing-skip`）把 `data/demo/` 真实 CCTV / 门口视频挂为 `{sid}/media/case.mp4`
+  （`ArtifactVideoSource`，经既有 Media Source Adapter 渲染为 `<video controls autoplay>`）。
+  真实网关验收：`GET /` 主轴为 `<video src="canonical/<sid>/media/case.mp4">`，media/audio
+  全部 200。**音频资产约束**：3 个真实演示视频均无声轨（h264 only）、`data/demo` 无真实 wav
+  → 音频样本保持确定性合成（诚实标注"样本声音（合成素材，非原始录音）"）；真实场景录音留待
+  资产到位后的下一阶段。
 - **前端选型待定**：SPA 框架需 Owner 拍板；本 ADR 不锁框架，只锁"渲染 `EvidenceProjection` + Media Source Adapter 分离 + CasePresentationDescriptor 编排 + Case Time 同步"契约。
 - **`ProjectionAccumulator` 须确定性/幂等**：VM-8 需补契约测试（对齐 ADR-0035 D8）。
 - **首 slice 刻意压小**（见 §实施切片）。

@@ -168,6 +168,18 @@ def test_prepare_one_fail_closed_missing_video(tmp_path: Path):
     assert _prepare_one(artifacts, media_root, "sw_x", "missing.mp4", force=False) is False
 
 
+def test_prepare_one_missing_skip_returns_none(tmp_path: Path):
+    """missing-skip：演示视频缺失 → None（跳过，不计失败、不产残缺 manifest）。"""
+    artifacts = tmp_path / "artifacts"
+    media_root = tmp_path / "media_root"
+    media_root.mkdir(parents=True)
+    assert (
+        _prepare_one(artifacts, media_root, "sw_x", "missing.mp4", force=False, missing_skip=True)
+        is None
+    )
+    assert not (artifacts / "sw_x" / "media" / "manifest.json").exists()
+
+
 def test_prepare_one_fail_closed_probe_error(tmp_path: Path, monkeypatch):
     """cv2 探测失败 → False 且不产 manifest（fail-closed）。"""
     artifacts = tmp_path / "artifacts"
@@ -262,6 +274,42 @@ def test_main_success_exit_0(tmp_path: Path, monkeypatch):
     )
     assert rc == 0
     assert (tmp_path / "a" / "sw_x" / "media" / "case.mp4").is_file()
+
+
+def test_main_missing_skip_exit_0(tmp_path: Path, monkeypatch):
+    """--missing-skip：所有场景视频缺失 → 跳过 + 退出 0（CI 无真实视频不红）。"""
+    monkeypatch.setattr(
+        "scripts.prepare_case_media._DEFAULT_ARTIFACTS", tmp_path / "a"
+    )
+    media_root = tmp_path / "media_root"
+    media_root.mkdir(parents=True)
+    rc = main(
+        [
+            "--artifacts", str(tmp_path / "a"),
+            "--media-root", str(media_root),
+            "--map", "sw_x=missing.mp4",
+            "--missing-skip",
+        ]
+    )
+    assert rc == 0
+    assert not (tmp_path / "a" / "sw_x" / "media" / "manifest.json").exists()
+
+
+def test_main_missing_no_skip_exit_1(tmp_path: Path, monkeypatch):
+    """未开 --missing-skip：视频缺失 → 退出 1（fail-closed 保持）。"""
+    monkeypatch.setattr(
+        "scripts.prepare_case_media._DEFAULT_ARTIFACTS", tmp_path / "a"
+    )
+    media_root = tmp_path / "media_root"
+    media_root.mkdir(parents=True)
+    rc = main(
+        [
+            "--artifacts", str(tmp_path / "a"),
+            "--media-root", str(media_root),
+            "--map", "sw_x=missing.mp4",
+        ]
+    )
+    assert rc == 1
 
 
 def _read_json(path: Path) -> dict:
