@@ -116,3 +116,78 @@ def test_live_mode_serves_case_viewer(monkeypatch):
     assert "SilverShield Case Viewer" in resp.text
     # 语义体系统一：不再各自解释 risk/decision/timeline（统一 Evidence Timeline）
     assert "统一 Evidence Timeline" in resp.text
+
+
+# ----------------------------------------------------------------------
+# 音频 E2E（P0 验收补全）：旗舰网关静态伺服 canonical/（音频样本 / 媒体帧 / case.mp4）
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def case_dir_with_canonical(tmp_path: Path) -> Path:
+    """造一个含 case_viewer.html + canonical/<sid>/audio 样本的假 Factory 产物目录。"""
+    d = tmp_path / "artifacts"
+    audio_dir = d / "canonical" / "sw_t1" / "audio"
+    audio_dir.mkdir(parents=True)
+    (d / "case_viewer.html").write_text(
+        "<html><body>CASE</body></html>", encoding="utf-8"
+    )
+    wav = audio_dir / "audio_telephone_persistent.wav"
+    wav.write_bytes(b"RIFF\x00fake-wav-bytes-for-test")
+    (audio_dir / "manifest.json").write_text(
+        '{"source_kind": "AudioFileSource", "files": {}}', encoding="utf-8"
+    )
+    # canonical 外的"秘密"文件：路径穿越防护验证目标（不得被伺服）。
+    (d / "secret.txt").write_text("TOP-SECRET", encoding="utf-8")
+    return d
+
+
+def test_flagship_serves_canonical_audio_sample(case_dir_with_canonical: Path):
+    """音频 E2E 验收：/canonical/<sid>/audio/<kind>.wav 可被浏览器真实加载（200 + 字节一致）。"""
+    settings = DemoSettings(
+        case_artifacts_dir=str(case_dir_with_canonical), live_enabled=False
+    )
+    app = create_app(settings)
+    with TestClient(app) as c:
+        resp = c.get("/canonical/sw_t1/audio/audio_telephone_persistent.wav")
+    assert resp.status_code == 200
+    assert resp.content == b"RIFF\x00fake-wav-bytes-for-test"
+    assert resp.headers.get("content-type", "").startswith("audio")
+
+
+def test_flagship_canonical_manifest_json_served(case_dir_with_canonical: Path):
+    """canonical 内元数据（manifest.json）同样可伺服（可信 artifact 树只读暴露）。"""
+    settings = DemoSettings(
+        case_artifacts_dir=str(case_dir_with_canonical), live_enabled=False
+    )
+    app = create_app(settings)
+    with TestClient(app) as c:
+        resp = c.get("/canonical/sw_t1/audio/manifest.json")
+    assert resp.status_code == 200
+    assert "AudioFileSource" in resp.text
+
+
+def test_flagship_canonical_path_traversal_rejected(case_dir_with_canonical: Path):
+    """路径穿越防护（fail-closed）：/canonical/.. 不得越界读取 artifacts 根之外文件。"""
+    settings = DemoSettings(
+        case_artifacts_dir=str(case_dir_with_canonical), live_enabled=False
+    )
+    app = create_app(settings)
+    with TestClient(app) as c:
+        # 双重穿越尝试：从 canonical/ 逃逸到 artifacts 根读 secret.txt（StaticFiles 拒绝）。
+        resp = c.get("/canonical/../secret.txt")
+    assert resp.status_code == 404
+    assert "TOP-SECRET" not in resp.text
+
+
+def test_flagship_no_canonical_dir_no_mount(tmp_path: Path):
+    """无 canonical 目录 → 不挂载静态资源（/canonical/* 自然 404，诚实降级不兜底）。"""
+    d = tmp_path / "artifacts"
+    d.mkdir()
+    (d / "case_viewer.html").write_text("<html></html>", encoding="utf-8")
+    settings = DemoSettings(case_artifacts_dir=str(d), live_enabled=False)
+    app = create_app(settings)
+    with TestClient(app) as c:
+        resp = c.get("/canonical/sw_t1/audio/audio_telephone_persistent.wav")
+    assert resp.status_code == 404
+

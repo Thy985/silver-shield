@@ -445,6 +445,12 @@ FIXTURE     → 固定测试素材 · 非实时
   命中才渲染 `<audio controls>`（VM-9/VM-10/AC-11 严格分离）；`run_case_viewer.py` 与
   `build_trusted_case.py`（步骤 5.5，`--audio/--no-audio`）穿线；验收测试
   `tests/visualizer/test_audio_e2e_viewer.py` 锁定"CI 可信 artifact → Case Viewer 真实消费"。
+- **网关静态伺服（P0 验收补全 · 已落地）**：网关验收发现 `GET /` 只伺服 `case_viewer.html`、
+  不伺服任何静态资源 → `<audio controls>` 的样本 / 媒体帧 / case.mp4 全部 404（产品形态下
+  "可播放"断裂）。`silver_demo.gateway` 旗舰模式现条件挂载 `StaticFiles`：`/canonical` →
+  `case_dir/canonical`（对齐 HTML 相对前缀，零改动渲染产物；缺失则自然 404 诚实降级；
+  starlette 自带路径穿越防护）。契约测试 `tests/demo/test_gateway_serves_case_viewer.py` 新增
+  4 条（wav 200 字节一致 / manifest 伺服 / 穿越 404 / 无 canonical 不挂载）。
 - **前端选型待定**：SPA 框架需 Owner 拍板；本 ADR 不锁框架，只锁"渲染 `EvidenceProjection` + Media Source Adapter 分离 + CasePresentationDescriptor 编排 + Case Time 同步"契约。
 - **`ProjectionAccumulator` 须确定性/幂等**：VM-8 需补契约测试（对齐 ADR-0035 D8）。
 - **首 slice 刻意压小**（见 §实施切片）。
