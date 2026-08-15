@@ -136,6 +136,18 @@ class MetaSpec(BaseModel):
     description: str = ""
     seed: int | None = None  # 生成期必填（仅 synthesize 时需要）
     duration_frames: int | None = None  # 生成期必填
+    # —— 运行时确定性覆盖（opt-in；缺省 None = 用闭环装配默认值，向后兼容）——
+    # ``clock_start``：会话时钟起点（Unix 秒，UTC）。缺省 None 时由 runner 用
+    # ``IntegrationRunnerConfig.clock_start`` 默认值；声明后覆盖为该值——用于让
+    # 异常时段（odd_hour_set）等依赖"当天几点"的规则在确定性下可触发（如
+    # adr0034_high_risk 场景声明 22:59:30，使第三次访问跨过 23:00 落入异常时段）。
+    # 语义与 ``audio[].timestamp``（同为 Unix 秒）一致，保证时钟/音频时间线可比。
+    # ``rule_overrides``：覆盖 ``ThresholdConfig`` 字段（如 ``long_duration_seconds`` /
+    # ``repeat_visit_count`` / ``cooldown_seconds``），键必须是 ThresholdConfig 既有字段，
+    # 未知键由 run_integration_validation 拒绝（fail-closed）。用于在保持确定性前提下
+    # 声明"本场景用更敏感/更宽松的阈值"（如 high_risk 场景把停留阈值降到 15s）。
+    clock_start: float | None = None
+    rule_overrides: dict[str, float | int] | None = None
     # —— D8 Scenario Registry 预留字段（schema 现在就预留，使 ADR-0033 可直接消费）——
     owner: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -207,6 +219,15 @@ def validate_scenario_structure(scn: Scenario) -> None:
                     raise ValueError(
                         f"actor {actor.id!r} 的 tracks.frame={kf.frame} 越界 [0, {dur})"
                     )
+
+    # 运行时确定性覆盖校验（fail-closed）：clock_start 必须是正 Unix 秒（UTC）；
+    # rule_overrides 的键合法性由闭环装配侧（run_integration_validation）对照
+    # ThresholdConfig 字段拒绝未知键——场景层不反向 import 分析包，保持依赖方向。
+    if scn.meta.clock_start is not None and scn.meta.clock_start <= 0:
+        raise ValueError(
+            f"场景 {scn.meta.scenario_id!r} 的 meta.clock_start={scn.meta.clock_start!r} "
+            "必须为正 Unix 秒（UTC）（fail-closed）"
+        )
 
 
 def ensure_synthesizable(scn: Scenario) -> None:
