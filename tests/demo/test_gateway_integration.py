@@ -140,7 +140,50 @@ def test_upload_accepts_video_and_returns_frames(client):
     dest = Path(client.app.state.gateway.demo_settings.upload_dir) / body["source_id"]
     assert dest.is_file()
     assert dest.suffix == ".mp4"
-    dest.unlink(missing_ok=True)  # 测试后清理（gitignore 目录）
+
+
+def test_action_closure_workflow_reaches_resolution(client):
+    """P0-1 人类处置闭环：WS 上行（家属→社区）→ 状态机翻转 → community_done → /live 重新投影出 Resolution。
+
+    验证：
+    - family action → family_handled；community action → community_done（state.py 翻转）；
+    - 终态触发 Resolution 事实摄入（Projection 不回写：经 accumulator 新事件 → /live 重新构造）；
+    - /live 渲染含"处置完成"ACTION 节点 + 行动闭环面板（action_closure）。
+    """
+    warning_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeffff0001"
+
+    with client.websocket_connect("/ws") as ws:
+        snap = ws.receive_json()  # 首连 snapshot（晚连也能看到历史 action 状态）
+        assert snap["type"] == "snapshot"
+
+        # 家属：我知道了 → family_handled
+        ws.send_json(
+            {"type": "action", "warning_id": warning_id, "operator": "family", "action": "acknowledge"}
+        )
+        ack = ws.receive_json()
+        assert ack["type"] == "action_ack"
+        assert ack["updated"]["status"] == "family_handled"
+        upd = ws.receive_json()  # 广播 state_update
+        assert upd["type"] == "state_update"
+        assert upd["state"][warning_id]["status"] == "family_handled"
+
+        # 社区：接受任务 → community_done
+        ws.send_json(
+            {"type": "action", "warning_id": warning_id, "operator": "community", "action": "accept"}
+        )
+        ack2 = ws.receive_json()
+        assert ack2["updated"]["status"] == "community_done"
+        upd2 = ws.receive_json()
+        assert upd2["state"][warning_id]["status"] == "community_done"
+
+    # 终态事实已摄入 accumulator → /live 重新投影出 Resolution 节点 + 行动闭环面板。
+    resp = client.get("/live")
+    assert resp.status_code == 200
+    assert "处置完成" in resp.text  # Evidence Timeline 的 Resolution 节点 summary
+    assert "aaaaaaaa" in resp.text  # warning 前缀在 summary
+    assert "行动闭环" in resp.text  # action_closure 面板
+    assert "我知道了" in resp.text
+    assert "完成处置" in resp.text
 
 
 def test_upload_rejects_oversized_file(client):

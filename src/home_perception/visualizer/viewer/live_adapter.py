@@ -50,11 +50,13 @@ from home_perception.visualizer.viewer.case_presentation import (
 )
 
 # Live 模式固定展示面板顺序（与 Artifact 默认一致，VM-1 纯展示元数据）。
+# P0-1：加 action_closure（人类处置闭环面板，Live 专属交互；Artifact 模式不渲染）。
 _LIVE_PANELS: tuple[str, ...] = (
     "case_video",
     "current_risk",
     "why",
     "action",
+    "action_closure",
     "evidence_timeline",
 )
 
@@ -323,6 +325,8 @@ class ProjectionAccumulator:
         # 音频：累计摄入序号（确定性交错标签）+ 去重 kind 集合（不进 Counts schema）。
         self._audio_index = 0
         self._audio_kinds: set[str] = set()
+        # P0-1 处置闭环：Resolution 事实累计序号（确定性 ref 标签）。
+        self._resolution_index = 0
 
     @property
     def n_frames(self) -> int:
@@ -357,6 +361,50 @@ class ProjectionAccumulator:
         """
         live_audio = audio_result_to_live_audio(audio_result)
         self._ingest_audio(live_audio)
+        return self
+
+    def ingest_resolution(self, fact: dict) -> ProjectionAccumulator:
+        """摄入一条处置完成事实（Resolution Fact）→ 累积；返回 self。
+
+        **P0-1 铁律（Projection 不回写 / VM-6）**：Resolution 是"事实源产生的新事实事件"，
+        经本 accumulator 摄入 → ``to_evidence_projection()`` **重新构造** EvidenceProjection
+        （只读派生，绝不 mutate projection）。gateway 在状态机到达终态 ``community_done`` 时
+        构造该事实；鸭子类型读 dict（AST 契约 _STDLIB_TOP 不变）。
+
+        Raises:
+            LiveIngestError: 事实契约违规（fail-closed）。
+        """
+        if not isinstance(fact, dict):
+            raise LiveIngestError("resolution fact 必须是对象（fail-closed）")
+        wid = fact.get("warning_id")
+        status = fact.get("status")
+        if not isinstance(wid, str) or not wid:
+            raise LiveIngestError("resolution.warning_id 缺失/非 str（fail-closed）")
+        if status != "community_done":
+            raise LiveIngestError(
+                f"resolution.status 须为 community_done，收到 {status!r}（fail-closed）"
+            )
+        operator = fact.get("operator")
+        if operator is not None and not isinstance(operator, str):
+            raise LiveIngestError("resolution.operator 非 str（fail-closed）")
+        action = fact.get("action")
+        if action is not None and not isinstance(action, str):
+            raise LiveIngestError("resolution.action 非 str（fail-closed）")
+        self._resolution_index += 1
+        self._recent_events.append(
+            {
+                "kind": "resolution",
+                "resolution": {
+                    "warning_id": wid,
+                    "operator": operator or "community",
+                    "action": action or "complete",
+                    "index": self._resolution_index,
+                },
+            }
+        )
+        if len(self._recent_events) > self.window_size:
+            # 确定性裁剪：与帧/音频同一滚动窗口（时间轴交错呈现，AC-9）。
+            self._recent_events = self._recent_events[-self.window_size:]
         return self
 
     def _accumulate(self, live: LiveFrame) -> None:
@@ -419,9 +467,10 @@ class ProjectionAccumulator:
                 ref=f"{_LIVE_REF_PREFIX}://session/{sid}",
             )
         )
-        # 按摄入顺序交错呈现视觉/音频（AC-9：统一时间轴，不三套独立时间轴）。
+        # 按摄入顺序交错呈现视觉/音频/处置结果（AC-9：统一时间轴，不三套独立时间轴）。
         for ev in self._recent_events:
-            if ev["kind"] == "frame":
+            kind = ev["kind"]
+            if kind == "frame":
                 lf = ev["frame"]
                 fi = lf["frame_index"]
                 nw = len(lf["risk_levels"])
@@ -437,7 +486,7 @@ class ProjectionAccumulator:
                         ref=f"{_LIVE_REF_PREFIX}://frame/{fi}",
                     )
                 )
-            else:  # audio
+            elif kind == "audio":
                 la = ev["audio"]
                 a_idx = ev["audio_index"]
                 nodes.append(
@@ -453,6 +502,23 @@ class ProjectionAccumulator:
                         modality="AUDIO",
                         provenance_kind="REAL_SENSOR",
                         ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
+                    )
+                )
+            else:  # resolution（P0-1 处置闭环事实）
+                rs = ev["resolution"]
+                nodes.append(
+                    TimelineNode(
+                        timestamp=f"R{rs['index']}",
+                        stage="action",
+                        type="resolution",
+                        summary=(
+                            f"处置完成：warning {rs['warning_id'][:8]} 由 "
+                            f"{rs['operator']}「{rs['action']}」（community_done）"
+                        ),
+                        verdict="INFO",
+                        modality="ACTION",
+                        provenance_kind="REAL_SENSOR",
+                        ref=f"{_LIVE_REF_PREFIX}://resolution/{rs['index']}",
                     )
                 )
         return tuple(nodes)
@@ -616,13 +682,16 @@ def build_live_presentation(
     projection: EvidenceProjection,
     *,
     scenario_index: int = 0,
+    live_ws_path: str = "/ws",
 ) -> tuple[EvidenceProjection, CasePresentationDescriptor]:
     """Live ``EvidenceProjection`` → （投影 + 纯展示编排，VM-11）。
 
     - 事实：来自 ``projection``（VM-1，EvidenceProjection 唯一事实源）；
     - 编排：media_binding 绑定 ``LiveFrameSource``（媒体字节由 Media Source Adapter 经
       ref 解析，不进 View Model；Slice A 的 ``resolve_media_source`` 对 LiveFrameSource
-      返回 ``None`` → 前端显示「无媒体绑定」脚注，诚实表达无媒体资产）。
+      返回 ``None`` → 前端显示「无媒体绑定」脚注，诚实表达无媒体资产）；
+    - P0-1：``live_ws_path`` 为纯展示元数据（行动闭环面板 WS 连接路径，非事实字段），
+      由 Host（gateway）注入 ``demo_settings.ws_path``。
     """
     scenarios = projection.get("scenarios")
     if not isinstance(scenarios, tuple) or not scenarios:
@@ -642,6 +711,7 @@ def build_live_presentation(
         ),
         first_screen_layout=FirstScreenLayout(panels=_LIVE_PANELS),
         time_mapping=TimeMapping(media_duration_s=60.0, mode="linear"),
+        live_ws_path=live_ws_path,
     )
     return projection, descriptor
 
