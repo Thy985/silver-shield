@@ -292,6 +292,14 @@ Media Source Adapter
 
 原则：**媒体字节与证据语义分离**。`EvidenceProjection`（含 `audio_evidence`）只持有 `ref` + `timestamp`；Media Source Adapter 负责把 ref 解析为可播放字节（视频帧序列 / mp4 / 音频 wav），喂给多模态案例播放器的"主轴"。它**不是** View Model 的一部分（不进 `EvidenceProjection`），只服务于播放 UI。这样 Vision 与 Audio 在媒体层统一为"Media"，在证据层统一为"EvidenceProjection"。
 
+**音频样本绑定（音频 E2E 新增，与证据严格分离）**：可播放音频走**独立**的 `Audio Source Adapter`
+（`visualizer/viewer/audio_source.py`，只读解析 `{sid}/audio/manifest.json`：
+`source_kind=AudioFileSource` + `files: {kind → 相对 url}`）。`audio_evidence`（证据）**绝不**
+含 url / 媒体字节；`prepare_case_audio.py` 把 `src/home_perception/audio/tts/fixtures/` 下确定性
+合成 WAV 复制为 `{sid}/audio/{kind}.wav` 并登记 manifest（诚实：只为 canonical 中真实出现的
+kind 准备样本，fixtures 未覆盖的 kind 不编造）。渲染层仅当绑定命中才渲染 `<audio controls>`；
+无绑定只显示证据事实（不渲染播放控件）。
+
 ---
 
 ## D-CasePresentation · CasePresentationDescriptor 展示编排（新增）
@@ -357,14 +365,22 @@ Risk / Decision / Action 面板随当前事件更新
 ```
 首屏
   → Case Video（主轴）
+  → 音频感知（系统听到了什么 · 音频 E2E 新增）
   → 当前风险
   → 为什么
   → 系统行动
   → Evidence Timeline（统一时间轴）
-  → 详细证据（展开后才见 Graph / Fingerprint / Gate / Audio 详情 / Memory）
+  → 详细证据（展开后才见 Graph / Fingerprint / Gate / Audio 详情表 / Memory）
 ```
 
-`EvidenceGraph` / `fingerprints` / `gate` / `audio` 详情 / `memory` 属于"详细证据"二级视图，**不在首屏同屏堆砌**（除非案例本身需要，由 `first_screen_layout` 显式声明）。
+音频 E2E 决策（Owner P0，2026-08-15）：**音频感知上首屏**——让用户第一眼理解"系统听到了什么"
+（人话化卡片：相对时间 + 中文类别 + score/confidence，如 `22.4s 🔊 持续电话声音 score 0.90
+confidence 0.92`），而非藏在折叠区。**"音频证据"与"可播放音频"严格分离**（VM-9/VM-10/AC-11）：
+`audio_evidence` 不含任何 url / 媒体字节；可播放样本走独立 `Audio Source Adapter`
+（`{sid}/audio/manifest.json`，`AudioFileSource`，kind→相对 url），仅绑定命中该 kind 时才渲染
+`<audio controls>`（无绑定诚实降级，不编造）。`EvidenceGraph` / `fingerprints` / `gate` /
+音频详情表 / `memory` 属于"详细证据"二级视图，**不在首屏同屏堆砌**（除非案例本身需要，由
+`first_screen_layout` 显式声明；`audio_perception` 是首屏面板，`audio_evidence` 详情表仍是二级）。
 
 ### 2. Provenance 文案映射（可信度是一等视觉，绝默认隐藏）
 
@@ -422,6 +438,19 @@ FIXTURE     → 固定测试素材 · 非实时
 **负面 / 技术债 / 待办**
 - **`silver_demo` 改造（若采用 WS 帧源）**：须把 `DemoAggregateState` 视图态映射移除，改为 `viewer/live_adapter` 投影映射；live 帧/音流只经冻结白名单 + 音频契约边界传递，`viewer/` 不得 import `silver_demo`（T0-3）。`silver_demo.gateway` 作为 Host / Composition Root 可 import `home_perception.visualizer.viewer` 投影并渲染统一 Case Viewer（ADR-0015 §2.1.1），**仅此一层**，Runtime Core 仍禁止 import `visualizer`（T0-1）。
 - **`audio_evidence` 落地（VM-13 Phase C · 已落地）**：真实音频证据已进入 canonical artifact（ADR-0027/0028 + ADR-0034 Phase B.2 落库，并经 `scenario.audio`→`compiler`→`synth.audio_events` 确定性携带）；`visualizer/schema/evidence.py` 的 `AudioEvidenceNode` + `loader._build_audio_evidence` 投影 + fail-closed 契约测试均已落地（见附录 A 实现状态）。
+- **音频 E2E 首屏接入（P0 · 已落地）**：`_DEFAULT_FIRST_SCREEN_PANELS` 新增 `audio_perception`
+  面板（Case Video 之后）；`renderer._AUDIO_KIND_ZH` + `_translate_audio_kind` 人话化；首屏卡片
+  用相对时间（以场景最早音频为 T0）；可播放样本经 `Audio Source Adapter`
+  （`audio_source.py` / `resolve_audio_source`）+ `scripts/prepare_case_audio.py` 独立绑定，
+  命中才渲染 `<audio controls>`（VM-9/VM-10/AC-11 严格分离）；`run_case_viewer.py` 与
+  `build_trusted_case.py`（步骤 5.5，`--audio/--no-audio`）穿线；验收测试
+  `tests/visualizer/test_audio_e2e_viewer.py` 锁定"CI 可信 artifact → Case Viewer 真实消费"。
+- **网关静态伺服（P0 验收补全 · 已落地）**：网关验收发现 `GET /` 只伺服 `case_viewer.html`、
+  不伺服任何静态资源 → `<audio controls>` 的样本 / 媒体帧 / case.mp4 全部 404（产品形态下
+  "可播放"断裂）。`silver_demo.gateway` 旗舰模式现条件挂载 `StaticFiles`：`/canonical` →
+  `case_dir/canonical`（对齐 HTML 相对前缀，零改动渲染产物；缺失则自然 404 诚实降级；
+  starlette 自带路径穿越防护）。契约测试 `tests/demo/test_gateway_serves_case_viewer.py` 新增
+  4 条（wav 200 字节一致 / manifest 伺服 / 穿越 404 / 无 canonical 不挂载）。
 - **前端选型待定**：SPA 框架需 Owner 拍板；本 ADR 不锁框架，只锁"渲染 `EvidenceProjection` + Media Source Adapter 分离 + CasePresentationDescriptor 编排 + Case Time 同步"契约。
 - **`ProjectionAccumulator` 须确定性/幂等**：VM-8 需补契约测试（对齐 ADR-0035 D8）。
 - **首 slice 刻意压小**（见 §实施切片）。

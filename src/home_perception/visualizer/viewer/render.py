@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 from home_perception.visualizer import renderer as _R
 from home_perception.visualizer.schema.evidence import EvidenceProjection
+from home_perception.visualizer.viewer.audio_source import resolve_audio_source
 from home_perception.visualizer.viewer.case_presentation import (
     CasePresentationDescriptor,
     build_default_case_presentation,
@@ -345,6 +346,85 @@ def _render_case_video(
 
 
 # ---------------------------------------------------------------------------
+# 音频感知首屏面板（音频 E2E P0：让用户真正理解"系统听到了什么"）
+# ---------------------------------------------------------------------------
+
+
+def _render_audio_perception(
+    scenario: ScenarioEvidence,
+    audio_manifest: dict | None,
+    audio_base_url: str,
+) -> str:
+    """音频感知首屏面板（音频 E2E P0：让用户真正理解"系统听到了什么"）。
+
+    无音频证据（``audio_evidence`` 空）→ 返回空串（AC-12：绝不编造面板）。
+
+    人话化卡片（相对时间 + 中文类别 + score/confidence），形如：
+      ``22.4s 🔊 持续电话声音  score 0.90 · confidence 0.92``
+
+    **证据与媒体严格分离**（VM-9 / VM-10 / AC-11）：
+    - ``audio_evidence`` 不含任何 url / 媒体字节（loader 投影保证）→ 只渲染事实字段；
+    - 可播放样本**仅当** ``audio_manifest``（独立 Audio Source Adapter 绑定）命中该 kind
+      时才渲染 ``<audio controls>``；无绑定则不渲染、不编造（诚实降级）。
+    """
+    audio = scenario.get("audio_evidence") or ()
+    if not audio:
+        return ""  # AC-12：无音频证据不渲染首屏面板
+
+    # 相对时间：以该场景最早音频时间戳为 T0（媒体时间 ≠ 证据时间，VM-10；此处用证据相对时间）。
+    t0 = min(float(a.get("timestamp", 0.0)) for a in audio)
+    cards: list[str] = []
+    for a in audio:
+        ts = float(a.get("timestamp", 0.0))
+        rel = ts - t0
+        kind = str(a.get("kind", ""))
+        kind_zh = _R._translate_audio_kind(kind)  # 含「中文（原始枚举）」
+        score = float(a.get("score") or 0.0)
+        conf = float(a.get("confidence") or 0.0)
+        labels = " · ".join(_R._esc(str(v)) for v in (a.get("labels") or ()))
+        # 可播放样本：仅当独立音频绑定命中该 kind（严格分离，绝不读 audio_evidence 内 url）。
+        play_ctrl = ""
+        if audio_manifest:
+            rel_url = audio_manifest.get("files", {}).get(kind)
+            if rel_url:
+                # 相对 url 叠加 audio_base_url（与媒体同契约）。
+                url = rel_url
+                if audio_base_url and not _url_scheme(rel_url):
+                    url = audio_base_url.rstrip("/") + "/" + rel_url.lstrip("/")
+                # 路径穿越防护（评审 #5 风格）：组合 URL 含 ".." 则不渲染播放控件
+                # （诚实降级，绝不拼接可能越界的样本 URL）。
+                if ".." not in url:
+                    safe = _safe_media_src(url)
+                    if safe:
+                        play_ctrl = (
+                            f'<div class="audio-play"><audio controls preload="none" '
+                            f'src="{_R._esc(safe)}"></audio>'
+                            f'<span class="muted">样本声音（合成素材，非原始录音）</span></div>'
+                        )
+        cards.append(
+            f"""
+            <div class="audio-card">
+              <div class="audio-card-head">
+                <span class="tl-step">{rel:.1f}s</span>
+                <span class="audio-marker">{_R._MODALITY_MARKER["AUDIO"]}</span>
+                <span class="audio-kind">{_R._esc(kind_zh)}</span>
+              </div>
+              <div class="audio-meta muted">
+                score {score:.2f} · confidence {conf:.2f}
+                {(" · " + labels) if labels else ""}
+              </div>
+              {play_ctrl}
+            </div>"""
+        )
+    return f"""
+    <section class="fs-panel" id="fs-audio-{_R._esc(scenario['scenario_id'])}">
+      <h3 class="view-anchor">系统听到了什么（音频感知）</h3>
+      <div class="audio-perception">{''.join(cards)}</div>
+      <p class="muted">音频为感知层证据（kind/score/confidence），非语义判定；样本声音为合成素材，仅供示意。</p>
+    </section>"""
+
+
+# ---------------------------------------------------------------------------
 # 单场景组装（首屏叙事 + 折叠详细证据）
 # ---------------------------------------------------------------------------
 
@@ -355,6 +435,8 @@ def _render_scenario_case(
     panels: tuple[str, ...],
     media_manifest: dict | None,
     media_base_url: str,
+    audio_manifest: dict | None = None,
+    audio_base_url: str = "",
 ) -> tuple[str, str]:
     """单场景 HTML + 该场景的 graph/media JS（一次遍历产出两块，评审 R3-#3 对称）。"""
     sid = scenario["scenario_id"]
@@ -415,6 +497,10 @@ def _render_scenario_case(
                 f'<section class="fs-panel" id="fs-evidence-timeline-{sid_html}">'
                 f'<h3 class="view-anchor">统一 Evidence Timeline（发生了什么）</h3>'
                 f"{_R._render_timeline(scenario)}</section>"
+            )
+        elif p == "audio_perception":
+            panel_html.append(
+                _render_audio_perception(scenario, audio_manifest, audio_base_url)
             )
         # 未知面板名静默忽略（前向兼容，不崩）
 
@@ -517,6 +603,8 @@ def render_case_viewer(
     *,
     media_base_dir: str | Path | None = None,
     media_base_url: str = "",
+    audio_base_dir: str | Path | None = None,
+    audio_base_url: str = "",
 ) -> str:
     """EvidenceProjection → 自包含 Case Viewer HTML（确定性，fail-closed）。
 
@@ -528,6 +616,10 @@ def render_case_viewer(
             （画布留空，仅纯 UI 进度 + Evidence 同步）。
         media_base_url: 从 HTML 到 ``media_base_dir`` 的相对 URL 前缀（供浏览器解析帧
             文件）；默认 ``""``（HTML 与 artifact 同目录）。
+        audio_base_dir: artifact 根目录（内含 ``{sid}/audio/``）。提供则经 Audio Source
+            Adapter 只读解析每场景可播放音频样本 manifest（音频 E2E）；``None`` → 无绑定
+            音频样本（首屏音频面板只显示证据事实，不渲染播放控件，严格分离不编造）。
+        audio_base_url: 从 HTML 到 ``audio_base_dir`` 的相对 URL 前缀；默认 ``""``。
 
     Raises:
         ValueError: projection 结构非法（缺场景 / 场景数超上限）。
@@ -552,11 +644,26 @@ def render_case_viewer(
                 media_base_dir, s["scenario_id"], mb["source_kind"]
             )
 
+    # 音频 E2E：经 Audio Source Adapter 只读解析每场景可播放样本 manifest（与媒体严格分离）。
+    # audio_base_dir 与 media_base_dir 通常同为 artifacts 根（音频/媒体都挂在 {sid}/ 下）。
+    audio_manifests: dict[str, dict | None] = {}
+    if audio_base_dir is not None:
+        for s in scenarios:
+            audio_manifests[s["scenario_id"]] = resolve_audio_source(
+                audio_base_dir, s["scenario_id"]
+            )
+
     scenario_blocks: list[str] = []
     graph_blocks: list[str] = []
     for s in scenarios:
         html_block, js_block = _render_scenario_case(
-            s, descriptor, panels, media_manifests.get(s["scenario_id"]), media_base_url
+            s,
+            descriptor,
+            panels,
+            media_manifests.get(s["scenario_id"]),
+            media_base_url,
+            audio_manifests.get(s["scenario_id"]),
+            audio_base_url,
         )
         scenario_blocks.append(html_block)
         if js_block:
@@ -624,6 +731,17 @@ def render_case_viewer(
   .risk-level {{ font-size:16px; font-weight:700; color:#d64541; }}
   .risk-card {{ border-left:4px solid #d64541; }}
   .action-card {{ border-left:4px solid #2e9e6b; }}
+  /* 音频感知首屏面板（音频 E2E P0） */
+  .audio-perception {{ display:flex; flex-direction:column; gap:10px; margin:8px 0; }}
+  .audio-card {{ background:#fdf2f8; border:1px solid #f3c9de; border-left:4px solid #c2408a;
+                 border-radius:8px; padding:10px 14px; }}
+  .audio-card-head {{ display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }}
+  .audio-marker {{ font-size:15px; }}
+  .audio-kind {{ font-size:15px; font-weight:700; color:#a12c6e; }}
+  .audio-meta {{ margin-top:2px; }}
+  .audio-play {{ margin-top:8px; display:flex; gap:10px; align-items:center; }}
+  .audio-play audio {{ height:34px; }}
+
   /* Case Video（主轴）+ Media Timeline（Case Time，VM-10/AC-14） */
   .case-video {{ background:#0e1726; border-radius:8px; padding:14px; margin:8px 0; }}
   .case-video-el {{ width:100%; border-radius:6px; display:block; background:#000; }}

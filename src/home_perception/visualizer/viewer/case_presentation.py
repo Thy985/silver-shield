@@ -39,10 +39,17 @@ GeneratedBy = Literal["manual", "ci"]
 # 解析，不进 EvidenceProjection（VM-10 / AC-11）。本枚举仅描述"绑定哪个源"，不持字节。
 MediaSourceKind = Literal["ArtifactVideoSource", "SyntheticFrameSource", "LiveFrameSource"]
 
-# 首屏面板默认顺序（§展示契约 AC-16）：Case Video → 当前风险 → 为什么 → 系统行动 →
-# 统一 Evidence Timeline；详细证据（Graph/Fingerprint/Gate/Audio）折叠在二级视图。
+# 音频样本源类型（音频 E2E）：可播放音频样本由 Audio Source Adapter 经 ref 解析，
+# 与 EvidenceProjection.audio_evidence（证据，无 url）**严格分离**（VM-9 / VM-10 / AC-11）。
+# 本枚举仅描述"绑定哪个音频样本源"，不持字节。
+AudioSourceKind = Literal["AudioFileSource"]
+
+# 首屏面板默认顺序（§展示契约 AC-16 扩展，音频 E2E）：Case Video → 音频感知 → 当前风险 →
+# 为什么 → 系统行动 → 统一 Evidence Timeline；详细证据（Graph/Fingerprint/Gate）折叠在二级视图。
+# 「音频感知」首屏紧接视频：让用户一眼看懂"系统看到了什么 + 听到了什么"（音频 E2E P0 验收）。
 _DEFAULT_FIRST_SCREEN_PANELS: tuple[str, ...] = (
     "case_video",
+    "audio_perception",
     "current_risk",
     "why",
     "action",

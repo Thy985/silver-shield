@@ -16,7 +16,13 @@ from home_perception.visualizer.viewer.artifact_source import (
     load_case_artifact,
     load_case_presentation,
 )
+from home_perception.visualizer.viewer.audio_source import (
+    AudioManifest,
+    AudioSourceError,
+    resolve_audio_source,
+)
 from home_perception.visualizer.viewer.case_presentation import (
+    AudioSourceKind,
     CasePresentationDescriptor,
     build_default_case_presentation,
     load_case_descriptor,
@@ -29,6 +35,9 @@ from home_perception.visualizer.viewer.media_source import (
 from home_perception.visualizer.viewer.render import render_case_viewer
 
 __all__ = [
+    "AudioManifest",
+    "AudioSourceError",
+    "AudioSourceKind",
     "CasePresentationDescriptor",
     "EvidenceProjectionError",
     "MediaManifest",
@@ -38,5 +47,6 @@ __all__ = [
     "load_case_descriptor",
     "load_case_presentation",
     "render_case_viewer",
+    "resolve_audio_source",
     "resolve_media_source",
 ]

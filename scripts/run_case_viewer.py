@@ -287,6 +287,11 @@ def main(argv: list[str] | None = None) -> int:
             descriptor,
             media_base_dir=args.artifacts,
             media_base_url=media_base_url,
+            # 音频 E2E：音频样本目录同挂在 artifacts 根（{sid}/audio/），故 audio_base_dir
+            # 与 media_base_dir 同为 artifacts；audio_base_url 与 media_base_url 同值。
+            # 无音频样本时 resolve_audio_source 返回 None → 首屏仅显示证据事实、不渲染播放控件。
+            audio_base_dir=args.artifacts,
+            audio_base_url=media_base_url,
         )
     except ValueError as exc:
         logger.error("渲染拒绝（fail-closed）", error=str(exc))

@@ -606,6 +606,23 @@ def create_app(
 
     case_dir = Path(demo_settings.case_artifacts_dir) if demo_settings.case_artifacts_dir else None
 
+    # 音频 E2E（P0 验收补全）：旗舰 Case Viewer 的媒体/音频资源是相对 artifacts 根的路径
+    # （如 canonical/<sid>/audio/<kind>.wav；case_viewer.html 在包根、canonical/ 是其兄弟目录）。
+    # 浏览器在 "/" 打开 HTML 后按相对路径请求 "/canonical/..."——若网关不伺服，<audio controls>
+    # 的样本、媒体帧、case.mp4 全部 404，产品形态下"可播放音频"断裂（验收红线）。
+    # 此处把 case_dir/canonical 挂载到 /canonical（与 HTML 相对前缀对齐，零改动渲染产物）。
+    # 仅 canonical 目录存在时挂载；缺失 → 该路径自然 404，不额外兜底（诚实降级）。
+    # starlette StaticFiles 自带路径穿越防护（拒绝 ".." 越界读取 artifacts 之外的文件，fail-closed）。
+    _canonical_dir = (case_dir / "canonical") if case_dir else None
+    if _canonical_dir is not None and _canonical_dir.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount(
+            "/canonical",
+            StaticFiles(directory=_canonical_dir, check_dir=True),
+            name="case_artifacts",
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def verified_case() -> HTMLResponse:
         """旗舰入口：Verified Case / 主展示。

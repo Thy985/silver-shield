@@ -137,6 +137,23 @@ _VALUE_ZH = {
     "CREATE_COMMUNITY_TASK": "创建社区任务（CREATE_COMMUNITY_TASK）",
 }
 
+# 音频感知枚举 → 通俗中文（VM-13 Phase C 首屏「系统听到了什么」面板人话化用）。
+# 与 _EVENT_ZH / _VALUE_ZH 同纪律：只翻译枚举值、不新增事实；翻译不到回退原文。
+_AUDIO_KIND_ZH = {
+    "audio_speech_rapid": "急促言语",
+    "audio_voice_raised": "高声争吵",
+    "audio_telephone_persistent": "持续电话声音",
+    "audio_distress_cry": "哭诉求助声",
+    "audio_anomaly_other": "其他异常声学信号",
+}
+
+
+def _translate_audio_kind(v: str) -> str:
+    """音频感知类别翻译：命中返回中文（保留原文括注）；未命中回退原文。"""
+    zh = _AUDIO_KIND_ZH.get(v)
+    return f"{zh}（{v}）" if zh else v
+
+
 # 全局仿真横幅（醒目提示，防把演示数据误读为真实报警）。
 _SIM_BANNER = (
     "<div class='sim-banner'>注意：本页为仿真（SIMULATED）演示数据——"
@@ -736,7 +753,9 @@ def _render_audio_evidence(scenario: ScenarioEvidence) -> str:
     rows: list[str] = []
     for a in audio:
         ts = _esc(str(a.get("timestamp", "")))
-        kind = _esc(str(a.get("kind", "")))
+        # 人话化：显示「中文（原始枚举）」，既给非技术读者可读文案，
+        # 又保留原始枚举供审计（测试可继续断言原始枚举串）。
+        kind = _esc(_translate_audio_kind(str(a.get("kind", ""))))
         score = float(a.get("score") or 0.0)
         conf = float(a.get("confidence") or 0.0)
         labels = ", ".join(_esc(str(v)) for v in (a.get("labels") or ()))
