@@ -134,6 +134,12 @@ def main(argv: list[str] | None = None) -> int:
         default=True,
         help="门禁 blocking 失败时工厂退出码非 0（默认开，CI 据此拦合并）",
     )
+    parser.add_argument(
+        "--audio/--no-audio",
+        dest="audio",
+        default=True,
+        help="是否准备可播放音频样本（音频 E2E，默认开；证据与样本严格分离，无样本时只显示证据事实）",
+    )
     args = parser.parse_args(argv)
 
     # 确保仓库根目录在 sys.path 上，使 ``scripts`` 可作为命名空间包导入
@@ -147,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 延迟导入既有入口（编排而非复制逻辑）。
     from home_perception.visualizer.viewer.case_presentation import RENDERER_VERSION
+    from scripts.prepare_case_audio import main as prepare_case_audio_main
     from scripts.run_case_viewer import main as run_case_viewer_main
     from scripts.run_integration_validation import (
         _DEFAULT_SCENARIOS as _IV_DEFAULT_SCENARIOS,
@@ -228,6 +235,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # —— 步骤 5：CI descriptor（驱动可信徽章）——
     ci_desc_path = _build_ci_descriptor(RENDERER_VERSION, out_dir)
+
+    # —— 步骤 5.5：准备可播放音频样本（音频 E2E · 证据与样本严格分离）——
+    # 在 Case Viewer 渲染前就绪（resolve_audio_source 渲染期才能命中）。无对应 fixture 的
+    # kind 诚实留空（不编造样本）；失败 fail-closed 退出非 0，绝不静默产残缺 demo。
+    if args.audio:
+        logger.info("Trusted Case Factory · 步骤5.5 准备可播放音频样本", artifacts=str(canonical_dir))
+        pa_rc = prepare_case_audio_main(["--artifacts", str(canonical_dir)])
+        if pa_rc != 0:
+            logger.error("可播放音频样本准备失败（fail-closed）", rc=pa_rc)
+            return pa_rc
 
     # —— 步骤 6：Case Viewer 渲染 → demo/case_viewer.html（含 CI 受控生成徽章）——
     cv_argv = [
