@@ -110,6 +110,10 @@ class CasePresentationDescriptor(TypedDict, total=False):
     generated_by: GeneratedBy
     renderer_version: str
     provenance_ref: str
+    # —— P0-1 新增：Live WS 连接路径（纯展示元数据，非事实字段，AC-13 不拦）——
+    # 仅 Live 模式（build_live_presentation）注入：行动闭环面板的前端 WS 客户端据此连接
+    # gateway（收 snapshot/state_update、发 action 上行）。Artifact 模式缺省无该键。
+    live_ws_path: str
 
 
 # AC-13 守护：Descriptor 不得承载的"事实型字段"黑名单（静态扫描 + 加载校验双保险）。

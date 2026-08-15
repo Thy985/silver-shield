@@ -41,6 +41,9 @@ if TYPE_CHECKING:  # 仅类型标注
 
     from home_perception.visualizer.schema.evidence import ScenarioEvidence
 
+# P0-1 行动闭环面板：Live WS 客户端资产文件名（render_case_viewer 内联注入）。
+_LIVE_ACTIONS_FILENAME = "live_actions.js"
+
 # Case Video 叙事结构（D-CaseVideo · VM-12）：产品主视频，非 Analysis Video。
 _CASE_VIDEO_NARRATIVE = (
     "Context",
@@ -425,6 +428,63 @@ def _render_audio_perception(
 
 
 # ---------------------------------------------------------------------------
+# P0-1 行动闭环面板（人类处置闭环 · Live 专属交互）
+# ---------------------------------------------------------------------------
+
+
+def _live_actions_inline() -> str:
+    """内联 P0-1 Live WS 客户端（缺失时降级为空串——面板静态可读、无交互，不崩）。"""
+    p = _R._ASSETS_DIR / _LIVE_ACTIONS_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def _render_action_closure(
+    scenario: ScenarioEvidence,
+    descriptor: CasePresentationDescriptor,
+) -> str:
+    """P0-1 人类处置闭环面板（Live 专属交互；Artifact 模式不渲染此面板）。
+
+    边界（P0-1 设计铁律）：
+    - 按钮 / 状态徽章是 **UI / Workflow 态**（VM-11：不进 CasePresentationDescriptor 事实字段，
+      不进 EvidenceProjection）——由 ``live_actions.js`` 经 WS snapshot/state_update 驱动；
+    - 「完成处置」的 Resolution **事实**由后端 state.py 状态机 → ProjectionAccumulator 投影为
+      Evidence Timeline 的 ACTION 节点（只读证据），前端绝不宣布行动成功；
+    - 无 ASR / LLM（VM-9 不变）。
+    """
+    sid = scenario["scenario_id"]
+    sid_html = _R._esc(sid)
+    ws_path = _R._esc(str(descriptor.get("live_ws_path", "/ws")))
+    return f"""
+    <section class="fs-panel" id="fs-action-closure-{sid_html}">
+      <h3 class="view-anchor">行动闭环（家属 / 社区协同处置）</h3>
+      <div class="closure-panel" id="closure-{sid_html}" data-ws-path="{ws_path}" data-scenario="{sid_html}">
+        <div class="closure-warning">暂无待处置警告</div>
+        <div class="closure-grid">
+          <div class="closure-role">
+            <div class="closure-role-title">家属端</div>
+            <div class="closure-status" id="closure-family-status-{sid_html}">—</div>
+            <div class="closure-actions">
+              <button class="rp-btn closure-btn" data-operator="family" data-action="acknowledge" id="closure-family-ack-{sid_html}">我知道了</button>
+              <button class="rp-btn closure-btn" data-operator="family" data-action="notify_community" id="closure-family-notify-{sid_html}">通知社区</button>
+            </div>
+          </div>
+          <div class="closure-role">
+            <div class="closure-role-title">社区端</div>
+            <div class="closure-status" id="closure-community-status-{sid_html}">—</div>
+            <div class="closure-actions">
+              <button class="rp-btn closure-btn" data-operator="community" data-action="accept" id="closure-community-accept-{sid_html}">接受任务</button>
+              <button class="rp-btn closure-btn" data-operator="community" data-action="complete" id="closure-community-complete-{sid_html}">完成处置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="muted">按钮与状态为实时工作流态（UI/Workflow，不进 EvidenceProjection）；「完成处置」后产生的 Resolution 事实由后端投影为 Evidence Timeline 的 ACTION 节点（只读证据）。</p>
+    </section>"""
+
+
+# ---------------------------------------------------------------------------
 # 单场景组装（首屏叙事 + 折叠详细证据）
 # ---------------------------------------------------------------------------
 
@@ -502,6 +562,9 @@ def _render_scenario_case(
             panel_html.append(
                 _render_audio_perception(scenario, audio_manifest, audio_base_url)
             )
+        elif p == "action_closure":
+            # P0-1：人类处置闭环面板（Live 专属；Artifact 模式面板列表不含此项 → 不渲染）。
+            panel_html.append(_render_action_closure(scenario, descriptor))
         # 未知面板名静默忽略（前向兼容，不崩）
 
     # 详细证据（二级视图，折叠，不在首屏同屏，AC-16）
@@ -685,6 +748,8 @@ def render_case_viewer(
     echarts = _R._echarts_inline()
     replay_js = _R._replay_inline()
     media_js = _R._media_inline()
+    # P0-1：行动闭环面板存在（Live 模式）时注入 Live WS 客户端；Artifact 模式无此面板 → 不注入。
+    live_actions_js = _live_actions_inline() if "action_closure" in panels else ""
 
     return f"""<!DOCTYPE html>
 <html lang="zh">
@@ -839,6 +904,9 @@ def render_case_viewer(
 </script>
 <script>
 {media_js}
+</script>
+<script>
+{live_actions_js}
 </script>
 <script>
 {_R._guard_script_close(replay_inits)}

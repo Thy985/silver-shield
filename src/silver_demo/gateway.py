@@ -214,6 +214,15 @@ class DemoGateway:
             except Exception as exc:  # noqa: BLE001  # 投影失败不影响实时循环
                 structlog.get_logger(__name__).warning("live_projection_ingest_failed", exc_info=exc)
 
+            # P0-1 人类处置闭环：把产生的 WarningEvent 登记进处置工作流 store（前端有可操作目标）。
+            # 这是 Workflow State（UI/会话态），不是 EvidenceProjection（VM-6 不回写）；
+            # 失败隔离：登记异常吞掉+记日志，绝不改变实时循环（探针铁律）。
+            try:
+                for w in (getattr(result, "warnings", None) or ()):
+                    await self.store.upsert(str(w.warning_id), status="pending")
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning("workflow_store_upsert_failed", exc_info=exc)
+
             # 心跳广播：每帧只推最小进度信号（frame_index / loop_count），
             # 不做第二套事实模型（view / state / meta）——真实展示走 GET /live 渲染同一 EvidenceProjection。
             await self.hub.broadcast(
@@ -654,7 +663,9 @@ def create_app(
             from home_perception.visualizer.viewer.live_adapter import build_live_presentation
 
             projection = gateway._ensure_live_accumulator().to_evidence_projection()
-            proj, descriptor = build_live_presentation(projection)
+            proj, descriptor = build_live_presentation(
+                projection, live_ws_path=demo_settings.ws_path
+            )
             html = render_case_viewer(proj, descriptor)
             return HTMLResponse(html)
         except Exception as exc:  # noqa: BLE001  # 渲染失败 fail-closed：返回 500 + 诊断，绝不静默产残缺页
@@ -712,6 +723,25 @@ def create_app(
                     # action 处理后广播最新 state 快照给所有连接
                     state_snap = await gateway.store.snapshot()
                     await gateway.hub.broadcast({"type": "state_update", "state": state_snap})
+                    # P0-1（Projection 不回写 / VM-6）：状态机到达终态 community_done →
+                    # 产生 Resolution 事实，作为**新事件** feed 进 accumulator（非 mutate
+                    # projection），/live 渲染时 to_evidence_projection() 重新构造 →
+                    # Evidence Timeline 出现 ACTION 节点。失败隔离：吞掉+记日志。
+                    updated = ack.get("updated") or {}
+                    if updated.get("status") == "community_done":
+                        try:
+                            gateway._ensure_live_accumulator().ingest_resolution(
+                                {
+                                    "warning_id": updated["warning_id"],
+                                    "operator": updated.get("operator") or "community",
+                                    "action": ack.get("action") or "complete",
+                                    "status": "community_done",
+                                }
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            structlog.get_logger(__name__).warning(
+                                "resolution_ingest_failed", exc_info=exc
+                            )
         except WebSocketDisconnect:
             pass
         finally:
