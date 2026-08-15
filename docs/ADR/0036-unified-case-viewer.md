@@ -74,7 +74,7 @@ ADR-0032～0035 已建成可信工程生产线（Scenario → Runtime 回放 →
 1. **新建统一 SilverShield Case Viewer**，定位为第二代 Demo / 主产品体验（人类面向，实时/准实时）。它是产品前端，**不参与运行、不参与判断、不改变系统行为**（与 ADR-0035 D9 一致）。
 2. **`EvidenceProjection` 是 Case Viewer 唯一 View Model（VM-1）**。Case Viewer **不得**自行定义 `riskData`/`decisionData`/`timelineData`/自有 graph/自有 `audioData`/`audioState`；只渲染 `visualizer/loader` 产出的 `EvidenceProjection`。
 3. **四块资产 → 三类 Adapter → 单一 View Model**：Artifact Adapter（D1 静态）/ Replay Adapter（D2 时间交互）/ Live Adapter（实时 FrameResult + AudioEvidence）。
-4. **依赖方向铁律**：Live Adapter 依赖 Runtime 输出契约（FrameResult / AudioEvidence / events），不依赖 `silver_demo` 内部状态；`silver_demo` 可继续作 WS/启动宿主（live 帧/音源之一），但不是 View Model 拥有者；`viewer/` 不得 import `silver_demo`。
+4. **依赖方向铁律（分层，见 ADR-0015 §2.1.1）**：Live Adapter 依赖 Runtime 输出契约（FrameResult / AudioEvidence / events），不依赖 `silver_demo` 内部状态；`silver_demo` 可继续作 WS/启动宿主（live 帧/音源之一），但不是 View Model 拥有者。**Host / Composition Root（`silver_demo.gateway`）允许 import `home_perception.visualizer.viewer`（Presentation Layer），作为唯一合法的「反向依赖展示层」角色**，把 `FrameResult`/`AudioEvidence` 投影为 `EvidenceProjection` 并渲染统一 Case Viewer；但 `silver_demo` 的 **Runtime Core**（除 `gateway` 外的子模块）仍**禁止** import `visualizer`。`viewer/` 不得 import `silver_demo`（T0-3）。
 5. **D-CaseVideo · Case Video 为主展示媒体（本轮新增）**：Case Viewer 的主视频形态是 **Case Video（案例视频）**，讲述"发生了什么、风险如何发展、系统何时介入、最终产生什么结果"。定义最小叙事结构：`Context → Incident → Risk Escalation → AI Perception → Intervention → Outcome`。明确 **Case Video ≠ Analysis Video**，后者不产品化（见 VM-12 / 决策 11）。
 6. **D-MediaMode · Case Video Mode 与双时间轴（本轮新增）**：Case Video 来自三类媒体模式——`Pre-generated Case MP4` / `Scenario Frame Replay` / `Live Media Stream`（见 §媒体源适配）。严格区分 **Media Timeline（播放什么）** 与 **Evidence Timeline（发生了什么）**：两条时间轴可同步但**不是同一个数据结构**（VM-10）。
 7. **D-Audio · 音频作为第一等证据（两轮新增）**：音频在 Case Viewer 中**不是独立 UI 数据源**，而是 `EvidenceProjection` 的一等证据类型，与视觉事件、Decision、Action、Episode、CrossModalLink 共存于**统一 Evidence Timeline / EvidenceGraph**。新增派生字段 `audio_evidence`（详见 §音频作为第一等证据 + 附录 A），由真实音频符号驱动，且不破坏 VM-1。
@@ -109,13 +109,19 @@ ADR-0032～0035 已建成可信工程生产线（Scenario → Runtime 回放 →
       D3 (同 View Model 渲染器, 非 Analysis Video)
 ```
 
+> **分层依赖补充（ADR-0015 §2.1.1）**：图中 `silver_demo transport` 仅作 WS / 启动宿主（live 帧/音源出口），
+> **不是 View Model 拥有者**；其中 `silver_demo.gateway`（Host / Composition Root）是**唯一**允许
+> import `home_perception.visualizer.viewer`（Presentation Layer）的层，用于把 `FrameResult`/`AudioEvidence`
+> 投影为 `EvidenceProjection` 并渲染统一 Case Viewer。`viewer/` 仍**单向**——
+> 依赖 Runtime 输出契约，**不**依赖 `silver_demo` 内部状态（T0-3）。
+
 ---
 
 ## 单一 View Model 不变式（Hard Invariant）
 
 - **VM-1（唯一 View Model）**：前端状态必须完全由 `EvidenceProjection` 派生；**不得**出现 `riskData`/`decisionData`/`timelineData`/自有 graph/**`audioData`/`audioState`** 等事实型模型。所有业务展示状态必须可从单个 `EvidenceProjection` 派生；**不得存在第二份业务事实状态**。允许纯 UI 状态（`UIState`/`PlaybackState`/`SelectionState`/`ZoomState`/`PanelState`/`AudioPlaybackState`/`AudioVolumeState`/`AudioWaveformUIState`）。
 - **VM-2（禁 synthetic）**：节点/边必须携带 `ref` 且 `provenance_kind` 必填；Live 标 `REAL_SENSOR`，Artifact 标 `SIMULATED`，绝不把合成当真实、或反之。
-- **VM-3（不反向耦合生产 + 不依赖 silver_demo）**：`viewer/` 与前端不得 import 生产 runtime 决策逻辑，也**不得 import `silver_demo`**；Live 只经 ADR-0015 §5 白名单 + ADR-0026 音频契约消费 `FrameResult`/`AudioEvidence`，映射逻辑全在 `live_adapter` 内。
+- **VM-3（不反向耦合生产 + 不依赖 silver_demo）**：`viewer/` 与前端不得 import 生产 runtime 决策逻辑，也**不得 import `silver_demo`**（T0-3，AST 守卫见 ADR-0015 §5 T0-3）；Live 只经 ADR-0015 §2.1 / §2.1.1 白名单 + ADR-0026 音频契约消费 `FrameResult`/`AudioEvidence`，映射逻辑全在 `live_adapter` 内。反向依赖的**唯一**合法例外是 `silver_demo.gateway`（Host / Composition Root）import `home_perception.visualizer.viewer`（ADR-0015 §2.1.1），该依赖方向是「Host → Presentation Layer」，不构成 `viewer → silver_demo`。
 - **VM-4（同源 schema，含音频与决策/行动）**：Live 与 Artifact 两种模式，对**视觉、音频、决策、行动共享同一 `EvidenceProjection` schema**，仅 `provenance_kind` 不同；前端渲染对两种模式无分支差异（或仅极薄溯源着色）。
 - **VM-5（零行为变化）**：Case Viewer / viewer 适配器不得改变 `silver_demo` 运行行为、不得接入 CI 门禁、不得写回 Memory/Decision。
 - **VM-6（只读派生，非权威状态）**：`EvidenceProjection` 是 **read-only projection, not an authoritative runtime state store**；runtime 不得把它当状态总线（守 ADR-0035 D5 派生模型边界）。
@@ -414,7 +420,7 @@ FIXTURE     → 固定测试素材 · 非实时
 - D3 定位清晰（降级为同 View Model 的 Case Video Export）。
 
 **负面 / 技术债 / 待办**
-- **`silver_demo` 改造（若采用 WS 帧源）**：须把 `DemoAggregateState` 视图态映射移除，改为 `viewer/live_adapter` 投影映射；live 帧/音流只经冻结白名单 + 音频契约边界传递，`viewer/` 不得 import `silver_demo`。
+- **`silver_demo` 改造（若采用 WS 帧源）**：须把 `DemoAggregateState` 视图态映射移除，改为 `viewer/live_adapter` 投影映射；live 帧/音流只经冻结白名单 + 音频契约边界传递，`viewer/` 不得 import `silver_demo`（T0-3）。`silver_demo.gateway` 作为 Host / Composition Root 可 import `home_perception.visualizer.viewer` 投影并渲染统一 Case Viewer（ADR-0015 §2.1.1），**仅此一层**，Runtime Core 仍禁止 import `visualizer`（T0-1）。
 - **`audio_evidence` 落地（VM-13 Phase C · 已落地）**：真实音频证据已进入 canonical artifact（ADR-0027/0028 + ADR-0034 Phase B.2 落库，并经 `scenario.audio`→`compiler`→`synth.audio_events` 确定性携带）；`visualizer/schema/evidence.py` 的 `AudioEvidenceNode` + `loader._build_audio_evidence` 投影 + fail-closed 契约测试均已落地（见附录 A 实现状态）。
 - **前端选型待定**：SPA 框架需 Owner 拍板；本 ADR 不锁框架，只锁"渲染 `EvidenceProjection` + Media Source Adapter 分离 + CasePresentationDescriptor 编排 + Case Time 同步"契约。
 - **`ProjectionAccumulator` 须确定性/幂等**：VM-8 需补契约测试（对齐 ADR-0035 D8）。
@@ -426,7 +432,7 @@ FIXTURE     → 固定测试素材 · 非实时
 
 - **A. 扩展 D1 Explorer 成全功能 Case Viewer**：否决。零服务器静态单页无法承载 Live + 音频流与交互。
 - **B. 在 `silver_demo` 内加 artifact 回放**：否决。`DemoAggregateState` 自拥 `riskData/decisionData`，叠加回放会复活血证据语义漂移。
-- **C. viewer 依赖 `silver_demo` 内部状态（即换个名字重写 silver_demo）**：否决。违背决策 4 / VM-3。
+- **C. viewer 依赖 `silver_demo` 内部状态（即换个名字重写 silver_demo）**：否决。违背决策 4 / VM-3（T0-3）。注意：否决的是「`viewer → silver_demo` 反向依赖」；「`silver_demo.gateway` → `visualizer.viewer`」是 Host→Presentation 的单向依赖（ADR-0015 §2.1.1），方向相反、不冲突。
 - **D. 把 `EvidenceProjection` 反渗 runtime 当状态总线**：否决。它是 presentation-layer derived model（VM-6）。
 - **E. 音频另立 `audioData` 平行模型 / Case Viewer 内做 ASR**：否决。破坏 VM-1 / VM-9。
 - **F. 把 Analysis Video 重新产品化**：否决。与 VM-12 / 决策 11 冲突，属重复表达。
@@ -458,7 +464,7 @@ FIXTURE     → 固定测试素材 · 非实时
 - **AC-3（VM-4 含音频）**：Live 与 Artifact 对视觉/音频/决策/行动共享同一 `EvidenceProjection` schema，仅 `provenance_kind` 不同。
 - **AC-4（VM-8 重放稳定）**：Live 流重放两次得到的 `ScenarioEvidence` 逐字段稳定。
 - **AC-4b（VM-8 幂等）**：同一有序 `FrameResult`(+`AudioEvidence`) stream 重放 N（≥2）次，最终 `EvidenceProjection` 逐字段一致。
-- **AC-5（VM-3 依赖方向）**：`viewer/` 与前端不 import 生产 runtime 决策符号，**且 `viewer/` 不得 import `silver_demo`**；`silver_demo` 白名单与内部状态模型不变。
+- **AC-5（VM-3 依赖方向 · 分层）**：`viewer/` 与前端不 import 生产 runtime 决策符号，**且 `viewer/` 不得 import `silver_demo`**（T0-3）；`silver_demo` 白名单与内部状态模型不变。放宽点唯一且单向：`silver_demo.gateway`（Host / Composition Root）**允许** import `home_perception.visualizer.viewer`（Presentation Layer，ADR-0015 §2.1.1），用于收敛 `GET /live` 到统一 Case Viewer（T0-2 / T0-6）；`silver_demo` 的其它子模块（Runtime Core）仍禁止 import `visualizer`（T0-1）。
 - **AC-6（D3 导出 / VM-12）**：D3 可从 Case Viewer 的 `EvidenceProjection` 导出 Case Video；**断言不存在 Analysis Video 被重新产品化**的入口。
 - **AC-7（决策 13 · Provenance 一等视觉）**：前端每个案例视图显式呈现 `provenance_kind` 及对应文案（程序化场景·可复现 / 真实传感器·实时数据 / 固定测试素材·非实时），不得默认隐藏。
 - **AC-8（VM-7 禁伪造）**：Live/音频缺失的 `gate`/`fingerprints`/`benchmark`/`audio_evidence` 必须显式表达（`None`/空元组/absent）；断言不存在 `gate=PASS` 或伪造音频证据。

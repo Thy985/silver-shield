@@ -6,7 +6,8 @@
 - ``GET /live`` 在旗舰模式下 404（明确提示 disabled）。
 - ``GET /health`` 报告 ``mode=verified`` / ``live_enabled=False`` / ``assembled=False``。
 - 旗舰模式 app 启动不装配 runtime（``gateway.pipeline is None``），即不触发 torch / YOLO。
-- Live 模式（``live_enabled=True``）下 ``GET /live`` 返回既有 ``dashboard/index.html``。
+- Live 模式（``live_enabled=True``）下 ``GET /live`` 收敛到统一 Case Viewer（与旗舰同源
+  ``render_case_viewer``，同一 ``EvidenceProjection`` View Model，T0-6）。
 
 若运行环境无 httpx（TestClient 依赖），整文件自动跳过。
 """
@@ -93,13 +94,10 @@ def test_flagship_does_not_assemble_runtime(built_case_dir: Path):
         assert c.app.state.gateway.pipeline is None
 
 
-def test_live_mode_serves_dashboard(monkeypatch):
-    # dashboard/index.html 存在于仓库（Legacy / Phase-3 Preview）；live_enabled=True 时应被 /live 返回
-    dash = SILVER_DEMO / "dashboard" / "index.html"
-    if not dash.is_file():
-        pytest.skip("dashboard/index.html 不存在")
-
-    # 隔离 YOLO：assemble / run_loop 置桩，避免启动加载权重
+def test_live_mode_serves_case_viewer(monkeypatch):
+    # ADR-0036 Phase 3：/live 收敛到统一 Case Viewer（与旗舰同源 render_case_viewer）。
+    # 隔离 YOLO：assemble / run_loop 置桩，避免启动加载权重；
+    # 即便 run_loop 未累积帧，/live 也须渲染出统一 Case Viewer（空投影 = 初始态）。
     def _noop_assemble(self):
         self.n_frames = 100
 
@@ -114,3 +112,7 @@ def test_live_mode_serves_dashboard(monkeypatch):
     with TestClient(app) as c:
         resp = c.get("/live")
     assert resp.status_code == 200
+    # T0-6：与旗舰同源——同一 render_case_viewer 输出的统一 Case Viewer 标题标记
+    assert "SilverShield Case Viewer" in resp.text
+    # 语义体系统一：不再各自解释 risk/decision/timeline（统一 Evidence Timeline）
+    assert "统一 Evidence Timeline" in resp.text
