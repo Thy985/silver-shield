@@ -196,16 +196,21 @@ def _render_case_video(
     - 媒体字节不进 View Model（VM-10/AC-11）：经 Media Source Adapter 解析的
       ``media_manifest`` 只持 ref/template/count，画布用 ``<canvas>`` 实时绘制帧，
       **绝不** base64 内联 660 帧；
-    - ``<video>`` 仅当源为 ``ArtifactVideoSource`` 且含 ``video_url``（原生控件播放）；
+    - ``<video>`` 仅当源为 ``ArtifactVideoSource`` 且含 ``video_url``（原生控件播放；
+      P1 整改：加 ``autoplay muted playsinline``，10 秒内即可看到画面）；
     - 绑定文案（源类型 + ref）**降级为脚注**（方案 3），不再占主轴 C 位；
+    - P11 整改：脚注的 ``source_kind`` / ``ref`` 从**已解析的 media_manifest** 读取
+      （manifest 与 prepare_case_media 登记的 ``ArtifactVideoSource`` 一致），而非
+      ``descriptor.media_binding`` 默认值（SyntheticFrameSource + 占位 ref，可能与
+      实际媒体矛盾）；无 manifest 时才显示"无媒体绑定"；
     - 注入 ``media-manifest-{sid}`` 数据岛（manifest 的 frame_template 已叠加
       ``media_base_url``），供前端 MediaPlayer 消费。
+
+    ``descriptor`` 参数保留：VM-11 纯展示编排的签名契约（测试直接调用本函数），
+    脚注事实以 manifest 为准（P11）。
     """
     sid = scenario["scenario_id"]
     sid_html = _R._esc(sid)
-    mb = descriptor["media_binding"]
-    src_kind = _R._esc(mb["source_kind"])
-    ref = _R._esc(mb["ref"])
 
     # 防御（评审 #9）：media_base_url 经协议黑名单校验（与 _safe_media_src 同契约）。
     # 正常来自 os.path.relpath（本地相对路径，无 scheme），此处仅防御畸形 / 不可控来源
@@ -240,8 +245,10 @@ def _render_case_video(
             media_area = (
                 # P5（评审整改）：给 <video> 加场景专属 id，media.js 据此桥接
                 # timeupdate → Evidence Timeline 定位（真实视频播放驱动证据同步）。
+                # P1（autoplay）：加 autoplay muted playsinline——10 秒内即可看到画面，
+                # muted+playsinline 保证移动端/自动播放策略不拦截。
                 f'<video class="case-video-el" id="case-video-el-{sid_html}" '
-                f'controls preload="metadata" '
+                f'controls autoplay muted playsinline preload="metadata" '
                 f'src="{_R._esc(safe_src)}"></video>'
                 if safe_src
                 else canvas_fallback
@@ -258,6 +265,20 @@ def _render_case_video(
             '控制条仍可驱动纯 UI 进度与 Evidence Timeline）</p>'
         )
     else:
+        # P11 整改：source_kind/ref 从已解析的 media_manifest 读取（真实值），而非
+        # descriptor 默认 binding——prepare_case_media 只写了 manifest、未更新
+        # descriptor.media_binding，若读 descriptor 会显示 SyntheticFrameSource/
+        # 占位 ref，与实际 ArtifactVideoSource 矛盾。ref 取 manifest 的真实媒体定位
+        # （ArtifactVideoSource→video_url；SyntheticFrameSource→frame_template；
+        # 字节仍由 Adapter 经 ref 解析，不进 View Model）。
+        src_kind = _R._esc(str(media_manifest.get("source_kind", "")))
+        ref = _R._esc(
+            str(
+                media_manifest.get("video_url")
+                or media_manifest.get("frame_template")
+                or ""
+            )
+        )
         binding_footnote = (
             f'<p class="muted case-video-binding">媒体源绑定：<code>{src_kind}</code> · '
             f'ref={ref}（字节由 Media Source Adapter 经 ref 解析，不进 View Model）</p>'
@@ -368,10 +389,13 @@ def _render_scenario_case(
         # 未知面板名静默忽略（前向兼容，不崩）
 
     # 详细证据（二级视图，折叠，不在首屏同屏，AC-16）
+    # P1（首屏清理）：场景技术信息（sid / mode / frames）并入底部详细证据区，
+    # 首屏只留叙事标题（_scenario_headline），不再出现工程噪音行。
     details = f"""
       <section class="fs-panel" id="fs-details-{sid_html}">
         <details>
           <summary>详细证据（音频 / Graph / Fingerprint / Gate）</summary>
+          <p class="muted">场景标识：<code>{sid_html}</code> · mode={_R._esc(scenario['mode'])} · frames={scenario['n_frames']}</p>
           {_R._render_audio_evidence(scenario)}
           <h3 class="view-anchor">Evidence Graph（因果链）</h3>
           {g_html}
@@ -388,7 +412,6 @@ def _render_scenario_case(
         <span class="badge {status_class}">{status}</span>
         {_scenario_headline(scenario)}
       </h2>
-      <p class="muted">场景标识：<code>{sid_html}</code> · mode={_R._esc(scenario['mode'])} · frames={scenario['n_frames']}</p>
       {_render_provenance_banner(scenario)}
       {''.join(panel_html)}
       {details}

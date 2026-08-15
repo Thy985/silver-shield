@@ -827,6 +827,12 @@ def test_render_case_video_uses_video_element_for_artifact_video():
     assert "<video" in html, "ArtifactVideoSource 应渲染原生 <video>"
     assert "case-video-canvas" not in html, "视频源不应回退 canvas"
     assert "https://example.com/case.mp4" in html, "video_url 应出现在 src"
+    # P1（autoplay）：muted+playsinline 保证 10 秒内可见画面、自动播放策略不拦截。
+    assert "autoplay" in html and "muted" in html and "playsinline" in html
+    # P11：绑定脚注的 source_kind/ref 从已解析 manifest 读取（真实 ArtifactVideoSource），
+    # 而非 descriptor 默认 SyntheticFrameSource——不得出现"实际是视频却标帧源"的矛盾。
+    assert "ArtifactVideoSource" in html
+    assert "SyntheticFrameSource" not in html
 
 
 def test_render_case_video_uses_canvas_when_no_media():

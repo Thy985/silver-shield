@@ -38,7 +38,7 @@ def test_render_four_views_anchors(tmp_path):
     assert "expectation_fingerprint" in html
     assert "loop_fingerprint" in html
     # Decision Explanation
-    assert "为什么报警？" in html
+    assert "为什么这样判断？" in html
     assert "abnormal_dwell" in html
 
 
@@ -349,14 +349,15 @@ def test_render_self_explanation_glossary(tmp_path):
 
 
 def test_render_self_explanation_stage_zh(tmp_path):
-    """自解释层：timeline 与 gate 表的 stage 名带中文注释。"""
+    """自解释层：timeline 与 gate 表的 stage 名带产品语言中文（保留英文原文括注）。"""
     d = make_artifacts(tmp_path / "a")
     html = _render(d)
-    assert "perception 感知" in html
-    assert "decision 决策" in html
-    assert "notification 通知" in html
-    assert "memory 记忆" in html
-    assert "observability 可观测" in html
+    assert "看到异常 (perception)" in html
+    assert "判断风险 (decision)" in html
+    assert "发出通知 (notification)" in html
+    assert "记忆归档 (memory)" in html
+    assert "系统观测 (observability)" in html
+    assert "跨模态印证 (cross_modal)" in html
 
 
 def test_render_self_explanation_decision_values_translated(tmp_path):

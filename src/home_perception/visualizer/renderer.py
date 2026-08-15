@@ -83,14 +83,15 @@ _DECISION_KINDS = {
 # 纯展示层常量——不改变证据内容，翻译不到的值回退原文（fail-open 于展示层）。
 # ---------------------------------------------------------------------------
 
-# stage → 中文注释（追加式：保留英文标识，供测试/审计继续引用原文）。
+# stage → 产品语言（P1 整改：首屏/时间轴以"发生了什么"叙事，不再裸暴露工程 stage 名）。
+# 保留英文原文在括号里供审计（测试/文档继续引用原文枚举）。
 _STAGE_ZH = {
-    "perception": "perception 感知",
-    "decision": "decision 决策",
-    "notification": "notification 通知",
-    "memory": "memory 记忆",
-    "cross_modal": "cross_modal 跨模态",
-    "observability": "observability 可观测",
+    "perception": "看到异常 (perception)",
+    "decision": "判断风险 (decision)",
+    "notification": "发出通知 (notification)",
+    "memory": "记忆归档 (memory)",
+    "cross_modal": "跨模态印证 (cross_modal)",
+    "observability": "系统观测 (observability)",
 }
 
 # D2.2 Causal Highlight：timeline 的 stage 级时间轴 与 Evidence Graph 的实体级
@@ -304,6 +305,20 @@ def _translate_value(v: str) -> str:
     return v
 
 
+def _display_value(v: str) -> str:
+    """展示值翻译（P1 整改）：优先事件类型中文（保留原文括注，供审计），其次
+    决策值翻译（``_translate_value``），均未命中回退原文。
+
+    覆盖场景：``abnormal_dwell`` 等感知事件枚举此前在「为什么」卡片 / 因果图节点
+    上以英文裸值出现（``_VALUE_ZH`` 不含事件类型），非技术读者看不懂。此处统一
+    「中文（原文）」格式——与 ``_VALUE_ZH`` 的「低风险（LOW）」括注风格一致，
+    且保留原文保证语义等价测试可逆回枚举。
+    """
+    if v in _EVENT_ZH:
+        return f"{_EVENT_ZH[v]}（{v}）"
+    return _translate_value(v)
+
+
 def _render_conclusion(scenario: ScenarioEvidence) -> str:
     """自解释层：一句话结论行（先给结论，再给证据）。
 
@@ -367,7 +382,7 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
             f"""
             <li class="dc-card" data-idx="{i}">
               <div class="dc-label" style="color:{color}">{_esc(label)}</div>
-              <div class="dc-value">{_esc(_translate_value(item['value']))}</div>
+              <div class="dc-value">{_esc(_display_value(item['value']))}</div>
               <div class="tl-meta muted">source: {_esc(item['ref'])}</div>
             </li>"""
         )
@@ -390,7 +405,8 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
         f"{''.join(cards)}</ul>"
     )
     return (
-        "<p class='subtitle'>为什么报警？（可重放：点击卡片 / 播放，联动高亮 Evidence Graph）</p>"
+        # P1 整改：副标题中性化（不再与 benign 无事件场景矛盾；可重放推理链）。
+        "<p class='subtitle'>为什么这样判断？（可重放推理链）</p>"
         + bar
         + trace_list
     )
@@ -426,7 +442,10 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
     cat_index = {t: i for i, t in enumerate(_CAT_TYPES)}
     nodes = [
         {
-            "id": n["id"], "name": n["label"],
+            "id": n["id"],
+            # P1 整改：因果图节点名走展示翻译（事件类型→中文，保留原文括注），
+            # 非技术读者也能看懂"异常停留（abnormal_dwell）"而非裸英文枚举。
+            "name": _display_value(n["label"]),
             "category": cat_index.get(n["type"], 0),
             "ntype": n["type"],  # 供 tooltip 显示节点类型（category 已是索引）
             "symbolSize": {"Scenario": 60, "Event": 48, "Decision": 48,
