@@ -84,6 +84,12 @@
     if (t < 0) t = 0;
     if (t > this.duration) t = this.duration;
     this.time = t;
+    // P5：有 <video>（ArtifactVideoSource）→ 反向定位 video（进度条点击 / replay 联动）。
+    if (this.videoEl && typeof this.videoEl.currentTime !== 'undefined') {
+      if (Math.abs(this.videoEl.currentTime - t) > 0.05) {
+        try { this.videoEl.currentTime = t; } catch (e) { /* seek 失败降级 */ }
+      }
+    }
     var fi = this.frameCount > 1
       ? Math.round(t / this.duration * (this.frameCount - 1)) : 0;
     this._drawFrame(fi);
@@ -104,11 +110,43 @@
     if (n < 1 || this.frameCount < 1) return;
     var fi = this.frameCount > 1
       ? Math.round((evidenceIdx || 0) / (n - 1) * (this.frameCount - 1)) : 0;
+    // P5：有 <video> → 按节点比例定位视频。
+    if (this.videoEl && n > 1 && typeof this.videoEl.currentTime !== 'undefined') {
+      var t = (evidenceIdx || 0) / (n - 1) * this.duration;
+      try { this.videoEl.currentTime = t; } catch (e) { /* seek 失败降级 */ }
+    }
     this._drawFrame(fi);
     this._renderProgress();
   };
 
+  MediaPlayer.prototype._bindVideoSync = function () {
+    // P5（评审整改）：ArtifactVideoSource 用原生 <video> 播放，须把 video 时钟桥接进
+    // MediaPlayer —— timeupdate → seekByTime（驱动 Evidence Timeline 定位）。
+    // 无 <video>（canvas 帧源 / 无媒体）→ 不绑定，保持原纯 UI 进度行为。
+    // 仅当元素是真实 <video>（含 play/pause 方法）才设 videoEl —— 否则 mock/缺失
+    // 元素会把 play() 错误导向 video 分支（评审：前端行为测试 mock 无 play 方法）。
+    var self = this;
+    if (typeof document === 'undefined') return;
+    var ve = document.getElementById('case-video-el-' + this.sid);
+    if (!ve) return;
+    if (typeof ve.play !== 'function' || typeof ve.addEventListener !== 'function') return;
+    this.videoEl = ve;
+    ve.addEventListener('timeupdate', function () {
+      if (!self.playing) self.playing = true;  // video 原生播放 → 标记播放态
+      if (ve.duration && isFinite(ve.duration)) self.duration = ve.duration;
+      self.seekByTime(ve.currentTime, true);
+    });
+    ve.addEventListener('play', function () { self.playing = true; });
+    ve.addEventListener('pause', function () { self.playing = false; });
+  };
+
   MediaPlayer.prototype.play = function () {
+    // 有 <video>（ArtifactVideoSource）→ 交给原生控件播放（timeupdate 驱动 Evidence 同步）；
+    // 无 <video>（canvas 帧源）→ 维持原 setInterval 帧播放。
+    if (this.videoEl) {
+      if (typeof this.videoEl.play === 'function') this.videoEl.play();
+      return;
+    }
     if (this.playing || !this.duration) return;
     this.playing = true;
     var self = this;
@@ -127,6 +165,10 @@
   };
 
   MediaPlayer.prototype.pause = function () {
+    if (this.videoEl) {
+      if (typeof this.videoEl.pause === 'function') this.videoEl.pause();
+      return;
+    }
     this.playing = false;
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
   };
@@ -169,6 +211,8 @@
 
   MediaPlayer.prototype.start = function () {
     this._bindControls();
+    // P5：真实 <video> 桥接（ArtifactVideoSource：timeupdate → Evidence Timeline）。
+    this._bindVideoSync();
     // 反向同步钩子（Evidence → Media）：仅注册一次；replay.js bindTimeline 点击时回调。
     if (global.__Replay && typeof global.__Replay.linkHighlight === 'function') {
       global.__MediaSync = global.__MediaSync || {};

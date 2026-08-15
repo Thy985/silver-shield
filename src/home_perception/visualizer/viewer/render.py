@@ -107,6 +107,34 @@ def _safe_media_src(url: str) -> str:
 # 派生展示卡片（VM-1：全部来自 projection，无第二份事实模型）
 # ---------------------------------------------------------------------------
 
+# P1/P10（评审整改）：场景标题人话化——从 projection 已有事实派生一句"发生了什么"，
+# 不新增事实（事件类型/风险/动作全部来自 scenario 字段 + 复用 renderer 翻译表）。
+# 纯展示层派生：sid 等工程标识降级为 muted 脚注，首屏只留可读叙事。
+def _scenario_headline(scenario: ScenarioEvidence) -> str:
+    """场景一句话叙事（P1：10 秒看懂"发生了什么"）。
+
+    从 projection 字段派生：事件类型（_EVENT_ZH）→ 风险（risk_levels 首项）→
+    系统行动（command_types / recommended_actions 首项）。**不编造**：字段缺失则
+    跳过对应片段；全部缺失回退场景 ID 标识。
+    """
+    parts: list[str] = []
+    events = [e for e in scenario.get("event_types", ()) if e]
+    if events:
+        translated = [_R._EVENT_ZH.get(e, e) for e in events]
+        parts.append("·".join(translated))
+    risks = [r for r in scenario.get("risk_levels", ()) if r]
+    if risks:
+        parts.append(_R._translate_value(risks[0]))
+    actions = [
+        c for c in scenario.get("command_types", ())
+        or scenario.get("recommended_actions", ()) if c
+    ]
+    if actions:
+        parts.append(_R._translate_value(actions[0]))
+    if not parts:
+        return _R._esc(scenario.get("scenario_id", "unknown"))
+    return " → ".join(parts)
+
 
 def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
     """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。"""
@@ -210,7 +238,10 @@ def _render_case_video(
                 vurl = media_base_url.rstrip("/") + "/" + raw_vurl.lstrip("/")
             safe_src = _safe_media_src(vurl)
             media_area = (
-                f'<video class="case-video-el" controls preload="metadata" '
+                # P5（评审整改）：给 <video> 加场景专属 id，media.js 据此桥接
+                # timeupdate → Evidence Timeline 定位（真实视频播放驱动证据同步）。
+                f'<video class="case-video-el" id="case-video-el-{sid_html}" '
+                f'controls preload="metadata" '
                 f'src="{_R._esc(safe_src)}"></video>'
                 if safe_src
                 else canvas_fallback
@@ -284,9 +315,13 @@ def _render_scenario_case(
     cm_html, cm_js = _R._render_graph(scenario)
 
     # 每场景 MediaPlayer init 调用（引擎 window.__MediaPlayer 由 _media_inline 全局注入一次）。
-    # duration 取 descriptor time_mapping（无媒体时仍驱动纯 UI 进度 + Evidence 同步）；
+    # duration 优先取真实媒体 manifest.duration_sec（P5：真实视频按自身时长驱动 Evidence 映射，
+    # 避免 descriptor 默认 60s 与 3.75s 真实视频错位）；无媒体时回退 descriptor 纯 UI 进度。
     # fps 留 0 → MediaPlayer 回退到 manifest.fps（有媒体时）。
-    duration = descriptor["time_mapping"]["media_duration_s"]
+    if media_manifest and media_manifest.get("duration_sec"):
+        duration = float(media_manifest["duration_sec"])
+    else:
+        duration = descriptor["time_mapping"]["media_duration_s"]
     media_init = (
         "(function(){"
         'var cv=document.getElementById("case-video-canvas-' + sid_html + '");'
@@ -315,7 +350,7 @@ def _render_scenario_case(
         elif p == "why":
             panel_html.append(
                 f'<section class="fs-panel" id="fs-why-{sid_html}">'
-                f'<h3 class="view-anchor">为什么（Decision Explanation · 可重放）</h3>'
+                f'<h3 class="view-anchor">为什么值得关注（点击卡片 / 播放可重放推理链）</h3>'
                 f"{_R._render_decision(scenario)}</section>"
             )
         elif p == "action":
@@ -336,7 +371,8 @@ def _render_scenario_case(
     details = f"""
       <section class="fs-panel" id="fs-details-{sid_html}">
         <details>
-          <summary>详细证据（Graph / Fingerprint / Gate）</summary>
+          <summary>详细证据（音频 / Graph / Fingerprint / Gate）</summary>
+          {_R._render_audio_evidence(scenario)}
           <h3 class="view-anchor">Evidence Graph（因果链）</h3>
           {g_html}
           <h3 class="view-anchor">Cross Modal Graph（supports 子图）</h3>
@@ -350,9 +386,9 @@ def _render_scenario_case(
     <section class="scenario">
       <h2 class="scenario-title">
         <span class="badge {status_class}">{status}</span>
-        <code>{sid_html}</code>
-        <span class="muted">mode={_R._esc(scenario['mode'])} · frames={scenario['n_frames']}</span>
+        {_scenario_headline(scenario)}
       </h2>
+      <p class="muted">场景标识：<code>{sid_html}</code> · mode={_R._esc(scenario['mode'])} · frames={scenario['n_frames']}</p>
       {_render_provenance_banner(scenario)}
       {''.join(panel_html)}
       {details}
@@ -599,19 +635,16 @@ def render_case_viewer(
 </head>
 <body>
 <div class="wrap">
-  <h1>SilverShield Case Viewer</h1>
-  <p class="muted">ADR-0036 · 统一 Case Viewer（Artifact Mode · Slice A）· 单一 EvidenceProjection View Model</p>
-  <div class="meta-card">
-    generated_at: <code>{_R._esc(meta.get('generated_at', '(unknown)'))}</code> ·
-    scenarios: {meta.get('scenario_count', 0)} ·
-    case_id: <code>{_R._esc(descriptor['case_id'])}</code> ·
-    数据源: ADR-0034 IntegrationReport artifact（只读投影，禁 synthetic node）
-  </div>
+  <h1>银龄盾 · 安全案例回放</h1>
+  <p class="subtitle">一次运行，看懂一起安全案例：发生了什么 → 为什么值得关注 → 系统做了什么</p>
   <p class="prov-note">{_R._esc(prov_note)}</p>
   {''.join(scenario_blocks)}
   <details class="glossary">
-    <summary>术语对照表（点开查看）</summary>
+    <summary>技术信息与术语对照（点开查看）</summary>
     <ul>
+      <li><code>case_id</code> — {_R._esc(descriptor['case_id'])}（ADR-0036 统一 Case Viewer · 单一 EvidenceProjection View Model）</li>
+      <li><code>generated_at</code> — {_R._esc(meta.get('generated_at', '(unknown)'))}</li>
+      <li><code>scenarios</code> — {meta.get('scenario_count', 0)} · 数据源: ADR-0034 IntegrationReport artifact（只读投影，禁 synthetic node）</li>
       {''.join(f'<li><code>{_R._esc(k)}</code> — {_R._esc(v)}</li>' for k, v in _R._GLOSSARY)}
     </ul>
   </details>

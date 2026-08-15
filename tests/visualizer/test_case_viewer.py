@@ -955,3 +955,118 @@ def test_make_media_asset_sanity_resolvable(tmp_path):
     assert m["frame_template"].endswith("{idx:06d}.png")
     # 缺媒体场景应降级为 None（不崩）
     assert resolve_media_source(base, "sw_absent", "SyntheticFrameSource") is None
+
+
+# ---------------------------------------------------------------------------
+# P5（评审整改）：ArtifactVideoSource 原生 <video> 桥接 —— video 时钟驱动 Evidence
+# Timeline（timeupdate → seekByTime → __Replay.seek）。Node vm 真实执行 media.js。
+# ---------------------------------------------------------------------------
+
+
+_MEDIA_JS_VIDEO_BRIDGE_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const mediaPath = process.argv[2];
+const code = fs.readFileSync(mediaPath, 'utf8');
+
+// 真实 <video> mock：记录 play/pause 调用与 timeupdate 回调，供触发同步。
+const videoEvents = {};
+const videoEl = {
+  _calls: [],
+  _listeners: {},
+  currentTime: 0,
+  duration: 30.0,
+  play() { this._calls.push('play'); },
+  pause() { this._calls.push('pause'); },
+  addEventListener(ev, cb) { this._listeners[ev] = cb; },
+  _fire(ev) { if (this._listeners[ev]) this._listeners[ev](); },
+};
+const canvasEl = { getContext(){ return { drawImage(){}, fillRect(){}, clearRect(){}, beginPath(){}, fill(){} }; }, style:{}, width:640, height:360 };
+const mockDoc = {
+  getElementById(id) {
+    if (id === 'case-video-el-u9') return videoEl;
+    if (id === 'case-video-canvas-u9') return canvasEl;
+    return null;
+  }
+};
+
+const ctx = {
+  console, setTimeout, clearTimeout, Math, JSON, isNaN, parseInt, Infinity,
+  setInterval: function (cb) { ctx.__playCb = cb; return 1; },
+  clearInterval: function () {},
+  document: mockDoc, Image: function(){ this.onload=null; this.onerror=null; this.src=''; },
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+try { vm.runInContext(code, ctx); } catch (e) { console.error('FAIL load: ' + e.message); process.exit(1); }
+
+const MP = ctx.window.__MediaPlayer;
+function check(cond, msg) { if (!cond) { console.error('FAIL: ' + msg); process.exit(1); } }
+
+const manifest = { source_kind:'ArtifactVideoSource', frame_count:300, fps:10,
+                   duration_sec:30, frame_template:'', video_url:'case.mp4' };
+const p = MP.init('u9', canvasEl, manifest, { duration:30, fps:0 });
+
+// 1) video 桥接已绑定（play/pause 委托原生 <video>，不启动 setInterval）。
+check(p.videoEl === videoEl, 'ArtifactVideoSource 应绑定真实 <video>');
+p.play();
+check(videoEl._calls.indexOf('play') !== -1, 'play() 应委托 video.play()');
+check(ctx.__playCb === undefined, '有 <video> 时不得启动 setInterval 帧播放');
+p.pause();
+check(videoEl._calls.indexOf('pause') !== -1, 'pause() 应委托 video.pause()');
+
+// 2) timeupdate → Evidence Timeline 定位（__Replay.seek 驱动）。
+// 注：_evidenceNodeCount 读 rp.nodes.length，须提供节点数组（>1）才驱动 seek。
+let seekIdx = -1;
+ctx.__Replay = { get(){ return { nodes: [0,1,2,3,4,5], seek(i){ seekIdx = i; } }; } };
+videoEl.currentTime = 15; videoEl.duration = 30;
+videoEl._fire('timeupdate');
+check(p.time === 15, 'timeupdate 应同步 MediaPlayer.time');
+check(seekIdx > 0, 'timeupdate 应驱动 Evidence Timeline 定位（__Replay.seek）');
+
+// 3) seekByTime 反向定位 video（进度条点击 / replay 联动）。
+p.seekByTime(5, false);
+check(Math.abs(videoEl.currentTime - 5) < 0.05, 'seekByTime 应反向定位 video.currentTime');
+
+// 4) 无 <video>（canvas 帧源 → HTML 无 case-video-el 元素）→ play 仍走 setInterval 路径。
+const mockDoc2 = {
+  getElementById(id) {
+    // canvas 帧源场景：HTML 不含 <video>，getElementById 返回 null（同真实 DOM）。
+    if (id === 'case-video-el-u10') return null;
+    if (id === 'case-video-canvas-u10') return canvasEl;
+    return null;
+  }
+};
+ctx.document = mockDoc2;
+const p2 = MP.init('u10', canvasEl, { source_kind:'SyntheticFrameSource', frame_count:10,
+  fps:10, duration_sec:1, frame_template:'f/{idx:06d}.png', video_url:'' }, { duration:1, fps:0 });
+check(p2.videoEl === undefined, 'canvas 帧源不得绑定 videoEl');
+p2.play();
+check(ctx.__playCb && typeof ctx.__playCb === 'function', '无 <video> 时 play 应启动 setInterval');
+
+console.log('OK media.js video bridge: play/pause 委托 + timeupdate→Evidence + seek 反向定位');
+"""
+
+
+def test_media_js_video_bridge_runtime(tmp_path):
+    """P5：ArtifactVideoSource 原生 <video> 桥接（Node 真实执行 media.js，非字符串断言）。
+
+    覆盖：play/pause 委托原生 <video>（不启动 canvas setInterval）；timeupdate →
+    __Replay.seek（Evidence Timeline 定位）；seekByTime 反向定位 video；
+    canvas 帧源不误绑 videoEl（回归保障）。
+    """
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 video 桥接运行时测试")
+
+    media_js = _media_js_path()
+    assert media_js.is_file(), f"media.js 缺失：{media_js}"
+    harness = tmp_path / "media_js_video_bridge_harness.js"
+    harness.write_text(_MEDIA_JS_VIDEO_BRIDGE_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(media_js)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"media.js video 桥接测试失败:\n{res.stdout}\n{res.stderr}"
+    )
