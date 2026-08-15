@@ -690,12 +690,22 @@ def test_caviar_end_to_end_full_pipeline(fixture_dir, scenario_name):
             assert forbidden not in d, f"WarningEvent 含禁止字段 {forbidden}：{scenario_name}"
             assert forbidden not in (w.meta or {}), f"WarningEvent.meta 含禁止字段 {forbidden}"
 
-    # 2) publisher/notifier 调用次数与 commands 数量一致
+    # 2) publisher/notifier 调用次数与 **真实发送的** commands 数量一致。
+    # 历史断言缺陷修复：LOG_ONLY 命令即使 DONE 也不实际发送（executor.py 对
+    # LOG_ONLY 只记日志、status=DONE，不调 publisher/notifier），故只统计
+    # 非 LOG_ONLY 的 DONE 命令（SEND_FAMILY_MESSAGE → notifier、
+    # CREATE_COMMUNITY_TASK → publisher）——对齐真实行为，避免本机 CAVIAR
+    # 产出 LOW→MONITOR→LOG_ONLY（4 个 DONE、0 次 pub/notif）时误判失败。
     pub_calls = pipeline.publisher.publish_count
     notif_calls = pipeline.notifier.family_count + pipeline.notifier.community_count
-    expected_calls = sum(1 for c in pipeline.commands if c.status == "DONE")
+    expected_calls = sum(
+        1
+        for c in pipeline.commands
+        if c.status == "DONE" and c.command_type != "LOG_ONLY"
+    )
     assert pub_calls + notif_calls == expected_calls, (
-        f"实际发送 {pub_calls + notif_calls} 次，但有 {expected_calls} 个 DONE commands"
+        f"实际发送 {pub_calls + notif_calls} 次，但非 LOG_ONLY 的 DONE commands 有 "
+        f"{expected_calls} 个（LOG_ONLY 不实际发送）"
     )
 
     # 3) 所有 DONE command 的 warning_id 都来自实际产生的 warning（无孤儿）
