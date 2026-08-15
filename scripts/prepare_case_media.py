@@ -27,6 +27,9 @@
 - sw_adr0034_benign       → Delivery_Courier_Final.mp4（正常快递到访 40.3s）
 - sw_adr0034_cross_modal  → CCTV_Surveillance_Final.mp4（复用监控素材）
 - sw_adr0034_elderly_dwell→ real_doorway.mp4（真实门口 3.8s，老人停留语义匹配）
+- sw_adr0034_audio_e2e    → CCTV_Surveillance_Final.mp4（音频 E2E 验收场景，主视觉复用监控）
+- sw_adr0034_high_risk    → CCTV_Surveillance_Final.mp4（高风险场景，复用监控素材）
+
 """
 
 from __future__ import annotations
@@ -46,11 +49,14 @@ _DEFAULT_ARTIFACTS = (
 _DEFAULT_MEDIA_ROOT = Path(__file__).resolve().parent.parent / "data" / "demo"
 
 # 默认场景 → 演示视频映射（语义匹配；key 为 scenario_id，value 为 media_root 下文件名）。
+# 音频 E2E 整改：补 audio_e2e / high_risk（P0 验收目标场景也须有真实主轴画面，否则黑屏）。
 _DEFAULT_MEDIA_MAP: dict[str, str] = {
     "sw_adr0034_alarm": "CCTV_Surveillance_Final.mp4",
     "sw_adr0034_benign": "Delivery_Courier_Final.mp4",
     "sw_adr0034_cross_modal": "CCTV_Surveillance_Final.mp4",
     "sw_adr0034_elderly_dwell": "real_doorway.mp4",
+    "sw_adr0034_audio_e2e": "CCTV_Surveillance_Final.mp4",
+    "sw_adr0034_high_risk": "CCTV_Surveillance_Final.mp4",
 }
 
 
@@ -118,10 +124,24 @@ def _prepare_one(
     video_name: str,
     *,
     force: bool,
-) -> bool:
-    """为单个场景准备真实视频：复制 + 写 manifest。成功 True，失败 False。"""
+    missing_skip: bool = False,
+) -> bool | None:
+    """为单个场景准备真实视频：复制 + 写 manifest。成功 True，失败 False，跳过 None。
+
+    ``missing_skip=True`` 时，演示视频缺失 → 返回 ``None``（跳过该场景，不计失败、
+    不产残缺 manifest）——供 ``build_trusted_case`` / CI 集成用：真实演示视频 gitignore
+    （不入库），CI 全新 checkout 无视频时媒体是**可选的展示增强**，缺失应跳过而非 fail
+    （媒体缺失不影响可信 artifact 完整性；本地有视频则照常挂上）。
+    """
     src = media_root / video_name
     if not src.is_file():
+        if missing_skip:
+            logger.warning(
+                "演示视频缺失（missing-skip 跳过，媒体为可选增强）",
+                scenario=scenario_id,
+                src=str(src),
+            )
+            return None
         logger.error("演示视频缺失（fail-closed）", scenario=scenario_id, src=str(src))
         return False
 
@@ -221,6 +241,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="强制覆盖已有媒体（默认幂等跳过已就绪场景）",
     )
+    parser.add_argument(
+        "--missing-skip",
+        action="store_true",
+        help=(
+            "演示视频缺失时跳过该场景（媒体为可选展示增强，缺失不影响 artifact 可信性）；"
+            "供 build_trusted_case / CI 集成用（真实演示视频 gitignore，CI 无视频不红）"
+        ),
+    )
     args = parser.parse_args(argv)
 
     media_map = args.map if args.map is not None else _DEFAULT_MEDIA_MAP
@@ -232,9 +260,17 @@ def main(argv: list[str] | None = None) -> int:
 
     ok = True
     for sid, video in media_map.items():
-        if not _prepare_one(
-            args.artifacts, args.media_root, sid, video, force=args.force
-        ):
+        result = _prepare_one(
+            args.artifacts,
+            args.media_root,
+            sid,
+            video,
+            force=args.force,
+            missing_skip=args.missing_skip,
+        )
+        if result is None:
+            continue  # missing-skip：该场景媒体跳过（不计失败）
+        if not result:
             ok = False
     if not ok:
         logger.error("真实案例媒体准备存在失败项（fail-closed）")
