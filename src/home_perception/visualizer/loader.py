@@ -406,6 +406,13 @@ def _build_audio_evidence(
         confidence = entry.get("audio_confidence")
         labels = entry.get("audio_labels")
         segments = entry.get("audio_source_segment_ids")
+        # 可选跨模态视觉 ref（Phase 2：音频节点 → 关联视觉节点）。缺失即未投影，绝不占位
+        # 编造；非 str 即拒绝（fail-closed，与 loader 其余字段校验一致）。
+        related = entry.get("audio_related_visual_ref")
+        if related is not None and not isinstance(related, str):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_related_visual_ref 非 str（fail-closed）"
+            )
         # 逐个字段强校验（fail-closed：缺字段 / 类型错误即拒绝，不兜底填占位）
         if not isinstance(timestamp, (int, float)):
             raise EvidenceProjectionError(
@@ -433,18 +440,19 @@ def _build_audio_evidence(
             raise EvidenceProjectionError(
                 f"{owner}.audio_evidence[{i}].audio_source_segment_ids 非 str 列表（fail-closed）"
             )
-        nodes.append(
-            AudioEvidenceNode(
-                timestamp=str(float(timestamp)),
-                kind=kind,
-                score=float(score),
-                confidence=float(confidence),
-                labels=tuple(labels),
-                source_segment_ids=tuple(segments),
-                ref=f"{scenario_id}.canonical.json#artifacts.audio_evidence[{i}]",
-                provenance_kind="SIMULATED",
-            )
+        node = AudioEvidenceNode(
+            timestamp=str(float(timestamp)),
+            kind=kind,
+            score=float(score),
+            confidence=float(confidence),
+            labels=tuple(labels),
+            source_segment_ids=tuple(segments),
+            ref=f"{scenario_id}.canonical.json#artifacts.audio_evidence[{i}]",
+            provenance_kind="SIMULATED",
         )
+        if related is not None:
+            node["related_visual_ref"] = related
+        nodes.append(node)
     return tuple(nodes)
 
 
@@ -590,18 +598,27 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
     # 不调用 ASR/LLM、不生成音频（VM-9）。无音频场景恒不追加（AC-12 绝不编造）。
     audio_evidence = _build_audio_evidence(artifacts, scenario_id, owner)
     for a in audio_evidence:
-        timeline_nodes.append(
-            TimelineNode(
-                timestamp=a["timestamp"],
-                stage="perception",
-                type=a["kind"],
-                summary=f"音频感知：{a['kind']} · 置信 {a['confidence']:.2f}",
-                verdict="INFO",
-                modality="AUDIO",
-                provenance_kind=a["provenance_kind"],
-                ref=a["ref"],
-            )
+        # ADR-0036 Phase 2（多模态消费）：在主时间轴直接富化音频细节（kind/强度/置信/标签/段），
+        # 不必依赖分离表格即可消费；related_visual_ref 派生自真实跨模态关联（缺则恒不携带）。
+        detail = f"音频感知：{a['kind']} · 强度 {a['score']:.2f} · 置信 {a['confidence']:.2f}"
+        if a["labels"]:
+            detail += f" · 标签 {', '.join(a['labels'])}"
+        if a["source_segment_ids"]:
+            detail += f" · 段 {', '.join(a['source_segment_ids'])}"
+        node = TimelineNode(
+            timestamp=a["timestamp"],
+            stage="perception",
+            type=a["kind"],
+            summary=detail,
+            verdict="INFO",
+            modality="AUDIO",
+            provenance_kind=a["provenance_kind"],
+            ref=a["ref"],
         )
+        related = a.get("related_visual_ref")
+        if related is not None:
+            node["related_visual_ref"] = related
+        timeline_nodes.append(node)
     refs += tuple(a["ref"] for a in audio_evidence)
 
     # ADR-0027 D5（P0-3.1）：真实跨模态关联边（来自 canonical.artifacts.cross_modal_links）

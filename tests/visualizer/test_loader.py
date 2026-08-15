@@ -376,6 +376,59 @@ def test_audio_evidence_projected_from_canonical(tmp_path):
     assert node["provenance_kind"] == "SIMULATED"
 
 
+def test_audio_related_visual_ref_flows_to_audio_and_timeline(tmp_path):
+    """ADR-0036 Phase 2（多模态消费）：``audio_related_visual_ref`` 须同时投影到
+    ``AudioEvidenceNode.related_visual_ref`` 与统一时间轴的 AUDIO ``TimelineNode``，
+    供 Case Viewer 渲染跨模态 🔗 徽章（音频节点 → 关联视觉节点）。缺该键时二者均不携带。"""
+    audio = [
+        {
+            "audio_timestamp": 1752952800.0,
+            "audio_kind": "audio_telephone_persistent",
+            "audio_score": 0.9,
+            "audio_confidence": 0.9,
+            "audio_labels": ["telephone"],
+            "audio_source_segment_ids": ["seg-0"],
+            "audio_related_visual_ref": "sw_t1.canonical.json#artifacts.event_types",
+        }
+    ]
+    d = make_artifacts(tmp_path / "a", audio_evidence=audio)
+    scn = load_evidence_projection(d)["scenarios"][0]
+    # 1) AudioEvidenceNode 携带 related_visual_ref
+    assert scn["audio_evidence"][0]["related_visual_ref"] == (
+        "sw_t1.canonical.json#artifacts.event_types"
+    )
+    # 2) 统一 Timeline 的 AUDIO 节点同样携带，且 ref 溯源到 audio_evidence[i]
+    audio_nodes = [n for n in scn["timeline"] if n["modality"] == "AUDIO"]
+    assert len(audio_nodes) == 1
+    assert audio_nodes[0]["related_visual_ref"] == (
+        "sw_t1.canonical.json#artifacts.event_types"
+    )
+    # 3) 缺键时不携带（NotRequired，绝不占位）
+    d2 = make_artifacts(tmp_path / "b", audio_evidence=_SAMPLE_AUDIO_EVIDENCE)
+    scn2 = load_evidence_projection(d2)["scenarios"][0]
+    assert "related_visual_ref" not in scn2["audio_evidence"][0]
+    audio_node2 = next(n for n in scn2["timeline"] if n["modality"] == "AUDIO")
+    assert "related_visual_ref" not in audio_node2
+
+
+def test_audio_related_visual_ref_non_str_fails_closed(tmp_path):
+    """Phase 2：``audio_related_visual_ref`` 非 str → fail-closed 拒绝（不兜底占位）。"""
+    audio = [
+        {
+            "audio_timestamp": 1752952800.0,
+            "audio_kind": "audio_telephone_persistent",
+            "audio_score": 0.9,
+            "audio_confidence": 0.9,
+            "audio_labels": ["telephone"],
+            "audio_source_segment_ids": ["seg-0"],
+            "audio_related_visual_ref": 123,  # 非 str → 拒绝
+        }
+    ]
+    d = make_artifacts(tmp_path / "a", audio_evidence=audio)
+    with pytest.raises(EvidenceProjectionError, match="audio_related_visual_ref"):
+        load_evidence_projection(d)
+
+
 def test_audio_evidence_malformed_fails_closed(tmp_path):
     """VM-13 Phase C：audio_evidence 结构非法（缺字段）→ fail-closed 拒绝投影（不兜底占位）。"""
     d = make_artifacts(

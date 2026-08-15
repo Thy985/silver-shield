@@ -257,9 +257,18 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
             "FAIL": "node-fail",
             "INFO": "node-neutral",
         }.get(node["verdict"], "node-neutral")
+        # ADR-0036 Phase 2（多模态消费）：跨模态关联视觉 ref 徽章（可选，缺则恒不渲染）。
+        # data-related-ref 供 replay.js 未来联动高亮关联节点；缺 ref 时不产生空徽章。
+        related = node.get("related_visual_ref")
+        related_badge = ""
+        if related:
+            related_badge = (
+                f'<span class="tl-related" data-related-ref="{_esc(related)}" '
+                f'title="跨模态关联到的视觉证据 ref">🔗 关联视觉证据：{_esc(related)}</span>'
+            )
         items.append(
             f"""
-            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}">
+            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}" data-ref="{_esc(node['ref'])}">
               <span class="tl-dot" style="background:{color}"></span>
               <div class="tl-body">
                 <div class="tl-head">
@@ -268,6 +277,7 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
                   <span class="tl-stage" style="color:{color}">{_esc(_STAGE_ZH.get(node['stage'], node['stage']))}</span>
                   <span class="tl-kind">{_esc(kind)}</span>
                   <span class="tl-verdict {verdict_class}">{_esc(node['summary'])}</span>
+                  {related_badge}
                 </div>
                 <div class="tl-meta muted">
                   provenance: {_esc(node['provenance_kind'])} · source: {_esc(node['ref'])}

@@ -438,6 +438,46 @@ def test_render_replay_timeline_data_idx(tmp_path):
     assert "provenance:" in html and "source:" in html
 
 
+def test_render_audio_related_visual_ref_badge(tmp_path):
+    """Phase 2（多模态消费）：AUDIO 节点带 related_visual_ref → 渲染 🔗 关联视觉证据徽章
+    （含 data-related-ref 供联动高亮）；且每个 timeline 节点带 data-ref（跨模态定位）。无
+    related 时不渲染空徽章。"""
+    audio_with = [
+        {
+            "audio_timestamp": 1752952800.0,
+            "audio_kind": "audio_telephone_persistent",
+            "audio_score": 0.9,
+            "audio_confidence": 0.9,
+            "audio_labels": ["telephone"],
+            "audio_source_segment_ids": ["seg-0"],
+            "audio_related_visual_ref": "sw_t1.canonical.json#artifacts.event_types",
+        }
+    ]
+    d1 = make_artifacts(tmp_path / "a", audio_evidence=audio_with)
+    html1 = _render(d1)
+    assert "🔗 关联视觉证据" in html1
+    assert 'data-related-ref="sw_t1.canonical.json#artifacts.event_types"' in html1
+    # 每个 timeline 节点带 data-ref（溯源 / 跨模态定位）
+    assert "data-ref=" in html1
+
+    # 无 related：不渲染空徽章
+    d2 = make_artifacts(
+        tmp_path / "b",
+        audio_evidence=[
+            {
+                "audio_timestamp": 1752952800.0,
+                "audio_kind": "audio_telephone_persistent",
+                "audio_score": 0.9,
+                "audio_confidence": 0.9,
+                "audio_labels": ["telephone"],
+                "audio_source_segment_ids": ["seg-0"],
+            }
+        ],
+    )
+    html2 = _render(d2)
+    assert "🔗 关联视觉证据" not in html2
+
+
 def test_render_replay_id_unique(tmp_path):
     """D2.1（评审 R4-Bug 最大可用性）：timeline 视图锚点 id 与重放目标 ul id 不撞名。
 
