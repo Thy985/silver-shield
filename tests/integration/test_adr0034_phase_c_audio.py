@@ -120,3 +120,99 @@ def test_integration_report_canonical_includes_audio_evidence():
     assert cd["artifacts"]["audio_evidence"] == [_AUDIO]
     # 落盘守卫（与 write_canonical_report 同款）必须放行
     assert_desensitized(cd)
+
+
+# ---------------------------------------------------------------------------
+# ADR-0027 D5 · P0-3.1：报告层真实跨模态关联边投影（不依赖 cv2 运行时）
+# ---------------------------------------------------------------------------
+
+class _FakeLink:
+    """鸭子类型伪造 CrossModalLink（只暴露 report._project_cross_modal_links 读取的 to_dict）。"""
+
+    def __init__(self, link_id, episode_ids, relationship, created_at):
+        self._link_id = link_id
+        self._episode_ids = episode_ids
+        self._relationship = relationship
+        self._created_at = created_at
+
+    def to_dict(self) -> dict:
+        return {
+            "link_id": self._link_id,
+            "episode_ids": list(self._episode_ids),
+            "relationship": self._relationship,
+            "time_overlap": ["2026-01-01T00:00:00+00:00", "2026-01-01T00:05:00+00:00"],
+            "confidence": 0.8,
+            "created_at": self._created_at,
+            "supporting_evidence_ids": [],
+        }
+
+
+def _fake_result_with_links(links):
+    return SimpleNamespace(
+        perception_events=(),
+        warnings=(),
+        commands=(),
+        sink_commands=(),
+        decision_traces=(),
+        episodes=(),
+        cross_modal_links=tuple(links),
+        audio_perception_events=(),
+    )
+
+
+def test_loop_summary_projects_cross_modal_links():
+    """真实关联边 → 确定性字典（字段对齐 CrossModalLink.to_dict()），计数与对象一致。"""
+    result = _fake_result_with_links(
+        [
+            _FakeLink("link-a-b", ["a", "b"], "supports", "2026-01-01T00:05:00+00:00"),
+            _FakeLink("link-b-c", ["b", "c"], "co_occurs", "2026-01-01T00:04:00+00:00"),
+        ]
+    )
+    summary = LoopArtifactSummary.from_run(result)
+    assert len(summary.cross_modal_links) == 2
+    assert summary.cross_modal_links[0]["link_id"] == "link-a-b"
+    assert summary.cross_modal_links[0]["relationship"] == "supports"
+    assert summary.cross_modal_links[1]["relationship"] == "co_occurs"
+
+
+def test_loop_summary_cross_modal_links_absent_when_disabled():
+    """未启用 cross_modal / 无可关联边 → cross_modal_links 恒 ()（不编造）。"""
+    summary = LoopArtifactSummary.from_run(_fake_result())
+    assert summary.cross_modal_links == ()
+
+
+def test_loop_summary_cross_modal_links_passes_desensitization():
+    """关联边字典键（link_id/episode_ids/relationship/...）通过脱敏守卫（无 "score"/"decision"）。"""
+    result = _fake_result_with_links(
+        [_FakeLink("link-a-b", ["a", "b"], "supports", "2026-01-01T00:05:00+00:00")]
+    )
+    summary = LoopArtifactSummary.from_run(result)
+    payload = {
+        "scenario_id": "sw_t1",
+        "ok": True,
+        "mode": "frames",
+        "n_frames": 10,
+        "scenario_fingerprint": "fp",
+        "stages": [],
+        "artifacts": summary.to_dict(),
+    }
+    assert_desensitized(payload)  # 不抛 = 通过
+
+
+def test_integration_report_canonical_includes_cross_modal_links():
+    """IntegrationReport.canonical_dict 经 cross_modal_links 自然包含，且写盘守卫通过。"""
+    result = _fake_result_with_links(
+        [_FakeLink("link-a-b", ["a", "b"], "supports", "2026-01-01T00:05:00+00:00")]
+    )
+    report = IntegrationReport(
+        scenario_id="sw_t1",
+        ok=True,
+        mode="frames",
+        n_frames=10,
+        scenario_fingerprint="fp",
+        artifacts=LoopArtifactSummary.from_run(result),
+    )
+    cd = report.canonical_dict()
+    assert len(cd["artifacts"]["cross_modal_links"]) == 1
+    assert cd["artifacts"]["cross_modal_links"][0]["link_id"] == "link-a-b"
+    assert_desensitized(cd)

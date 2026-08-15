@@ -35,7 +35,10 @@ NodeType = Literal[
 ]
 
 # Edge 类型闭集（D5 白名单）。
-EdgeType = Literal["observed_from", "caused_by", "triggered", "supports", "stored_as"]
+# 评审（P0-3.1）：新增 ``co_occurs`` 以对应 ``CrossModalRelationship.CO_OCCURS``——
+# 跨模态边不再被笼统归并到 ``supports``，关系语义在图上层级可区分（LOADER 投影时
+# SUPPORTS→"supports"、CO_OCCURS→"co_occurs"）。渲染层按 Literal 接受，无硬编码分支。
+EdgeType = Literal["observed_from", "caused_by", "triggered", "supports", "stored_as", "co_occurs"]
 
 
 class EvidenceGraphNode(TypedDict):

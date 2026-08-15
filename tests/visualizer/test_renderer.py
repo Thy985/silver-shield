@@ -93,11 +93,17 @@ def test_render_graph_degradation_when_no_links(tmp_path):
 
 
 def test_render_graph_when_links_present(tmp_path):
-    """Graph 渲染：cross_modal_links>0 → 图容器 + 数据属性（验收 2 的 Graph 视图）。"""
+    """Graph 渲染：cross_modal_links>0 → 图容器 + 数据属性（验收 2 的 Graph 视图）。
+
+    P0-3.1：复制更新——④ Cross Modal 视图文案改为指向「Evidence Graph 的 Link 节点 +
+    统一 Timeline 的 🔗 节点（均带溯源 ref）」作为真实关联详情来源，本视图为 supports /
+    co_occurs 关系概览。断言同步新文案。
+    """
     d = make_artifacts(tmp_path / "a")  # fixture 默认 links=1
     html = _render(d)
     assert 'data-links="1"' in html
-    assert "supports 关联" in html
+    assert "关系概览" in html
+    assert "supports / co_occurs" in html
 
 
 def test_render_graph_episodes_zero_degraded(tmp_path):

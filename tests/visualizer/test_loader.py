@@ -77,6 +77,46 @@ def test_every_node_has_ref(artifacts_dir):
     assert scn["refs"], "必须有节点 ref"
     for ref in scn["refs"]:
         assert ref.startswith("sw_t1.canonical.json#"), f"ref 必须溯源到 canonical：{ref}"
+
+
+def test_audio_evidence_merged_into_unified_timeline(tmp_path):
+    """ADR-0036 VM-13 Phase C（P0-1 验收缺口修复）：真实音频证据须作为 AUDIO modality
+    节点并入「统一 Evidence Timeline」，而非孤立在 Audio Evidence 区块；ref 可回溯到
+    canonical.audio_evidence[i]；无音频场景恒不追加 AUDIO 节点（AC-12 绝不编造）。"""
+    audio = [
+        {
+            "audio_timestamp": 1752952800.0,
+            "audio_kind": "audio_telephone_persistent",
+            "audio_score": 0.9,
+            "audio_confidence": 0.9,
+            "audio_labels": ["telephone"],
+            "audio_source_segment_ids": ["seg-0"],
+        },
+        {
+            "audio_timestamp": 1752953120.0,
+            "audio_kind": "audio_telephone_persistent",
+            "audio_score": 0.9,
+            "audio_confidence": 0.9,
+            "audio_labels": ["telephone"],
+            "audio_source_segment_ids": ["seg-1"],
+        },
+    ]
+    d = make_artifacts(tmp_path / "a", audio_evidence=audio)
+    scn = load_evidence_projection(d)["scenarios"][0]
+    # 1) 直接投影的 audio_evidence 守恒
+    assert len(scn["audio_evidence"]) == 2
+    # 2) 统一 Timeline 出现 AUDIO 节点，数量 == audio_evidence
+    audio_nodes = [n for n in scn["timeline"] if n["modality"] == "AUDIO"]
+    assert len(audio_nodes) == 2, "音频必须并入统一 Timeline"
+    for n in audio_nodes:
+        assert n["stage"] == "perception"
+        assert n["verdict"] == "INFO"
+        assert n["provenance_kind"] == "SIMULATED"
+        assert "audio_evidence[" in n["ref"], "ref 必须溯源到 canonical 音频证据"
+    # 3) 无音频场景：Timeline 绝不出现 AUDIO 节点（不编造）
+    d2 = make_artifacts(tmp_path / "b")
+    scn2 = load_evidence_projection(d2)["scenarios"][0]
+    assert all(n["modality"] != "AUDIO" for n in scn2["timeline"])
     for node in scn["timeline"]:
         assert node["ref"].startswith("sw_t1.canonical.json#"), node["ref"]
     for item in scn["decision_evidence"]:
@@ -174,8 +214,8 @@ def test_evidence_graph_causal_chain(artifacts_dir):
     assert "caused_by" in edge_types
     assert "triggered" in edge_types
     assert "stored_as" in edge_types
-    # 边类型闭集（D5 白名单）
-    assert set(edge_types) <= {"observed_from", "caused_by", "triggered", "supports", "stored_as"}
+    # 边类型闭集（D5 白名单；P0-3.1 扩展 co_occurs）
+    assert set(edge_types) <= {"observed_from", "caused_by", "triggered", "supports", "stored_as", "co_occurs"}
     # 节点类型闭集
     assert set(types) <= {"Scenario", "Frame", "Detection", "Event", "Decision",
                           "Action", "Episode", "Link"}
@@ -358,3 +398,106 @@ def test_audio_evidence_not_injected_when_absent(tmp_path):
     d = make_artifacts(tmp_path / "a")  # 默认不注入音频
     scn = load_evidence_projection(d)["scenarios"][0]
     assert scn["audio_evidence"] == ()
+
+
+# ---------------------------------------------------------------------------
+# ADR-0027 D5 · P0-3.1：真实跨模态关联边进入 canonical → loader 真消费（🔗 变真证据）
+# ---------------------------------------------------------------------------
+
+_SAMPLE_CROSS_MODAL_LINKS = [
+    {
+        "link_id": "link-ep-0-ep-1",
+        "episode_ids": ["ep-0", "ep-1"],
+        "relationship": "supports",
+        "time_overlap": ["2026-01-01T00:00:00+00:00", "2026-01-01T00:05:00+00:00"],
+        "confidence": 0.8,
+        "created_at": "2026-01-01T00:05:00+00:00",
+        "supporting_evidence_ids": [],
+    },
+    {
+        "link_id": "link-ep-1-ep-2",
+        "episode_ids": ["ep-1", "ep-2"],
+        "relationship": "co_occurs",
+        "time_overlap": ["2026-01-01T00:01:00+00:00", "2026-01-01T00:04:00+00:00"],
+        "confidence": 0.6,
+        "created_at": "2026-01-01T00:04:00+00:00",
+        "supporting_evidence_ids": [],
+    },
+]
+
+
+def test_cross_modal_links_into_unified_timeline(tmp_path):
+    """P0-3.1：真实跨模态关联边须作为 CROSS_MODAL modality 节点并入「统一 Evidence
+    Timeline」，而非孤立区块；ref 可回溯到 canonical.cross_modal_links[i]；provenance_kind
+    恒 SIMULATED；无真实 link 的 artifact 绝不出现 type=='link' 的 CROSS_MODAL 真节点
+    （降级为 stage count 摘要，不编造）。"""
+    d = make_artifacts(tmp_path / "a", cross_modal_links=[_SAMPLE_CROSS_MODAL_LINKS[0]])
+    scn = load_evidence_projection(d)["scenarios"][0]
+    cm_nodes = [n for n in scn["timeline"] if n["modality"] == "CROSS_MODAL"]
+    # 1 条真实 link → 1 个 type=='link' 的 CROSS_MODAL 真节点
+    link_nodes = [n for n in cm_nodes if n["type"] == "link"]
+    assert len(link_nodes) == 1
+    node = link_nodes[0]
+    assert node["stage"] == "cross_modal"
+    assert node["verdict"] == "INFO"
+    assert node["provenance_kind"] == "SIMULATED"
+    assert "cross_modal_links[0]" in node["ref"], "ref 必须溯源到 canonical 关联边"
+    assert node["ref"].startswith("sw_t1.canonical.json#")
+    # 降级：无真实 link（仅计数）→ 不出现 type=='link' 真节点
+    d2 = make_artifacts(tmp_path / "b")  # 默认无 cross_modal_links 键
+    scn2 = load_evidence_projection(d2)["scenarios"][0]
+    assert all(
+        not (n["modality"] == "CROSS_MODAL" and n["type"] == "link")
+        for n in scn2["timeline"]
+    )
+
+
+def test_cross_modal_links_into_evidence_graph(tmp_path):
+    """P0-3.1：真实关联边 → Evidence Graph 逐条建 Link 节点 + 按 relationship 建边
+    （SUPPORTS→supports / CO_OCCURS→co_occurs，EdgeType 闭集已扩展）；节点 ref 溯源到
+    canonical.cross_modal_links[i]；无真实 link 时降级为单条 counts 摘要节点（不伪造真边）。"""
+    d = make_artifacts(tmp_path / "a", cross_modal_links=_SAMPLE_CROSS_MODAL_LINKS)
+    scn = load_evidence_projection(d)["scenarios"][0]
+    graph = scn["graph"]
+    link_nodes = [n for n in graph["nodes"] if n["type"] == "Link"]
+    assert len(link_nodes) == 2
+    for n in link_nodes:
+        assert n["ref"].startswith("sw_t1.canonical.json#artifacts.cross_modal_links[")
+        assert n["provenance_kind"] == "SIMULATED"
+    edge_types = {e["type"] for e in graph["edges"]}
+    assert "supports" in edge_types and "co_occurs" in edge_types
+    # 节点 id 全局唯一（图结构合法性）
+    ids = [n["id"] for n in graph["nodes"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_cross_modal_links_degradation_when_absent(tmp_path):
+    """P0-3.1（降级回归）：canonical 无 cross_modal_links 键（仅 counts）→ Evidence Graph
+    仅产出单条 counts 摘要 Link 节点（"1 links"），ref 指向 counts，不伪造真实 link 节点。"""
+    d = make_artifacts(tmp_path / "a")  # 默认无 cross_modal_links 键
+    scn = load_evidence_projection(d)["scenarios"][0]
+    link_nodes = [n for n in scn["graph"]["nodes"] if n["type"] == "Link"]
+    assert len(link_nodes) == 1
+    assert link_nodes[0]["ref"].endswith("artifacts.counts.cross_modal_links")
+    assert all(
+        not (n["modality"] == "CROSS_MODAL" and n["type"] == "link")
+        for n in scn["timeline"]
+    )
+
+
+def test_cross_modal_links_malformed_fails_closed(tmp_path):
+    """P0-3.1：cross_modal_links 结构非法（缺 relationship）→ fail-closed 拒绝投影（不兜底）。"""
+    bad = [
+        {
+            "link_id": "link-x",
+            "episode_ids": ["ep-0", "ep-1"],
+            "time_overlap": None,
+            "confidence": 0.5,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "supporting_evidence_ids": [],
+            # 缺 relationship
+        }
+    ]
+    d = make_artifacts(tmp_path / "a", cross_modal_links=bad)
+    with pytest.raises(EvidenceProjectionError):
+        load_evidence_projection(d)

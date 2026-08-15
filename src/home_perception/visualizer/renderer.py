@@ -617,8 +617,8 @@ def _render_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
       <div id="crossmodal-{sid_html}" class="graph-box" style="height:320px"
            data-links="{n_links}" data-episodes="{n_episodes}"></div>
       <p class="muted">Cross Modal 子图（Evidence Graph 的 supports 视角）：{n_episodes} 个 episode
-        节点 · {n_links} 条 supports 关联。D1 降级：canonical 无 link 级 detail
-        （confidence/time_overlap 未落盘，不渲染），完整关系见 Memory 层。</p>"""
+        节点 · {n_links} 条关联。真实关联详情见上方 ① Evidence Graph 的 Link 节点与 ② 统一 Timeline 的
+        🔗 节点（均带溯源 ref）；本视图为 supports / co_occurs 关系概览。</p>"""
 
     sid = scenario["scenario_id"]
     sid_js = _esc_js(f"crossmodal-{sid}")  # Cross Modal 子图容器（评审 R2-#6 JS 转义）

@@ -326,8 +326,36 @@ def _build_evidence_graph(
         for action_id in action_ids:
             _edge(action_id, episode_id, "stored_as", "artifacts.counts.episodes")
 
-    # Link ← supports ← Episode（仅 counts 摘要）
-    if counts["cross_modal_links"] > 0 and counts["episodes"] > 0:
+    # Link ← (relationship) ← Episode。
+    # P0-3.1：真实关联边优先（artifacts.cross_modal_links 为真实对象列表）→ 逐条建 Link
+    # 节点 + 按 relationship 类型建边（SUPPORTS→supports / CO_OCCURS→co_occurs，EdgeType
+    # 闭集已扩展）；旧 artifact 仅含计数（无此键或空）时降级为单条 counts 摘要节点
+    # （"N links"，ref 指向 counts），绝不伪造真边（D2 禁 synthetic）。
+    real_links = artifacts.get("cross_modal_links")
+    has_real_links = (
+        isinstance(real_links, list)
+        and len(real_links) > 0
+        and all(isinstance(d, dict) for d in real_links)
+    )
+    if has_real_links:
+        for i, link in enumerate(real_links):
+            rel = link.get("relationship")
+            if not isinstance(rel, str) or not rel:
+                raise EvidenceProjectionError(
+                    f"{scenario_id}.cross_modal_links[{i}].relationship 缺失/非 str（fail-closed）"
+                )
+            edge_type = "supports" if rel == "supports" else "co_occurs"
+            _node(
+                f"link-{i}", "Link",
+                f"{rel} · {link.get('link_id')}",
+                f"artifacts.cross_modal_links[{i}]",
+            )
+            if counts["episodes"] > 0:
+                _edge(
+                    episode_id, f"link-{i}", edge_type,
+                    f"artifacts.cross_modal_links[{i}]",
+                )
+    elif counts["cross_modal_links"] > 0 and counts["episodes"] > 0:
         _node(
             "links", "Link", f"{counts['cross_modal_links']} links",
             "artifacts.counts.cross_modal_links",
@@ -420,6 +448,60 @@ def _build_audio_evidence(
     return tuple(nodes)
 
 
+def _build_cross_modal_timeline_nodes(
+    artifacts: dict, scenario_id: str
+) -> tuple[TimelineNode, ...]:
+    """ADR-0027 D5（P0-3.1）：真实跨模态关联边 → 统一时间轴的 ``CROSS_MODAL`` 节点。
+
+    仅当 ``artifacts.cross_modal_links`` 为真实对象列表（``list[dict]`` 且非空）才投影；
+    旧 artifact 仅含计数（无此键或空）时返回 ``()`` —— 此时统一时间轴的 cross_modal stage
+    仍由 ``_build_timeline`` 产出一条 count 摘要节点（"cross-modal links: N"），不伪造真边
+    （D2 禁 synthetic）。每个节点携带 ``ref`` 溯源到 ``#artifacts.cross_modal_links[i]``，
+    ``provenance_kind=SIMULATED``（D1 恒仿真闭环）。
+
+    字段逐个强校验（fail-closed：缺 ``relationship`` / ``link_id`` / ``created_at`` 或类型
+    非法即拒绝，不兜底占位），与 ``_build_audio_evidence`` 风格一致。
+    """
+    raw = artifacts.get("cross_modal_links")
+    if not isinstance(raw, list) or not raw:
+        return ()
+    nodes: list[TimelineNode] = []
+    for i, link in enumerate(raw):
+        if not isinstance(link, dict):
+            raise EvidenceProjectionError(
+                f"{scenario_id}.artifacts.cross_modal_links[{i}] 非对象（fail-closed）"
+            )
+        rel = link.get("relationship")
+        link_id = link.get("link_id")
+        created_at = link.get("created_at")
+        episode_ids = link.get("episode_ids") or []
+        if not isinstance(rel, str) or not rel:
+            raise EvidenceProjectionError(
+                f"{scenario_id}.cross_modal_links[{i}].relationship 缺失/非 str（fail-closed）"
+            )
+        if not isinstance(link_id, str) or not link_id:
+            raise EvidenceProjectionError(
+                f"{scenario_id}.cross_modal_links[{i}].link_id 缺失/非 str（fail-closed）"
+            )
+        if not isinstance(created_at, str):
+            raise EvidenceProjectionError(
+                f"{scenario_id}.cross_modal_links[{i}].created_at 缺失/非 str（fail-closed）"
+            )
+        nodes.append(
+            TimelineNode(
+                timestamp=created_at,
+                stage="cross_modal",
+                type="link",
+                summary=f"跨模态关联：{rel} · {len(episode_ids)} episodes · {link_id}",
+                verdict="INFO",
+                modality="CROSS_MODAL",
+                provenance_kind="SIMULATED",
+                ref=f"{scenario_id}.canonical.json#artifacts.cross_modal_links[{i}]",
+            )
+        )
+    return tuple(nodes)
+
+
 def _build_gate(
     scenario_id: str,
     gate_data: dict,
@@ -490,9 +572,9 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
 
     verdicts, gate_passed, gate_degraded = _build_gate(scenario_id, gate, owner)
     counts = _counts_from(canonical, owner)
-    timeline = _build_timeline(canonical, scenario_id, counts)
+    timeline_nodes = list(_build_timeline(canonical, scenario_id, counts))
     decision_evidence = _build_decision_evidence(canonical, scenario_id)
-    refs = tuple(n["ref"] for n in timeline) + tuple(e["ref"] for e in decision_evidence)
+    refs = tuple(n["ref"] for n in timeline_nodes) + tuple(e["ref"] for e in decision_evidence)
 
     artifacts = canonical.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -501,6 +583,35 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
     refs += tuple(n["ref"] for n in graph["nodes"]) + tuple(
         e["ref"] for e in graph["edges"]
     )
+
+    # ADR-0036 VM-13 Phase C：真实音频证据并入「统一 Evidence Timeline」——
+    # 作为 AUDIO modality 节点与 VISION/DECISION/... 同台（非孤立区块）。ref 指向
+    # canonical.audio_evidence[i] 可回溯；provenance_kind=SIMULATED（D1 恒仿真闭环）；
+    # 不调用 ASR/LLM、不生成音频（VM-9）。无音频场景恒不追加（AC-12 绝不编造）。
+    audio_evidence = _build_audio_evidence(artifacts, scenario_id, owner)
+    for a in audio_evidence:
+        timeline_nodes.append(
+            TimelineNode(
+                timestamp=a["timestamp"],
+                stage="perception",
+                type=a["kind"],
+                summary=f"音频感知：{a['kind']} · 置信 {a['confidence']:.2f}",
+                verdict="INFO",
+                modality="AUDIO",
+                provenance_kind=a["provenance_kind"],
+                ref=a["ref"],
+            )
+        )
+    refs += tuple(a["ref"] for a in audio_evidence)
+
+    # ADR-0027 D5（P0-3.1）：真实跨模态关联边（来自 canonical.artifacts.cross_modal_links）
+    # 作为 CROSS_MODAL modality 节点并入「统一 Evidence Timeline」——与 AUDIO/VISION/… 同台
+    # （非孤立区块），ref 指向 canonical.cross_modal_links[i] 可回溯；provenance_kind=SIMULATED
+    # （D1 恒仿真闭环）。旧 artifact 仅含计数时无真实 link → 本调用返回 ``()``，不伪造真节点。
+    cross_modal_nodes = _build_cross_modal_timeline_nodes(artifacts, scenario_id)
+    for n in cross_modal_nodes:
+        timeline_nodes.append(n)
+        refs += (n["ref"],)
 
     return ScenarioEvidence(
         scenario_id=scenario_id,
@@ -518,12 +629,9 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         episode_action_command_types=_str_tuple(
             artifacts, "episode_action_command_types", owner
         ),
-        timeline=timeline,
+        timeline=tuple(timeline_nodes),
         decision_evidence=decision_evidence,
-        # ADR-0036 VM-13 Phase C（AC-12）：真实音频符号进入 canonical 后由 loader 投影；
-        # 缺 ``audio_evidence`` / 空列表 → ``()``（绝不编造）。VM-9：无 ASR/LLM、无
-        # text/transcript/FORBIDDEN_AUDIO_FIELDS。
-        audio_evidence=_build_audio_evidence(artifacts, scenario_id, owner),
+        audio_evidence=audio_evidence,
         gate=verdicts,
         gate_passed=gate_passed,
         gate_degraded=gate_degraded,

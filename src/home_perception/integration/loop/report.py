@@ -93,6 +93,36 @@ def _project_audio_events(result: IntegrationRunResult) -> tuple[dict, ...]:
     return tuple(out)
 
 
+def _project_cross_modal_links(result: IntegrationRunResult) -> tuple[dict, ...]:
+    """ADR-0027 D5（P0-3.1 升级）：真实跨模态关联边 → 确定性字典。
+
+    数据源 = ``result.cross_modal_links``（runner 从 ``CrossModalLinkRuntime.all_links()``
+    真实读回的 ``CrossModalLink`` 对象）。纯鸭子读取，不 import 生产类（保持 report
+    模块 stdlib-friendly）。每个 link 调用其 ``.to_dict()``（确定性序列化：datetime→iso、
+    enum→value、tuple→list，且 ``created_at`` / ``time_overlap`` 来自受控时钟 → 可安全进
+    canonical，不破坏 t1 确定性）。
+
+    脱敏：link 字典键为 ``link_id`` / ``episode_ids`` / ``relationship`` / ``time_overlap`` /
+    ``confidence`` / ``created_at`` / ``supporting_evidence_ids``，**均不在**
+    ``DECISION_TRACE_FORBIDDEN_FIELDS``（"score" / "decision" 等）且不含密钥类提示
+    （password/token/secret/…）→ 过 ``assert_desensitized`` 安全。媒体字节 / UUID / 墙钟
+    一律不出现。
+    """
+    links = getattr(result, "cross_modal_links", ()) or ()
+    out: list[dict] = []
+    for lk in links:
+        to_dict = getattr(lk, "to_dict", None)
+        if not callable(to_dict):
+            raise TypeError(
+                f"cross_modal_link 对象缺 to_dict()：{type(lk).__name__}（fail-closed）"
+            )
+        d = to_dict()
+        if not isinstance(d, dict):
+            raise TypeError("cross_modal_link.to_dict() 必须返回 dict（fail-closed）")
+        out.append(d)
+    return tuple(out)
+
+
 @dataclass(frozen=True, slots=True)
 class LoopArtifactSummary:
     """闭环 artifacts 的**结构化**摘要：只含计数与类型集合。
@@ -119,6 +149,10 @@ class LoopArtifactSummary:
     # 键统一用 ``audio_*`` 前缀，规避脱敏禁止键 ``"score"``（精确匹配）——``audio_score`` 安全。
     # 未声明音频的场景恒 ``()``（AC-12：绝不编造）。
     audio_events: tuple[dict, ...] = ()
+    # ADR-0027 D5（P0-3.1）：真实跨模态关联边（来自 ``IntegrationRunResult.cross_modal_links``
+    # 的 ``CrossModalLink.to_dict()`` 确定性投影）。键对齐 ``CrossModalLink.to_dict()``；
+    # 未启用 cross_modal 或无可关联边时恒 ``()``（不编造）。
+    cross_modal_links: tuple[dict, ...] = ()
 
     @classmethod
     def from_run(cls, result: IntegrationRunResult) -> LoopArtifactSummary:
@@ -150,6 +184,7 @@ class LoopArtifactSummary:
             ),
             episode_action_command_types=_sorted_unique(episode_action_types),
             audio_events=_project_audio_events(result),
+            cross_modal_links=_project_cross_modal_links(result),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -173,6 +208,10 @@ class LoopArtifactSummary:
             # ADR-0036 VM-13 Phase C：真实音频证据（仅当音频符号进入 canonical 后非空；
             # 未声明音频场景恒 ``[]``，AC-12 绝不编造）。键名用 ``audio_*`` 前缀避脱敏禁止键。
             "audio_evidence": [dict(d) for d in self.audio_events],
+            # ADR-0027 D5（P0-3.1）：真实跨模态关联边（来自 CrossModalLink.to_dict()）。
+            # 旧 artifact 仅含计数（无本键或空）时恒 ``[]``（不编造）；键集对齐
+            # ``CROSS_MODAL_LINK_DICT_KEYS``，脱敏安全（无 "score"/"decision" 等禁止键）。
+            "cross_modal_links": [dict(d) for d in self.cross_modal_links],
         }
 
 

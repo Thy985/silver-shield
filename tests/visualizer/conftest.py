@@ -19,7 +19,14 @@ from home_perception.visualizer.loader import SUMMARY_FILENAME
 SUMMARY = SUMMARY_FILENAME
 
 
-def _canonical(scenario_id: str, audio_evidence: list[dict] | None = None) -> dict:
+def _canonical(
+    scenario_id: str,
+    audio_evidence: list[dict] | None = None,
+    cross_modal_links: list[dict] | None = None,
+) -> dict:
+    # 真实关联边数量由注入决定（默认按旧 artifact 形状给计数 1，但不注入真实 link 列表，
+    # 以保留"仅计数、无真实 link"的降级路径测试）。
+    cross_count = len(cross_modal_links) if cross_modal_links is not None else 1
     artifacts = {
         "counts": {
             "perception_events": 1,
@@ -28,7 +35,7 @@ def _canonical(scenario_id: str, audio_evidence: list[dict] | None = None) -> di
             "sink_commands": 1,
             "decision_traces": 1,
             "episodes": 2,
-            "cross_modal_links": 1,
+            "cross_modal_links": cross_count,
         },
         "event_types": ["abnormal_dwell"],
         "risk_levels": ["LOW"],
@@ -41,6 +48,9 @@ def _canonical(scenario_id: str, audio_evidence: list[dict] | None = None) -> di
     if audio_evidence is not None:
         # ADR-0036 VM-13 Phase C：真实音频证据（audio_* 前缀键，避脱敏禁止键 "score"）。
         artifacts["audio_evidence"] = audio_evidence
+    if cross_modal_links is not None:
+        # ADR-0027 D5（P0-3.1）：真实跨模态关联边（对齐 CrossModalLink.to_dict() 形状）。
+        artifacts["cross_modal_links"] = cross_modal_links
     return {
         "scenario_id": scenario_id,
         "ok": True,
@@ -99,6 +109,7 @@ def make_artifacts(
     drop_file: str | None = None,
     drop_field: tuple[str, str] | None = None,
     audio_evidence: list[dict] | None = None,
+    cross_modal_links: list[dict] | None = None,
 ) -> Path:
     """在 ``directory`` 生成合法 artifact 集；``drop_*`` 注入异常（fail-closed 测试）。
 
@@ -107,11 +118,16 @@ def make_artifacts(
         drop_field: 从 canonical 中删除的字段（(owner, key) 如 ("sw_t1", "stages")）。
         audio_evidence: 注入 canonical.artifacts 的真实音频证据（``audio_*`` 前缀键字典列表）；
             ``None``（默认）= 不注入，对应 Phase A/B 与未声明音频场景（audio_evidence 恒 ``()``）。
+        cross_modal_links: 注入 canonical.artifacts 的真实跨模态关联边（对齐
+            ``CrossModalLink.to_dict()`` 形状）；``None``（默认）= 不注入，对应旧 artifact
+            仅含计数（counts.cross_modal_links=1）的降级路径（loader 不伪造真边）。
     """
     directory.mkdir(parents=True, exist_ok=True)
     entries = []
     for sid in scenario_ids:
-        canonical = _canonical(sid, audio_evidence=audio_evidence)
+        canonical = _canonical(
+            sid, audio_evidence=audio_evidence, cross_modal_links=cross_modal_links
+        )
         if drop_field is not None and drop_field[0] == sid:
             canonical.pop(drop_field[1], None)
         files = {
