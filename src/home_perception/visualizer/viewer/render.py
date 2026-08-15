@@ -242,6 +242,17 @@ def _render_case_video(
         f'width="640" height="360"></canvas>'
     )
 
+    # 防御（评审 #9）：media_base_url 经协议黑名单校验（与 _safe_media_src 同契约）。
+    # 正常来自 os.path.relpath（本地相对路径，无 scheme），此处仅防御畸形 / 不可控来源
+    # （如 javascript: 之类伪协议），避免拼接后形成隐式 XSS 面。
+    if _url_scheme(media_base_url) and _url_scheme(media_base_url) not in _ALLOWED_URL_SCHEMES:
+        media_base_url = ""
+
+    canvas_fallback = (
+        f'<canvas id="case-video-canvas-{sid_html}" class="case-video-canvas" '
+        f'width="640" height="360"></canvas>'
+    )
+
     # 媒体区：ArtifactVideoSource 用原生 <video>；其余（SyntheticFrameSource / 无媒体）
     # 用 canvas 播放器（MediaPlayer 主时钟驱动）。绝不占位空框。
     if (
