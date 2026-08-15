@@ -47,9 +47,6 @@ TIERS: dict[str, list[str]] = {
         "tests/contract/test_schema_contract.py",
         "tests/contract/test_interface_contract.py",
         "tests/contract/test_input_attack_contract.py",
-        "tests/demo/test_dashboard_p0_11_4.py",
-        "tests/demo/test_dashboard_state_layer.py",
-        "tests/demo/test_dashboard_video_input.py",
         "tests/demo/test_freeze_boundary.py",
     ],
     "unit": [

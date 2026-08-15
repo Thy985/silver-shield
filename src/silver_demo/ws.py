@@ -7,8 +7,10 @@
     {"type": "action", "warning_id": "...", "operator": "family"|"community", "action": "..."}
     → 写入 DemoStateStore
 
-下行消息（网关 → Dashboard）：
-    {"type": "frame", "view": {...frame_result_to_view...}, "state": {...snapshot...}}
+下行消息（网关 → 客户端）：
+    - {"type": "frame_tick", "frame_index": int, "loop_count": int}  # 每帧最小进度心跳（无 view/state 第二事实模型）
+    - {"type": "snapshot", "state": {...}, "meta": {...}}            # 首连推动作闭环态
+    - {"type": "state_update", "state": {...}}                        # 动作处理后广播闭环态
 """
 
 from __future__ import annotations

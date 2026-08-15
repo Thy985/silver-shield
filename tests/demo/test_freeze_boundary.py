@@ -270,12 +270,20 @@ def test_gateway_consumes_only_whitelist_api() -> None:
 
 
 def test_bridge_does_not_construct_frozen_objects() -> None:
-    """断言 bridge.py 源码中不出现 WarningEvent(...) / ActionCommand(...) 构造调用。"""
+    """断言 bridge.py 不构造冻结对象，且退化为纯帧编码器（ADR-0036 Phase 3 收敛）。
+
+    第二套事实模型符号（frame_result_to_view / collect_active_warnings /
+    route_commands / build_memory_profiles）是否彻底移除，由
+    ``test_bridge_has_no_second_fact_model`` 用 ``hasattr`` 守（避免误判 docstring 中的名词提及）。
+    """
+    import silver_demo.bridge as bridge_mod
+
     bridge_src = (SILVER_DEMO_SRC / "bridge.py").read_text(encoding="utf-8")
-    assert "WarningEvent(" not in bridge_src, "bridge.py 禁止构造 WarningEvent（只读 to_dict）"
-    assert "ActionCommand(" not in bridge_src, "bridge.py 禁止构造 ActionCommand（只读 to_dict）"
-    # 允许 to_dict 调用
-    assert "to_dict()" in bridge_src, "bridge.py 应通过 to_dict() 消费冻结对象"
+    # 不构造冻结对象（只读消费 / 纯格式转换）
+    assert "WarningEvent(" not in bridge_src, "bridge.py 禁止构造 WarningEvent"
+    assert "ActionCommand(" not in bridge_src, "bridge.py 禁止构造 ActionCommand"
+    # 收敛后 bridge 仅暴露帧编码入口
+    assert hasattr(bridge_mod, "encode_frame_to_base64_jpeg")
 
 
 def test_gateway_does_not_construct_frozen_objects() -> None:
@@ -296,123 +304,36 @@ def test_gateway_does_not_construct_frozen_objects() -> None:
 
 
 # ============================================================================
-# 测试 4：bridge view-model 结构正确
+# 测试 4：bridge 收敛为单一帧编码点（ADR-0036 Phase 3 收敛）
 # ============================================================================
 
 
-def test_bridge_view_model_structure() -> None:
-    """断言 frame_result_to_view 产出的 dict 含 ADR-0015 §2.2 要求的字段。"""
-    from silver_demo.bridge import frame_result_to_view
+def test_bridge_has_no_second_fact_model() -> None:
+    """断言 silver_demo.bridge 已移除第二套事实模型函数。
 
-    # 用一个最小 stub FrameResult（不依赖真实 pipeline）
-    class _StubFrameResult:
-        n_detections = 2
-        n_visitor_events = 1
-        perception_events: list = []  # noqa: RUF012
-        warnings: list = []  # noqa: RUF012
-        commands: list = []  # noqa: RUF012
+    ADR-0036 Phase 3 收敛后，唯一事实源为
+    ``FrameResult → Live Adapter(ProjectionAccumulator) → EvidenceProjection → Case Viewer``。
+    原 bridge 的 ``frame_result_to_view`` / ``collect_active_warnings`` /
+    ``route_commands`` / ``build_memory_profiles`` 必须彻底移除——它们曾与
+    ``DemoAggregateState`` 在 run_loop 里每帧生产 ``view`` 第二套事实模型。
 
-    view = frame_result_to_view(
-        _StubFrameResult(),
-        frame_index=5,
-        frame_base64="abc123",
-        demo_time="2026-07-19T23:30:00+00:00",
-    )
-    assert view["frame_index"] == 5
-    assert view["frame_base64"] == "abc123"
-    assert view["demo_time"] == "2026-07-19T23:30:00+00:00"
-    assert view["n_detections"] == 2
-    assert view["n_visitor_events"] == 1
-    assert view["perception_events"] == []
-    assert view["warnings"] == []
-    assert view["commands"] == []
-
-
-def test_bridge_view_model_restamps_created_at_to_demo_time() -> None:
-    """断言 frame_result_to_view 把透传的 perception_events/warnings created_at 重打为 demo_time。
-
-    根因：模型 created_at 是真实墙钟 UTC（_utc_now），而 Region 1 的 demo_time 是 DemoClock
-    模拟时间，两者时基不同 → ①区模拟时间 vs ②区 AI 行为时间线对不上。重打后两区统一。
-    demo_time=None 时保留原始 created_at（降级不破坏）。
+    本测试守「不再回退」：若有人误把第二套事实模型重新加回 bridge，本测试 fail。
     """
-    from silver_demo.bridge import frame_result_to_view
+    import silver_demo.bridge as bridge_mod
 
-    class _StubEvent:
-        def to_dict(self):
-            return {"event_type": "long_stay", "created_at": "2026-07-22T03:11:45.123456+00:00"}
-
-    class _StubWarning:
-        def to_dict(self):
-            return {
-                "warning_id": "w1",
-                "risk_level": "HIGH",
-                "created_at": "2026-07-22T03:11:50.654321+00:00",
-            }
-
-    class _StubFrameResult:
-        n_detections = 1
-        n_visitor_events = 1
-        perception_events: list = [_StubEvent()]  # noqa: RUF012
-        warnings: list = [_StubWarning()]  # noqa: RUF012
-        commands: list = []  # noqa: RUF012
-
-    demo_time = "2026-07-19T23:30:00+00:00"
-    view = frame_result_to_view(
-        _StubFrameResult(), frame_index=10, frame_base64=None, demo_time=demo_time
-    )
-    assert view["perception_events"][0]["created_at"] == demo_time
-    assert view["warnings"][0]["created_at"] == demo_time
-
-    # demo_time=None → 保留真实墙钟 created_at（降级路径）
-    view2 = frame_result_to_view(
-        _StubFrameResult(), frame_index=10, frame_base64=None, demo_time=None
-    )
-    assert view2["perception_events"][0]["created_at"].startswith("2026-07-22")
-    assert view2["warnings"][0]["created_at"].startswith("2026-07-22")
-
-
-def test_bridge_route_commands() -> None:
-    """断言 route_commands 按 command_type 正确路由到三端。"""
-    from silver_demo.bridge import route_commands
-
-    commands = [
-        {"command_type": "SEND_FAMILY_MESSAGE", "command_id": "1"},
-        {"command_type": "CREATE_COMMUNITY_TASK", "command_id": "2"},
-        {"command_type": "LOG_ONLY", "command_id": "3"},
-        {"command_type": "SEND_FAMILY_MESSAGE", "command_id": "4"},
+    leaked = [
+        name
+        for name in (
+            "frame_result_to_view",
+            "collect_active_warnings",
+            "route_commands",
+            "build_memory_profiles",
+        )
+        if hasattr(bridge_mod, name)
     ]
-    routed = route_commands(commands)
-    assert len(routed["family"]) == 2
-    assert len(routed["community"]) == 1
-    assert len(routed["log_only"]) == 1
-
-
-def test_bridge_collect_active_warnings() -> None:
-    """断言 collect_active_warnings 过滤掉 RESOLVED/REJECTED 的告警（P0-11.2 区域 3 渲染）。"""
-    from silver_demo.bridge import collect_active_warnings
-
-    warnings = [
-        {"warning_id": "1", "status": "CREATED"},
-        {"warning_id": "2", "status": "PENDING"},
-        {"warning_id": "3", "status": "RESOLVED"},
-        {"warning_id": "4", "status": "REJECTED"},
-        {"warning_id": "5", "status": "CONFIRMED"},
-    ]
-    active = collect_active_warnings(warnings)
-    assert {w["warning_id"] for w in active} == {"1", "2", "5"}
-    # 缺 status 字段也视为活跃（防御性，不静默丢弃）
-    assert collect_active_warnings([{"warning_id": "x"}]) == [{"warning_id": "x"}]
-    # 空列表安全
-    assert collect_active_warnings([]) == []
-
-
-def test_bridge_collect_active_warnings_skips_non_dict() -> None:
-    """断言 collect_active_warnings 对 None / 非 dict 元素防御性跳过（不崩溃）。"""
-    from silver_demo.bridge import collect_active_warnings
-
-    # 非 dict 元素（None / 字符串 / 数字）被跳过，仅保留 dict
-    mixed = [None, "not-a-dict", 42, {"warning_id": "1"}, {"warning_id": "2", "status": "RESOLVED"}]
-    assert collect_active_warnings(mixed) == [{"warning_id": "1"}]
+    assert not leaked, f"bridge 仍泄漏第二套事实模型符号：{leaked}"
+    # 帧编码辅助函数必须保留（供 live 媒体渲染路径使用）
+    assert hasattr(bridge_mod, "encode_frame_to_base64_jpeg")
 
 
 # ============================================================================
