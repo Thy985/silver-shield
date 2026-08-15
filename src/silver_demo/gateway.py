@@ -3,7 +3,7 @@
 职责（仅消费冻结契约，零改 home_perception）：
 1. 经 ``PerceptionPipeline.from_settings(settings, ...)`` 装配流水线 + ``load_detector()`` 懒加载 YOLO。
 2. 经 ``build_frame_source(scenario, hp_settings)`` 构建帧源（CAVIAR jpg 或 真实 MP4，P0-11.3 可替换）。
-3. 后台帧循环：``DemoClock.tick()`` → ``process_frame(frame, i)`` → bridge 翻译 → WS 广播。
+3. 后台帧循环：``DemoClock.tick()`` → ``process_frame(frame, i)`` → Live Adapter 投影（FrameResult → EvidenceProjection）→ WS 心跳。
 4. WebSocket 端点：下行推 frame view-model + state 快照；上行接 action 写 DemoStateStore。
 5. 双入口（Task 0）：``GET /`` 旗舰 Case Viewer（静态托管 Factory 预渲染 HTML，零渲染 import）；
    ``GET /live`` 收敛到统一 Case Viewer（``render_case_viewer`` 渲染同一 ``EvidenceProjection`` View Model；Host 层反向依赖 Presentation Layer，ADR-0015 §2.1.1）。
@@ -31,7 +31,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -42,7 +41,6 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 # 类型标注用（运行期不调构造器；仅用于 type hint 让代码可读）
 from home_perception.action.command import ActionCommand  # noqa: F401  # 类型标注
@@ -57,16 +55,10 @@ from home_perception.core.config import RealtimeRiskConfig, Settings
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 
 # === 本包内部 ===
-from .bridge import (
-    collect_active_warnings,
-    encode_frame_to_base64_jpeg,
-    frame_result_to_view,
-    route_commands,
-)
 from .config import DemoSettings
 from .scenarios import ScenarioConfig, load_scenario
 from .sources import Source
-from .state import DemoAggregateState, DemoStateStore
+from .state import DemoStateStore
 from .ws import ConnectionHub, handle_upstream
 
 
@@ -93,13 +85,13 @@ class DemoGateway:
         self.source: Source | None = None
         self.n_frames: int = -1
 
-        # 展示层组件
+        # 展示层组件（保留 Live Runtime 闭环：WS 上行 action → store 确认 ACK）
         self.hub = ConnectionHub()
         self.store = DemoStateStore()
-        self.aggregate_state = DemoAggregateState()  # 服务端权威聚合状态（P0-11.3.5）
 
-        # ADR-0036 Phase 3：Live Adapter 增量投影累积器（Host 层反向依赖 visualizer.viewer；
-        # 惰性创建，失败隔离——投影异常绝不改变生产行为）。
+        # ADR-0036 Phase 3：Live Adapter 增量投影累积器（Host 层反向依赖 visualizer.viewer）。
+        # 单一事实源：每帧 FrameResult 经 Live Adapter 投影为 EvidenceProjection，
+        # 不再有 aggregate_state 第二套事实模型；惰性创建，失败隔离——投影异常绝不改变生产行为。
         self._live_accumulator = None
 
         # 循环控制
@@ -114,7 +106,7 @@ class DemoGateway:
 
         避免测试用 ``DemoGateway.__new__`` 绕过 ``__init__`` 后手动补齐一堆属性
         （脆弱、易漏属性导致 ``AttributeError``）。直接 ``cls(None, None, None)``
-        即获得 ``__init__`` 赋予的全部默认属性（hub / store / aggregate_state 等），
+        即获得 ``__init__`` 赋予的全部默认属性（hub / store 等），
         测试再按需 monkeypatch 隔离 I/O 副作用。
         """
         return cls(None, None, None)
@@ -159,13 +151,6 @@ class DemoGateway:
         self.source = Source()
         self.source.load(self.scenario, self.hp_settings)
         self.n_frames = self.source.frame_count
-
-        # 聚合状态会话信息（P0-11.3.5：供状态面板 / snapshot）
-        self.aggregate_state.started_at = time.time()
-        self.aggregate_state.scenario = self.scenario.scenario_id
-        self.aggregate_state.source = self.scenario.source
-        self.aggregate_state.source_type = self.scenario.source_type
-        self.aggregate_state.n_frames = self.n_frames
 
         # 场景级规则阈值覆盖（P0-11.5a：CCTV 夜间场景降 repeat_visit_count 以稳定产出 HIGH）
         self._apply_scenario_rule_overrides()
@@ -216,61 +201,26 @@ class DemoGateway:
             # 推进模拟时间（在网关内，不在 pipeline.run 内；process_frame 不推进 clock）
             self.clock.tick(self.scenario.frame_interval_s)
 
-            # 消费冻结契约：process_frame（唯一出口）
+            # 消费冻结契约：process_frame（唯一出口，冻结对象只读消费）
             # 注意：frame_index 单调递增、loop 重放时**不回绕**（与冻结 read_caviar_frames 的 i % n 不同）。
-            # 长 loop 下 frame_index 会超过 n_frames——Dashboard 不要用它作取模/进度条边界，
-            # 展示进度请用 clock.now()（demo_time）或 self.n_frames。
+            # 长 loop 下 frame_index 会超过 n_frames——展示进度请用 clock.now()（demo_time）或 self.n_frames。
             result: FrameResult = self.pipeline.process_frame(frame, frame_index=self._frame_index)
 
-            # bridge 翻译（只读 to_dict + base64；预览帧缩图降体积）
-            frame_b64 = encode_frame_to_base64_jpeg(
-                frame,
-                quality=self.demo_settings.jpeg_quality,
-                max_width=self.demo_settings.preview_max_width,
-            )
-            demo_time = self.clock.now().isoformat()
-            view = frame_result_to_view(
-                result, frame_index=self._frame_index, frame_base64=frame_b64, demo_time=demo_time
-            )
-
             # Live Adapter 增量投影（ADR-0036 Phase 3：收敛 /live 到统一 Case Viewer）。
+            # 单一事实源：FrameResult → ProjectionAccumulator → EvidenceProjection。
             # 失败隔离：投影探针异常必须吞掉+记日志，绝不改变生产行为（VM-5 / 探针铁律）。
             try:
                 self._ensure_live_accumulator().ingest(result)
             except Exception as exc:  # noqa: BLE001  # 投影失败不影响实时循环
                 structlog.get_logger(__name__).warning("live_projection_ingest_failed", exc_info=exc)
 
-            # 区域⑥ Memory Context：粘性持有（方案1 修复面板随空帧闪空）。
-            # 仅非空帧覆盖权威态；空帧保留上一帧画像，回填进 view 供前端持续渲染。
-            self.aggregate_state.ingest_memory(view.get("memory_profiles") or [])
-            if not view.get("memory_profiles"):
-                view["memory_profiles"] = self.aggregate_state.memory_profiles
-
-            # 广播（frame view + state 快照 + 衍生的三端聚合视图）
-            # active_warnings / routed_commands 由 bridge 消费 view-model 产出（P0-11.2 区域 3/4 直接渲染），
-            # 此处调用即"消费" collect_active_warnings / route_commands（消除孤儿代码），
-            # 且避免在展示层 JS 里重复实现路由/过滤逻辑（守住 ADR-0015 §5 冻结边界）。
-            active_warnings = collect_active_warnings(view["warnings"])
-            routed_commands = route_commands(view["commands"])
-            # 服务端权威聚合状态（P0-11.3.5）：每帧累积 warning/behavior/command + 运行时元数据
-            self.aggregate_state.ingest(
-                active_warnings,
-                view["perception_events"],
-                view["warnings"],
-                routed_commands,
-                self._frame_index,
-                self.loop_count,
-                view["risk_signals"],  # ADR-0021 Phase 1 · 实时风险跃迁（RAISED/CLEARED）
-            )
-            state_snap = await self.store.snapshot()
+            # 心跳广播：每帧只推最小进度信号（frame_index / loop_count），
+            # 不做第二套事实模型（view / state / meta）——真实展示走 GET /live 渲染同一 EvidenceProjection。
             await self.hub.broadcast(
                 {
-                    "type": "frame",
-                    "view": view,
-                    "state": state_snap,
-                    "active_warnings": active_warnings,
-                    "routed_commands": routed_commands,
-                    "meta": self.aggregate_state.meta(),  # 状态面板 / 晚连恢复
+                    "type": "frame_tick",
+                    "frame_index": self._frame_index,
+                    "loop_count": self.loop_count,
                 }
             )
 
@@ -480,12 +430,8 @@ class DemoGateway:
         self._frame_index = 0
         self.loop_count = 0
         self.store = DemoStateStore()  # 新会话：清空历史闭环状态
-        # 服务端聚合状态清空（解决「切换视频源状态残留」服务端侧）；重置会话计时
-        self.aggregate_state.clear(reset_session=True)
-        self.aggregate_state.scenario = scenario.scenario_id
-        self.aggregate_state.source = scenario.source
-        self.aggregate_state.source_type = scenario.source_type
-        self.aggregate_state.n_frames = self.n_frames
+        # Live Adapter 投影累积器重置（新会话 = 新证据投影；GET /live 重渲染即干净状态）
+        self._live_accumulator = None
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())
@@ -654,12 +600,9 @@ def create_app(
         lifespan=lifespan,
     )
 
-    # 静态资源：Live 次级入口（/live）的资产目录。仅当 Live 开启时挂载，与旗舰入口隔离。
+    # 静态资源：Live 次级入口不再独立挂载 /live-static（legacy dashboard 已移除，收敛到统一 Case Viewer）。
     # 旗舰 Case Viewer 的 HTML 由下方 GET / 直接读取文件返回（Phase 1 自包含，无需静态挂载；
-    # 后续 Phase 2 / Slice D 引入媒体资产时再在此处挂载 case_artifacts_dir 并让 build 重写资源路径）。
-    dash_dir = Path(demo_settings.dashboard_dir)
-    if demo_settings.live_enabled and dash_dir.is_dir():
-        app.mount("/live-static", StaticFiles(directory=str(dash_dir)), name="live-static")
+    # 媒体资产经 EvidenceProjection → Case Viewer 渲染管线统一处理）。
 
     case_dir = Path(demo_settings.case_artifacts_dir) if demo_settings.case_artifacts_dir else None
 
@@ -723,19 +666,24 @@ def create_app(
 
     @app.websocket(demo_settings.ws_path)
     async def websocket_endpoint(ws: WebSocket) -> None:
-        """WebSocket 端点：下行 frame view + state；上行 action 写 store。"""
+        """WebSocket 端点：下行 state 快照 + 心跳；上行 action 写 store。"""
         if not demo_settings.live_enabled:
             # 旗舰模式：Live WS 不暴露；直接关闭连接（明确提示 disabled）
             await ws.close(code=1000)
             return
         await gateway.hub.connect(ws)
-        # 首连 snapshot：把服务端权威聚合状态推给新连接（晚连也能看到历史）
+        # 首连 snapshot：把动作闭环状态推给新连接（晚连也能看到历史 action 状态）
         await gateway.hub.send_to(
             ws,
             {
                 "type": "snapshot",
-                **gateway.aggregate_state.snapshot(),
-                "meta": gateway.aggregate_state.meta(),
+                "state": await gateway.store.snapshot(),
+                "meta": {
+                    "frame_index": gateway._frame_index,
+                    "loop_count": gateway.loop_count,
+                    "n_frames": gateway.n_frames,
+                    "scenario": gateway.scenario.scenario_id,
+                },
             },
         )
         try:
@@ -844,7 +792,7 @@ def create_app(
             "source_id": safe_name,
             "filename": fname,
             "frames": gateway.n_frames,
-            "message": "已开始分析，Dashboard 实时刷新（身份→轨迹→行为→风险→干预）",
+            "message": "已开始分析，Case Viewer 实时刷新（身份→轨迹→行为→风险→干预）",
         }
 
     @app.post("/demo/scenario")
@@ -907,7 +855,6 @@ def create_app(
         return {
             "status": "ok",
             "frame_index": 0,
-            "session_status": gateway.aggregate_state.session_status,
             "loop_count": 0,
         }
 
