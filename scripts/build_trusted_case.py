@@ -140,6 +140,16 @@ def main(argv: list[str] | None = None) -> int:
         default=True,
         help="是否准备可播放音频样本（音频 E2E，默认开；证据与样本严格分离，无样本时只显示证据事实）",
     )
+    parser.add_argument(
+        "--media/--no-media",
+        dest="media",
+        default=True,
+        help=(
+            "是否准备真实案例媒体（Case Video 主轴视频，默认开）。真实演示视频 gitignore、"
+            "CI 全新 checkout 无视频 → 经 --missing-skip 自动跳过（媒体为可选展示增强，缺失"
+            "不影响可信 artifact 完整性）；本地有视频则挂真实主轴画面（非黑屏）。"
+        ),
+    )
     args = parser.parse_args(argv)
 
     # 确保仓库根目录在 sys.path 上，使 ``scripts`` 可作为命名空间包导入
@@ -154,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     # 延迟导入既有入口（编排而非复制逻辑）。
     from home_perception.visualizer.viewer.case_presentation import RENDERER_VERSION
     from scripts.prepare_case_audio import main as prepare_case_audio_main
+    from scripts.prepare_case_media import main as prepare_case_media_main
     from scripts.run_case_viewer import main as run_case_viewer_main
     from scripts.run_integration_validation import (
         _DEFAULT_SCENARIOS as _IV_DEFAULT_SCENARIOS,
@@ -245,6 +256,18 @@ def main(argv: list[str] | None = None) -> int:
         if pa_rc != 0:
             logger.error("可播放音频样本准备失败（fail-closed）", rc=pa_rc)
             return pa_rc
+
+    # —— 步骤 5.6：准备真实案例媒体（Case Video 主轴视频，P0 验收整改）——
+    # 在 Case Viewer 渲染前就绪（resolve_media_source 渲染期才能命中 ArtifactVideoSource →
+    # Case Video 用 <video> 真实画面，非黑屏 canvas）。真实演示视频 gitignore（CI 无视频），
+    # 故传 --missing-skip：视频缺失跳过（媒体为可选展示增强，缺失不影响可信 artifact 完整性）；
+    # 本地有视频则挂上真实主轴画面。
+    if args.media:
+        logger.info("Trusted Case Factory · 步骤5.6 准备真实案例媒体（主轴视频）", artifacts=str(canonical_dir))
+        pm_rc = prepare_case_media_main(["--artifacts", str(canonical_dir), "--missing-skip"])
+        if pm_rc != 0:
+            logger.error("真实案例媒体准备失败（fail-closed）", rc=pm_rc)
+            return pm_rc
 
     # —— 步骤 6：Case Viewer 渲染 → demo/case_viewer.html（含 CI 受控生成徽章）——
     cv_argv = [
