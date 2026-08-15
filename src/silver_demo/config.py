@@ -25,9 +25,14 @@ class DemoSettings(BaseModel):
     - ``host`` / ``port``：FastAPI/uvicorn 绑定地址（默认本地回环，演示足够）
     - ``scenario_path``：night_visit.yaml 路径（默认 config/demo/scenarios/night_visit.yaml）
     - ``home_perception_config``：冻结包 Settings 的 YAML 路径（默认 config/default.yaml）
-    - ``dashboard_dir``：StaticFiles 托管目录（默认 silver_demo/dashboard）
-    - ``ws_path``：WebSocket 端点路径（默认 /ws）
-    - ``frame_loop_interval_s``：帧循环最小间隔（0 = 不限速；>0 模拟实时观感）
+    - ``dashboard_dir``：Live 次级入口（``/live``）的 Dashboard 静态目录（默认 silver_demo/dashboard）
+    - ``ws_path``：Live WebSocket 端点路径（默认 /ws）
+    - ``case_artifacts_dir``：旗舰 ``/`` 入口托管的 Factory 预渲染产物目录（含 case_viewer.html）；
+      为 ``None`` 时 ``GET /`` 返回"未构建"提示页（不依赖 runtime、不 import visualizer）
+    - ``case_viewer_filename``：旗舰入口 HTML 文件名（默认 case_viewer.html）
+    - ``live_enabled``：是否暴露 Live 次级入口（``/live`` + WS + /demo/*）；默认 False → 仅旗舰 Case Viewer
+    - ``live_route``：Live 次级入口路径（默认 /live）
+    - ``frame_loop_interval_s``：Live 帧循环最小间隔（0 = 不限速；>0 模拟实时观感）
     - ``jpeg_quality``：base64 JPEG 编码质量（1-100；Demo 50 足够，降带宽）
     """
 
@@ -49,9 +54,20 @@ class DemoSettings(BaseModel):
     scenarios_dir: str = "config/demo/scenarios"
     max_upload_mb: float = 1024.0  # 上传视频软上限；超过则 413 拒绝（Demo 不做文件管理/存储）
 
+    # 旗舰入口（``GET /``）：由外部生产阶段（build_trusted_case → run_case_viewer.py）预渲染的
+    # 可信案例 HTML；网关只做静态托管，不 import visualizer、不依赖 runtime。
+    # 为 None 时，``GET /`` 返回"未构建"提示页，引导先跑 CI / build_trusted_case。
+    case_artifacts_dir: str | None = None
+    case_viewer_filename: str = "case_viewer.html"
+    # Live 次级入口（``GET /live``）：保留既有实时 Dashboard + WS + YOLO runtime。
+    # False（默认）→ 旗舰模式，仅服务 Case Viewer，不装配 runtime、不启帧循环。
+    # True → 暴露 /live + /ws + /demo/*，与旗舰入口业务语义隔离（不互相参与）。
+    live_enabled: bool = False
+    live_route: str = "/live"
+
     @classmethod
     def from_env(cls) -> DemoSettings:
-        """从环境变量构造（DEMO_HOST / DEMO_PORT / DEMO_SCENARIO 可覆盖）。
+        """从环境变量构造（DEMO_HOST / DEMO_PORT / DEMO_SCENARIO / DEMO_CASE_ARTIFACTS / DEMO_LIVE 可覆盖）。
 
         保持与 AGENTS.md §1.3 一致：凭证/配置走环境变量，不硬编码。
         """
@@ -79,4 +95,9 @@ class DemoSettings(BaseModel):
                 kwargs["preview_max_width"] = int(v)
             except ValueError:
                 raise ValueError(f"DEMO_PREVIEW_MAX_WIDTH 必须是整数，收到 {v!r}") from None
+        if v := os.environ.get("DEMO_CASE_ARTIFACTS"):
+            kwargs["case_artifacts_dir"] = v
+        if v := os.environ.get("DEMO_LIVE"):
+            # 任意非空真值（1 / true / yes / on，大小写不敏感）视为开启 Live 次级入口
+            kwargs["live_enabled"] = v.strip().lower() in ("1", "true", "yes", "on")
         return cls(**kwargs)

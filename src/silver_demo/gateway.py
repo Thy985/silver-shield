@@ -5,7 +5,8 @@
 2. 经 ``build_frame_source(scenario, hp_settings)`` 构建帧源（CAVIAR jpg 或 真实 MP4，P0-11.3 可替换）。
 3. 后台帧循环：``DemoClock.tick()`` → ``process_frame(frame, i)`` → bridge 翻译 → WS 广播。
 4. WebSocket 端点：下行推 frame view-model + state 快照；上行接 action 写 DemoStateStore。
-5. StaticFiles 托管 ``dashboard/``（P0-11.2 实现完整 5 区域 HTML Dashboard）。
+5. 双入口（Task 0）：``GET /`` 旗舰 Case Viewer（静态托管 Factory 预渲染 HTML，零渲染 import）；
+   ``GET /live`` 次级 Live Demo（既有 Dashboard + WS + YOLO，仅 DEMO_LIVE=1 暴露）。
 
 冻结合规白名单（ADR-0015 §2.1，只 import 以下符号）：
 - ``PerceptionPipeline`` / ``DemoClock`` / ``FrameResult`` ← ``home_perception.runtime.pipeline``
@@ -515,20 +516,53 @@ def _resolve_inference_device(hp_settings: Settings) -> str:
     return getattr(getattr(hp_settings, "detection", None), "device", "cpu") or "cpu"
 
 
+def _verified_case_missing_html() -> str:
+    """旗舰入口未构建产物时的引导提示页（Verified Cases）。"""
+    return (
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<title>SilverShield · Verified Cases</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:3rem;color:#222}"
+        "code{background:#f4f4f4;padding:2px 6px;border-radius:4px}</style></head><body>"
+        "<h1>SilverShield · Verified Cases</h1>"
+        "<p>旗舰入口：可信案例回放 · CI 验证资产。</p>"
+        "<p>尚未发现预渲染的 <code>case_viewer.html</code>。请先运行生产阶段的 Trusted Case Factory：</p>"
+        "<pre>python scripts/build_trusted_case.py --scenarios config/demo/scenarios/night_visit.yaml --out-dir demo</pre>"
+        "<p>或在 <code>DEMO_CASE_ARTIFACTS</code> 中指向已构建产物目录。</p>"
+        "<p style=\"color:#888\">Live 实时运行入口（/live）仅在 <code>DEMO_LIVE=1</code> 时可用。</p>"
+        "</body></html>"
+    )
+
+
+def _live_disabled_html() -> str:
+    """Live 次级入口未启用时的提示页（404）。"""
+    return (
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<title>SilverShield · Live Runtime Preview (disabled)</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:3rem;color:#222}"
+        "code{background:#f4f4f4;padding:2px 6px;border-radius:4px}</style></head><body>"
+        "<h1>SilverShield · Live Runtime Preview</h1>"
+        "<p>实时运行模式 · 实验 / 演示入口。</p>"
+        "<p>当前未启用（<code>DEMO_LIVE=1</code> 才暴露）。旗舰入口请访问 "
+        "<a href=\"/\">/（Verified Cases）</a>。</p>"
+        "</body></html>"
+    )
+
+
 def create_app(
     demo_settings: DemoSettings | None = None,
 ) -> FastAPI:
-    """构造 FastAPI app（ADR-0015 §3）。
+    """构造 FastAPI app（ADR-0015 §3 · Task 0 双入口）。
 
     Args:
         demo_settings: Demo 网关配置；None 则从环境变量构造。
 
     Returns:
         FastAPI app，已注册：
-        - ``GET /`` → Dashboard index.html（P0-11.2 完整 5 区域）
-        - ``GET /health`` → 健康检查
-        - ``WS {ws_path}`` → WebSocket 端点（帧下行 + action 上行）
-        - ``StaticFiles`` → dashboard/ 静态资源
+        - ``GET /`` → 旗舰 Case Viewer（静态托管 Factory 预渲染 case_viewer.html；不 import visualizer、不依赖 runtime）
+        - ``GET /live`` → Live Runtime Preview（既有 Dashboard + WS + YOLO；仅 ``live_enabled`` 时可用）
+        - ``GET /health`` → 健康检查（含 mode / live_enabled / assembled）
+        - ``WS {ws_path}`` → Live 帧下行 + action 上行（仅 live_enabled）
+        - ``POST /demo/*`` → Live 视频输入 / 场景切换 / reset（仅 live_enabled）
     """
     demo_settings = demo_settings or DemoSettings.from_env()
     hp_settings = Settings.load(demo_settings.home_perception_config)
@@ -551,7 +585,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # 启动：确保上传目录存在 + 装配 + 起帧循环后台 task
+        if not demo_settings.live_enabled:
+            # 旗舰模式：仅服务 Factory 预渲染的 Case Viewer，不装配 runtime、不启帧循环、
+            # 不加载 YOLO / torch。网关此时零渲染逻辑、零 home_perception 运行期依赖。
+            yield
+            return
+        # Live 模式：确保上传目录存在 + 装配 + 起帧循环后台 task
         Path(demo_settings.upload_dir).mkdir(parents=True, exist_ok=True)
         gateway.assemble()
         gateway._task = asyncio.create_task(gateway.run_loop())
@@ -576,28 +615,53 @@ def create_app(
         lifespan=lifespan,
     )
 
-    # 静态资源（dashboard/）
+    # 静态资源：Live 次级入口（/live）的资产目录。仅当 Live 开启时挂载，与旗舰入口隔离。
+    # 旗舰 Case Viewer 的 HTML 由下方 GET / 直接读取文件返回（Phase 1 自包含，无需静态挂载；
+    # 后续 Phase 2 / Slice D 引入媒体资产时再在此处挂载 case_artifacts_dir 并让 build 重写资源路径）。
     dash_dir = Path(demo_settings.dashboard_dir)
-    if dash_dir.is_dir():
-        app.mount("/static", StaticFiles(directory=str(dash_dir)), name="static")
+    if demo_settings.live_enabled and dash_dir.is_dir():
+        app.mount("/live-static", StaticFiles(directory=str(dash_dir)), name="live-static")
+
+    case_dir = Path(demo_settings.case_artifacts_dir) if demo_settings.case_artifacts_dir else None
 
     @app.get("/", response_class=HTMLResponse)
-    async def index() -> HTMLResponse:
-        """Dashboard 入口（P0-11.2 完整 5 区域 HTML）。"""
+    async def verified_case() -> HTMLResponse:
+        """旗舰入口：Verified Case / 主展示。
+
+        静态托管 Factory 预渲染的 case_viewer.html（由 build_trusted_case → run_case_viewer.py
+        在外部生产阶段生成）。不启动渲染逻辑、不 import visualizer、不依赖 runtime。
+        未构建时返回引导提示页。
+        """
+        if case_dir is None:
+            return HTMLResponse(_verified_case_missing_html(), status_code=200)
+        case_file = case_dir / demo_settings.case_viewer_filename
+        if case_file.is_file():
+            return HTMLResponse(case_file.read_text(encoding="utf-8"))
+        return HTMLResponse(_verified_case_missing_html(), status_code=200)
+
+    @app.get("/live", response_class=HTMLResponse)
+    async def live_preview() -> HTMLResponse:
+        """次级入口：Live Runtime Preview / 实验·演示入口（仅 DEMO_LIVE=1 暴露）。
+
+        保留既有实时 Dashboard（WebSocket + YOLO + pipeline），但明确不是旗舰产品入口；
+        带"Legacy / Phase-3 Preview"架构降级标签，后续经 Live Adapter 收敛到 EvidenceProjection，
+        不再往 dashboard 内加音频 / CrossModal / Case Video。
+        """
+        if not demo_settings.live_enabled:
+            return HTMLResponse(_live_disabled_html(), status_code=404)
         index_file = dash_dir / "index.html"
         if index_file.is_file():
             return HTMLResponse(index_file.read_text(encoding="utf-8"))
-        return HTMLResponse(
-            "<h1>SilverShield Demo Gateway</h1>"
-            "<p>P0-11.1 网关已启动。Dashboard HTML 将在 P0-11.2 落地。</p>"
-            f"<p>WebSocket 端点：{demo_settings.ws_path}</p>",
-            status_code=200,
-        )
+        return HTMLResponse(_live_disabled_html(), status_code=404)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
+            "mode": "verified" if not demo_settings.live_enabled else "live",
+            "live_enabled": demo_settings.live_enabled,
+            "live_route": demo_settings.live_route,
+            "assembled": gateway.pipeline is not None,
             "scenario": gateway.scenario.scenario_id,
             "source": gateway.scenario.source,
             "source_type": gateway.scenario.source_type,
@@ -609,6 +673,10 @@ def create_app(
     @app.websocket(demo_settings.ws_path)
     async def websocket_endpoint(ws: WebSocket) -> None:
         """WebSocket 端点：下行 frame view + state；上行 action 写 store。"""
+        if not demo_settings.live_enabled:
+            # 旗舰模式：Live WS 不暴露；直接关闭连接（明确提示 disabled）
+            await ws.close(code=1000)
+            return
         await gateway.hub.connect(ws)
         # 首连 snapshot：把服务端权威聚合状态推给新连接（晚连也能看到历史）
         await gateway.hub.send_to(
@@ -644,6 +712,11 @@ def create_app(
         视频只是"传感器"：经冻结 Pipeline 产出 身份→轨迹→行为→风险→解释→干预 全链，
         不调用任何视觉大模型 API（工程闭环验证，非模型性能评测）。
         """
+        if not demo_settings.live_enabled:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Live 入口未启用（DEMO_LIVE=1 才暴露 /live + WS + /demo/*）"},
+            )
         allowed = {".mp4", ".mpg", ".mpeg", ".avi", ".mov", ".mkv", ".webm"}
         fname = file.filename or ""
         ext = Path(fname).suffix.lower()
@@ -726,6 +799,11 @@ def create_app(
     @app.post("/demo/scenario")
     async def switch_scenario(req: Request) -> dict[str, Any]:
         """P0-11.4 场景输入：按 scenario_id（或路径）热切换到预置场景（模拟场景 / CAVIAR 工程验证）。"""
+        if not demo_settings.live_enabled:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Live 入口未启用（DEMO_LIVE=1 才暴露 /live + WS + /demo/*）"},
+            )
         try:
             body = await req.json()
         except Exception:  # noqa: BLE001  # JSON 解析失败：回退到空 body
@@ -766,6 +844,11 @@ def create_app(
         广播 ``source_switched``（前端据此 ``resetSession()`` 清空跨帧累积）。
         比赛换组场景：点 Reset → ≤30s 内恢复干净状态可重跑。
         """
+        if not demo_settings.live_enabled:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Live 入口未启用（DEMO_LIVE=1 才暴露 /live + WS + /demo/*）"},
+            )
         try:
             await gateway.switch_source(gateway.scenario)
         except Exception as exc:  # noqa: BLE001  # 重置中 pipeline 重建失败
