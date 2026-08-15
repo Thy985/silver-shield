@@ -38,7 +38,7 @@ def test_render_four_views_anchors(tmp_path):
     assert "expectation_fingerprint" in html
     assert "loop_fingerprint" in html
     # Decision Explanation
-    assert "为什么报警？" in html
+    assert "为什么这样判断？" in html
     assert "abnormal_dwell" in html
 
 
@@ -93,11 +93,17 @@ def test_render_graph_degradation_when_no_links(tmp_path):
 
 
 def test_render_graph_when_links_present(tmp_path):
-    """Graph 渲染：cross_modal_links>0 → 图容器 + 数据属性（验收 2 的 Graph 视图）。"""
+    """Graph 渲染：cross_modal_links>0 → 图容器 + 数据属性（验收 2 的 Graph 视图）。
+
+    P0-3.1：复制更新——④ Cross Modal 视图文案改为指向「Evidence Graph 的 Link 节点 +
+    统一 Timeline 的 🔗 节点（均带溯源 ref）」作为真实关联详情来源，本视图为 supports /
+    co_occurs 关系概览。断言同步新文案。
+    """
     d = make_artifacts(tmp_path / "a")  # fixture 默认 links=1
     html = _render(d)
     assert 'data-links="1"' in html
-    assert "supports 关联" in html
+    assert "关系概览" in html
+    assert "supports / co_occurs" in html
 
 
 def test_render_graph_episodes_zero_degraded(tmp_path):
@@ -349,14 +355,15 @@ def test_render_self_explanation_glossary(tmp_path):
 
 
 def test_render_self_explanation_stage_zh(tmp_path):
-    """自解释层：timeline 与 gate 表的 stage 名带中文注释。"""
+    """自解释层：timeline 与 gate 表的 stage 名带产品语言中文（保留英文原文括注）。"""
     d = make_artifacts(tmp_path / "a")
     html = _render(d)
-    assert "perception 感知" in html
-    assert "decision 决策" in html
-    assert "notification 通知" in html
-    assert "memory 记忆" in html
-    assert "observability 可观测" in html
+    assert "看到异常 (perception)" in html
+    assert "判断风险 (decision)" in html
+    assert "发出通知 (notification)" in html
+    assert "记忆归档 (memory)" in html
+    assert "系统观测 (observability)" in html
+    assert "跨模态印证 (cross_modal)" in html
 
 
 def test_render_self_explanation_decision_values_translated(tmp_path):
@@ -429,6 +436,46 @@ def test_render_replay_timeline_data_idx(tmp_path):
     assert 'data-step="S1"' in html
     # 溯源信息仍在（D2.4 前置：重放态下 ref 不丢）
     assert "provenance:" in html and "source:" in html
+
+
+def test_render_audio_related_visual_ref_badge(tmp_path):
+    """Phase 2（多模态消费）：AUDIO 节点带 related_visual_ref → 渲染 🔗 关联视觉证据徽章
+    （含 data-related-ref 供联动高亮）；且每个 timeline 节点带 data-ref（跨模态定位）。无
+    related 时不渲染空徽章。"""
+    audio_with = [
+        {
+            "audio_timestamp": 1752952800.0,
+            "audio_kind": "audio_telephone_persistent",
+            "audio_score": 0.9,
+            "audio_confidence": 0.9,
+            "audio_labels": ["telephone"],
+            "audio_source_segment_ids": ["seg-0"],
+            "audio_related_visual_ref": "sw_t1.canonical.json#artifacts.event_types",
+        }
+    ]
+    d1 = make_artifacts(tmp_path / "a", audio_evidence=audio_with)
+    html1 = _render(d1)
+    assert "🔗 关联视觉证据" in html1
+    assert 'data-related-ref="sw_t1.canonical.json#artifacts.event_types"' in html1
+    # 每个 timeline 节点带 data-ref（溯源 / 跨模态定位）
+    assert "data-ref=" in html1
+
+    # 无 related：不渲染空徽章
+    d2 = make_artifacts(
+        tmp_path / "b",
+        audio_evidence=[
+            {
+                "audio_timestamp": 1752952800.0,
+                "audio_kind": "audio_telephone_persistent",
+                "audio_score": 0.9,
+                "audio_confidence": 0.9,
+                "audio_labels": ["telephone"],
+                "audio_source_segment_ids": ["seg-0"],
+            }
+        ],
+    )
+    html2 = _render(d2)
+    assert "🔗 关联视觉证据" not in html2
 
 
 def test_render_replay_id_unique(tmp_path):

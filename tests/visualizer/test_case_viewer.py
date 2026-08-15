@@ -26,9 +26,11 @@ from home_perception.visualizer.viewer import (
     load_case_descriptor,
     render_case_viewer,
 )
+from home_perception.visualizer.viewer.case_presentation import RENDERER_VERSION
 from home_perception.visualizer.viewer.media_source import resolve_media_source
 from home_perception.visualizer.viewer.render import (
     _render_case_video,
+    _render_ci_badge,
     _render_provenance_banner,
     _safe_media_src,
 )
@@ -135,6 +137,50 @@ def test_viewer_ac7_provenance_first_class(tmp_path):
     assert "prov-banner" in html, "缺 provenance banner（AC-7 一等视觉）"
     assert "程序化场景 · 可复现" in html, "缺 SIMULATED provenance 文案"
     assert "SIMULATED" in html
+
+
+# ---------------------------------------------------------------------------
+# P0-4.2（CI 受控生成可信徽章）：generated_by="ci" → 渲染"本案例由 CI 受控生成"
+# ---------------------------------------------------------------------------
+
+
+def test_render_ci_badge_shown_when_generated_by_ci(tmp_path):
+    """P0-4.2：生成方为 ci 时，HTML 必须含可信徽章（含 case_id 与 renderer 版本）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    desc = build_default_case_presentation(proj)
+    desc["generated_by"] = "ci"
+    desc["renderer_version"] = RENDERER_VERSION
+    desc["case_id"] = "sw_t1"
+    html = render_case_viewer(proj, desc)
+    assert "本案例由 CI 受控生成" in html, "CI 受控生成徽章缺失"
+    assert "ci-badge" in html, "CI 徽章 div 缺失"
+    assert "case_id=sw_t1" in html, "徽章须携带 case_id"
+    assert f"renderer=v{RENDERER_VERSION}" in html, "徽章须携带 renderer 版本"
+
+
+def test_render_ci_badge_hidden_when_manual_default(tmp_path):
+    """P0-4.2：默认 manual 生成方（人工本地生成）不显示 CI 徽章。
+
+    注：``.ci-badge`` CSS 类定义恒嵌入 ``<style>``（无论是否显示徽章），故只断言
+    徽章**文案**「本案例由 CI 受控生成」不出现——那才是徽章是否被渲染的判别依据。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    desc = build_default_case_presentation(proj)  # 默认 generated_by="manual"
+    assert desc.get("generated_by") == "manual"
+    html = render_case_viewer(proj, desc)
+    assert "本案例由 CI 受控生成" not in html, "manual 生成方不应显示 CI 徽章"
+
+
+def test_render_ci_badge_unit_deterministic():
+    """P0-4.2：_render_ci_badge 纯函数——ci 输出固定、manual/缺省返回空串（t1 确定性，无墙钟）。"""
+    ci = {"generated_by": "ci", "case_id": "sw_x", "renderer_version": "1.0.0"}
+    manual = {"generated_by": "manual", "case_id": "sw_x", "renderer_version": "1.0.0"}
+    assert _render_ci_badge(ci) == _render_ci_badge(dict(ci)), "ci 徽章须确定性"
+    assert "本案例由 CI 受控生成" in _render_ci_badge(ci)
+    assert _render_ci_badge(manual) == "", "manual 应返回空串"
+    assert _render_ci_badge({}) == "", "缺 generated_by 视为非 ci，返回空串"
 
 
 # ---------------------------------------------------------------------------
@@ -827,6 +873,12 @@ def test_render_case_video_uses_video_element_for_artifact_video():
     assert "<video" in html, "ArtifactVideoSource 应渲染原生 <video>"
     assert "case-video-canvas" not in html, "视频源不应回退 canvas"
     assert "https://example.com/case.mp4" in html, "video_url 应出现在 src"
+    # P1（autoplay）：muted+playsinline 保证 10 秒内可见画面、自动播放策略不拦截。
+    assert "autoplay" in html and "muted" in html and "playsinline" in html
+    # P11：绑定脚注的 source_kind/ref 从已解析 manifest 读取（真实 ArtifactVideoSource），
+    # 而非 descriptor 默认 SyntheticFrameSource——不得出现"实际是视频却标帧源"的矛盾。
+    assert "ArtifactVideoSource" in html
+    assert "SyntheticFrameSource" not in html
 
 
 def test_render_case_video_uses_canvas_when_no_media():
@@ -955,3 +1007,118 @@ def test_make_media_asset_sanity_resolvable(tmp_path):
     assert m["frame_template"].endswith("{idx:06d}.png")
     # 缺媒体场景应降级为 None（不崩）
     assert resolve_media_source(base, "sw_absent", "SyntheticFrameSource") is None
+
+
+# ---------------------------------------------------------------------------
+# P5（评审整改）：ArtifactVideoSource 原生 <video> 桥接 —— video 时钟驱动 Evidence
+# Timeline（timeupdate → seekByTime → __Replay.seek）。Node vm 真实执行 media.js。
+# ---------------------------------------------------------------------------
+
+
+_MEDIA_JS_VIDEO_BRIDGE_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+const mediaPath = process.argv[2];
+const code = fs.readFileSync(mediaPath, 'utf8');
+
+// 真实 <video> mock：记录 play/pause 调用与 timeupdate 回调，供触发同步。
+const videoEvents = {};
+const videoEl = {
+  _calls: [],
+  _listeners: {},
+  currentTime: 0,
+  duration: 30.0,
+  play() { this._calls.push('play'); },
+  pause() { this._calls.push('pause'); },
+  addEventListener(ev, cb) { this._listeners[ev] = cb; },
+  _fire(ev) { if (this._listeners[ev]) this._listeners[ev](); },
+};
+const canvasEl = { getContext(){ return { drawImage(){}, fillRect(){}, clearRect(){}, beginPath(){}, fill(){} }; }, style:{}, width:640, height:360 };
+const mockDoc = {
+  getElementById(id) {
+    if (id === 'case-video-el-u9') return videoEl;
+    if (id === 'case-video-canvas-u9') return canvasEl;
+    return null;
+  }
+};
+
+const ctx = {
+  console, setTimeout, clearTimeout, Math, JSON, isNaN, parseInt, Infinity,
+  setInterval: function (cb) { ctx.__playCb = cb; return 1; },
+  clearInterval: function () {},
+  document: mockDoc, Image: function(){ this.onload=null; this.onerror=null; this.src=''; },
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+try { vm.runInContext(code, ctx); } catch (e) { console.error('FAIL load: ' + e.message); process.exit(1); }
+
+const MP = ctx.window.__MediaPlayer;
+function check(cond, msg) { if (!cond) { console.error('FAIL: ' + msg); process.exit(1); } }
+
+const manifest = { source_kind:'ArtifactVideoSource', frame_count:300, fps:10,
+                   duration_sec:30, frame_template:'', video_url:'case.mp4' };
+const p = MP.init('u9', canvasEl, manifest, { duration:30, fps:0 });
+
+// 1) video 桥接已绑定（play/pause 委托原生 <video>，不启动 setInterval）。
+check(p.videoEl === videoEl, 'ArtifactVideoSource 应绑定真实 <video>');
+p.play();
+check(videoEl._calls.indexOf('play') !== -1, 'play() 应委托 video.play()');
+check(ctx.__playCb === undefined, '有 <video> 时不得启动 setInterval 帧播放');
+p.pause();
+check(videoEl._calls.indexOf('pause') !== -1, 'pause() 应委托 video.pause()');
+
+// 2) timeupdate → Evidence Timeline 定位（__Replay.seek 驱动）。
+// 注：_evidenceNodeCount 读 rp.nodes.length，须提供节点数组（>1）才驱动 seek。
+let seekIdx = -1;
+ctx.__Replay = { get(){ return { nodes: [0,1,2,3,4,5], seek(i){ seekIdx = i; } }; } };
+videoEl.currentTime = 15; videoEl.duration = 30;
+videoEl._fire('timeupdate');
+check(p.time === 15, 'timeupdate 应同步 MediaPlayer.time');
+check(seekIdx > 0, 'timeupdate 应驱动 Evidence Timeline 定位（__Replay.seek）');
+
+// 3) seekByTime 反向定位 video（进度条点击 / replay 联动）。
+p.seekByTime(5, false);
+check(Math.abs(videoEl.currentTime - 5) < 0.05, 'seekByTime 应反向定位 video.currentTime');
+
+// 4) 无 <video>（canvas 帧源 → HTML 无 case-video-el 元素）→ play 仍走 setInterval 路径。
+const mockDoc2 = {
+  getElementById(id) {
+    // canvas 帧源场景：HTML 不含 <video>，getElementById 返回 null（同真实 DOM）。
+    if (id === 'case-video-el-u10') return null;
+    if (id === 'case-video-canvas-u10') return canvasEl;
+    return null;
+  }
+};
+ctx.document = mockDoc2;
+const p2 = MP.init('u10', canvasEl, { source_kind:'SyntheticFrameSource', frame_count:10,
+  fps:10, duration_sec:1, frame_template:'f/{idx:06d}.png', video_url:'' }, { duration:1, fps:0 });
+check(p2.videoEl === undefined, 'canvas 帧源不得绑定 videoEl');
+p2.play();
+check(ctx.__playCb && typeof ctx.__playCb === 'function', '无 <video> 时 play 应启动 setInterval');
+
+console.log('OK media.js video bridge: play/pause 委托 + timeupdate→Evidence + seek 反向定位');
+"""
+
+
+def test_media_js_video_bridge_runtime(tmp_path):
+    """P5：ArtifactVideoSource 原生 <video> 桥接（Node 真实执行 media.js，非字符串断言）。
+
+    覆盖：play/pause 委托原生 <video>（不启动 canvas setInterval）；timeupdate →
+    __Replay.seek（Evidence Timeline 定位）；seekByTime 反向定位 video；
+    canvas 帧源不误绑 videoEl（回归保障）。
+    """
+    node = _node_exe()
+    if not node:
+        pytest.skip("node 不可用，跳过 video 桥接运行时测试")
+
+    media_js = _media_js_path()
+    assert media_js.is_file(), f"media.js 缺失：{media_js}"
+    harness = tmp_path / "media_js_video_bridge_harness.js"
+    harness.write_text(_MEDIA_JS_VIDEO_BRIDGE_HARNESS, encoding="utf-8")
+    res = subprocess.run(
+        [node, str(harness), str(media_js)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert res.returncode == 0, (
+        f"media.js video 桥接测试失败:\n{res.stdout}\n{res.stderr}"
+    )

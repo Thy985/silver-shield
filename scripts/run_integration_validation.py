@@ -50,7 +50,7 @@ import platform
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from home_perception.common.logging import get_logger
 
@@ -144,6 +144,42 @@ def _write_guarded(path: str | Path, payload: dict[str, object], *, who: str) ->
     )
 
 
+def _build_runner(scn: Any) -> Any:
+    """按场景声明构建 ``IntegrationRunner``（ADR-0036 P0-2：确定性运行时覆盖）。
+
+    缺省场景（未声明 ``meta.clock_start`` / ``meta.rule_overrides``）→ 与历史行为
+    逐字节一致（默认 18:00 UTC 时钟 + 默认阈值）；声明后覆盖为确定性自定义值。
+    loop_fingerprint 成分**不含** clock_start / thresholds（见 runner 的
+    ``_policy_fingerprint``），故覆盖不影响两枚闭环指纹的可复现性。
+
+    规则（fail-closed）：
+    - ``meta.clock_start`` 为正 Unix 秒（UTC）→ ``IntegrationRunnerConfig.clock_start``；
+    - ``meta.rule_overrides`` 键必须是 ``ThresholdConfig`` 既有字段，未知键直接拒绝，
+      绝不静默忽略（对齐 ADR-0034 "静默丢弃 = 失败" 的姿态）。
+    """
+    from home_perception.analysis.rule_engine import ThresholdConfig
+    from home_perception.integration.loop.context import IntegrationRunnerConfig
+    from home_perception.integration.loop.runner import IntegrationRunner
+
+    config = IntegrationRunnerConfig(cross_modal_enabled=True)
+    if scn.meta.clock_start is not None:
+        config = IntegrationRunnerConfig(
+            cross_modal_enabled=True,
+            clock_start=datetime.fromtimestamp(scn.meta.clock_start, tz=UTC),
+        )
+    thresholds: ThresholdConfig | None = None
+    if scn.meta.rule_overrides:
+        thresholds = ThresholdConfig()
+        for key, value in scn.meta.rule_overrides.items():
+            if not hasattr(thresholds, key):
+                raise ValueError(
+                    f"场景 {scn.meta.scenario_id!r} meta.rule_overrides 含未知阈值键 "
+                    f"{key!r}（ThresholdConfig 无此字段，fail-closed）"
+                )
+            setattr(thresholds, key, value)
+    return IntegrationRunner(config=config, thresholds=thresholds)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="ADR-0034 Phase A 闭环集成验证")
     parser.add_argument(
@@ -172,10 +208,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # 延迟导入：避免在 --help 或导入期就拉起运行时重链。
-    from home_perception.integration.loop.context import IntegrationRunnerConfig
+    # （IntegrationRunner / IntegrationRunnerConfig 由 _build_runner 按场景懒加载，
+    # 本层不直接引用，保持主流程只依赖 validator/report/gate。）
     from home_perception.integration.loop.gate import evaluate_integration_gate
     from home_perception.integration.loop.report import IntegrationReport
-    from home_perception.integration.loop.runner import IntegrationRunner
     from home_perception.integration.loop.validator import IntegrationValidator
     from home_perception.validation.scenario import load_scenario
 
@@ -192,9 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     # sw_adr0034_cross_modal.yaml）声明了 F5 期望，默认关闭跨模态会让它恒 F5 失败
     # （t8：声明了期望却没注入 runtime = 必须暴露）。其余场景无 cross_modal 期望，
     # 启用后恒通过（validator 未声明期望即不校验），无副作用。
-    runner = IntegrationRunner(
-        config=IntegrationRunnerConfig(cross_modal_enabled=True)
-    )
+    # 每场景按 meta 声明构建 runner（ADR-0036 P0-2）：缺省 = 默认配置，行为与历史
+    # 逐字节一致；声明 clock_start / rule_overrides 的场景用确定性自定义值。
     validator = IntegrationValidator()
 
     summary: dict[str, object] = {
@@ -208,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for path in paths:
         scn = load_scenario(path)
+        runner = _build_runner(scn)
         result = runner.run(scn)
         validation = validator.validate(result, scn)
         report = IntegrationReport.build(

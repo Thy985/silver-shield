@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # 便于 import check_env
 
-from check_env import run_checks  # 纯标准库，不拉 torch  # noqa: E402
+from check_env import run_checks  # 纯标准库，不拉 torch
 
 DEFAULT_SCENARIO = "config/demo/scenarios/night_visit.yaml"
 SCENARIOS_DIR = "config/demo/scenarios"
@@ -61,8 +61,8 @@ def resolve_scenario(args: argparse.Namespace) -> tuple[Path, Path | None]:
     """
     if args.scenario:
         s = args.scenario
-        if s.endswith(".yaml") or s.endswith(".yml"):
-            base = (ROOT / s) if Path(s).is_absolute() else (ROOT / s)
+        if s.endswith((".yaml", ".yml")):
+            base = ROOT / s
         else:
             base = ROOT / SCENARIOS_DIR / f"{s}.yaml"
     else:
@@ -156,6 +156,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--host", help="绑定地址（默认 127.0.0.1，或 DEMO_HOST）")
     p.add_argument("--port", help="绑定端口（默认 8765，或 DEMO_PORT）")
     p.add_argument("--check", action="store_true", help="仅做环境预检，不启动网关")
+    p.add_argument(
+        "--live",
+        action="store_true",
+        help="启用 Live 次级入口（/live + WS + /demo/*）；默认旗舰 Case Viewer 模式（/）",
+    )
     return p.parse_args()
 
 
@@ -177,6 +182,105 @@ def _register_synthetic_source() -> None:
         print(f"[i] 合成帧源不可用，跳过注册（{exc}）")
         return
     install_into(register_frame_source, replace=True)
+
+
+def _run_live(args: argparse.Namespace) -> None:
+    """Legacy Live 模式：既有实时 Dashboard + WS + YOLO（/live 次级入口）。"""
+    scenario_path, temp_path = resolve_scenario(args)
+    # --video 产生的临时点文件：启动失败（含 preflight_media 的 sys.exit）时清理
+    if temp_path is not None:
+        atexit.register(lambda: temp_path.unlink(missing_ok=True))
+    preflight_media(scenario_path)
+
+    os.environ["DEMO_SCENARIO"] = str(scenario_path)
+    if args.host:
+        os.environ["DEMO_HOST"] = args.host
+    if args.port:
+        os.environ["DEMO_PORT"] = str(args.port)
+    os.environ["DEMO_LIVE"] = "1"  # 暴露 /live + WS + /demo/*
+
+    print_banner(scenario_path)
+
+    import silver_demo.gateway as gw  # 懒加载：预检通过后才 import（会拉 torch）
+
+    _register_synthetic_source()
+    gw.main()
+
+
+def _try_build_case_viewer() -> Path | None:
+    """尽力用 Trusted Case Factory 生成 high_risk 案例的 case_viewer.html 到 demo/ 目录。
+
+    仅用自包含的合成 high_risk fixture（adr0034_high_risk.yaml，无外部帧依赖），
+    故本地即可确定性构建。返回产物目录；失败（torch / YOLO 权重缺失等）返回 None，
+    由调用方降级（/ 显示引导提示页）。
+    """
+    out_dir = ROOT / "src" / "silver_demo" / "demo"
+    src_yaml = (
+        ROOT / "src" / "home_perception" / "validation" / "fixtures"
+        / "scenarios" / "integration" / "adr0034_high_risk.yaml"
+    )
+    if not src_yaml.is_file():
+        print("[i] 未找到 high_risk fixture，跳过自动构建。")
+        return None
+
+    import shutil
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="ss_case_"))
+    try:
+        shutil.copyfile(src_yaml, tmp / "adr0034_high_risk.yaml")
+        try:
+            from build_trusted_case import main as build_main
+        except ImportError as exc:  # pragma: no cover - 精简部署降级路径
+            print(f"[i] 无法加载 build_trusted_case，跳过自动构建（{exc}）")
+            return None
+        out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[*] 自动构建旗舰 Case Viewer（high_risk）→ {out_dir} ...")
+        rc = build_main(["--scenarios", str(tmp), "--out-dir", str(out_dir)])
+        if rc not in (0, None):
+            print(f"[!] 自动构建返回非零退出码 {rc}，降级启动。")
+            return None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[!] 自动构建 Case Viewer 失败，降级启动（/ 显示引导提示）：{exc}")
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return out_dir if (out_dir / "case_viewer.html").is_file() else None
+
+
+def _run_flagship(args: argparse.Namespace) -> None:
+    """旗舰模式：静态托管 Factory 预渲染的 Case Viewer（/），不依赖 runtime、不 import visualizer。"""
+    os.environ["DEMO_LIVE"] = "0"  # 确定性关闭 Live 次级入口
+    if args.host:
+        os.environ["DEMO_HOST"] = args.host
+    if args.port:
+        os.environ["DEMO_PORT"] = str(args.port)
+
+    # 确定 case_artifacts_dir：优先 DEMO_CASE_ARTIFACTS；否则尽力本地构建 high_risk 案例
+    artifacts_dir = os.environ.get("DEMO_CASE_ARTIFACTS")
+    if not artifacts_dir or not (Path(artifacts_dir) / "case_viewer.html").is_file():
+        built = _try_build_case_viewer()
+        if built is not None:
+            artifacts_dir = str(built)
+            os.environ["DEMO_CASE_ARTIFACTS"] = artifacts_dir
+
+    host = os.environ.get("DEMO_HOST", "127.0.0.1")
+    port = os.environ.get("DEMO_PORT", "8765")
+    print("\n" + "=" * 52)
+    print("  银龄盾 Demo 网关启动中 · 旗舰模式")
+    print("=" * 52)
+    print("  入口   : /  (Verified Cases · 可信案例回放)")
+    print("  来源   : Trusted Case Factory 预渲染（CI / build_trusted_case）")
+    if artifacts_dir and (Path(artifacts_dir) / "case_viewer.html").is_file():
+        print(f"  产物   : {artifacts_dir}/case_viewer.html  ✓")
+    else:
+        print("  产物   : 未构建 → / 显示引导提示页（先跑 build_trusted_case 或 --live）")
+    print(f"  访问   : http://{host}:{port}/")
+    print("  Live   : /live（需 --live 或 DEMO_LIVE=1，当前关闭）")
+    print("=" * 52 + "\n")
+
+    import silver_demo.gateway as gw  # 懒加载：预检通过后才 import
+    gw.main()
 
 
 def main() -> None:
@@ -201,29 +305,11 @@ def main() -> None:
         print("\n✅ 环境检查通过。")
         sys.exit(0)
 
-    # 2) 解析场景 + 3) 媒体/帧预检
-    scenario_path, temp_path = resolve_scenario(args)
-    # --video 产生的临时点文件：启动失败（含 preflight_media 的 sys.exit）时清理，
-    # 避免 preflight 在落盘之后才报错、留下孤立文件。
-    if temp_path is not None:
-        atexit.register(lambda: temp_path.unlink(missing_ok=True))
-
-    preflight_media(scenario_path)
-
-    # 4) 注入环境变量并启动（此时 torch 已就绪，可安全加载 gateway）
-    os.environ["DEMO_SCENARIO"] = str(scenario_path)
-    if args.host:
-        os.environ["DEMO_HOST"] = args.host
-    if args.port:
-        os.environ["DEMO_PORT"] = str(args.port)
-
-    print_banner(scenario_path)
-
-    import silver_demo.gateway as gw  # 懒加载：预检通过后才 import（会拉 torch）
-
-    _register_synthetic_source()
-
-    gw.main()
+    # Task 0 双入口：--live 走 Legacy 实时；默认走旗舰 Case Viewer
+    if args.live:
+        _run_live(args)
+    else:
+        _run_flagship(args)
 
 
 if __name__ == "__main__":

@@ -111,6 +111,7 @@ def client(monkeypatch):
     monkeypatch.setattr(DemoGateway, "switch_source", _noop_switch)
 
     settings = DemoSettings.from_env()
+    settings.live_enabled = True  # 本套测试专测 Live 次级入口（WS + /demo/*），必须开启
     app = create_app(settings)
     with TestClient(app) as c:
         yield c

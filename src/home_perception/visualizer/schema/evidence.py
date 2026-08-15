@@ -56,6 +56,10 @@ class TimelineNode(TypedDict):
     modality: TimelineModality  # AC-9 统一时间轴：节点须带 modality 判别
     provenance_kind: ProvenanceKind
     ref: str  # 溯源：<artifact 文件名>#<记录定位>（D8 Evidence provenance）
+    # ADR-0036 Phase 2（多模态消费）：可选跨模态视觉 ref（可选高亮目标）。
+    # 仅当真实跨模态关联派生（音频节点 → 关联视觉节点）时由 loader 投影产出；
+    # 缺失即未投影，绝不占位编造（对齐 AudioEvidenceNode.related_visual_ref）。
+    related_visual_ref: NotRequired[str]
 
 
 class StageVerdict(TypedDict):

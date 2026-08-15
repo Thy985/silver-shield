@@ -83,14 +83,15 @@ _DECISION_KINDS = {
 # 纯展示层常量——不改变证据内容，翻译不到的值回退原文（fail-open 于展示层）。
 # ---------------------------------------------------------------------------
 
-# stage → 中文注释（追加式：保留英文标识，供测试/审计继续引用原文）。
+# stage → 产品语言（P1 整改：首屏/时间轴以"发生了什么"叙事，不再裸暴露工程 stage 名）。
+# 保留英文原文在括号里供审计（测试/文档继续引用原文枚举）。
 _STAGE_ZH = {
-    "perception": "perception 感知",
-    "decision": "decision 决策",
-    "notification": "notification 通知",
-    "memory": "memory 记忆",
-    "cross_modal": "cross_modal 跨模态",
-    "observability": "observability 可观测",
+    "perception": "看到异常 (perception)",
+    "decision": "判断风险 (decision)",
+    "notification": "发出通知 (notification)",
+    "memory": "记忆归档 (memory)",
+    "cross_modal": "跨模态印证 (cross_modal)",
+    "observability": "系统观测 (observability)",
 }
 
 # D2.2 Causal Highlight：timeline 的 stage 级时间轴 与 Evidence Graph 的实体级
@@ -256,9 +257,18 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
             "FAIL": "node-fail",
             "INFO": "node-neutral",
         }.get(node["verdict"], "node-neutral")
+        # ADR-0036 Phase 2（多模态消费）：跨模态关联视觉 ref 徽章（可选，缺则恒不渲染）。
+        # data-related-ref 供 replay.js 未来联动高亮关联节点；缺 ref 时不产生空徽章。
+        related = node.get("related_visual_ref")
+        related_badge = ""
+        if related:
+            related_badge = (
+                f'<span class="tl-related" data-related-ref="{_esc(related)}" '
+                f'title="跨模态关联到的视觉证据 ref">🔗 关联视觉证据：{_esc(related)}</span>'
+            )
         items.append(
             f"""
-            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}">
+            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}" data-ref="{_esc(node['ref'])}">
               <span class="tl-dot" style="background:{color}"></span>
               <div class="tl-body">
                 <div class="tl-head">
@@ -267,6 +277,7 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
                   <span class="tl-stage" style="color:{color}">{_esc(_STAGE_ZH.get(node['stage'], node['stage']))}</span>
                   <span class="tl-kind">{_esc(kind)}</span>
                   <span class="tl-verdict {verdict_class}">{_esc(node['summary'])}</span>
+                  {related_badge}
                 </div>
                 <div class="tl-meta muted">
                   provenance: {_esc(node['provenance_kind'])} · source: {_esc(node['ref'])}
@@ -302,6 +313,20 @@ def _translate_value(v: str) -> str:
     if len(parts) > 1 and all(p in _VALUE_ZH for p in parts):
         return "、".join(_VALUE_ZH[p] for p in parts)
     return v
+
+
+def _display_value(v: str) -> str:
+    """展示值翻译（P1 整改）：优先事件类型中文（保留原文括注，供审计），其次
+    决策值翻译（``_translate_value``），均未命中回退原文。
+
+    覆盖场景：``abnormal_dwell`` 等感知事件枚举此前在「为什么」卡片 / 因果图节点
+    上以英文裸值出现（``_VALUE_ZH`` 不含事件类型），非技术读者看不懂。此处统一
+    「中文（原文）」格式——与 ``_VALUE_ZH`` 的「低风险（LOW）」括注风格一致，
+    且保留原文保证语义等价测试可逆回枚举。
+    """
+    if v in _EVENT_ZH:
+        return f"{_EVENT_ZH[v]}（{v}）"
+    return _translate_value(v)
 
 
 def _render_conclusion(scenario: ScenarioEvidence) -> str:
@@ -367,7 +392,7 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
             f"""
             <li class="dc-card" data-idx="{i}">
               <div class="dc-label" style="color:{color}">{_esc(label)}</div>
-              <div class="dc-value">{_esc(_translate_value(item['value']))}</div>
+              <div class="dc-value">{_esc(_display_value(item['value']))}</div>
               <div class="tl-meta muted">source: {_esc(item['ref'])}</div>
             </li>"""
         )
@@ -390,7 +415,8 @@ def _render_decision(scenario: ScenarioEvidence) -> str:
         f"{''.join(cards)}</ul>"
     )
     return (
-        "<p class='subtitle'>为什么报警？（可重放：点击卡片 / 播放，联动高亮 Evidence Graph）</p>"
+        # P1 整改：副标题中性化（不再与 benign 无事件场景矛盾；可重放推理链）。
+        "<p class='subtitle'>为什么这样判断？（可重放推理链）</p>"
         + bar
         + trace_list
     )
@@ -426,7 +452,10 @@ def _render_evidence_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
     cat_index = {t: i for i, t in enumerate(_CAT_TYPES)}
     nodes = [
         {
-            "id": n["id"], "name": n["label"],
+            "id": n["id"],
+            # P1 整改：因果图节点名走展示翻译（事件类型→中文，保留原文括注），
+            # 非技术读者也能看懂"异常停留（abnormal_dwell）"而非裸英文枚举。
+            "name": _display_value(n["label"]),
             "category": cat_index.get(n["type"], 0),
             "ntype": n["type"],  # 供 tooltip 显示节点类型（category 已是索引）
             "symbolSize": {"Scenario": 60, "Event": 48, "Decision": 48,
@@ -598,8 +627,8 @@ def _render_graph(scenario: ScenarioEvidence) -> tuple[str, str]:
       <div id="crossmodal-{sid_html}" class="graph-box" style="height:320px"
            data-links="{n_links}" data-episodes="{n_episodes}"></div>
       <p class="muted">Cross Modal 子图（Evidence Graph 的 supports 视角）：{n_episodes} 个 episode
-        节点 · {n_links} 条 supports 关联。D1 降级：canonical 无 link 级 detail
-        （confidence/time_overlap 未落盘，不渲染），完整关系见 Memory 层。</p>"""
+        节点 · {n_links} 条关联。真实关联详情见上方 ① Evidence Graph 的 Link 节点与 ② 统一 Timeline 的
+        🔗 节点（均带溯源 ref）；本视图为 supports / co_occurs 关系概览。</p>"""
 
     sid = scenario["scenario_id"]
     sid_js = _esc_js(f"crossmodal-{sid}")  # Cross Modal 子图容器（评审 R2-#6 JS 转义）

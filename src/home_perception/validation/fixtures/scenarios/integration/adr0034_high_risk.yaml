@@ -1,0 +1,112 @@
+# ADR-0036 P0-2 · 高风险→真实干预闭环 fixture（自洽，确定性可复现）。
+# 目标：让闭环真实产出 high_risk_approach → HIGH → ESCALATE_COMMUNITY →
+# CREATE_COMMUNITY_TASK（非 LOG_ONLY 的真实干预），并落盘 canonical。
+#
+# 触发机制（真实规则链，非伪造）：
+#   HighRiskApproachRule（组合规则）要求 LongDurationRule + RepeatVisitRule +
+#   OddHourRule 在**同一次 RiskFeature 评估**上全部命中：
+#   - LongDurationRule：dwell >= long_duration_seconds（本场景经 rule_overrides 降为 15s）；
+#   - RepeatVisitRule：同 visitor 30min（FeatureExtractor 窗口）内 >= 3 次访问；
+#   - OddHourRule：leave_time 的 hour ∈ {23,0,1,2,3,4}（异常时段）。
+#
+# 场景几何（同一身份 3 段在场，经 generator 确定性回放）：
+#   同一 actor.id 声明 3 个独立在场段 → _assign_track_ids 按 id 归并为同一 track_id
+#   → VisitorTracker 离场后重进复用同一 visitor_id（ADR-0007 同会话身份）→ 3 次离场
+#   生成 3 条同一 visitor 的 VisitorEvent，第 3 次离场时 visits_in_window=3。
+#   帧号（frame_interval=0.5s，absence_gap=3s=6 帧）：
+#     - 段 1：frame 3-8   → dwell 2.5s（<15s，不触发长停留），leave≈22:59:34（hour 22 非异常）
+#     - 段 2：frame 20-25 → dwell 2.5s（同上），leave≈22:59:43（hour 22 非异常）
+#     - 段 3：frame 40-70 → dwell 15s（>=15s，触发长停留），leave≈23:00:05（hour 23 异常）
+#   第 3 次离场时三条基础规则全部命中 → HighRiskApproachRule 命中 → high_risk_approach
+#   → 决策层 HIGH → ESCALATE_COMMUNITY → ActionDispatcher 派发 CREATE_COMMUNITY_TASK。
+#   前两次访问（hour 22 + 短停留 + 次数不足）不触发任何规则 → 不产生噪音告警。
+#
+# 时间基准：clock_start = 2026-07-19 22:59:30 UTC = 1784501970.0 (Unix 秒)，
+# 覆盖 runner 默认 18:00 UTC，使第三次访问跨过 23:00 落入异常时段（确定性可复现，
+# 不依赖墙钟；见 meta.clock_start 的 schema 文档）。
+meta:
+  schema_version: "1.0"
+  scenario_id: sw_adr0034_high_risk
+  version: 1
+  description: "ADR-0036 P0-2: 同人短时三次到访+末次长停留跨入凌晨 -> high_risk_approach -> HIGH -> ESCALATE_COMMUNITY"
+  seed: 99
+  duration_frames: 660
+  clock_start: 1784501970.0   # 2026-07-19 22:59:30 UTC（hour 22 → 23 跨边界）
+  rule_overrides:
+    long_duration_seconds: 15.0   # 场景内把"长停留"阈值降到 15s，使 660 帧内末次访问可触发
+  owner: perception-team
+  category: visitor
+  difficulty: high
+  tags: [adr0034, high_risk, escalate, integration]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+    corridor: [0.4, 0.0, 1.0, 1.0]
+  static_objects: []
+actors:
+  # 同一 id = 同一访客身份（3 段在场；见文件头注释）。
+  - id: visitor_x
+    actor_type: human
+    tracks:
+      - frame: 3
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 8
+        pos: [240.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+  - id: visitor_x
+    actor_type: human
+    tracks:
+      - frame: 20
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 25
+        pos: [240.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+  - id: visitor_x
+    actor_type: human
+    tracks:
+      - frame: 40
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 70
+        pos: [240.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 70
+    type: high_risk_approach
+expects:
+  emitted_event_types: [high_risk_approach]
+  min_risk_level: HIGH
+# ADR-0033 D3：安全评价标签（预期告警 + 高风险）。
+benchmark:
+  expected_alarm: true
+  severity: HIGH
+  note: "凌晨同人三次短访、末次长停留跨入异常时段，组合规则命中最高风险，须升级社区干预"
+# ADR-0034 D4：闭环集成期望（opt-in，仅 IntegrationValidator 消费）。
+integration:
+  perception:
+    min_perception_events: 1
+  decision:
+    outcome: WARN
+    risk_level: HIGH
+    recommended_action: ESCALATE_COMMUNITY
+  action:
+    expected_notification: true
+    expected_command_types: [CREATE_COMMUNITY_TASK]
+  memory:
+    min_records: 1
+    expected_risk_level: HIGH
+    expected_action_types: [CREATE_COMMUNITY_TASK]
