@@ -6,7 +6,7 @@
 3. 后台帧循环：``DemoClock.tick()`` → ``process_frame(frame, i)`` → bridge 翻译 → WS 广播。
 4. WebSocket 端点：下行推 frame view-model + state 快照；上行接 action 写 DemoStateStore。
 5. 双入口（Task 0）：``GET /`` 旗舰 Case Viewer（静态托管 Factory 预渲染 HTML，零渲染 import）；
-   ``GET /live`` 次级 Live Demo（既有 Dashboard + WS + YOLO，仅 DEMO_LIVE=1 暴露）。
+   ``GET /live`` 收敛到统一 Case Viewer（``render_case_viewer`` 渲染同一 ``EvidenceProjection`` View Model；Host 层反向依赖 Presentation Layer，ADR-0015 §2.1.1）。
 
 冻结合规白名单（ADR-0015 §2.1，只 import 以下符号）：
 - ``PerceptionPipeline`` / ``DemoClock`` / ``FrameResult`` ← ``home_perception.runtime.pipeline``
@@ -16,7 +16,14 @@
 
 严禁 import：``rule_engine`` / ``decision_engine`` / ``action.executor`` / ``action.dispatcher`` 等 7 层内部；
 亦严禁 import 冻结包内的帧源实现模块（FrameSource 所在子模块）；``.sources`` 以结构一致的本地抽象自提供帧源。
-``tests/demo/test_freeze_boundary.py`` 守此边界。
+
+**唯一例外（ADR-0015 §2.1.1 分层依赖契约）**：``silver_demo.gateway`` 作为 Host / Composition Root，
+允许 import ``home_perception.visualizer.viewer``（含 ``render_case_viewer`` / ``live_adapter`` 的
+``ProjectionAccumulator`` / ``build_live_presentation``），用于把 ``FrameResult`` 投影为
+``EvidenceProjection`` 并渲染统一 Case Viewer（ADR-0036 Phase 3 收敛 ``GET /live``）；这是
+「Host → Presentation Layer」的单向依赖，**不构成** ``viewer → silver_demo``。Runtime Core
+（除 gateway 外的子模块）仍禁止 import ``visualizer``。
+``tests/demo/test_freeze_boundary.py``（T0-1~T0-5）+ ``tests/visualizer/test_ast_contract.py``（T0-3 / T0-5）守此边界。
 """
 
 from __future__ import annotations
@@ -30,7 +37,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -40,6 +47,10 @@ from fastapi.staticfiles import StaticFiles
 # 类型标注用（运行期不调构造器；仅用于 type hint 让代码可读）
 from home_perception.action.command import ActionCommand  # noqa: F401  # 类型标注
 from home_perception.analysis.warning import WarningEvent  # noqa: F401  # 类型标注
+
+# 运行期惰性 import（失败隔离 + 避免循环）；仅用于类型标注解析
+if TYPE_CHECKING:
+    from home_perception.visualizer.viewer.live_adapter import ProjectionAccumulator
 
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
 from home_perception.core.config import RealtimeRiskConfig, Settings
@@ -86,6 +97,10 @@ class DemoGateway:
         self.hub = ConnectionHub()
         self.store = DemoStateStore()
         self.aggregate_state = DemoAggregateState()  # 服务端权威聚合状态（P0-11.3.5）
+
+        # ADR-0036 Phase 3：Live Adapter 增量投影累积器（Host 层反向依赖 visualizer.viewer；
+        # 惰性创建，失败隔离——投影异常绝不改变生产行为）。
+        self._live_accumulator = None
 
         # 循环控制
         self._running = False
@@ -218,6 +233,13 @@ class DemoGateway:
                 result, frame_index=self._frame_index, frame_base64=frame_b64, demo_time=demo_time
             )
 
+            # Live Adapter 增量投影（ADR-0036 Phase 3：收敛 /live 到统一 Case Viewer）。
+            # 失败隔离：投影探针异常必须吞掉+记日志，绝不改变生产行为（VM-5 / 探针铁律）。
+            try:
+                self._ensure_live_accumulator().ingest(result)
+            except Exception as exc:  # noqa: BLE001  # 投影失败不影响实时循环
+                structlog.get_logger(__name__).warning("live_projection_ingest_failed", exc_info=exc)
+
             # 区域⑥ Memory Context：粘性持有（方案1 修复面板随空帧闪空）。
             # 仅非空帧覆盖权威态；空帧保留上一帧画像，回填进 view 供前端持续渲染。
             self.aggregate_state.ingest_memory(view.get("memory_profiles") or [])
@@ -271,6 +293,23 @@ class DemoGateway:
             except Exception as exc:  # noqa: BLE001  # 资源释放失败也要记日志，避免静默泄漏（AGENTS.md §2.5）
                 structlog.get_logger(__name__).warning("pipeline.close 失败", exc_info=exc)
             self.pipeline = None
+
+    # ------------------------------------------------------------------
+    # ADR-0036 Phase 3：Live Adapter 增量投影（Host 层反向依赖 Presentation Layer）
+    # ------------------------------------------------------------------
+
+    def _ensure_live_accumulator(self) -> ProjectionAccumulator:
+        """惰性创建 Live Adapter 的 ``ProjectionAccumulator``（仅 Host 层反向依赖 visualizer.viewer）。
+
+        失败隔离：投影是只读探针，异常必须吞掉+记日志，绝不改变生产行为（VM-5 / 探针铁律）。
+        """
+        if self._live_accumulator is None:
+            from home_perception.visualizer.viewer.live_adapter import ProjectionAccumulator
+
+            self._live_accumulator = ProjectionAccumulator(
+                self.scenario.scenario_id, mode="live"
+            )
+        return self._live_accumulator
 
     def _validate_frame_source(self, scenario: ScenarioConfig) -> None:
         """校验帧源可用性（assemble 与 switch_source 共用，避免损坏场景静默空循环）。
@@ -559,7 +598,7 @@ def create_app(
     Returns:
         FastAPI app，已注册：
         - ``GET /`` → 旗舰 Case Viewer（静态托管 Factory 预渲染 case_viewer.html；不 import visualizer、不依赖 runtime）
-        - ``GET /live`` → Live Runtime Preview（既有 Dashboard + WS + YOLO；仅 ``live_enabled`` 时可用）
+        - ``GET /live`` → Live Runtime Preview（统一 Case Viewer：``render_case_viewer`` 渲染实时累积的 ``EvidenceProjection``；仅 ``live_enabled`` 时可用）
         - ``GET /health`` → 健康检查（含 mode / live_enabled / assembled）
         - ``WS {ws_path}`` → Live 帧下行 + action 上行（仅 live_enabled）
         - ``POST /demo/*`` → Live 视频输入 / 场景切换 / reset（仅 live_enabled）
@@ -643,16 +682,28 @@ def create_app(
     async def live_preview() -> HTMLResponse:
         """次级入口：Live Runtime Preview / 实验·演示入口（仅 DEMO_LIVE=1 暴露）。
 
-        保留既有实时 Dashboard（WebSocket + YOLO + pipeline），但明确不是旗舰产品入口；
-        带"Legacy / Phase-3 Preview"架构降级标签，后续经 Live Adapter 收敛到 EvidenceProjection，
-        不再往 dashboard 内加音频 / CrossModal / Case Video。
+        收敛到统一 Case Viewer（ADR-0036 Phase 3）：经 Host 层（gateway）反向依赖
+        ``home_perception.visualizer.viewer``，把实时累积的 ``EvidenceProjection`` 投影为
+        与旗舰同源的 Case Viewer HTML（同一渲染器 ``render_case_viewer``、同一 View Model、
+        同一套语义体系，T0-6）。Legacy dashboard 不再作为 /live 表面。
         """
         if not demo_settings.live_enabled:
             return HTMLResponse(_live_disabled_html(), status_code=404)
-        index_file = dash_dir / "index.html"
-        if index_file.is_file():
-            return HTMLResponse(index_file.read_text(encoding="utf-8"))
-        return HTMLResponse(_live_disabled_html(), status_code=404)
+        try:
+            from home_perception.visualizer.viewer import render_case_viewer
+            from home_perception.visualizer.viewer.live_adapter import build_live_presentation
+
+            projection = gateway._ensure_live_accumulator().to_evidence_projection()
+            proj, descriptor = build_live_presentation(projection)
+            html = render_case_viewer(proj, descriptor)
+            return HTMLResponse(html)
+        except Exception as exc:  # noqa: BLE001  # 渲染失败 fail-closed：返回 500 + 诊断，绝不静默产残缺页
+            structlog.get_logger(__name__).warning("live_case_viewer_render_failed", exc_info=exc)
+            return HTMLResponse(
+                f"<!doctype html><html><body><h1>Live Case Viewer 渲染失败</h1>"
+                f"<pre>{exc!r}</pre></body></html>",
+                status_code=500,
+            )
 
     @app.get("/health")
     async def health() -> dict[str, Any]:

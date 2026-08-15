@@ -13,7 +13,9 @@
 3. **类型只读**：``bridge`` 对 ``WarningEvent``/``ActionCommand`` 只调 ``to_dict()``，
    不调构造器（source 中不出现 ``WarningEvent(`` / ``ActionCommand(`` 构造调用）。
 
-> 这条测试把 ADR-0014 Level 3（Runtime Assembly 契约）从"内部纪律"变成"外部可验证"。
+> 这条测试把 ADR-0014 Level 3（Runtime Assembly 契约）+ ADR-0015 §2.1.1（分层依赖契约）从"内部纪律"
+> 变成"外部可验证"；T0-1~T0-5 守「Runtime Core 不依赖 Presentation Layer / Host 可依赖 / 不反向依赖」，
+> T0-6 见 ``tests/demo/test_gateway_serves_case_viewer.py``。
 """
 
 from __future__ import annotations
@@ -81,8 +83,23 @@ def _collect_silver_demo_modules() -> list[str]:
     return modules
 
 
+# ADR-0015 §2.1.1：仅 Host(gateway) 允许 import Presentation Layer（visualizer.viewer）；
+# 其余 silver_demo 子模块（Runtime Core）一律禁止 import visualizer（T0-1 / T0-2）。
+_GATEWAY_VISUALIZER_PREFIX = "home_perception.visualizer.viewer"
+
+
+def _is_visualizer_import_allowed_for(modname: str, module: str) -> bool:
+    """仅 ``silver_demo.gateway`` 可 import ``home_perception.visualizer.viewer``（含子模块）。"""
+    if modname != "silver_demo.gateway":
+        return False
+    return (
+        module == _GATEWAY_VISUALIZER_PREFIX
+        or module.startswith(_GATEWAY_VISUALIZER_PREFIX + ".")
+    )
+
+
 def test_import_boundary_only_whitelist() -> None:
-    """断言 silver_demo 的 home_perception 依赖仅在白名单内。"""
+    """断言 silver_demo 的 home_perception 依赖仅在白名单内（gateway 的 visualizer.viewer 例外）。"""
     # 注意：gateway import 会触发 home_perception.runtime.pipeline 加载，
     # 而 pipeline 内部 import 了 detection/analysis/action 等 7 层。
     # 因此不能直接断言 sys.modules（会被 pipeline 的内部依赖污染）。
@@ -104,23 +121,88 @@ def test_import_boundary_only_whitelist() -> None:
             # import home_perception.xxx
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if (
-                        alias.name.startswith("home_perception.")
-                        and alias.name not in ALLOWED_HP_IMPORTS
-                    ):
+                    if not alias.name.startswith("home_perception."):
+                        continue
+                    if _is_visualizer_import_allowed_for(modname, alias.name):
+                        continue
+                    if alias.name not in ALLOWED_HP_IMPORTS:
                         violations.append(f"{modname}: 禁止 import {alias.name!r}")
             # from home_perception.xxx import ...
             elif (
                 isinstance(node, ast.ImportFrom)
                 and node.module
                 and node.module.startswith("home_perception.")
-                and node.module not in ALLOWED_HP_IMPORTS
             ):
-                violations.append(f"{modname}: 禁止 from {node.module!r} import")
+                if _is_visualizer_import_allowed_for(modname, node.module):
+                    continue
+                if node.module not in ALLOWED_HP_IMPORTS:
+                    violations.append(f"{modname}: 禁止 from {node.module!r} import")
 
     assert not violations, "silver_demo 违反冻结合规：以下 import 超出白名单\n  - " + "\n  - ".join(
         violations
     )
+
+
+def test_runtime_core_does_not_import_visualizer() -> None:
+    """T0-1（ADR-0015 §2.1.1）：Runtime Core（silver_demo 除 gateway 外）不得 import visualizer。"""
+    import ast as _ast
+
+    violations: list[str] = []
+    for py in sorted(SILVER_DEMO_SRC.rglob("*.py")):
+        rel = py.relative_to(SILVER_DEMO_SRC.parent)
+        modname = ".".join(rel.with_suffix("").parts).removesuffix(".__init__")
+        if modname == "silver_demo.gateway":
+            continue  # Host 层允许（T0-2）
+        try:
+            tree = _ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        except SyntaxError:
+            continue
+        for node in _ast.walk(tree):
+            mods: list[str] = []
+            if isinstance(node, _ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, _ast.ImportFrom) and node.module:
+                mods = [node.module]
+            for m in mods:
+                if m.startswith("home_perception.visualizer"):
+                    violations.append(f"{modname}: 禁止 import {m!r}（仅 gateway 允许）")
+    assert not violations, "silver_demo Runtime Core 违反分层依赖契约：\n  - " + "\n  - ".join(
+        violations
+    )
+
+
+def test_gateway_may_import_visualizer_viewer() -> None:
+    """T0-2（ADR-0015 §2.1.1）：Host(gateway) 可 import visualizer.viewer，但仅此子包。"""
+    import ast as _ast
+
+    gw = SILVER_DEMO_SRC / "gateway.py"
+    tree = _ast.parse(gw.read_text(encoding="utf-8"), filename=str(gw))
+    imported: list[str] = []
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            imported.extend(a.name for a in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.module:
+            imported.extend([node.module])
+    vis = [m for m in imported if m.startswith("home_perception.visualizer")]
+    assert vis, "gateway 应 import home_perception.visualizer.viewer（T0-2 未满足）"
+    for m in vis:
+        assert m == "home_perception.visualizer.viewer" or m.startswith(
+            "home_perception.visualizer.viewer."
+        ), f"gateway 只允许 import visualizer.viewer（子包），不允许 {m!r}"
+
+
+def test_gateway_projects_via_live_adapter_only() -> None:
+    """T0-4（ADR-0015 §5）：gateway 只经 viewer/live_adapter 投影，不自行构造 EvidenceProjection。"""
+    gw_src = (SILVER_DEMO_SRC / "gateway.py").read_text(encoding="utf-8")
+    # 正向：使用 viewer 的投影入口
+    assert "build_live_presentation" in gw_src, "gateway 应经 viewer 的 build_live_presentation 投影"
+    assert "ProjectionAccumulator" in gw_src, "gateway 应经 viewer 的 ProjectionAccumulator 累积"
+    assert "render_case_viewer" in gw_src, "gateway 应经 viewer 的 render_case_viewer 渲染"
+    # 负向：不得自行从 schema 构造 View Model（只读投影，不造事实）
+    assert "EvidenceProjection(" not in gw_src, "gateway 不得自行构造 EvidenceProjection"
+    assert (
+        "from home_perception.visualizer.schema" not in gw_src
+    ), "gateway 不得直接 import visualizer.schema"
 
 
 def test_no_forbidden_submodule_imports() -> None:

@@ -108,3 +108,37 @@ def test_visualizer_imports_are_stdlib_or_self():
                     f"{path.relative_to(_PACKAGE_ROOT.parent)} -> {module} (top={top})"
                 )
     assert offenders == [], f"visualizer 出现非允许依赖：{offenders}"
+
+
+# ============================================================================
+# ADR-0015 §2.1.1 / ADR-0036 VM-3：Presentation Layer 不反向依赖 silver_demo / 运行期决策
+# ============================================================================
+
+# T0-5：Presentation Layer 不参与运行期决策（VM-3 / VM-5）。
+_VISUALIZER_DECISION_FORBIDDEN = (
+    "home_perception.analysis.rule_engine",
+    "home_perception.analysis.decision_engine",
+    "home_perception.analysis.decision_policy",
+    "home_perception.action.executor",
+    "home_perception.action.dispatcher",
+)
+
+
+def test_visualizer_does_not_import_silver_demo():
+    """T0-3（ADR-0015 §2.1.1 / VM-3）：Presentation Layer 不得反向依赖 silver_demo。"""
+    offenders: list[str] = []
+    for path in sorted(_PACKAGE_ROOT.rglob("*.py")):
+        for module in _collect_imports(path):
+            if module.startswith("silver_demo"):
+                offenders.append(f"{path.relative_to(_PACKAGE_ROOT.parent)} -> {module}")
+    assert offenders == [], f"visualizer 不得 import silver_demo：{offenders}"
+
+
+def test_visualizer_does_not_import_runtime_decision_symbols():
+    """T0-5（ADR-0015 §2.1.1 / VM-3 / VM-5）：Presentation Layer 不参与运行期决策。"""
+    offenders: list[str] = []
+    for path in sorted(_PACKAGE_ROOT.rglob("*.py")):
+        for module in _collect_imports(path):
+            if module.startswith(_VISUALIZER_DECISION_FORBIDDEN):
+                offenders.append(f"{path.relative_to(_PACKAGE_ROOT.parent)} -> {module}")
+    assert offenders == [], f"visualizer 不得 import 运行期决策符号：{offenders}"

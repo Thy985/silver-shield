@@ -46,9 +46,9 @@ P0-10.5 已证明**架构纪律成立**（冻结契约 + Contract Test + 仓库�
 ### 2.1 引入独立的展示层包 `src/silver_demo/`（与冻结包物理隔离）
 
 - 与冻结包 `home_perception` **物理隔离**（different package），保证冻结包不引入任何 Web 依赖。
-- `silver_demo` **仅 import 以下白名单符号**（视为"消费冻结契约"的合法边界）：
+- `silver_demo` 的 **Runtime Core** 仅经 §2.1.1 白名单消费 `home_perception` 运行时**输出契约**（视为"消费冻结契约"的合法边界）；**Host / Composition Root（`silver_demo.gateway`）** 在此基础上额外允许依赖 §2.1.1 定义的 Presentation Layer（见该节「分层依赖契约」）。
 
-| 消费目标 | 来源（白名单） | 用途 |
+| 消费目标（Runtime Core 白名单） | 来源（白名单） | 用途 |
 | --- | --- | --- |
 | `PerceptionPipeline` | `home_perception.runtime.pipeline` | 唯一装配入口 |
 | `DemoClock` | `home_perception.runtime.pipeline` | 确定性时序源（驱动场景时间） |
@@ -65,9 +65,43 @@ P0-10.5 已证明**架构纪律成立**（冻结契约 + Contract Test + 仓库�
 > 这正是 ADR-0014「实现可替换」在消费者侧的体现：消费者可自由提供自己的输入源，无需耦合冻结包内部。
 > 冻结包内的 `CaviarFrameSource` 仍作为 FrameSource 契约的参考实现保留，用于工程回归。
 
-- **严禁**：`silver_demo` 直接或间接 import `rule_engine` / `decision_engine` / `decision_policy` /
-  `action.executor` / `action.dispatcher` / `action.notifier` / `action.publisher`（即不得穿透 7 层内部）。
-  网关只通过 `PerceptionPipeline.from_settings(...)` 拿到的对象驱动，绝不自行构造/调用层内组件。
+- **严禁**：`silver_demo`（Runtime Core 与 Host 均适用）直接或间接 import `rule_engine` / `decision_engine` /
+  `decision_policy` / `action.executor` / `action.dispatcher` / `action.notifier` / `action.publisher`
+  （即不得穿透 7 层内部）。网关只通过 `PerceptionPipeline.from_settings(...)` 拿到的对象驱动，绝不自行构造/调用层内组件。
+  **唯一例外**：`silver_demo.gateway`（仅此一层）允许 import `home_perception.visualizer.viewer`，详见 §2.1.1。
+
+### 2.1.1 分层依赖契约（ADR-0036 收敛后升级：从 import 白名单到 layer dependency contract）
+
+原 §2.1 以「模块级 import 白名单」限定 `silver_demo ↔ home_perception` 的契约面；随着 ADR-0036 统一
+Case Viewer 落地，边界升级为**分层依赖契约（layer dependency contract）**，并区分 `silver_demo`
+内部的 **Runtime Core** 与 **Host / Composition Root** 两种角色：
+
+| 层 | 范围 | 对 Presentation Layer（`home_perception.visualizer`）的依赖 |
+| --- | --- | --- |
+| **Runtime Core** | `silver_demo` 内除 `gateway` 外的所有子模块（`config` / `bridge` / `state` / `scenarios` / `sources` / `ws` / `runtime`） | ❌ **禁止** import `visualizer`（含 `viewer` / `render` / `loader` / `schema`） |
+| **Host / Composition Root** | `silver_demo.gateway`（FastAPI 装配 + 帧循环 + 路由 + 静态托管） | ✅ **允许** import `home_perception.visualizer.viewer`（仅 `viewer` 子包；用于将 `FrameResult` / `AudioEvidence` 投影为 `EvidenceProjection` 并渲染统一 Case Viewer） |
+
+**依赖方向单一（不可环）**：
+
+```
+Runtime Core ──(Output Contract: FrameResult / AudioEvidence / events)──► Presentation Adapter (viewer/)
+   │                                                                               │
+   │  Host / Composition Root (gateway) 是唯一允许「反向依赖」Presentation Layer 的层  │
+   └──────────────────────► home_perception.visualizer.viewer ◄─────────────────────┘
+                                            │
+                                            ▼
+                                      EvidenceProjection ──► Case Viewer
+```
+
+- **Presentation Layer 必须单向**：`home_perception.visualizer`（含 `viewer/` / `render/` / `loader/` / `schema`）
+  **不得 import `silver_demo`**，绝不参与运行期决策或改变 `silver_demo` 行为（VM-3 / VM-5 / VM-9）。
+  它与 `silver_demo` 的关系只能是「被 Host 反向 import」，而非「依赖 `silver_demo`」。
+- **真正被放宽的只有 Gateway / Host 这一层（Composition Root），不是整个 `silver_demo` 包**。
+  Runtime Core 的禁止规则与原白名单**完全不变**。
+
+> **硬原则（Hard Invariant）**：
+> *Presentation Layer may be imported by the Application Host / Composition Root,
+> but must never be imported by Runtime Core or participate in runtime decision logic.*
 
 ### 2.2 消费边界精确映射（基于真实代码，三端）
 
@@ -280,20 +314,44 @@ tests/demo/
 
 ---
 
-## 5. 冻结合规证明（呼应 ADR-0014）
+## 5. 冻结合规证明（呼应 ADR-0014 · 升级为分层依赖契约测试）
 
-新增 `tests/demo/test_freeze_boundary.py`，作为 P0-11 的"攻击性契约测试"：
+新增 / 升级 `tests/demo/test_freeze_boundary.py` 与 `tests/visualizer/test_ast_contract.py`，
+把 ADR-0014 L3（Runtime Assembly 契约）+ ADR-0036 §2.1.1 分层依赖铁律从「内部纪律」变成「外部可验证」。
 
-1. **import 边界**：用 `importlib` 导入 `silver_demo.gateway`，遍历其模块依赖图，
-   断言**仅**引用 §2.1 白名单中的 `home_perception` 子模块；
+### 5.1 分层依赖契约验收（T0-1 ~ T0-6）
+
+1. **T0-1（Runtime Core 不依赖 Presentation Layer）**：AST 扫描 `silver_demo` 内除 `gateway` 外的
+   所有子模块，断言其**不得** import `home_perception.visualizer`（含 `viewer`/`render`/`loader`/`schema`）；
+   若出现 → 测试失败。
+2. **T0-2（Host 可依赖 Presentation Layer）**：断言 `silver_demo.gateway` **可** import
+   `home_perception.visualizer.viewer`（及其 `render_case_viewer` / `ProjectionAccumulator` /
+   `build_live_presentation`），作为唯一的 Composition Root 反向依赖。
+3. **T0-3（Presentation Layer 不反向依赖 silver_demo）**：AST 扫描 `home_perception.visualizer`，
+   断言其**不得** import `silver_demo`（任何子模块）；若出现 → 测试失败。
+4. **T0-4（gateway 经 viewer 投影）**：断言 `gateway` 只通过 `viewer/live_adapter` 的
+   `build_live_presentation` / `ProjectionAccumulator` 把 `FrameResult` 投影为 `EvidenceProjection`，
+   不自行构造 View Model。
+5. **T0-5（viewer 不参与运行期决策）**：断言 `home_perception.visualizer` 不 import
+   `rule_engine`/`decision_engine`/`decision_policy`/`action.executor` 等运行期决策符号，
+   不改变 `silver_demo` 行为。
+6. **T0-6（GET /live 收敛到统一 Case Viewer）**：集成测试断言 `GET /live` 与 `GET /` 共用同一
+   `render_case_viewer` 渲染器、同一 `EvidenceProjection` View Model、同一套语义体系
+   （`tests/demo/test_gateway_serves_case_viewer.py::test_live_mode_serves_case_viewer`）。
+
+### 5.2 冻结消费契约验收（沿用原 §5 三断言，仍有效）
+
+A. **import 边界**：用 `importlib` 导入 `silver_demo.gateway`，遍历其模块依赖图，
+   断言运行时消费**仅**引用 §2.1 白名单中的 `home_perception` 子模块（不含 7 层内部）；
    若出现 `rule_engine`/`decision_engine`/`action.executor` 等 → 测试失败。
-2. **消费形态**：断言网关只调用 `PerceptionPipeline.from_settings` / `process_frame` /
+B. **消费形态**：断言网关只调用 `PerceptionPipeline.from_settings` / `process_frame` /
    读取 `FrameResult` 字段，断言其**不**拥有 `RuleEngine`/`DecisionEngine`/`ActionExecutor` 实例引用。
-3. **类型只读**：断言网关对 `WarningEvent`/`ActionCommand` 仅调用 `.to_dict()`，不调用构造器。
+C. **类型只读**：断言网关对 `WarningEvent`/`ActionCommand` 仅调用 `.to_dict()`，不调用构造器。
 
-> 这条测试把 ADR-0014 Level 3（Runtime Assembly 契约）从"内部纪律"变成"外部可验证"——
+> 这条测试把 ADR-0014 / ADR-0036 的边界从「内部纪律」变成「外部可验证」——
 > 直接回答 Owner 之前的担忧："后续接 Dashboard/设备/Agent 时容易绕过架构"。
-> 它也是本 ADR §1 原则（"Demo 是消费者，不是架构参与者"）的可执行证据。
+> 它也是本 ADR §1 原则（"Demo 是消费者，不是架构参与者"）的可执行证据——
+> 只是「消费者」在 ADR-0036 之后明确包含了「Host 反向依赖 Presentation Layer 渲染」这一合法角色。
 
 ---
 
