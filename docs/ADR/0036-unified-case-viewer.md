@@ -1,7 +1,7 @@
 # ADR-0036: 统一 SilverShield Case Viewer（展示语义统一层 · 单一 View Model）
 
-- 状态：Proposed（Owner 评审 · 已按四轮评审收紧，待冻结）
-- 日期：2026-08-14
+- 状态：Accepted（四轮评审 + E2E 实证后冻结）
+- 日期：2026-08-14（定稿）／ 2026-08-16（冻结）
 - 决策者：Owner
 - 相关：ADR-0015 / ADR-0016 / ADR-0017（第一代 Demo）、ADR-0026（音频感知链路）、ADR-0027（音频记忆集成）、ADR-0028（跨模态运行时接线）、ADR-0031 / ADR-0032 / ADR-0033 / ADR-0034 / ADR-0035、MEMORY.md「战略方向重定向（2026-08-14）」
 
@@ -596,3 +596,71 @@ FIXTURE     → 固定测试素材 · 非实时
 - **`text` / `transcript`**：ASR 不在音频感知层（ADR-0001/0026），且 Case Viewer 不生成（VM-9）。若未来有转录，是独立派生产物，不进 `audio_evidence` 主投影。
 - **`FORBIDDEN_AUDIO_FIELDS`**（`fraud_result` / `verdict` / `is_fraud` / `is_scammer` / `is_criminal` / `crime_probability` / `guilt_score` / `deception_score` 等）：音频只产 perception，不产判定（模块边界铁律，`AudioPerceptionEvent` 结构性禁止）。
 - **媒体字节（`raw_audio` / `mp4` / `wav`）**：媒体字节不进 View Model（VM-10 / AC-11），只由 Media Source Adapter 经 `ref` 解析。
+
+---
+
+## 冻结记录（Acceptance · E2E 实证 · 2026-08-16）
+
+> 本 ADR 经四轮评审收紧 + 端到端实证后由 Owner 拍板冻结（Proposed → Accepted）。
+> 冻结**不是"全绿"口号**，而是"代码级贯通已验证、唯一未过项是真实 runtime 环境受限"。
+> 以下为可复核的硬证据，不接受口头全绿。
+
+### 1. 四闸门签字状态（沿用 Live Audio 验收闸门）
+
+| 闸门 | 含义 | 状态 | 证据 |
+| --- | --- | --- | --- |
+| Gate 1 · 技术压力审核 | 边界/异常/幂等/大输入 | **PASS** | `tests/visualizer` 全量 392 passed/0 failed；fail-closed 守卫（`MediaSourceError`/`EvidenceProjectionError`/`_assert_audio_boundary`） |
+| Gate 2 · 端到端 Projection/Viewer | 四块资产 → 单一 View Model 贯通 | **PASS** | Slice A/B/C/D 全量测试 47 passed；Live 音频独立 harness 42/42 PASS |
+| Gate 3 · PM 产品验收 | 首屏叙事 + 产品语义一致 | **PASS**（条件已落实） | 首屏 `audio_perception` 实时摘要已加（PR #238 已 MERGED）；首屏层级 = Case Video → 当前风险 → 为什么 → 系统行动 → Evidence Timeline → 详细证据 |
+| Gate 4 · 真实 Runtime 验收 | 真实音频 + GPU/YOLO 权重跑通 | **NOT YET VERIFIED** | **环境受限，非代码未完成**：验证环境无真实音频素材、未装 YOLO 权重；代码级贯通已在 Gate 2 验证。需在带素材的机器跑 `scripts/run_demo.py --live` 补签（见 §4 已知限制） |
+
+> **总状态唯一正确表述**：`Live Audio：Projection chain PASS；Product visibility conditional（首屏摘要已加）；Real runtime production path pending verification.`
+
+### 2. E2E 实证摘要（可复核）
+
+| 套件 | 命令 | 结果 |
+| --- | --- | --- |
+| visualizer 全量 | `pytest tests/visualizer`（系统 Py3.14，pytest 9.0.2） | **392 passed / 0 failed**（退出码 0，无 F/E） |
+| Slice D 子集 | `test_slice_d / test_media_source / test_cli_d3 / test_semantic_equivalence / test_prepare_case_media` | **47 passed** |
+| Live 音频 E2E harness（上一轮） | `D:/temp/e2e_live_audio_harness.py` | **42/42 PASS**（fail-closed 6/6、DI 吞异常、2 万条 0.72s、幂等 5 次、路径穿越拒绝、网关 HTTP 200/404、Gate3 分发回归） |
+| ruff（提交前） | managed venv `ruff==0.16.1` 全量 | 历史提交全量通过（PR #229–#238 均过 preflight） |
+
+> 注：sandbox atexit 的 `safe-delete` 提示会吞掉 pytest 汇总计数行，但退出码 0 + 全程 `.` 无 `F`/`E` 即全绿；用例数以 collect-only（392）为准。
+
+### 3. 验收合规矩阵（AC-1 ～ AC-16）
+
+| AC | 条款（VM 不变式） | 证据 | 状态 |
+| --- | --- | --- | --- |
+| AC-1 | VM-1：前端无 `riskData`/`decisionData`/`timelineData` 自有类型 | grep `riskData\|decisionData\|timelineData` 于 `visualizer/`（含 `assets/` JS）→ **0 命中**（仅 `render.py:10` 文档声明"不定义"） | ✅ PASS |
+| AC-1b | VM-1：禁止 `RiskState`/`DecisionState`/`TimelineState`/`GraphState` 事实模型 | grep → **0 命中**；`case_presentation.py` 把 `risk_data/decision_data/timeline_data/audio_data/audio_state` 列为禁止键并 fail-closed 拒绝 | ✅ PASS |
+| AC-1c | VM-1 音频维度：禁 `audioData`/`audioState` 业务事实源 | grep `audioState\|AudioFactState` → **0 命中**（`assets/` 无 `AudioState`） | ✅ PASS |
+| AC-2 | VM-4：Artifact Mode 与 D1 Explorer 同 artifact 语义一致 | `render_case_viewer` 为 D1/D2 唯一渲染入口；`test_semantic_equivalence.py` | ✅ PASS |
+| AC-3 | VM-4 含音频：Live 与 Artifact 共享同一 `EvidenceProjection` schema | `AudioEvidenceNode` 共用；`live_adapter`(REAL_SENSOR) 与 `loader`(SIMULATED) 同 schema；`test_live_adapter.py`/`test_loader.py` | ✅ PASS |
+| AC-4 | VM-8：Live 流重放两次 `ScenarioEvidence` 逐字段稳定 | `test_live_adapter.py` 幂等用例 + E2E harness 幂等 5 次一致 | ✅ PASS |
+| AC-4b | VM-8 幂等：同一有序 stream 重放 N≥2 次 `EvidenceProjection` 逐字段一致 | 同上；harness 幂等 5 次逐字节一致 | ✅ PASS |
+| AC-5 | VM-3：viewer/ 不 import 生产 runtime 决策符号、不 import `silver_demo`；`gateway` 单向 import viewer | grep `import silver_demo` 于 `viewer/` → 仅 `__init__.py` 文档说明"不 import"；`gateway` 是 Host 单向依赖（ADR-0015 §2.1.1） | ✅ PASS |
+| AC-6 | VM-12：D3 导出 Case Video；无 Analysis Video 被重新产品化 | `run_case_viewer.py --export-case-video` → `D3.generate_case_video(CaseVideoSpec)`；`with_audio` 默认 False、`True` 时 fail-closed `NotImplementedError`（绝不静默产无声片）；无 Analysis Video 入口 | ✅ PASS |
+| AC-7 | 决策 13：每个案例视图显式呈现 `provenance_kind` 及文案 | `render.py _PROVENANCE_BADGE`：REAL_SENSOR→"真实传感器·实时数据"、FIXTURE→"固定测试素材·非实时"、SIMULATED→"程序化场景·可复现"；`assets/` provenance 逻辑 | ✅ PASS |
+| AC-8 | VM-7：缺失的 `gate`/`fingerprints`/`benchmark`/`audio_evidence` 显式表达；无 `gate=PASS`/伪造音频 | `loader._build_audio_evidence` `raw is None → return ()`（AC-12）；VM-7 显式空；`test_loader.py` | ✅ PASS |
+| AC-9 | D-Audio：Timeline 按 `timestamp` 交错呈现视觉/音频/决策/行动/记忆；`TimelineNode` 带 `modality`；无三套独立时间轴 | `schema/evidence.py:56 modality: TimelineModality`；统一 timeline 交错渲染；`test_renderer.py` | ✅ PASS |
+| AC-10 | VM-9：无 ASR/LLM；`audio_evidence` 仅来自 `EvidenceProjection`；无 `text`/`transcript`/`FORBIDDEN_AUDIO_FIELDS` | grep `transcribe\|asr\|llm` 于 `viewer/` → 仅文档声明"无 ASR/LLM"；`AudioEvidenceNode` 无禁止字段（脱敏守卫 + 字段来源表） | ✅ PASS |
+| AC-11 | Media Source 分离：媒体字节经 ref 解析，不存 `EvidenceProjection` | `media_source.py MediaManifest` 仅含 `source_kind`/`frame_template`/`video_url`（URL/ref），**不读任何媒体字节**（无 `open`/`read_bytes`）；`EvidenceProjection` 不持 `raw_audio/mp4/wav` | ✅ PASS |
+| AC-12 | VM-13：`audio_evidence` 仅真实音频进入 canonical 后由 loader 投影；Phase A/B 恒 `()`，不编造 | `loader.py:419-420 if raw is None: return ()`；runner→report→loader→renderer 全链路；`test_loader.py`/`test_integration_adr0034_phase_c_audio.py` | ✅ PASS |
+| AC-13 | VM-11：`CasePresentationDescriptor` 不含 `case_risk_level`/`case_decision`/`case_timeline` | `case_presentation.py _FORBIDDEN_FACT_FIELDS` + `_assert_no_forbidden_fact_fields` fail-closed 拒绝；`load_case_descriptor` 校验 shape | ✅ PASS |
+| AC-14 | VM-10：Media Timeline 与 Evidence Timeline 经 Case Time 映射同步，不混同 | `case_presentation.py TimeMapping(mode="linear")`；`assets/media.js`/`audio_sync.js` 处理 Case Time 同步；VM-10 分离 | ✅ PASS |
+| AC-15 | VM-12：主体验使用 Case Video 叙事结构，不把 Analysis Video 当主视频 | D3 仅 `generate_case_video(CaseVideoSpec, 叙事路径)`；`_assert_audio_boundary` 边界；无 Analysis Video 入口；首屏 `case_video` 面板 | ✅ PASS |
+| AC-16 | 展示契约：首屏层级 Case Video→当前风险→为什么→系统行动→Evidence Timeline→详细证据 | `render.py _DEFAULT_FIRST_SCREEN_PANELS`：case_video → (memory_timeline) → current_risk → why → action → action_closure → evidence_timeline → audio_perception；graph/fingerprints/gate/audio 详情在二级视图 | ✅ PASS |
+
+**结论：AC-1 ～ AC-16 全部 PASS（19 条验收项，含 AC-1b/1c 子项）。**
+
+### 4. 已知限制（诚实标注，非未完成的代码）
+
+1. **Gate 4 真实 Runtime 未签**（环境受限）：需在带真实音频素材 + GPU/YOLO 权重的机器跑 `scripts/run_demo.py --live`，验证 `真实音频 → AudioPipeline → 实时帧循环 → Live ingest → Projection → 首屏显示 → 播放/时间轴联动`。当前验证环境不具备素材/权重，**非代码路径未完成**。
+2. **D3 `with_audio`（D3-B 旁白/音频合成）未实现**：`_assert_audio_boundary` fail-closed，`with_audio=True` 显式 `NotImplementedError`，绝不静默产"无声片冒充有声片"。Case Video 导出诚实为纯视觉。
+3. **YOLO 权重**：`yolo11n.pt` 在仓库根，CI/隔离验证环境未装载 → 涉及真实检测的部分用例在隔离环境跳过（标记 skipped，非失败）。
+
+### 5. 关联提交 / PR（冻结溯源）
+
+- Slice A/B/C + Gate 3：PR #236（Live 真实音频投影，MERGED）、PR #238（Live 首屏 `audio_perception` 实时摘要，MERGED）。
+- Slice D（Media Source Adapter + D3 导出 + D1/D2 去重）：随 #229–#238 系列 MERGED（落地快照见附录 A）。
+- 本冻结 PR：状态行 Proposed→Accepted + README 清单同步（见关联 PR）。
