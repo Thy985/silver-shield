@@ -34,6 +34,7 @@ _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _ECHARTS_FILENAME = "echarts.min.js"
 _REPLAY_FILENAME = "replay.js"
 _MEDIA_FILENAME = "media.js"
+_AUDIO_SYNC_FILENAME = "audio_sync.js"
 
 # 时间轴配色（浅色主题，stage → 色值）。
 _STAGE_COLOR = {
@@ -236,6 +237,14 @@ def _replay_inline() -> str:
     return p.read_text(encoding="utf-8")
 
 
+def _audio_sync_inline() -> str:
+    """内联 P0-3 AudioSync（音频轨 ↔ 证据时间线联动；缺失时降级为空串——不联动，不崩）。"""
+    p = _ASSETS_DIR / _AUDIO_SYNC_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
 def _media_inline() -> str:
     """内联 ADR-0036 Slice A.1 MediaPlayer 引擎（缺失时降级为空串——画布留空，不崩）。"""
     p = _ASSETS_DIR / _MEDIA_FILENAME
@@ -283,9 +292,14 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
                 f'<span class="tl-related" data-related-ref="{_esc(related)}" '
                 f'title="跨模态关联到的视觉证据 ref">🔗 关联视觉证据：{_esc(related)}</span>'
             )
+        # P0-3（media_tracks）：AUDIO 节点带 data-kind（= type=AudioPerceptionKind）——
+        # 供前端音频轨联动（点击证据节点 → 播放对应样本轨 #audio-<kind> + 高亮卡片）。
+        audio_kind_attr = (
+            f' data-kind="{_esc(node["type"])}"' if modality == "AUDIO" else ""
+        )
         items.append(
             f"""
-            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}" data-ref="{_esc(node['ref'])}">
+            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}" data-ref="{_esc(node['ref'])}"{audio_kind_attr}>
               <span class="tl-dot" style="background:{color}"></span>
               <div class="tl-body">
                 <div class="tl-head">

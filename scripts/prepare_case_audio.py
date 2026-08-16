@@ -52,23 +52,30 @@ _FIXTURE_MAP: dict[str, str] = {
 }
 
 
-def _discover_kinds(canonical_path: Path) -> set[str]:
-    """从 canonical 读取真实出现的音频 kind（仅声明有的才准备样本，诚实）。"""
+def _discover_audio_specs(canonical_path: Path) -> dict[str, dict]:
+    """从 canonical 读取真实出现的音频 kind → 时间锚点（仅声明有的才准备样本，诚实）。
+
+    P0-3（media_tracks 时间绑定）：返回 ``{kind: {"timestamp": float}}``——timestamp 为
+    canonical ``audio_timestamp``（Unix 秒，证据层时间）；manifest 的 ``tracks`` 据此
+    推导相对最早音频的 start_time（与渲染层卡片 rel 时间同源，Case Time 对齐）。
+    """
     try:
         data = json.loads(canonical_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.error("canonical 解析失败（跳过）", path=str(canonical_path), error=str(exc))
-        return set()
+        return {}
     raw = (data.get("artifacts") or {}).get("audio_evidence")
     if not isinstance(raw, list):
-        return set()
-    kinds: set[str] = set()
+        return {}
+    specs: dict[str, dict] = {}
     for entry in raw:
-        if isinstance(entry, dict):
-            k = entry.get("audio_kind")
-            if isinstance(k, str) and k:
-                kinds.add(k)
-    return kinds
+        if not isinstance(entry, dict):
+            continue
+        k = entry.get("audio_kind")
+        if isinstance(k, str) and k and k not in specs:
+            ts = entry.get("audio_timestamp")
+            specs[k] = {"timestamp": float(ts) if isinstance(ts, (int, float)) else 0.0}
+    return specs
 
 
 def _audio_valid(audio_dir: Path, manifest: dict | None, want_kinds: set[str]) -> bool:
@@ -95,15 +102,19 @@ def _prepare_one(
     artifacts: Path,
     fixtures: Path,
     scenario_id: str,
-    want_kinds: set[str],
+    audio_specs: dict[str, dict],
     *,
     force: bool,
 ) -> bool:
     """为单个场景准备可播放样本：复制 WAV + 写 manifest。成功 True，失败 False。
 
-    只为 ``want_kinds`` 中能在 ``_FIXTURE_MAP`` 命中 fixture 的 kind 复制样本；其余
+    只为 ``audio_specs`` 中能在 ``_FIXTURE_MAP`` 命中 fixture 的 kind 复制样本；其余
     kind（如 audio_anomaly_other）如实留空（不编造样本）。无样本可放时也写合法空 manifest，
     使 resolve_audio_source 返回 ``files={}``（诚实：有证据但无样本，不渲染播放控件）。
+
+    P0-3（media_tracks 时间绑定）：manifest 增写 ``tracks``——每条样本轨带
+    ``start_time``（相对最早音频 T0 的秒，与渲染层卡片 rel 时间同源）与
+    ``provenance_kind``（SIMULATED：确定性合成素材，诚实标注）。
     """
     audio_dir = artifacts / scenario_id / "audio"
     existing = None
@@ -113,6 +124,7 @@ def _prepare_one(
             existing = json.loads(mani_p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             existing = None
+    want_kinds = set(audio_specs)
     if not force and _audio_valid(audio_dir, existing, want_kinds):
         logger.info("音频样本已就绪，跳过（幂等）", scenario=scenario_id)
         return True
@@ -147,7 +159,24 @@ def _prepare_one(
         logger.error("部分 kind 缺少 fixture，音频样本准备不完整（fail-closed）", scenario=scenario_id)
         return False
 
-    manifest = {"source_kind": "AudioFileSource", "files": files}
+    # P0-3：tracks = 样本轨时间绑定（start_time 相对最早音频 T0，与渲染卡片 rel 同源）。
+    timestamps = sorted(
+        (audio_specs[k].get("timestamp", 0.0), k) for k in files
+    )
+    t0 = timestamps[0][0] if timestamps else 0.0
+    tracks: list[dict] = []
+    for ts, kind in timestamps:
+        tracks.append(
+            {
+                "id": kind,
+                "kind": kind,
+                "url": files[kind],
+                "start_time": round(ts - t0, 3),
+                "end_time": None,  # 合成样本整段可播，无独立结束锚点
+                "provenance_kind": "SIMULATED",
+            }
+        )
+    manifest = {"source_kind": "AudioFileSource", "files": files, "tracks": tracks}
     try:
         audio_dir.mkdir(parents=True, exist_ok=True)
         mani_p.write_text(
@@ -160,6 +189,7 @@ def _prepare_one(
         "可播放音频样本已登记为 AudioFileSource",
         scenario=scenario_id,
         kinds=list(files.keys()),
+        tracks=[t["id"] for t in tracks],
     )
     return True
 
@@ -195,15 +225,15 @@ def main(argv: list[str] | None = None) -> int:
     ok = True
     for canonical in sorted(args.artifacts.glob("*.canonical.json")):
         sid = canonical.name[: -len(".canonical.json")]
-        want_kinds = _discover_kinds(canonical)
-        if not want_kinds:
+        audio_specs = _discover_audio_specs(canonical)
+        if not audio_specs:
             # 该场景无音频证据：确保无遗留音频目录（干净态），跳过准备。
             leftover = args.artifacts / sid / "audio"
             if leftover.exists():
                 logger.info("场景无音频证据，清理残留音频目录", scenario=sid)
                 shutil.rmtree(leftover, ignore_errors=True)
             continue
-        if not _prepare_one(args.artifacts, args.fixtures, sid, want_kinds, force=args.force):
+        if not _prepare_one(args.artifacts, args.fixtures, sid, audio_specs, force=args.force):
             ok = False
 
     if not ok:
