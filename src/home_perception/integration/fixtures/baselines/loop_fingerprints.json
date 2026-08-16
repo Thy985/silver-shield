@@ -1,6 +1,6 @@
 {
   "generated_at": "",
-  "note": "ADR-0034 loop 指纹基线（DoD C4）。变更须 PR 注明 integration-baseline-bump。指纹含 numpy/opencv 版本（ADR-0032 D7），基线必须由 CI 裁判环境生成（numpy==2.4.2 / opencv-python==4.13.0.92，见 requirements-ci.txt）；在本地其他依赖版本下重新生成会导致 CI 漂移。",
+  "note": "ADR-0034 loop 指纹基线（DoD C4）。变更须 PR 注明 integration-baseline-bump。指纹含 numpy/opencv 版本（ADR-0032 D7），基线必须由 CI 裁判环境生成（numpy==2.4.2 / opencv-python==4.13.0.92，见 requirements-ci.txt）；在本地其他依赖版本下重新生成会导致 CI 漂移；2026-08-16 补 audio_e2e/high_risk（#215 引入时漏更新）。",
   "scenarios": {
     "sw_adr0034_alarm": {
       "expectation_fingerprint": "734e993a1d4bcb491d4824f40cdde4e8b4c98f9de7b62624d5056f6377917edd",
@@ -17,6 +17,14 @@
     "sw_adr0034_elderly_dwell": {
       "expectation_fingerprint": "c8b4730f3262a00eba9ee0529e0b90563d3f6a0efb0ac940ab4f25ba44079aa0",
       "loop_fingerprint": "4d930ce2491b105c3ae0057dbda9c3909f35ea17dc54bea2d4a863ba71a6de14"
+    },
+    "sw_adr0034_audio_e2e": {
+      "expectation_fingerprint": "c788f50d589c393a502d9a83281e98bbe012829ee7b2fa52ad68c46f14eff307",
+      "loop_fingerprint": "feede4009ed8e134eb023c5e6665c6b4b54b2947d89ce728525967ddb5e24502"
+    },
+    "sw_adr0034_high_risk": {
+      "expectation_fingerprint": "d83091a8d079a580bdcc925336e1dbf1adce9e583c0d4a739dc467315354df1e",
+      "loop_fingerprint": "0b33101f05178c70a10fd2678127be5a840cafe35c1c945d971f590100285436"
     }
   }
 }
