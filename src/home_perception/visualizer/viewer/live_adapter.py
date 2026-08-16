@@ -619,7 +619,9 @@ class ProjectionAccumulator:
 
         Live 显式缺失字段（AC-8 / VM-7）：``gate=()`` / ``gate_passed=False`` /
         ``gate_degraded=False`` / ``fingerprints=None`` / ``trace_outcome_kinds=()`` /
-        ``suppress_reasons=()`` / ``episode_action_command_types=()`` / ``episodes=0`` /
+        ``suppress_reasons=()``（刻意分歧：Live 是进行中的实时流、case 未终结，负向能力卡
+        "为什么没有报警"仅对※已终结的 Canonical case※有意义，故 Live 恒不显示该卡）/
+        ``episode_action_command_types=()`` / ``episodes=0`` /
         ``cross_modal_links=0`` / ``audio_evidence=()``（AC-12：真实音频证据在 Phase C 才由
         loader 投影；Phase B 仅时间轴增量合并 AUDIO modality 节点，绝不编造音频证据）。
         """
@@ -657,6 +659,8 @@ class ProjectionAccumulator:
             recommended_actions=recommended_actions,
             command_types=command_types,
             trace_outcome_kinds=(),
+            # 刻意分歧（ADR-0036）：Live 进行中、case 未终结，"为什么没有报警"卡仅对
+            # 已终结 Canonical case 有意义；此处恒 () 使渲染层不出现负向能力卡（诚实优先）。
             suppress_reasons=(),
             episode_action_command_types=(),
             timeline=timeline,
