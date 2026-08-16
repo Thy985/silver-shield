@@ -200,6 +200,10 @@ class Scenario(BaseModel):
     # runner 在运行前经 ``memory_store.upsert_episodic`` 预置，决策检索引用
     # （如 repeated_visit：3 days ago / yesterday / today）。
     prior_episodes: list[PriorEpisodeSpec] = Field(default_factory=list)
+    # G0-3：历史感知决策开关（golden opt-in，缺省 False = 纯感知决策，现有场景逐字不变）。
+    # True 时 runner 注入 memory_store 并启用 RuleBasedDecisionPolicy(memory_aware=True)——
+    # 历史 episodes >= 2（跨日模式重复）→ 风险升级（LOW→MEDIUM 等）。
+    memory_aware: bool = False
     # ADR-0033：可选安全评价标签（向后兼容缺省 None；ScenarioValidator 不消费此字段，
     # 验证 ≠ 评价，职责分离）。benchmark.expected_alarm 由场景作者显式声明。
     benchmark: BenchmarkExpectation | None = None
