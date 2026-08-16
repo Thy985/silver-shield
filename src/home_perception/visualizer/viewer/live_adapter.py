@@ -58,6 +58,9 @@ _LIVE_PANELS: tuple[str, ...] = (
     "action",
     "action_closure",
     "evidence_timeline",
+    # Gate 3 产品拍板（2026-08-16）：Live 首屏须展示"此刻真实传感器检测到什么"，
+    # 与 Artifact 首屏音频面板语义对齐；首屏为实时摘要，完整技术细节在 details 区。
+    "audio_perception",
 )
 
 # 确定性 ref 前缀（Live 源，区别于 artifact 的 ``<scenario>.canonical.json#...``）。
