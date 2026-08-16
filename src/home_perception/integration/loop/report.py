@@ -93,6 +93,47 @@ def _project_audio_events(result: IntegrationRunResult) -> tuple[dict, ...]:
     return tuple(out)
 
 
+def _project_memory_episodes(result: IntegrationRunResult) -> tuple[dict, ...]:
+    """G0-3/G0-2：记忆时间线明细（EpisodicRecord 确定性投影，prior 历史 + 本次会话）。
+
+    数据源 = ``result.episodes``（runner 从共享 MemoryStore 读回的 ``EpisodicRecord``
+    列表，含 prior_episodes 预置 + 本次运行期落库）。纯鸭子读取，不 import 生产类
+    （保持 report 模块 stdlib-friendly）。
+
+    键名铁律：脱敏守卫 ``assert_desensitized`` 对 ``"score"`` / ``"decision"`` 是精确
+    匹配禁止键，故用 ``memory_record_id`` / ``memory_timestamp`` / ``memory_risk_level`` /
+    ``memory_recommended_action`` / ``memory_summary`` / ``memory_reason_summary`` /
+    ``memory_command_types`` / ``memory_prior`` 前缀键。字段语义对齐
+    ``MemoryEpisodeNode``（schema/evidence.py）；无 episode 时恒 ``()``（AC-12 不编造）。
+    """
+    episodes = getattr(result, "episodes", ()) or ()
+    out: list[dict] = []
+    # 确定性排序：按 enter_time 升序（与 DecisionEngine._ordered 同一键，审计可对齐）。
+    ordered = sorted(
+        episodes, key=lambda ep: (ep.enter_time, ep.record_id)
+    )
+    for ep in ordered:
+        command_types = tuple(
+            getattr(act, "command_type", "")
+            for act in (getattr(ep, "actions", ()) or ())
+            if getattr(act, "command_type", "")
+        )
+        out.append(
+            {
+                "memory_record_id": ep.record_id,
+                "memory_timestamp": ep.enter_time.isoformat(),
+                "memory_risk_level": ep.risk_level or "",
+                "memory_recommended_action": ep.recommended_action or "",
+                "memory_summary": ep.summary,
+                "memory_reason_summary": list(ep.reason_summary or ()),
+                "memory_command_types": list(command_types),
+                # prior 标记：record_id 前缀 ep-prior-（G0-3 预置历史）
+                "memory_prior": str(ep.record_id).startswith("ep-prior-"),
+            }
+        )
+    return tuple(out)
+
+
 def _project_cross_modal_links(result: IntegrationRunResult) -> tuple[dict, ...]:
     """ADR-0027 D5（P0-3.1 升级）：真实跨模态关联边 → 确定性字典。
 
@@ -153,6 +194,9 @@ class LoopArtifactSummary:
     # 的 ``CrossModalLink.to_dict()`` 确定性投影）。键对齐 ``CrossModalLink.to_dict()``；
     # 未启用 cross_modal 或无可关联边时恒 ``()``（不编造）。
     cross_modal_links: tuple[dict, ...] = ()
+    # G0-3/G0-2：记忆时间线明细（EpisodicRecord 确定性投影：prior 历史 + 本次会话）。
+    # 键带 ``memory_`` 前缀（脱敏安全）；无 episode 时恒 ``()``（AC-12 不编造）。
+    memory_episodes: tuple[dict, ...] = ()
 
     @classmethod
     def from_run(cls, result: IntegrationRunResult) -> LoopArtifactSummary:
@@ -185,6 +229,7 @@ class LoopArtifactSummary:
             episode_action_command_types=_sorted_unique(episode_action_types),
             audio_events=_project_audio_events(result),
             cross_modal_links=_project_cross_modal_links(result),
+            memory_episodes=_project_memory_episodes(result),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -212,6 +257,9 @@ class LoopArtifactSummary:
             # 旧 artifact 仅含计数（无本键或空）时恒 ``[]``（不编造）；键集对齐
             # ``CROSS_MODAL_LINK_DICT_KEYS``，脱敏安全（无 "score"/"decision" 等禁止键）。
             "cross_modal_links": [dict(d) for d in self.cross_modal_links],
+            # G0-3/G0-2：记忆时间线明细（EpisodicRecord 确定性投影）。键带 ``memory_``
+            # 前缀避脱敏禁止键；无 episode 时恒 ``[]``（AC-12 不编造）。
+            "memory_episodes": [dict(d) for d in self.memory_episodes],
         }
 
 

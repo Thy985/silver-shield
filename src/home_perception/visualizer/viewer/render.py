@@ -428,6 +428,56 @@ def _render_audio_perception(
 
 
 # ---------------------------------------------------------------------------
+# G0-3/G0-2 记忆时间线面板（历史 Episodes · 决策引用可证）
+# ---------------------------------------------------------------------------
+
+
+def _render_memory_timeline(scenario: ScenarioEvidence) -> str:
+    """记忆时间线（repeated_visit 等历史记忆场景 · VM-1 只投影不生成）。
+
+    - 数据：``scenario.memory_episodes``（loader 从 canonical memory_episodes 投影，
+      prior=历史预置 / 本次会话=运行期落库；AC-12 无明细恒 ()）；
+    - 呈现：每 episode 卡片（record_id / prior 标记 / timestamp / summary / 风险 /
+      建议 / reason_summary）+ 决策引用脚注（Decision Trace historical_record_ids 可证）；
+    - 无 ASR / LLM / 判定（VM-9）：只展示事实。
+    """
+    mem = scenario.get("memory_episodes") or ()
+    if not mem:
+        return ""
+    sid_html = _R._esc(scenario["scenario_id"])
+    cards: list[str] = []
+    for ep in mem:
+        ep_id = _R._esc(ep["record_id"])
+        tag = "历史预置" if ep["prior"] else "本次会话"
+        risk = _R._translate_value(ep.get("risk_level", "")) or "—"
+        action = _R._translate_value(ep.get("recommended_action", "")) or "—"
+        summary = _R._esc(ep.get("summary", ""))
+        reasons = "、".join(
+            _R._translate_value(r) for r in (ep.get("reason_summary") or ())
+        ) or "—"
+        cards.append(
+            f"""
+        <div class="mem-ep{' mem-ep-prior' if ep['prior'] else ''}">
+          <div class="mem-ep-head">
+            <span class="mem-ep-id">{ep_id}</span>
+            <span class="mem-ep-tag">{tag}</span>
+            <span class="mem-ep-time">{_R._esc(ep['timestamp'])}</span>
+          </div>
+          <div class="mem-ep-body">{summary} · 风险 {risk} · 建议 {action}</div>
+          <div class="mem-ep-reasons">依据：{reasons}</div>
+        </div>"""
+        )
+    return f"""
+    <section class="fs-panel" id="fs-memory-timeline-{sid_html}">
+      <h3 class="view-anchor">记忆时间线（历史 Episodes · 决策引用可证）</h3>
+      <div class="mem-timeline">
+        {''.join(cards)}
+      </div>
+      <p class="muted">历史 Episode 来自 canonical memory_episodes 事实投影（prior=历史预置 / 本次会话=运行期落库）；当前决策是否引用了历史由 Decision Trace.historical_record_ids 可证。</p>
+    </section>"""
+
+
+# ---------------------------------------------------------------------------
 # P0-1 行动闭环面板（人类处置闭环 · Live 专属交互）
 # ---------------------------------------------------------------------------
 
@@ -565,6 +615,9 @@ def _render_scenario_case(
         elif p == "action_closure":
             # P0-1：人类处置闭环面板（Live 专属；Artifact 模式面板列表不含此项 → 不渲染）。
             panel_html.append(_render_action_closure(scenario, descriptor))
+        elif p == "memory_timeline":
+            # G0-3/G0-2：记忆时间线（历史记忆场景，descriptor 注入；无明细返回空串）。
+            panel_html.append(_render_memory_timeline(scenario))
         # 未知面板名静默忽略（前向兼容，不崩）
 
     # 详细证据（二级视图，折叠，不在首屏同屏，AC-16）
