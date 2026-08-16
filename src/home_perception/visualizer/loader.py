@@ -30,6 +30,7 @@ from home_perception.visualizer.schema.evidence import (
     DecisionEvidence,
     EvidenceProjection,
     FingerprintPair,
+    MemoryEpisodeNode,
     ProjectionMeta,
     ScenarioEvidence,
     StageVerdict,
@@ -456,6 +457,75 @@ def _build_audio_evidence(
     return tuple(nodes)
 
 
+def _build_memory_episodes(
+    artifacts: dict, scenario_id: str, owner: str
+) -> tuple[MemoryEpisodeNode, ...]:
+    """G0-3/G0-2：从 canonical ``artifacts.memory_episodes`` 投影记忆时间线节点。
+
+    仅当 canonical 含 memory 明细（report 落盘 ``memory_*`` 前缀键）才非空；其余恒
+    ``()``（AC-12：绝不编造）。字段逐个强校验（fail-closed），键名 ``memory_*`` 前缀
+    规避脱敏禁止键（"score"/"decision" 精确匹配）。
+
+    映射（canonical ``memory_*`` 键 → ``MemoryEpisodeNode`` 字段）：
+      memory_record_id          → record_id (str，prior 前缀 ep-prior-* = 历史)
+      memory_timestamp          → timestamp (str ISO)
+      memory_risk_level         → risk_level
+      memory_recommended_action → recommended_action
+      memory_summary            → summary
+      memory_reason_summary     → reason_summary (str 列表)
+      memory_command_types      → command_types (str 列表)
+      memory_prior              → prior (bool)
+    """
+    raw = artifacts.get("memory_episodes")
+    if raw is None:
+        return ()  # 旧 artifact 无 memory 明细（AC-12：不编造）
+    if not isinstance(raw, list):
+        raise EvidenceProjectionError(f"{owner}.artifacts.memory_episodes 结构非法（fail-closed）")
+    nodes: list[MemoryEpisodeNode] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise EvidenceProjectionError(
+                f"{owner}.artifacts.memory_episodes[{i}] 非对象（fail-closed）"
+            )
+        record_id = item.get("memory_record_id")
+        ts = item.get("memory_timestamp")
+        risk = item.get("memory_risk_level", "")
+        action = item.get("memory_recommended_action", "")
+        summary = item.get("memory_summary", "")
+        reasons = item.get("memory_reason_summary", [])
+        commands = item.get("memory_command_types", [])
+        prior = item.get("memory_prior", False)
+        if not isinstance(record_id, str) or not record_id:
+            raise EvidenceProjectionError(
+                f"{owner}.artifacts.memory_episodes[{i}].memory_record_id 缺失/非 str（fail-closed）"
+            )
+        if not isinstance(ts, str) or not ts:
+            raise EvidenceProjectionError(
+                f"{owner}.artifacts.memory_episodes[{i}].memory_timestamp 缺失/非 str（fail-closed）"
+            )
+        if not isinstance(reasons, list) or not all(isinstance(v, str) for v in reasons):
+            raise EvidenceProjectionError(
+                f"{owner}.artifacts.memory_episodes[{i}].memory_reason_summary 非 str 列表（fail-closed）"
+            )
+        if not isinstance(commands, list) or not all(isinstance(v, str) for v in commands):
+            raise EvidenceProjectionError(
+                f"{owner}.artifacts.memory_episodes[{i}].memory_command_types 非 str 列表（fail-closed）"
+            )
+        nodes.append(
+            MemoryEpisodeNode(
+                record_id=record_id,
+                timestamp=ts,
+                risk_level=str(risk),
+                recommended_action=str(action),
+                summary=str(summary),
+                reason_summary=tuple(reasons),
+                command_types=tuple(commands),
+                prior=bool(prior),
+            )
+        )
+    return tuple(nodes)
+
+
 def _build_cross_modal_timeline_nodes(
     artifacts: dict, scenario_id: str
 ) -> tuple[TimelineNode, ...]:
@@ -649,6 +719,7 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         timeline=tuple(timeline_nodes),
         decision_evidence=decision_evidence,
         audio_evidence=audio_evidence,
+        memory_episodes=_build_memory_episodes(artifacts, scenario_id, owner),
         gate=verdicts,
         gate_passed=gate_passed,
         gate_degraded=gate_degraded,

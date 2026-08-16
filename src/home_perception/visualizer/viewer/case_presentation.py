@@ -149,6 +149,12 @@ def build_default_case_presentation(
             f"scenario_index 越界：{scenario_index} 不在 [0, {len(scenarios)})（fail-closed）"
         )
     sid = scenarios[scenario_index]["scenario_id"]
+    # G0-3/G0-2：历史记忆场景（memory_episodes >= 2，如 repeated_visit 跨日历史）
+    # → 首屏注入 Memory Timeline（纯展示编排，VM-11；非事实判断）。
+    panels = list(_DEFAULT_FIRST_SCREEN_PANELS)
+    memory_eps = scenarios[scenario_index].get("memory_episodes") or ()
+    if len(memory_eps) >= 2:
+        panels.insert(panels.index("current_risk"), "memory_timeline")
     return CasePresentationDescriptor(
         case_id=sid,
         title=f"Case · {sid}",
@@ -158,7 +164,7 @@ def build_default_case_presentation(
             # 占位 ref：字节由 Media Source Adapter 经此解析，不进 View Model（VM-10/AC-11）
             ref=f"{sid}.canonical.json#media",
         ),
-        first_screen_layout=FirstScreenLayout(panels=_DEFAULT_FIRST_SCREEN_PANELS),
+        first_screen_layout=FirstScreenLayout(panels=tuple(panels)),
         time_mapping=TimeMapping(media_duration_s=60.0, mode="linear"),
         # P0-4.2：默认派生为 manual（人工本地生成）；CI 受控生成须显式置 "ci"。
         generated_by="manual",
