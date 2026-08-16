@@ -24,7 +24,13 @@ def _canonical(
     audio_evidence: list[dict] | None = None,
     cross_modal_links: list[dict] | None = None,
     memory_episodes: list[dict] | None = None,
+    command_types: list[str] | None = None,
 ) -> dict:
+    # P1（干预回执 + 闭环可达性）：command_types 驱动 artifacts.command_types 与
+    # artifacts.episode_action_command_types（二者同源于真实 ActionCommand 派发类型）。
+    # 默认 ["LOG_ONLY"]（仅记录）以不破坏既有测试；注入真实类型可驱动回执卡派生。
+    if command_types is None:
+        command_types = ["LOG_ONLY"]
     # 真实关联边数量由注入决定（默认按旧 artifact 形状给计数 1，但不注入真实 link 列表，
     # 以保留"仅计数、无真实 link"的降级路径测试）。
     cross_count = len(cross_modal_links) if cross_modal_links is not None else 1
@@ -41,10 +47,10 @@ def _canonical(
         "event_types": ["abnormal_dwell"],
         "risk_levels": ["LOW"],
         "recommended_actions": ["NOTIFY_FAMILY"],
-        "command_types": ["LOG_ONLY"],
+        "command_types": command_types,
         "trace_outcome_kinds": ["WARN"],
         "suppress_reasons": [],
-        "episode_action_command_types": ["LOG_ONLY"],
+        "episode_action_command_types": command_types,
     }
     if audio_evidence is not None:
         # ADR-0036 VM-13 Phase C：真实音频证据（audio_* 前缀键，避脱敏禁止键 "score"）。
@@ -115,6 +121,7 @@ def make_artifacts(
     audio_evidence: list[dict] | None = None,
     cross_modal_links: list[dict] | None = None,
     memory_episodes: list[dict] | None = None,
+    command_types: list[str] | None = None,
 ) -> Path:
     """在 ``directory`` 生成合法 artifact 集；``drop_*`` 注入异常（fail-closed 测试）。
 
@@ -126,6 +133,9 @@ def make_artifacts(
         cross_modal_links: 注入 canonical.artifacts 的真实跨模态关联边（对齐
             ``CrossModalLink.to_dict()`` 形状）；``None``（默认）= 不注入，对应旧 artifact
             仅含计数（counts.cross_modal_links=1）的降级路径（loader 不伪造真边）。
+        command_types: 注入 canonical.artifacts 的真实 ActionCommand 派发类型（如
+            ``["SEND_FAMILY_MESSAGE", "CREATE_COMMUNITY_TASK"]``）；``None``（默认）=
+            ``["LOG_ONLY"]``，对应仅记录场景，以不破坏既有测试（P1 干预回执派生源）。
     """
     directory.mkdir(parents=True, exist_ok=True)
     entries = []
@@ -135,6 +145,7 @@ def make_artifacts(
             audio_evidence=audio_evidence,
             cross_modal_links=cross_modal_links,
             memory_episodes=memory_episodes,
+            command_types=command_types,
         )
         if drop_field is not None and drop_field[0] == sid:
             canonical.pop(drop_field[1], None)
