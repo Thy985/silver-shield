@@ -629,7 +629,75 @@ def _render_audio_perception(
     audio_manifest: dict | None,
     audio_base_url: str,
 ) -> str:
-    """音频感知首屏面板（音频 E2E P0：让用户真正理解"系统听到了什么"）。
+    """音频感知首屏面板分发器（Gate 3 产品拍板 2026-08-16）。
+
+    - Live（``mode == "live"``，provenance=REAL_SENSOR）→ 渲染**实时摘要**
+      （"此刻传感器检测到什么"），完整 event / provenance / 原始技术细节留在 details 区；
+    - Artifact（SIMULATED）→ 渲染完整"系统听到了什么"卡片（既有 P0 行为，不变）。
+
+    两者均遵守：``audio_evidence`` 空 → 返回空串（AC-12 绝不编造面板）；
+    证据与媒体严格分离（可播放样本仅在 details 区由独立 Audio Source Adapter 绑定呈现）。
+    """
+    audio = scenario.get("audio_evidence") or ()
+    if not audio:
+        return ""  # AC-12：无音频证据不渲染首屏面板
+    if str(scenario.get("mode", "")) == "live":
+        return _render_live_audio_summary(scenario, audio_manifest, audio_base_url)
+    return _render_audio_perception_full(scenario, audio_manifest, audio_base_url)
+
+
+def _render_live_audio_summary(
+    scenario: ScenarioEvidence,
+    audio_manifest: dict | None,  # 与 full 同签名；manifest 仅 details 区消费
+    audio_base_url: str,
+) -> str:
+    """Live 首屏实时音频摘要。
+
+    只陈述"此刻系统检测到了哪些声学事件 + 时间跨度 + 真实传感器来源"，不展开逐条技术字段
+    （score / confidence / labels / provenance 由 details 区 ``_render_audio_evidence`` 承载）。
+
+    AC-12 / 6 MUST fail-closed：只读 ``audio_evidence`` 事实字段，绝不渲染 url / 媒体字节；
+    来源标注来自节点 ``provenance_kind``（Live=REAL_SENSOR），此处仅作展示，不跨模态补语义、
+    不伪造事件。
+    """
+    audio = scenario.get("audio_evidence") or ()
+    if not audio:
+        return ""  # AC-12
+    t0 = min(float(a.get("timestamp", 0.0)) for a in audio)
+    tmax = max(float(a.get("timestamp", 0.0)) for a in audio)
+    # 检测到的声学类别（去重保序）。
+    seen: list[str] = []
+    for a in audio:
+        k = str(a.get("kind", ""))
+        if k and k not in seen:
+            seen.append(k)
+    items = "".join(
+        f'<li><span class="audio-marker">{_R._MODALITY_MARKER["AUDIO"]}</span>'
+        f'<span class="detected-kind">{_R._esc(_R._translate_audio_kind(k))}</span></li>'
+        for k in seen
+    )
+    span = f"{t0 - t0:.1f} — {tmax - t0:.1f}s"
+    return f"""
+    <section class="fs-panel" id="fs-audio-{_R._esc(scenario['scenario_id'])}">
+      <h3 class="view-anchor">现在系统听到了什么（实时音频感知）</h3>
+      <div class="audio-perception live-audio-summary">
+        <ul class="detected-list">{items}</ul>
+        <div class="live-audio-meta muted">
+          <span class="live-audio-span">时间跨度 {_R._esc(span)}</span>
+          <span class="live-audio-count">· 事件 {len(audio)}</span>
+          <span class="audio-source">Source · REAL SENSOR</span>
+        </div>
+      </div>
+      <p class="muted">实时摘要；事件明细、provenance 与原始技术字段见下方「详细证据」。</p>
+    </section>"""
+
+
+def _render_audio_perception_full(
+    scenario: ScenarioEvidence,
+    audio_manifest: dict | None,
+    audio_base_url: str,
+) -> str:
+    """音频感知首屏完整卡片（Artifact / Golden Case，provenance=SIMULATED；既有 P0 行为不变）。
 
     无音频证据（``audio_evidence`` 空）→ 返回空串（AC-12：绝不编造面板）。
 
@@ -1301,6 +1369,13 @@ def render_case_viewer(
   .audio-meta {{ margin-top:2px; }}
   .audio-play {{ margin-top:8px; display:flex; gap:10px; align-items:center; }}
   .audio-play audio {{ height:34px; }}
+  /* Gate 3：Live 首屏实时音频摘要（"此刻传感器检测到什么"；技术细节在 details） */
+  .live-audio-summary {{ margin:8px 0; }}
+  .detected-list {{ list-style:none; margin:4px 0; padding:0; display:flex; flex-direction:column; gap:4px; }}
+  .detected-list li {{ display:flex; gap:8px; align-items:baseline; }}
+  .detected-kind {{ font-size:15px; font-weight:700; color:#a12c6e; }}
+  .live-audio-meta {{ display:flex; gap:10px; flex-wrap:wrap; align-items:baseline; margin-top:6px; }}
+  .audio-source {{ font-weight:600; color:#2e9e6b; }}
   /* P1 Acoustic State（telephone_risk · 声学状态变化，非诈骗判定，VM-9） */
   .acoustic-state {{ background:#fff7ed; border:1px solid #f4d3a8; border-left:4px solid #d9842f;
                     border-radius:8px; padding:10px 14px; margin:4px 0 12px; }}
