@@ -151,9 +151,10 @@ def build_default_case_presentation(
     sid = scenarios[scenario_index]["scenario_id"]
     # G0-3/G0-2：历史记忆场景（memory_episodes >= 2，如 repeated_visit 跨日历史）
     # → 首屏注入 Memory Timeline（纯展示编排，VM-11；非事实判断）。
+    # descriptor 是全局单例（所有场景共用一套面板），注入条件须遍历全部场景：
+    # 任一场景有记忆明细即注入（有记忆场景渲染记忆卡，无记忆场景渲染空，AC-12 不编造）。
     panels = list(_DEFAULT_FIRST_SCREEN_PANELS)
-    memory_eps = scenarios[scenario_index].get("memory_episodes") or ()
-    if len(memory_eps) >= 2:
+    if any(len(sc.get("memory_episodes") or ()) >= 2 for sc in scenarios):
         panels.insert(panels.index("current_risk"), "memory_timeline")
     return CasePresentationDescriptor(
         case_id=sid,

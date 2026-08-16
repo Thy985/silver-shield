@@ -59,6 +59,14 @@ _DEFAULT_MEDIA_MAP: dict[str, str] = {
     "sw_adr0034_high_risk": "CCTV_Surveillance_Final.mp4",
 }
 
+# 黄金案例集（Golden Scenario Set）媒体映射：值相对 ``data/golden/`` 根（G0-4 CI 生产）。
+# ``build_trusted_case --golden`` 时经 ``--media-root data/golden`` + 本映射挂载真实 golden
+# 视频资产（data/golden 整体 gitignore；CI 无资产时 --missing-skip 跳过，媒体为可选展示增强）。
+# 仅映射有专属视频资产的 case；benign 无专属 golden 视频 → 不映射（缺失跳过，保持诚实）。
+_DEFAULT_GOLDEN_MEDIA_MAP: dict[str, str] = {
+    "sw_golden_repeated_visit": "repeated_visit/output/repeated_visit_demo.mp4",
+}
+
 
 def _probe_video(path: Path) -> tuple[int, float, float]:
     """读取视频元信息（帧数 / fps / 时长）。cv2 缺失 → ImportError（fail-closed）。
