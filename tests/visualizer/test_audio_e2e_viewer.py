@@ -87,8 +87,12 @@ def test_audio_perception_with_binding_renders_play_control(tmp_path):
     html = render_case_viewer(
         projection, descriptor, audio_base_dir=d, audio_base_url="./"
     )
-    # 两个有样本 kind → 两个播放控件。
-    assert html.count("<audio controls") == 2
+    # 两个有样本 kind → 两个播放控件（P0-3：<audio> 带 id/data-kind，controls 属性仍在）。
+    assert html.count('id="audio-audio_') == 2
+    assert html.count('controls') >= 2
+    # 样本 id（P0-3 音频轨联动键）。
+    assert 'id="audio-audio_telephone_persistent"' in html
+    assert 'id="audio-audio_voice_raised"' in html
     # src 指向相对样本 url（字节不进 HTML，仅 ref）。
     assert "./sw_t1/audio/audio_telephone_persistent.wav" in html
     assert "./sw_t1/audio/audio_voice_raised.wav" in html

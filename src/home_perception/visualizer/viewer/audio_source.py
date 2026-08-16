@@ -36,6 +36,22 @@ _AUDIO_SUBDIR = "audio"
 _MANIFEST_FILENAME = "manifest.json"
 
 
+class AudioTrack(TypedDict):
+    """样本轨时间绑定（P0-3 media_tracks）：音频作为与视频并行的 Case Media Track。
+
+    - ``start_time``：相对最早音频 T0 的秒（与渲染层卡片 rel 时间同源，Case Time 对齐）；
+    - ``end_time``：可空（合成样本整段可播，无独立结束锚点）；
+    - ``provenance_kind``：SIMULATED（确定性合成素材，诚实标注，非真实录音）。
+    """
+
+    id: str
+    kind: str
+    url: str
+    start_time: float
+    end_time: float | None
+    provenance_kind: str
+
+
 class AudioManifest(TypedDict):
     """音频源解析结果（只读；不持任何媒体字节，VM-10/AC-11）。
 
@@ -43,10 +59,12 @@ class AudioManifest(TypedDict):
     - ``files``：音频感知 kind（``AudioPerceptionKind.value``）→ 相对 **audio base 目录** 的
       样本 URL。渲染层会再叠加 ``audio_base_url``（HTML→artifact 的相对路径）形成最终地址。
       只有确实存在的样本才入表；未命中的 kind 不编造（诚实降级）。
+    - ``tracks``：样本轨时间绑定（P0-3，可选——旧 manifest 无此键时恒 ``()``，向后兼容）。
     """
 
     source_kind: AudioSourceKind
     files: dict[str, str]
+    tracks: tuple[AudioTrack, ...]
 
 
 class AudioSourceError(ValueError):
@@ -116,7 +134,55 @@ def resolve_audio_source(
             )
         files[audio_kind] = url
 
-    return AudioManifest(source_kind="AudioFileSource", files=files)
+    # P0-3：tracks 时间绑定（可选，旧 manifest 无此键 → 恒 ()，向后兼容不崩）。
+    tracks: list[AudioTrack] = []
+    tracks_raw = data.get("tracks")
+    if tracks_raw is not None:
+        if not isinstance(tracks_raw, list):
+            raise AudioSourceError(f"audio[{scenario_id}].tracks 非列表（fail-closed）")
+        for i, t in enumerate(tracks_raw):
+            if not isinstance(t, dict):
+                raise AudioSourceError(
+                    f"audio[{scenario_id}].tracks[{i}] 非对象（fail-closed）"
+                )
+            tid = t.get("id")
+            if not isinstance(tid, str) or not tid:
+                raise AudioSourceError(
+                    f"audio[{scenario_id}].tracks[{i}].id 缺失/非 str（fail-closed）"
+                )
+            url = t.get("url")
+            if not isinstance(url, str) or not url:
+                raise AudioSourceError(
+                    f"audio[{scenario_id}].tracks[{i}].url 缺失/非 str（fail-closed）"
+                )
+            if ".." in url:
+                raise AudioSourceError(
+                    f"audio[{scenario_id}].tracks[{i}].url 含非法路径片段 '..'（fail-closed）"
+                )
+            st = t.get("start_time")
+            if not isinstance(st, (int, float)):
+                raise AudioSourceError(
+                    f"audio[{scenario_id}].tracks[{i}].start_time 非数值（fail-closed）"
+                )
+            end = t.get("end_time")
+            if end is not None and not isinstance(end, (int, float)):
+                raise AudioSourceError(
+                    f"audio[{scenario_id}].tracks[{i}].end_time 非数值/null（fail-closed）"
+                )
+            tracks.append(
+                AudioTrack(
+                    id=tid,
+                    kind=str(t.get("kind", tid)),
+                    url=url,
+                    start_time=float(st),
+                    end_time=float(end) if end is not None else None,
+                    provenance_kind=str(t.get("provenance_kind", "")),
+                )
+            )
+
+    return AudioManifest(
+        source_kind="AudioFileSource", files=files, tracks=tuple(tracks)
+    )
 
 
 __all__ = [

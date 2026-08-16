@@ -387,6 +387,7 @@ def _render_audio_perception(
         labels = " · ".join(_R._esc(str(v)) for v in (a.get("labels") or ()))
         # 可播放样本：仅当独立音频绑定命中该 kind（严格分离，绝不读 audio_evidence 内 url）。
         play_ctrl = ""
+        audio_el_id = ""
         if audio_manifest:
             rel_url = audio_manifest.get("files", {}).get(kind)
             if rel_url:
@@ -399,14 +400,18 @@ def _render_audio_perception(
                 if ".." not in url:
                     safe = _safe_media_src(url)
                     if safe:
+                        # P0-3：<audio> 带确定性 id（audio-<kind>）+ data-kind ——
+                        # Evidence Timeline 音频节点（data-kind）点击 → JS 播放对应样本轨。
+                        audio_el_id = f"audio-{_R._esc(kind)}"
                         play_ctrl = (
-                            f'<div class="audio-play"><audio controls preload="none" '
-                            f'src="{_R._esc(safe)}"></audio>'
+                            f'<div class="audio-play">'
+                            f'<audio id="{audio_el_id}" data-kind="{_R._esc(kind)}" '
+                            f'controls preload="none" src="{_R._esc(safe)}"></audio>'
                             f'<span class="muted">样本声音（合成素材，非原始录音）</span></div>'
                         )
         cards.append(
             f"""
-            <div class="audio-card">
+            <div class="audio-card" data-kind="{_R._esc(kind)}">
               <div class="audio-card-head">
                 <span class="tl-step">{rel:.1f}s</span>
                 <span class="audio-marker">{_R._MODALITY_MARKER["AUDIO"]}</span>
@@ -803,6 +808,13 @@ def render_case_viewer(
     media_js = _R._media_inline()
     # P0-1：行动闭环面板存在（Live 模式）时注入 Live WS 客户端；Artifact 模式无此面板 → 不注入。
     live_actions_js = _live_actions_inline() if "action_closure" in panels else ""
+    # P0-3：任一场景有真实音频证据时注入 AudioSync（音频轨 ↔ 证据时间线联动）；
+    # 无音频场景 → 不注入（零成本降级）。audio_perception 面板在默认面板列表恒存在，
+    # 但无 audio_evidence 时面板渲染为空串——以证据为准，避免空页面带无用引擎。
+    has_audio_evidence = any(
+        sc.get("audio_evidence") for sc in scenarios
+    )
+    audio_sync_js = _R._audio_sync_inline() if has_audio_evidence else ""
 
     return f"""<!DOCTYPE html>
 <html lang="zh">
@@ -957,6 +969,9 @@ def render_case_viewer(
 </script>
 <script>
 {media_js}
+</script>
+<script>
+{audio_sync_js}
 </script>
 <script>
 {live_actions_js}
