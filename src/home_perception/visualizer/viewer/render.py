@@ -669,6 +669,73 @@ def _render_suppression_reason(scenario: ScenarioEvidence) -> str:
     </div>"""
 
 
+# P1-1 场景差异化叙事：结果自适应一句话"叙事带"（产品化总原则 §0：开始删除信息、
+# 用一句结果类型声明替代散落工程细节）。纯 VM-1 投影——完全依赖 ScenarioEvidence 既有
+# 字段（recommended_actions / command_types / suppress_reasons），零新数据生成。
+# 派生优先级（信号最强者主导）：
+#   1. suppress_reasons 非空 → suppressed（负向能力：系统有意保持沉默，真阴性 TN）
+#   2. ESCALATE_COMMUNITY / CREATE_COMMUNITY_TASK → high_risk（升级处置）
+#   3. NOTIFY_FAMILY / SEND_FAMILY_MESSAGE → repeated_visit（记忆驱动通知家属）
+#   4. MONITOR（recommended） → monitor（持续观察，未达升级阈值）
+#   5. 其余 → none（不渲染任何带，VM-1 不编造）
+_NARRATIVE_KIND_LABELS: dict[str, tuple[str, str]] = {
+    "suppressed": (
+        "未触发风险（真阴性）",
+        "系统观测到正常环境，主动保持沉默——这是有意的负向能力，而非漏报。",
+    ),
+    "high_risk": ("高风险处置", "系统识别高风险并升级至社区协同处置。"),
+    "repeated_visit": ("记忆驱动升级", "系统结合历史记忆重新评估风险，并通知家属。"),
+    "monitor": ("持续观察", "系统持续观察，当前未达升级阈值。"),
+}
+
+_ESCALATE_ACTIONS = ("ESCALATE_COMMUNITY",)
+_ESCALATE_COMMANDS = ("CREATE_COMMUNITY_TASK",)
+_NOTIFY_ACTIONS = ("NOTIFY_FAMILY",)
+_NOTIFY_COMMANDS = ("SEND_FAMILY_MESSAGE",)
+_MONITOR_ACTIONS = ("MONITOR",)
+
+
+def _derive_narrative_kind(scenario: ScenarioEvidence) -> str | None:
+    """从既有字段派生主导结果类型（叙事带种类）；无法归类返回 None（不渲染带）。
+
+    纯展示层派生（VM-1）：不读任何 runtime/检测字段，只用场景声明的事实投影。
+    优先级：suppressed > high_risk > repeated_visit > monitor > none。
+    """
+    if scenario.get("suppress_reasons"):
+        return "suppressed"
+    recs = scenario.get("recommended_actions") or ()
+    cmds = scenario.get("command_types") or ()
+    if any(a in _ESCALATE_ACTIONS for a in recs) or any(
+        c in _ESCALATE_COMMANDS for c in cmds
+    ):
+        return "high_risk"
+    if any(a in _NOTIFY_ACTIONS for a in recs) or any(
+        c in _NOTIFY_COMMANDS for c in cmds
+    ):
+        return "repeated_visit"
+    if any(a in _MONITOR_ACTIONS for a in recs):
+        return "monitor"
+    return None
+
+
+def _render_narrative_band(scenario: ScenarioEvidence) -> str:
+    """叙事带：场景结果类型的一句话 hero 声明（P1-1 差异化叙事）。
+
+    置于 Case Header 之后、Suppression 卡之前，作为首屏"这是一起什么性质的案例"的
+    最高层级答案。仅用既有字段派生（VM-1）；kind=None → 返回空串（不渲染，VM-1 不编造）。
+    与 Suppression 卡分工：带=结果类型一行总览，卡=为何沉默的明细（互补不重复）。
+    """
+    kind = _derive_narrative_kind(scenario)
+    if kind is None:
+        return ""
+    label, text = _NARRATIVE_KIND_LABELS[kind]
+    return f"""
+    <div class="narrative-band sev-{kind}">
+      <span class="nb-kind">{_R._esc(label)}</span>
+      <span class="nb-text">{_R._esc(text)}</span>
+    </div>"""
+
+
 def _render_scenario_case(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -775,6 +842,7 @@ def _render_scenario_case(
         {_scenario_headline(scenario)}
       </h2>
       {_render_case_header(scenario)}
+      {_render_narrative_band(scenario)}
       {_render_suppression_reason(scenario)}
       {_render_provenance_banner(scenario)}
       {''.join(panel_html)}
@@ -1011,6 +1079,22 @@ def render_case_viewer(
                   background:#dcebfb; color:#1c4f7c; border-radius:6px; padding:1px 8px;
                   white-space:nowrap; }}
   .suppress-text {{ font-size:13px; color:#2b3a4a; }}
+
+  /* P1-1：叙事带（结果自适应一句话 hero）——差异化叙事首屏锚点 */
+  .narrative-band {{ display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+                    border-radius:8px; padding:12px 16px; margin:12px 0;
+                    border:1px solid #e3e8ee; border-left:4px solid #8a94a6; background:#f7f9fc; }}
+  .nb-kind {{ font-weight:700; font-size:13px; border-radius:6px; padding:2px 10px;
+              background:#e9edf3; color:#3b4a5a; white-space:nowrap; }}
+  .nb-text {{ font-size:14px; color:#2b3a4a; }}
+  .narrative-band.sev-suppressed {{ border-left-color:#2e9e6b; background:#eefaf3; }}
+  .narrative-band.sev-suppressed .nb-kind {{ background:#d7f0e2; color:#1e7a4f; }}
+  .narrative-band.sev-high_risk {{ border-left-color:#d64541; background:#fdf0ef; }}
+  .narrative-band.sev-high_risk .nb-kind {{ background:#f7d6d4; color:#b0332f; }}
+  .narrative-band.sev-repeated_visit {{ border-left-color:#e0a030; background:#fdf7ec; }}
+  .narrative-band.sev-repeated_visit .nb-kind {{ background:#f7e7c8; color:#9a6b13; }}
+  .narrative-band.sev-monitor {{ border-left-color:#4a90d9; background:#eef6ff; }}
+  .narrative-band.sev-monitor .nb-kind {{ background:#dcebfb; color:#1c4f7c; }}
 
   /* Case Video（主轴）+ Media Timeline（Case Time，VM-10/AC-14） */
   .case-video {{ background:#0e1726; border-radius:8px; padding:14px; margin:8px 0; }}
