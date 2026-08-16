@@ -224,6 +224,19 @@ def _run_live(args: argparse.Namespace) -> None:
         os.environ["DEMO_PORT"] = str(args.port)
     os.environ["DEMO_LIVE"] = "1"  # 暴露 /live + WS + /demo/*
 
+    # Gate 4（telephone_risk live audio vertical slice）：场景声明 audio_path 时，
+    # 自动套用音频开启的 HP 配置覆盖（config/live_audio.yaml），不动 config/default.yaml
+    # （其 audio 须保持关闭以通过契约测试 test_settings_load_includes_audio_tier1_disabled）。
+    # 走官方 DEMO_HP_CONFIG 覆盖入口（silver_demo/config.py），不改核心逻辑。
+    # scenario_path 已由 resolve_scenario/preflight_media 校验存在且可读，无需再静默吞异常。
+    if not os.environ.get("DEMO_HP_CONFIG") and scenario_path.is_file():
+        with scenario_path.open("r", encoding="utf-8") as _f:
+            _sc = yaml.safe_load(_f) or {}
+        if _sc.get("audio_path"):
+            _live_hp = ROOT / "config" / "live_audio.yaml"
+            if _live_hp.is_file():
+                os.environ["DEMO_HP_CONFIG"] = str(_live_hp)
+
     print_banner(scenario_path)
 
     import silver_demo.gateway as gw  # 懒加载：预检通过后才 import（会拉 torch）

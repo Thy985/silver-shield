@@ -1,0 +1,144 @@
+# ============================================================
+# Home 感知模块 - 全局默认配置
+# 支持 ${ENV_VAR:-default} 形式引用环境变量（由 core/config.py 展开）
+# 设备清单见 config/devices.yaml（不入库，含真实序列号）
+# ============================================================
+
+logging:
+  level: INFO
+  json_logs: true
+
+ingestion:
+  protocol: rtsp          # rtsp=低延迟(默认) | hls=已验证回退方案
+  quality: 1              # 1=HD
+  channel_no: 1
+  reconnect:
+    max_retries: 5
+    backoff_s: 3
+  fps_target: 8           # 感知抽帧率（YOLO 前的有效处理帧率）
+
+detection:
+  model: yolo11n.pt
+  conf_threshold: 0.45
+  classes: [0, 24, 26, 67]   # person, backpack, handbag, cell phone（仅第一阶段 4 类）
+  device: cpu                 # cpu | cuda:0
+  # P0-5 跨帧跟踪：固定摄像头 / 单区域 / CPU / 停留分析 → bytetrack 足够（轻量、无 ReID）
+  # botsort 的 ReID 价值（人离开又回来 / 长遮挡 / 多摄）不在 MVP 范围
+  tracking:
+    enabled: true
+    algorithm: bytetrack       # bytetrack | botsort
+  # 向后兼容字段（值优先取自 tracking 段，将被后续版本移除）
+  enable_track: true
+  tracker: bytetrack
+  # P0-4 实测结论：纯 CPU 边缘机 yolo11n@640 推理 ~124ms 未达实时目标（<100ms / >10FPS）。
+  # MVP 默认 480（balanced）：满足实时约束且门前场景精度足够。
+  # 三档推理分辨率预设（见 ImgszProfile）：
+  #   accuracy  = 640  # 精度优先（GPU 或算力充足时）
+  #   balanced  = 480  # 默认，实时折中（门前人物占比大）
+  #   realtime  = 416  # 低延迟，预留算力给 Tracker/ROI/事件（小目标精度略降）
+  imgsz: 480                 # 默认推理分辨率（= balanced）；显式改此值即覆盖 profile
+  imgsz_profile: balanced    # 可设为 accuracy / balanced / realtime
+
+analysis:
+  dwell_threshold_s: 30       # 门口逗留超过该时长触发告警
+  odd_hour_start: 23          # 异常时段起点（含）
+  odd_hour_end: 6             # 异常时段终点（不含）
+  cooldown_s: 60              # 同一设备同源事件冷却时间
+
+evidence:
+  store: local                # local | cos
+  local_dir: data/evidence
+  clip_seconds: 10            # 事件前后取证片段时长
+  snapshot: true
+
+output:
+  transport: mqtt             # mqtt | http
+  mqtt:
+    host: ${CENTER_MQTT_HOST:-127.0.0.1}
+    port: ${CENTER_MQTT_PORT:-1883}
+    topic: silvershield/home/{device_id}/events
+  buffer:
+    enabled: true             # 中心不可达时本地落盘，恢复后补发
+    max_items: 200
+
+# ============================================================================
+# P0-10 运行时装配配置（Demo 模式）
+# 阈值/权重集中此处，规则逻辑不硬编码（ADR-0009 Decision 6）
+# ============================================================================
+rule:
+  long_duration_seconds: 1.5      # Demo 调优：CAVIAR 短片（~25s）需降低阈值；生产用 300s
+  repeat_visit_count: 3             # 窗口内同访客进出次数超该值 → repeat_visit
+  odd_hour_set: [23, 0, 1, 2, 3, 4] # 异常时段（含 23、不含 5）
+  cooldown_seconds: 600.0           # 同 (visitor_id, rule) 冷却
+  reset_gap_seconds: 1800.0         # 超过该时长重置冷却窗口
+  frequency_window_s: 1800.0        # 重复来访滑动窗口（30 分钟）
+  high_risk_required_rules: [LongDurationRule, RepeatVisitRule, OddHourRule]
+  rule_weights:
+    LongDurationRule: 0.50
+    RepeatVisitRule: 0.30
+    OddHourRule: 0.10
+    HighRiskApproachRule: 0.90
+
+decision:
+  policy: rule_based              # rule_based | (v2: ml, llm)
+
+action:
+  # P0-11.5a：Demo 家属联系方式。配了才真发 SEND_FAMILY_MESSAGE（否则 NOTIFY_FAMILY 降级 LOG_ONLY，
+  # 家属端会空壳）。这是 Demo/MVP 占位联系方式，v1 接真实短信网关 / App push 时由中心 RiskTwin 拉取覆盖。
+  family_contact:
+    elder_id: elder_001
+    name: 家属演示
+    phone: "+8613800000000"
+    relation: family
+  community_endpoint: ${COMMUNITY_ENDPOINT:-https://community.example.com/api/v1/tasks}
+  mqtt_topic_prefix: silvershield/home
+  max_retries: 3
+  mock_publisher_output: var/mock_mqtt_demo.jsonl   # Mock 落盘 JSONL；null=仅内存
+
+runtime:
+  mode: demo                      # demo（CAVIAR 复现）| realtime（v1 接真实萤石）
+  caviar_base_dir: tests/fixtures/doorway
+  frame_glob: frame_*.jpg
+  demo_scenarios: [one_stop_enter, one_leave_reenter, meet_walk_together]
+  detector_model: null           # 覆盖 detection.model
+  detector_imgsz: null           # 覆盖 detection.imgsz
+  detector_conf: 0.10            # Demo 调优：CAVIAR 鱼眼俯拍人物小，需降低阈值（class_filter 过滤噪声）
+  demo_clock_start: "2026-07-19T23:30:00+00:00"  # Demo 模拟时钟起点（ISO 8601，带时区）；23:30 UTC 让 OddHourRule 自然触发
+
+# 实时风险状态流（ADR-0021 · Migration Stage B 起）。
+# 只放开关与实时特有项；阈值复用上面 rule 段（单一阈值来源，不在此重复）。
+# enabled=false 默认关闭：关闭时 pipeline 不构造实时组件（零运行时开销）；
+# Demo 场景如需开启，经 ScenarioConfig.rule_overrides 同型通道或此处显式置 true。
+# decision_enabled=true 开启 Stage D（RAISED 信号经 adapter 汇入 DecisionEngine 产 Warning）；
+# 灰度策略：先 enabled=true, decision_enabled=false 观察误报率（Shadow Mode），再开决策。
+realtime_risk:
+  enabled: false                  # Feature Flag：Stage B 起 main 默认关闭
+  eval_interval_frames: 1         # 每 N 帧评估一次（性能旋钮，见工程方案 §5.3）；Demo 保持 1（dwell 阈值小）
+  decision_enabled: false         # Stage D 决策接入开关：true 时 RAISED→Warning；需 enabled=true 才生效
+
+memory:
+  enabled: false                  # ADR-0024 Slice 3 Snapshot Recovery 总开关（Stage F Shadow Mode gating）
+  snapshot_path: data/memory/snapshot.json   # JSON 原子写路径
+  snapshot_interval_seconds: 30.0             # 周期快照间隔（秒）
+  snapshot_fresh_threshold_seconds: 30.0      # FRESH/STALE 分界（秒）
+  snapshot_ttl_seconds: 300.0                 # STALE/DISCARD 分界（秒，5min）
+  recent_behavior_retention_seconds: 3600.0   # 恢复时只保留 1h 内见过的 visitor
+  eviction_interval_frames: 60                # 每 N 帧内联 evict_expired（Stage D）
+  cold_start_stale_confidence: 0.5            # STALE 档恢复 confidence 值
+
+# ============================================================================
+# 音频感知管道（ADR-0026 · Phase 3.0）
+# Tier0（VAD + Prosody）常驻、零模型；Tier1（YAMNet）可选增强，默认关闭。
+# 开启 Tier1：enabled=true 并填入 model_path（.onnx 权重）；留空则回退 Stub（可用但非真实推理）。
+# ============================================================================
+audio:
+  enabled: true                   # Gate 4（telephone_risk live audio vertical slice）：开启音频→Live 接线（run_demo --live 的 live_audio_builder 门控）
+  tier1:
+    enabled: true                 # 真实 YAMNet 推理（非 Stub）；需配合下方 model_path
+    model_path: data/models/yamnet/onnx/yamnet.onnx   # YAMNet .onnx 权重路径（运维受控、远端不入库）
+    class_map_path: ""             # 可选：521 类名映射文件（yaml/json）
+    threshold: 0.1                 # YAMNet 段级平均 score 阈值 [0,1]
+    top_k: 10                      # 每段标签上限
+    trigger: segment               # segment=每段 VAD 语音段都跑 | perception=仅 Tier0 命中时跑
+    target_sr: 16000               # YAMNet 规范采样率
+
