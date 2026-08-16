@@ -213,15 +213,20 @@ def _render_action(scenario: ScenarioEvidence) -> str:
 
 
 def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
-    """Case Time 主轴：证据时间轴上的事件标记（音频轨 + 本次会话记忆）。
+    """Case Time 主轴：证据时间轴上的事件标记（音频 Lane + 记忆 Lane，双轨视图）。
 
     - 数据：``scenario.case_time_tracks``（loader 投影，相对最早证据 T0；prior 历史
       不进主轴——那是背景，不是当下；VM-10 不伪造媒体对齐）；
+    - 布局：统一时间轴内分 **音频 Lane（🔊，上）** 与 **记忆 Lane（🧠，下）** 两行，
+      共享同一游标与回放；记忆因此自然嵌进统一时间轴（P1：Memory Timeline 嵌入
+      Case Time），而非孤立面板。零新数据（VM-1：仅已有 case_time_tracks 的展示编排）；
     - 交互：点击标记 → ``window.__caseTime(sid, kind, label, time)``——移动游标 +
       联动（audio → 播放对应样本/高亮卡片；memory → 滚动记忆面板）；
     - P0-3 Evidence Replay：标记带 data-time/data-kind/data-label（JS 播放器遍历
       触发）；主轴播放按钮 → ``window.__caseTimeReplay(sid)``（证据时间自动回放：
       游标推进 + 事件按序涌现，独立于媒体时间，诚实不伪造媒体对齐）；
+      所有标记仍置于同一 ``#case-time-track-{sid}``（单 track / 单 cursor /
+      querySelectorAll('.case-time-mark') 契约不变），仅以 CSS 上下两行区分 Lane；
     - 无事件标记 → 返回空串（AC-12 不编造）；无音频/记忆场景零成本。
     """
     tracks = scenario.get("case_time_tracks") or ()
@@ -230,15 +235,17 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
     sid = scenario["scenario_id"]
     sid_html = _R._esc(sid)
     max_time = max((float(t["time"]) for t in tracks), default=0.0) or 1.0
-    marks: list[str] = []
+    audio_marks: list[str] = []
+    memory_marks: list[str] = []
     for t in tracks:
         time = float(t["time"])
         pct = min(time / max_time * 100.0, 100.0)
         kind = str(t["kind"])
-        cls = "mark-audio" if kind == "audio" else "mark-memory"
-        marker = "🔊" if kind == "audio" else "🧠"
+        is_audio = kind == "audio"
+        cls = "mark-audio" if is_audio else "mark-memory"
+        marker = "🔊" if is_audio else "🧠"
         label_js = _R._esc_js(str(t["label"]))
-        marks.append(
+        mark = (
             f'<span class="case-time-mark {cls}" style="left:{pct:.1f}%" '
             f'data-time="{time:.3f}" data-kind="{_R._esc(kind)}" '
             f'data-label="{label_js}" '
@@ -246,11 +253,23 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
             f'\'{label_js}\',{time:.3f})" '
             f'title="{time:.1f}s · {kind} · {_R._esc(str(t["label"]))}">{marker}</span>'
         )
+        (audio_marks if is_audio else memory_marks).append(mark)
+    # 双 Lane 标签：仅在该类事件存在时显示（避免空行标签噪音）。
+    lane_tags = ""
+    if audio_marks:
+        lane_tags += '<span class="lane-tag lane-tag-audio">音频</span>'
+    if memory_marks:
+        lane_tags += '<span class="lane-tag lane-tag-memory">记忆</span>'
+    # 所有标记置于同一 track（P0-3 回放 JS 契约），CSS 上下两行区分 Lane。
+    all_marks = audio_marks + memory_marks
     return f"""
     <div class="case-time" id="case-time-{sid_html}">
-      <div class="case-time-track" id="case-time-track-{sid_html}" data-max="{max_time:.3f}">
-        <span class="case-time-cursor" id="case-time-cursor-{sid_html}"></span>
-        {''.join(marks)}
+      <div class="case-time-axis">
+        <div class="lane-tags">{lane_tags}</div>
+        <div class="case-time-track" id="case-time-track-{sid_html}" data-max="{max_time:.3f}">
+          <span class="case-time-cursor" id="case-time-cursor-{sid_html}"></span>
+          {''.join(all_marks)}
+        </div>
       </div>
       <div class="case-time-meta">
         <button type="button" class="rp-btn case-time-play" id="case-time-play-{sid_html}"
@@ -1107,6 +1126,25 @@ def render_case_viewer(
   .media-play {{ cursor:pointer; border:1px solid #cdd6e0; background:#fff; border-radius:6px;
                 padding:4px 10px; font-size:14px; line-height:1; }}
   .media-progress {{ display:block; height:100%; width:0; background:#7b5cd6; transition:width .2s; }}
+  /* Case Time 主轴：音频 + 记忆 双 Lane（P1 · VM-1 纯展示编排，零新数据） */
+  .case-time {{ margin:8px 0; }}
+  .case-time-axis {{ display:grid; grid-template-columns:42px 1fr; grid-template-rows:24px 24px;
+                    gap:4px; align-items:center; }}
+  .lane-tags {{ grid-column:1; grid-row:1 / span 2; display:flex; flex-direction:column;
+               justify-content:space-around; }}
+  .lane-tag {{ font-size:11px; color:#5b6b7b; line-height:1; white-space:nowrap; }}
+  .case-time-track {{ grid-column:2; grid-row:1 / span 2; position:relative; height:52px;
+                     background:#f7f9fc; border:1px solid #e3e8ee; border-radius:6px; }}
+  .case-time-mark {{ position:absolute; transform:translateX(-50%); display:inline-flex;
+                    align-items:center; justify-content:center; width:22px; height:18px;
+                    border-radius:50%; font-size:12px; cursor:pointer; z-index:2;
+                    box-shadow:0 0 0 1px #fff; }}
+  .mark-audio {{ top:4px; background:#e8f1fb; border:1px solid #4a90d9; }}
+  .mark-memory {{ top:30px; background:#fdf0e3; border:1px solid #e0922f; }}
+  .case-time-mark-active {{ outline:2px solid #2e9e6b; }}
+  .case-time-cursor {{ position:absolute; top:0; bottom:0; left:0; width:2px;
+                      background:#4a90d9; z-index:1; transition:left .15s; }}
+  .case-time-meta {{ display:flex; gap:8px; align-items:center; margin-top:6px; }}
   /* Timeline（复用 renderer） */
   .timeline {{ list-style:none; margin:0; padding:0 0 0 18px; border-left:2px solid #d8dee6; }}
   .tl-item {{ position:relative; margin:10px 0; }}
