@@ -212,6 +212,21 @@ def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
     )
 
 
+def _audio_dedup_key(la: LiveAudioFrame) -> str:
+    """无 event_id 时的去重键（护 VM-8 重放幂等）：kind+timestamp+segments+score+conf 组合。
+
+    仅作回退——优先用 event_id（上游 AudioPerceptionEvent.event_id，跨重放稳定）。
+    """
+    segs = ",".join(la["source_segment_ids"]) if la.get("source_segment_ids") else ""
+    return "|".join([
+        str(la["kind"]),
+        str(la["timestamp"]),
+        segs,
+        repr(la["score"]),
+        repr(la["confidence"]),
+    ])
+
+
 def _coerce_timestamp(audio_result: Any) -> str:
     """取 timestamp（Unix 秒）→ 规范字符串（fail-closed：缺/类型非法）。
 
@@ -350,6 +365,14 @@ class ProjectionAccumulator:
         # 音频：累计摄入序号（确定性交错标签）+ 去重 kind 集合（不进 Counts schema）。
         self._audio_index = 0
         self._audio_kinds: set[str] = set()
+        # 音频证据持久化（不进 _recent_events 滚动窗口）：真实音频是稀疏语义证据，须跨整个
+        # 实时会话可见；否则长循环跑过 window_size 帧后早期音频被滚动裁掉 → audio_evidence
+        # 首屏不持久（Gate 4 真实缺陷 #2）。帧/处置细节走窗口，音频走持久列表，二者分别服务
+        # "细节"与"证据"，时间轴 AUDIO 节点 ↔ audio_evidence ↔ Case Time 音频 Lane 同源一致。
+        self._audio_events: list[LiveAudioFrame] = []  # 持久音频事件（dict{kind,audio,audio_index}）
+        # 去重键集合（event_id 优先，缺失回退组合键），护 VM-8 重放幂等：
+        # live 循环重启 frame_index 归零会重新喂入同一音频事件，去重避免重复累积污染证据。
+        self._audio_dedup_keys: set[str] = set()
         # P0-1 处置闭环：Resolution 事实累计序号（确定性 ref 标签）。
         self._resolution_index = 0
 
@@ -450,12 +473,15 @@ class ProjectionAccumulator:
         self._audio_index += 1
         self._total_audio += 1
         self._audio_kinds.add(live_audio["kind"])
-        self._recent_events.append(
-            {"kind": "audio", "audio": live_audio, "audio_index": self._audio_index}
-        )
-        if len(self._recent_events) > self.window_size:
-            # 确定性裁剪：与帧同一滚动窗口（时间轴交错呈现，AC-9）。
-            self._recent_events = self._recent_events[-self.window_size:]
+        # 持久化（不进滚动窗口）：真实音频是稀疏语义证据，须跨整个实时会话可见。
+        # 去重保护 VM-8 重放幂等：live 循环重启 frame_index 归零会重新喂入同一音频事件，
+        # 以 event_id 为主键（缺失回退组合键 _audio_dedup_key）去重，避免重复累积污染证据。
+        key = live_audio.get("event_id") or _audio_dedup_key(live_audio)
+        if key not in self._audio_dedup_keys:
+            self._audio_dedup_keys.add(key)
+            self._audio_events.append(
+                {"kind": "audio", "audio": live_audio, "audio_index": self._audio_index}
+            )
 
     # —— 投影构件（镜像 loader 形态，但 provenance=REAL_SENSOR、ref 走 live://） ——
 
@@ -492,7 +518,9 @@ class ProjectionAccumulator:
                 ref=f"{_LIVE_REF_PREFIX}://session/{sid}",
             )
         )
-        # 按摄入顺序交错呈现视觉/音频/处置结果（AC-9：统一时间轴，不三套独立时间轴）。
+        # 按摄入顺序呈现视觉/处置结果（AC-9：统一时间轴，不三套独立时间轴）。
+        # 注：音频节点不再经 _recent_events 滚动窗口——已迁至持久列表 _audio_events，
+        # 与时间轴 AUDIO 节点 ↔ audio_evidence ↔ Case Time 音频 Lane 同源一致（VM-13 / Gate 4 缺陷 #2）。
         for ev in self._recent_events:
             kind = ev["kind"]
             if kind == "frame":
@@ -511,25 +539,7 @@ class ProjectionAccumulator:
                         ref=f"{_LIVE_REF_PREFIX}://frame/{fi}",
                     )
                 )
-            elif kind == "audio":
-                la = ev["audio"]
-                a_idx = ev["audio_index"]
-                nodes.append(
-                    TimelineNode(
-                        timestamp=f"A{a_idx}",
-                        stage="perception",
-                        type="audio",
-                        summary=(
-                            f"audio {a_idx}: {la['kind']} "
-                            f"(score={la['score']:.2f}, conf={la['confidence']:.2f})"
-                        ),
-                        verdict="INFO",
-                        modality="AUDIO",
-                        provenance_kind="REAL_SENSOR",
-                        ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
-                    )
-                )
-            else:  # resolution（P0-1 处置闭环事实）
+            elif kind == "resolution":  # P0-1 处置闭环事实
                 rs = ev["resolution"]
                 nodes.append(
                     TimelineNode(
@@ -546,6 +556,25 @@ class ProjectionAccumulator:
                         ref=f"{_LIVE_REF_PREFIX}://resolution/{rs['index']}",
                     )
                 )
+        # 音频证据节点（持久，跨会话可见）：与时间轴 AUDIO 节点 ↔ audio_evidence 同源一致。
+        for ev in self._audio_events:
+            la = ev["audio"]
+            a_idx = ev["audio_index"]
+            nodes.append(
+                TimelineNode(
+                    timestamp=f"A{a_idx}",
+                    stage="perception",
+                    type="audio",
+                    summary=(
+                        f"audio {a_idx}: {la['kind']} "
+                        f"(score={la['score']:.2f}, conf={la['confidence']:.2f})"
+                    ),
+                    verdict="INFO",
+                    modality="AUDIO",
+                    provenance_kind="REAL_SENSOR",
+                    ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
+                )
+            )
         return tuple(nodes)
 
     def _build_decision_evidence(
@@ -650,14 +679,12 @@ class ProjectionAccumulator:
         - 无 ASR/LLM：不产 text/transcript/verdict/risk 解释；
         - 保留 provenance：每条 ``provenance_kind="REAL_SENSOR"``，``ref="live://audio/{idx}"``；
         - 幂等（VM-8）：同一有序流重放 N 次 → 同一节点列表（滚动窗口裁剪确定性，与帧一致）；
-        - 未摄入音频（``_recent_events`` 无 audio 项）→ 恒 ``()``，绝不编造。
-        仅投影滚动窗口内（``_recent_events``）的音频项——与时间轴 AUDIO 节点同源、同窗口，
-        与摄入顺序无关地稳定（VM-8）。
+        - 未摄入音频（``_audio_events`` 空）→ 恒 ``()``，绝不编造。
+        仅投影持久列表（``_audio_events``）的音频项——跨整个实时会话不随帧窗口滚动裁掉
+        （Gate 4 真实缺陷 #2 修复），与时间轴 AUDIO 节点 ↔ Case Time 音频 Lane 同源一致（VM-13）。
         """
         nodes: list[AudioEvidenceNode] = []
-        for ev in self._recent_events:
-            if ev["kind"] != "audio":
-                continue
+        for ev in self._audio_events:
             la = ev["audio"]
             a_idx = ev["audio_index"]
             node: AudioEvidenceNode = AudioEvidenceNode(
@@ -681,7 +708,7 @@ class ProjectionAccumulator:
 
         实时会话无 memory episodes（Live 不产记忆落库），故只铺音频 Lane。与 loader
         共用 ``CaseTimeTrack`` schema，T0 = 最早音频时间戳，相对时间确定性排序（VM-8 幂等）。
-        无摄入音频 → 恒 ``()``（AC-12 / VM-13 6 MUST，绝不编造）。仅投影滚动窗口内音频项，
+        无摄入音频 → 恒 ``()``（AC-12 / VM-13 6 MUST，绝不编造）。仅投影持久列表（``_audio_events``）音频项，
         与 ``_build_audio_evidence_live`` 同源同窗口（时间轴 AUDIO 节点 ↔ Case Time 音频标记一致）。
         """
         audio = self._build_audio_evidence_live()

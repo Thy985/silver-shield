@@ -476,3 +476,47 @@ def test_render_live_case_time_audio_lane():
     assert "Case Time" in html
     assert "🔊" in html
     assert "音高升高" in html
+
+
+# —— Gate 4 真实缺陷 #2 回归：audio_evidence 跨滚动窗口持久（不被帧窗口裁掉） ——
+
+def test_audio_evidence_persists_beyond_rolling_window():
+    """Gate 4 缺陷 #2 回归：音频证据须跨整个会话持久，不被帧滚动窗口裁掉。
+
+    模拟长循环：先摄入若干音频事件（帧 0..k），再灌入远超 window_size 的帧事件；
+    早期音频事件若只存于 _recent_events 滚动窗口会被裁空（audio_evidence 首屏不持久）。
+    正确实现应将音频存入独立持久列表，audio_evidence 始终非空；且时间轴 AUDIO 节点同源一致。
+    """
+    acc = ProjectionAccumulator("sess-persist", window_size=4)
+    # 早段摄入 3 条音频（模拟 live_audio_builder 在帧 0..2 喂入）
+    for i in range(3):
+        acc.ingest_audio(_make_audio(1700000000.0 + i, f"audio_kind_{i}", event_id=f"e{i}"))
+    # 灌入远超窗口的帧事件（模拟长循环跑到几百帧）
+    for i in range(50):
+        acc.ingest(_make_frame(i, n_detections=1, event_types=["visit_normal"]))
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    # 核心断言：即便滚动窗口早已滚过早期音频，audio_evidence 仍含全部 3 条
+    assert len(scn["audio_evidence"]) == 3, scn["audio_evidence"]
+    # 时间轴 AUDIO 节点也须一致（不变式：时间轴 ↔ audio_evidence 同源）
+    audio_nodes = [n for n in scn["timeline"] if n["type"] == "audio"]
+    assert len(audio_nodes) == 3
+    # 帧窗口只保留最近 4 帧（独立裁剪），但音频不受影响
+    frame_nodes = [n for n in scn["timeline"] if n["type"] == "frame"]
+    assert len(frame_nodes) == 4
+
+
+def test_audio_evidence_dedup_on_repeat_feed():
+    """同一音频事件被重复喂入（live 循环重启 frame_index 归零重新喂入）→ 去重，不重复累积（VM-8）。"""
+    acc = ProjectionAccumulator("sess-dedup", window_size=64)
+    # 模拟两次循环各喂一次相同音频（event_id 相同 → 去重）
+    for _ in range(2):
+        for i in range(3):
+            acc.ingest_audio(_make_audio(1700000000.0 + i, f"audio_kind_{i}", event_id=f"e{i}"))
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    # 去重后音频证据仍为 3 条，不随重放翻倍
+    assert len(scn["audio_evidence"]) == 3
+    # 缺 event_id 时回退组合键去重同样生效
+    acc2 = ProjectionAccumulator("sess-dedup2", window_size=64)
+    for _ in range(2):
+        acc2.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised"))
+    assert len(acc2.to_evidence_projection()["scenarios"][0]["audio_evidence"]) == 1
