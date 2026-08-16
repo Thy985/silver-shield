@@ -352,6 +352,23 @@ Risk / Decision / Action 面板随当前事件更新
 - **Phase B（Live 音频接入）**：`Audio Runtime → AudioEvidence → Live Adapter`，REAL_SENSOR 音频进入 projection；此时音频经 `live_adapter` 增量合并，仍守 VM-8 幂等。
 - **Phase C（Artifact 音频）**：真实音频证据进入 canonical artifact（ADR-0027/0028 + ADR-0034 Phase B.2 落库后）→ `loader` 投影 `audio_evidence` → Artifact Mode 也能展示音频，与 Live 共用同一 schema（VM-4）。
 
+### Live 音频投影铁律（VM-13 Phase B · 6 MUST · 2026-08-16 决策）
+
+> **决策修正（Owner，2026-08-16）**：此前将「Live `audio_evidence` 恒为 `()`」写进 Projection 层，
+> 实为**架构主动截断** Live 真实声学证据——并非 Viewer 接线小问题。现纠正为：
+> **Live `audio_evidence` MAY 含 REAL_SENSOR 派生的 `AudioPerceptionEvent`**，与 Artifact 共用同一
+> `AudioEvidenceNode` 契约，区别仅在 `provenance_kind`（Live=`REAL_SENSOR` / Artifact=`SIMULATED`）。
+> 实现顺序固定为 **A'（改契约）→ A（Live 投影）→ B（AudioPipeline 接入 runtime）→ 验证**，不得先 B。
+
+Live 投影（含 `live_adapter` 与未来 `AudioPipeline → runtime` 接线）必须守以下 6 条 MUST：
+
+1. **fail-closed**：摄入命中 `_LIVE_AUDIO_FORBIDDEN_FIELDS`（verdict / transcript / raw_audio / fraud / …）即拒绝，**绝不**进入 View Model（沿用 `ingest_audio` 守卫）。
+2. **无 ASR transcript**：`audio_evidence` 不含 `text` / `transcript`（Case Viewer 执行期无 ASR/LLM，VM-9）。
+3. **无 verdict / risk 解释**：不含 `verdict` / `fraud_result` / `risk_reason` 等判定或解释字段（音频只产 perception，不产语义判定）。
+4. **保留 provenance**：每条节点 `provenance_kind=REAL_SENSOR`，`ref` 可溯源（`live://audio/{idx}`）；与 Artifact 的 `SIMULATED` 仅此一字段之差，便于产品角标区分 `● LIVE · REAL SENSOR` vs `● GOLDEN CASE · SIMULATED`。
+5. **幂等（VM-8）**：同一有序音频流重放 N（≥2）次，最终 `audio_evidence` 逐字段一致；禁用墙钟 / 随机 / UUID 派生展示字段（仅透传上游 `event_id`，不新生成）。
+6. **共用 EvidenceProjection 契约**：Live 与 Artifact 投影产出**同一 `AudioEvidenceNode` schema**（字段集与禁止字段一致），不引入第二套音频结构。
+
 **Live 窗口语义（回应"滚动窗口 vs 当前 episode"）**：Live Case Viewer 展示的是由 `ProjectionAccumulator` 维护的**滚动案例窗口**（默认保留最近 N 秒 / 最近 M 个事件，窗口参数为纯 UI 配置，不进 View Model）；当 episode 落库时窗口可锚定当前 episode。`EvidenceProjection` 在 Live 模式的生命周期 = accumulator 的当前快照；窗口边界只影响"展示多少"，不影响"事实从哪来"（仍来自 `EvidenceProjection`）。
 
 ---
@@ -511,7 +528,7 @@ FIXTURE     → 固定测试素材 · 非实时
 - **AC-9（D-Audio · 统一时间轴）**：Timeline 必须按 `timestamp` 交错呈现视觉/音频/决策/行动/记忆，**不得**出现视频/音频/决策三套独立时间轴；`TimelineNode` 须带 `modality` 判别。
 - **AC-10（VM-9 不生成音频证据）**：Case Viewer 执行期间**无 ASR/LLM 调用**；`audio_evidence` 仅来自 `EvidenceProjection`（AudioPerceptionEvent/EvidenceItem(modality=AUDIO)/RiskSignal(source=AUDIO)/CrossModalLink）；断言 `audio_evidence` 节点字段全部派生自真实音频符号，无 `text`/`transcript` 字段、无 `FORBIDDEN_AUDIO_FIELDS` 判定字段。
 - **AC-11（Media Source 分离）**：媒体播放字节由 Media Source Adapter 经 ref 解析，不得存入 `EvidenceProjection`；`EvidenceProjection` 只持 ref/timestamp。
-- **AC-12（audio_evidence 落地门槛 / VM-13）**：`audio_evidence` 字段仅在真实音频证据进入 canonical artifact 后（Phase C）由 `loader` 投影产出；Phase A/B 恒为 `()`，不得编造。
+- **AC-12（audio_evidence 落地门槛 / VM-13）**：`audio_evidence` **不**再以「Phase B 恒为空」截断。Phase A（视觉 Live，无音频）恒为 `()`；Phase B（Live 真实音频接入）**MAY 含** REAL_SENSOR 派生的 `AudioPerceptionEvent`（仅当实时音频流真实摄入，由 `live_adapter` 投影产出）；Phase C（Artifact）由 `loader` 投影产出（provenance=SIMULATED）。三者的唯一差异是 `provenance_kind`；**未摄入音频的任何 phase 恒为 `()`，绝不编造**（fail-closed）。
 - **AC-13（VM-11 · CasePresentationDescriptor 不含事实）**：`CasePresentationDescriptor` 不含 `case_risk_level`/`case_decision`/`case_timeline` 等可由 `EvidenceProjection` 派生的业务事实；静态扫描禁止此类字段。
 - **AC-14（VM-10 · 双时间轴 + Case Time）**：前端 Media Timeline 与 Evidence Timeline 经 `Case Time` 映射同步，不混为同一数组/状态；视频播放位置能驱动时间轴定位与面板更新。
 - **AC-15（VM-12 · Case Video ≠ Analysis Video）**：Case Viewer 主体验使用 Case Video（叙事结构 Context→Incident→Risk Escalation→AI Perception→Intervention→Outcome），不得把 Analysis Video 当主视频。
@@ -535,7 +552,7 @@ FIXTURE     → 固定测试素材 · 非实时
 3. **AC-12 严守**：未声明音频的场景（或 Phase A/B Live）`audio_evidence` 恒为 `()`；`loader._build_audio_evidence` 对 `raw is None` 返回 `()`、对任意字段缺失/类型非法 **fail-closed 抛 `EvidenceProjectionError`**，绝不编造。
 4. **脱敏守卫兼容性（关键约束）**：`AudioEvidenceNode.score` 的裸键 `"score"` 会触发 `assert_desensitized` 的 `forbidden_field`（精确匹配 `"score"`）→ 在 **canonical 中间层**一律用 `audio_*` 前缀键承载（`audio_timestamp`/`audio_kind`/`audio_score`/`audio_confidence`/`audio_labels`/`audio_source_segment_ids`），`loader` 投影进 `AudioEvidenceNode` 时再还原为 `score`/`confidence` 等字段。字段级契约见下表「canonical 中间层键」列。
 
-> Phase B（Live）状态不变：live_adapter 增量合并 AUDIO modality 时间轴节点（`REAL_SENSOR` provenance，`audio_evidence` 在 Live 投影中仍是 `()`，Phase C 不引入 Live 侧变化），见 `visualizer/viewer/live_adapter.py`。
+> Phase B（Live）已落地：live_adapter 增量合并 AUDIO modality 时间轴节点（`REAL_SENSOR` provenance），**且**把摄入的 `AudioPerceptionEvent` 投影为 `audio_evidence`（`provenance_kind=REAL_SENSOR`，fail-closed，幂等，见 `visualizer/viewer/live_adapter.py` 的 `_build_audio_evidence_live`）；未摄入音频时恒 `()`，绝不编造（AC-12 / 6 MUST）。与 Artifact（Phase C loader）共用同一 `AudioEvidenceNode` schema，区别仅 `provenance_kind`。
 
 ### 实现状态（Slice D · Media Source Adapter + D3 导出 + D1/D2 去重 已落地）
 

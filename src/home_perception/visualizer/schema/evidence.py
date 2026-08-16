@@ -210,23 +210,34 @@ class CaseTimeTrack(TypedDict):
 
 
 class AudioEvidenceNode(TypedDict):
-    """音频证据节点（ADR-0036 · VM-13 Phase C 由 loader 投影产出；Phase A/B 恒 ``()``）。
+    """音频证据节点（ADR-0036 · VM-13）。
+
+    **Live（Phase B）与 Artifact（Phase C）共用本 schema**——唯一差异是 ``provenance_kind``
+    （Live=``REAL_SENSOR`` / Artifact=``SIMULATED``）；未摄入音频时（Phase A / 无音频场景）恒
+    ``()``（AC-12 / VM-13 6 MUST）。
 
     字段严格来自真实音频符号（AC-10 / 附录 A），**绝不**出现 ``text`` / ``transcript`` /
     ``FORBIDDEN_AUDIO_FIELDS``（fraud_result/verdict/is_fraud/…）/ 媒体字节
     （raw_audio/mp4/wav）。Case Viewer 执行期间无 ASR/LLM（VM-9），音频只产 perception，
     不产语义判定；媒体字节由 Media Source Adapter 经 ``ref`` 解析（VM-10 / AC-11）。
+
+    设计说明（对齐 Owner 2026-08-16 统一结构诉求）：上游 ``AudioPerceptionEvent`` 不含
+    ``duration`` 字段，故不引入 `duration`；``event_time`` 语义由 ``timestamp``（Unix 秒）
+    承载；``source``（REAL_SENSOR/SIMULATED）由 ``provenance_kind`` 单一字段表达，不另设
+    冗余 ``source`` / ``provenance`` 双字段。``event_id`` 透传上游事件 ID（可选），仅用于
+    溯源 / 幂等核对，不新生成、不进展示判定。
     """
 
-    timestamp: str                      # ← AudioPerceptionEvent.timestamp（Unix 秒）
+    timestamp: str                      # ← AudioPerceptionEvent.timestamp（Unix 秒，即 event_time）
     kind: str                           # ← AudioPerceptionKind.value（五值）
     score: float                        # ← .score (0~1)，规则强度（非诈骗概率）
     confidence: float                   # ← .confidence (0~1)，检测可信度
     labels: tuple[str, ...]             # ← .labels / .scored_labels（声学标签透传）
     source_segment_ids: tuple[str, ...]  # ← .source_segment_ids
-    ref: str                            # ← trace artifact 定位
-    provenance_kind: ProvenanceKind      # REAL_SENSOR / SIMULATED / FIXTURE
+    ref: str                            # ← trace artifact 定位（artifact: canonical#...；live: live://audio/{idx}）
+    provenance_kind: ProvenanceKind      # REAL_SENSOR（Live）/ SIMULATED（Artifact）/ FIXTURE
     # 以下为可选字段（NotRequired：缺失即未投影，绝不占位编造）
+    event_id: NotRequired[str]               # ← AudioPerceptionEvent.event_id（透传，可选）
     acoustics: NotRequired[AudioAcoustics]   # 可选声学特征
     signal_category: NotRequired[str]        # 可选证据分类（如 COMMUNICATION）
     related_visual_ref: NotRequired[str]     # 可选跨模态视觉 ref（CrossModalLink 派生）

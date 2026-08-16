@@ -56,13 +56,13 @@ def _projection_json(proj):
 
 
 def _make_audio(timestamp, kind, *, score=0.8, confidence=0.9,
-                source_segment_ids=("seg-1",), labels=("raised",)):
+                source_segment_ids=("seg-1",), labels=("raised",), event_id=None):
     """构造 AudioPerceptionEvent 契约的 dict 形态（鸭子类型摄入，不依赖生产对象）。
 
     timestamp 数值型（对齐 AudioPerceptionEvent.to_dict() 的 Unix 秒 float），
-    与 JSONL 人工条目的字符串形态都兼容。
+    与 JSONL 人工条目的字符串形态都兼容。event_id 可选（透传上游事件 ID）。
     """
-    return {
+    d = {
         "timestamp": timestamp,
         "kind": kind,
         "score": score,
@@ -70,6 +70,9 @@ def _make_audio(timestamp, kind, *, score=0.8, confidence=0.9,
         "source_segment_ids": list(source_segment_ids),
         "labels": list(labels),
     }
+    if event_id is not None:
+        d["event_id"] = event_id
+    return d
 
 
 # —— AC-5 / VM-3：依赖方向（不 import 生产 runtime / silver_demo） ——
@@ -385,3 +388,91 @@ def test_render_live_with_audio_marker():
     assert "🔊" in html            # AUDIO modality 徽章
     assert "AUDIO" in html          # modality 标签
     assert "真实传感器" in html      # AC-7 provenance 一等视觉（音频节点同为 REAL_SENSOR）
+
+
+# —— ADR-0036 VM-13 Phase B（#509 验证）：Live audio_evidence 投影字段契约 ——
+
+def test_ingest_audio_populates_audio_evidence():
+    """摄入真实音频 → audio_evidence 非空、provenance=REAL_SENSOR、ref=live://audio/{idx}。
+
+    这是「Active 截断 Live 音频证据」修正后的核心验收：Live 投影不再恒 ``()``，
+    而是把摄入的 REAL_SENSOR 音频感知投影为与 Artifact 共享 schema 的节点（区别仅
+    provenance_kind）。
+    """
+    acc = ProjectionAccumulator("sess-ev")
+    acc.ingest_audio(_make_audio(
+        1700000000.0, "audio_voice_raised",
+        score=0.83, confidence=0.91,
+        source_segment_ids=("seg-1",), labels=("raised",),
+        event_id="ev-1",
+    ))
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    assert scn["audio_evidence"], "摄入音频后 audio_evidence 必须非空（VM-13 Phase B）"
+    node = scn["audio_evidence"][0]
+    assert node["provenance_kind"] == "REAL_SENSOR"
+    assert node["ref"] == "live://audio/1"
+    assert node["kind"] == "audio_voice_raised"
+    assert node["score"] == 0.83
+    assert node["confidence"] == 0.91
+    assert node["labels"] == ("raised",)
+    assert node["source_segment_ids"] == ("seg-1",)
+    assert node["event_id"] == "ev-1"          # 可选 event_id 透传（溯源/幂等）
+
+
+def test_audio_evidence_event_id_omitted_when_absent():
+    """未提供 event_id → 节点不含 event_id 键（NotRequired，绝不占位编造）。"""
+    acc = ProjectionAccumulator("sess-ev2")
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_speech_rapid"))
+    node = acc.to_evidence_projection()["scenarios"][0]["audio_evidence"][0]
+    assert "event_id" not in node
+
+
+def test_audio_evidence_empty_without_audio():
+    """未摄入音频 → audio_evidence 恒 ()（AC-12 / VM-13 6 MUST，绝不编造）。"""
+    acc = ProjectionAccumulator("sess-ev3")
+    acc.ingest(_make_frame(0, n_detections=1, event_types=["visit_normal"]))
+    assert acc.to_evidence_projection()["scenarios"][0]["audio_evidence"] == ()
+
+
+def test_audio_evidence_idempotent_replay_explicit():
+    """含音频流重放 N 次 → audio_evidence 逐字段一致（VM-8 幂等，显式断言节点内容）。"""
+    def build():
+        a = ProjectionAccumulator("sess-evidem", window_size=64)
+        a.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", event_id="e1"))
+        a.ingest_audio(_make_audio(1700000001.0, "audio_telephone_persistent", event_id="e2"))
+        return a.to_evidence_projection()["scenarios"][0]["audio_evidence"]
+    baseline = build()
+    assert len(baseline) == 2
+    for _ in range(4):
+        cur = build()
+        assert cur == baseline, "audio_evidence 重放不一致（破坏 VM-8 幂等）"
+
+
+def test_live_audio_case_time_track_audio_lane():
+    """Step 6：Live 摄入音频 → Case Time 主轴含音频 Lane 标记（相对 T0 确定性排序）。"""
+    acc = ProjectionAccumulator("sess-ct", window_size=64)
+    acc.ingest_audio(_make_audio(1700000002.0, "audio_speech_rapid", event_id="e2"))
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", event_id="e1"))
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    tracks = scn["case_time_tracks"]
+    assert len(tracks) == 2
+    # 按时间确定性排序：e1(t=0) 在前、e2(t=2) 在后
+    assert tracks[0]["kind"] == "audio"
+    assert tracks[0]["time"] == 0.0
+    assert tracks[1]["time"] == 2.0
+    assert tracks[0]["ref"] == "live://audio/2"   # ref 用的是（逆序）摄入序号
+    # 音频 Lane 标签来自本地映射（不编造）
+    assert tracks[0]["label"] == "音高升高"
+    # 实时会话无 memory episodes → 显式 absent
+    assert scn["memory_episodes"] == ()
+
+
+def test_render_live_case_time_audio_lane():
+    """含音频的 Live 投影渲染出 Case Time 音频 Lane 标记（🔊 · 相对时间）。"""
+    acc = ProjectionAccumulator("sess-render-ct")
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", event_id="e1"))
+    proj, desc = build_live_presentation(acc.to_evidence_projection())
+    html = render_case_viewer(proj, desc)
+    assert "Case Time" in html
+    assert "🔊" in html
+    assert "音高升高" in html

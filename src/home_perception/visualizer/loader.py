@@ -417,7 +417,7 @@ def _build_audio_evidence(
     """
     raw = artifacts.get("audio_evidence")
     if raw is None:
-        return ()  # 无音频符号：Phase A/B 与未声明音频场景恒空（AC-12）
+        return ()  # 无音频符号：未声明音频的 artifact 场景恒空（AC-12；Live 路径见 live_adapter）
     if not isinstance(raw, list):
         raise EvidenceProjectionError(
             f"{owner}.artifacts.audio_evidence 结构非法（fail-closed）"
@@ -440,6 +440,13 @@ def _build_audio_evidence(
         if related is not None and not isinstance(related, str):
             raise EvidenceProjectionError(
                 f"{owner}.audio_evidence[{i}].audio_related_visual_ref 非 str（fail-closed）"
+            )
+        # 可选事件 ID（透传上游 AudioPerceptionEvent.event_id，仅溯源/幂等核对，非展示判定）。
+        # canonical 中间层用 audio_event_id 承载（与 audio_score 等同级前缀键）；缺失即不投影。
+        event_id = entry.get("audio_event_id")
+        if event_id is not None and not isinstance(event_id, str):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_event_id 非 str（fail-closed）"
             )
         # 逐个字段强校验（fail-closed：缺字段 / 类型错误即拒绝，不兜底填占位）
         if not isinstance(timestamp, (int, float)):
@@ -480,6 +487,8 @@ def _build_audio_evidence(
         )
         if related is not None:
             node["related_visual_ref"] = related
+        if event_id is not None:
+            node["event_id"] = event_id
         nodes.append(node)
     return tuple(nodes)
 
