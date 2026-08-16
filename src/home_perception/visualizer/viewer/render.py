@@ -219,6 +219,9 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
       不进主轴——那是背景，不是当下；VM-10 不伪造媒体对齐）；
     - 交互：点击标记 → ``window.__caseTime(sid, kind, label, time)``——移动游标 +
       联动（audio → 播放对应样本/高亮卡片；memory → 滚动记忆面板）；
+    - P0-3 Evidence Replay：标记带 data-time/data-kind/data-label（JS 播放器遍历
+      触发）；主轴播放按钮 → ``window.__caseTimeReplay(sid)``（证据时间自动回放：
+      游标推进 + 事件按序涌现，独立于媒体时间，诚实不伪造媒体对齐）；
     - 无事件标记 → 返回空串（AC-12 不编造）；无音频/记忆场景零成本。
     """
     tracks = scenario.get("case_time_tracks") or ()
@@ -234,10 +237,13 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
         kind = str(t["kind"])
         cls = "mark-audio" if kind == "audio" else "mark-memory"
         marker = "🔊" if kind == "audio" else "🧠"
+        label_js = _R._esc_js(str(t["label"]))
         marks.append(
             f'<span class="case-time-mark {cls}" style="left:{pct:.1f}%" '
+            f'data-time="{time:.3f}" data-kind="{_R._esc(kind)}" '
+            f'data-label="{label_js}" '
             f'onclick="window.__caseTime(\'{sid_html}\',\'{_R._esc(kind)}\','
-            f'\'{_R._esc_js(str(t["label"]))}\',{time:.3f})" '
+            f'\'{label_js}\',{time:.3f})" '
             f'title="{time:.1f}s · {kind} · {_R._esc(str(t["label"]))}">{marker}</span>'
         )
     return f"""
@@ -246,8 +252,11 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
         <span class="case-time-cursor" id="case-time-cursor-{sid_html}"></span>
         {''.join(marks)}
       </div>
-      <div class="case-time-meta muted">
-        Case Time（证据时间轴 · 0~{max_time:.1f}s）— 点击事件标记定位；媒体时间≠证据时间（VM-10）
+      <div class="case-time-meta">
+        <button type="button" class="rp-btn case-time-play" id="case-time-play-{sid_html}"
+                onclick="window.__caseTimeReplay('{sid_html}')"
+                title="证据时间回放（事件按 Case Time 涌现）">▶</button>
+        <span class="muted">Case Time（证据时间轴 · 0~{max_time:.1f}s）— 回放 = 事件按序涌现；媒体时间≠证据时间（VM-10）</span>
       </div>
     </div>"""
 

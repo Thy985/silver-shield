@@ -292,4 +292,72 @@
       }
     }
   };
+
+  // P0-3 Evidence Replay：证据时间自动回放（游标推进 + 事件按序涌现）。
+  // - 独立于媒体时间（VM-10 不伪造媒体对齐）：沿证据时间轴推进，命中标记逐个触发
+  //   （复用 __caseTime 联动：音频播放/记忆高亮）；
+  // - 播放时长 = 事件数 × 1.2s（证据时间压缩，诚实标注在 UI）；
+  // - 按钮切换；无标记 no-op 不崩。
+  var caseReplays = {};
+
+  function _triggerCaseMark(sid, mark) {
+    var kind = mark.getAttribute('data-kind');
+    var label = mark.getAttribute('data-label') || '';
+    var time = parseFloat(mark.getAttribute('data-time') || '0') || 0;
+    global.__caseTime(sid, kind, label, time);
+    mark.classList.add('case-time-mark-active');
+    (function (m) {
+      setTimeout(function () { m.classList.remove('case-time-mark-active'); }, 2500);
+    })(mark);
+  }
+
+  function _stopCaseReplay(sid) {
+    if (caseReplays[sid]) {
+      clearInterval(caseReplays[sid]);
+      delete caseReplays[sid];
+    }
+  }
+
+  global.__caseTimeReplay = function (sid) {
+    if (typeof global.document === 'undefined') return;
+    if (caseReplays[sid]) { _stopCaseReplay(sid); return; }  // toggle 暂停
+    var track = global.document.getElementById('case-time-track-' + sid);
+    var cursor = global.document.getElementById('case-time-cursor-' + sid);
+    if (!track || !cursor) return;
+    var marks = track.querySelectorAll('.case-time-mark');
+    if (!marks.length) return;
+    var max = parseFloat(track.getAttribute('data-max') || '0') || 1;
+    var idx = 0;
+    var steps = marks.length + 4;  // 开头/结尾留白
+    var stepSec = 1.2;             // 每 tick 1.2s（证据时间压缩）
+    // 播放按钮状态切换。
+    var btn = global.document.getElementById('case-time-play-' + sid);
+    if (btn) { btn.textContent = '⏸'; }
+    caseReplays[sid] = setInterval(function () {
+      if (idx >= steps) {
+        _stopCaseReplay(sid);
+        if (btn) { btn.textContent = '▶'; }
+        if (cursor) { cursor.style.left = '0%'; }
+        return;
+      }
+      var frac = idx / (steps - 1);
+      if (cursor) { cursor.style.left = (frac * 100) + '%'; }
+      var t = frac * max;
+      // 触发所有 time <= t 且未触发的标记。
+      var triggered = false;
+      for (var i = 0; i < marks.length; i++) {
+        var mt = parseFloat(marks[i].getAttribute('data-time') || '0') || 0;
+        if (mt <= t && marks[i].getAttribute('data-triggered') !== '1') {
+          marks[i].setAttribute('data-triggered', '1');
+          _triggerCaseMark(sid, marks[i]);
+          triggered = true;
+        }
+      }
+      idx++;
+    }, stepSec * 1000);
+    // 重置 triggered 标记（本轮播放开始）。
+    for (var j = 0; j < marks.length; j++) {
+      marks[j].setAttribute('data-triggered', '0');
+    }
+  };
 })(window);
