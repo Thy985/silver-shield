@@ -26,6 +26,7 @@ from typing import Literal
 
 from home_perception.visualizer.schema.evidence import (
     AudioEvidenceNode,
+    CaseTimeTrack,
     Counts,
     DecisionEvidence,
     EvidenceProjection,
@@ -538,6 +539,57 @@ def _build_memory_episodes(
     return tuple(nodes)
 
 
+def _build_case_time_tracks(
+    audio_evidence: tuple[AudioEvidenceNode, ...],
+    memory_episodes: tuple[MemoryEpisodeNode, ...],
+    scenario_id: str,
+) -> tuple[CaseTimeTrack, ...]:
+    """P0-2：Case Time 主轴事件标记（相对最早证据 T0，确定性排序）。
+
+    - 音频轨：``audio_evidence`` timestamp（float Unix 秒）；
+    - 记忆：``memory_episodes`` 中**非 prior**（本次会话）的 timestamp（ISO → Unix 秒）；
+      prior 历史是背景（3 days ago/yesterday），**不进当前 Case Time 主轴**（VM-10）；
+    - T0 = 最早音频时间（音频存在时），否则最早非 prior 记忆时间；无事件 → 恒 ``()``；
+    - 相对时间为负的事件（早于 T0，属历史背景）→ 丢弃（诚实，不伪造当下时刻）；
+    - 排序 ``(time, kind, ref)`` 确定性（同 seed 两次运行一致）。
+    """
+    events: list[tuple[float, str, str, str]] = []  # (time, kind, ref, label)
+    for a in audio_evidence:
+        try:
+            ts = float(a.get("timestamp", 0.0))
+        except (TypeError, ValueError):
+            continue
+        events.append(
+            (ts, "audio", a.get("ref", ""), str(a.get("kind", "audio")))
+        )
+    for m in memory_episodes:
+        if m.get("prior"):
+            continue  # prior 历史不进当前 Case Time 主轴
+        raw = m.get("timestamp", "")
+        try:
+            from datetime import datetime
+
+            ts = datetime.fromisoformat(str(raw)).timestamp()
+        except (TypeError, ValueError):
+            continue
+        label = str(m.get("summary", ""))[:24]
+        events.append((ts, "memory", "", label or str(m.get("record_id", ""))))
+
+    if not events:
+        return ()
+    t0 = min(ts for ts, *_ in events)
+    tracks: list[CaseTimeTrack] = []
+    for ts, kind, ref, label in events:
+        rel = ts - t0
+        if rel < 0:
+            continue  # 早于 T0（历史背景）→ 不标记
+        tracks.append(
+            CaseTimeTrack(time=round(rel, 3), kind=kind, ref=ref, label=label)
+        )
+    tracks.sort(key=lambda t: (t["time"], t["kind"], t["ref"], t["label"]))
+    return tuple(tracks)
+
+
 def _build_cross_modal_timeline_nodes(
     artifacts: dict, scenario_id: str
 ) -> tuple[TimelineNode, ...]:
@@ -679,6 +731,7 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
     # canonical.audio_evidence[i] 可回溯；provenance_kind=SIMULATED（D1 恒仿真闭环）；
     # 不调用 ASR/LLM、不生成音频（VM-9）。无音频场景恒不追加（AC-12 绝不编造）。
     audio_evidence = _build_audio_evidence(artifacts, scenario_id, owner)
+    memory_nodes = _build_memory_episodes(artifacts, scenario_id, owner)
     for a in audio_evidence:
         # ADR-0036 Phase 2（多模态消费）：在主时间轴直接富化音频细节（kind/强度/置信/标签/段），
         # 不必依赖分离表格即可消费；related_visual_ref 派生自真实跨模态关联（缺则恒不携带）。
@@ -733,7 +786,11 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         timeline=tuple(timeline_nodes),
         decision_evidence=decision_evidence,
         audio_evidence=audio_evidence,
-        memory_episodes=_build_memory_episodes(artifacts, scenario_id, owner),
+        memory_episodes=memory_nodes,
+        # P0-2：Case Time 主轴事件标记（音频轨 + 本次会话记忆，相对 T0；prior 不进）。
+        case_time_tracks=_build_case_time_tracks(
+            audio_evidence, memory_nodes, scenario_id
+        ),
         gate=verdicts,
         gate_passed=gate_passed,
         gate_degraded=gate_degraded,

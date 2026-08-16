@@ -251,4 +251,45 @@
       try { p.play(); } catch (e) { /* 降级 */ }
     }
   };
+
+  // P0-2 Case Time 主轴：点击事件标记 → 移动游标 + 联动（音频播放 / 记忆定位）。
+  // 无目标元素 → no-op（降级不崩）；媒体时间≠证据时间（VM-10），不伪造视频 seek。
+  global.__caseTime = function (sid, kind, label, time) {
+    if (typeof global.document === 'undefined') return;
+    var track = global.document.getElementById('case-time-track-' + sid);
+    var cursor = global.document.getElementById('case-time-cursor-' + sid);
+    if (track && cursor) {
+      var max = parseFloat(track.getAttribute('data-max') || '0') || 1;
+      var pct = Math.min(Math.max(time / max * 100, 0), 100);
+      cursor.style.left = pct + '%';
+    }
+    if (kind === 'audio' && label) {
+      // 音频轨：播放对应样本（P0-3 联动键 #audio-<kind>）+ 高亮卡片。
+      var audioEl = global.document.getElementById('audio-' + label);
+      if (audioEl && typeof audioEl.play === 'function') {
+        try { audioEl.play(); } catch (e) { /* 降级 */ }
+      }
+      var cards = global.document.querySelectorAll('.audio-card[data-kind="' + label + '"]');
+      for (var i = 0; i < cards.length; i++) {
+        cards[i].classList.add('audio-card-active');
+        (function (card) {
+          setTimeout(function () { card.classList.remove('audio-card-active'); }, 3000);
+        })(cards[i]);
+      }
+    } else if (kind === 'memory') {
+      // 记忆轨：滚动到 Memory Timeline 面板（高亮该场景首条记忆卡）。
+      var panel = global.document.getElementById('fs-memory-timeline-' + sid);
+      if (panel && panel.scrollIntoView) {
+        try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+        catch (e) { panel.scrollIntoView(); }
+      }
+      var memCards = panel ? panel.querySelectorAll('.mem-ep') : [];
+      if (memCards.length) {
+        memCards[0].classList.add('mem-ep-active');
+        (function (card) {
+          setTimeout(function () { card.classList.remove('mem-ep-active'); }, 3000);
+        })(memCards[0]);
+      }
+    }
+  };
 })(window);
