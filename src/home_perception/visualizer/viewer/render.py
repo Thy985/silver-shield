@@ -192,18 +192,66 @@ def _render_current_risk(scenario: ScenarioEvidence) -> str:
 
 
 def _render_action(scenario: ScenarioEvidence) -> str:
-    """系统行动卡片（派生展示：来自 command_types / recommended_actions，VM-1）。"""
-    cmd_str = (
-        "、".join(_R._translate_value(c) for c in scenario["command_types"]) or "—"
-    )
-    rec_str = (
-        "、".join(_R._translate_value(c) for c in scenario["recommended_actions"]) or "—"
-    )
+    """干预派发回执卡（P1 · VM-1 派生自 scenario.intervention_dispatch；VM-9 守诚实边界）。
+
+    展示：① 逐指令「真实派发类型 → 目标人类接收方 → 期望闭环状态」；② 闭环可达性陈述
+    （干预触达**可定义的人类接收方**——家属 / 社区，可闭合到具体责任人）；③ 诚实注记——
+    运行态未产出送达遥测，本回执**不声称 60s 内送达**、不含任何时延 / SLA 测量
+    （AC-12 绝不编造送达或时延）。空派发 → 返回诚实空卡，不编造回执。
+    """
+    dispatch = scenario.get("intervention_dispatch") or ()
+    if not dispatch:
+        return (
+            "<div class='card action-card'>"
+            "<div class='card-title'>干预派发回执</div>"
+            "<div class='muted'>本场景未派发任何干预指令（仅感知与记录）。</div>"
+            "</div>"
+        )
+
+    rows: list[str] = []
+    for d in dispatch:
+        ct = _R._esc(d["command_type"])
+        role = _R._esc(d["target_role"])
+        closure = d.get("closure_expectation") or ""
+        if closure:
+            closure_html = (
+                f"<span class='receipt-closure'>待确认闭环：{_R._esc(closure)}</span>"
+            )
+        else:
+            closure_html = (
+                "<span class='receipt-closure muted'>无外部接收方（仅系统记录）</span>"
+            )
+        rows.append(
+            f"<li class='receipt-row'>"
+            f"<span class='receipt-cmd'>{ct}</span>"
+            f"<span class='receipt-arrow'>→</span>"
+            f"<span class='receipt-role'>{role}</span>"
+            f"{closure_html}</li>"
+        )
+
+    closure_rows = [d for d in dispatch if d.get("closure_expectation")]
+    closure_list_html = ""
+    if closure_rows:
+        items = "".join(
+            f"<li>{_R._esc(d['target_role'])}"
+            f"（{_R._esc(d['command_type'])} → 期望闭环 "
+            f"<code>{_R._esc(d['closure_expectation'])}</code>）</li>"
+            for d in closure_rows
+        )
+        closure_list_html = (
+            "<div class='receipt-closure-list'>本案例期望的闭环确认："
+            f"<ul>{items}</ul></div>"
+        )
+
     return f"""
       <div class='card action-card'>
-        <div class='card-title'>系统行动</div>
-        <div>实际命令：{_R._esc(cmd_str)}</div>
-        <div class='muted'>建议动作：{_R._esc(rec_str)}</div>
+        <div class='card-title'>干预派发回执</div>
+        <ul class='receipt-list'>
+          {''.join(rows)}
+        </ul>
+        {closure_list_html}
+        <div class='receipt-reach'>闭环可达性：上述指令派发至<span class='receipt-reach-target'>可定义的人类接收方</span>（家属 / 社区），干预闭环可闭合到具体责任人。</div>
+        <div class='receipt-note muted'>诚实边界：运行态未产出送达遥测（送达时间 / 接收确认 / 时延）。本回执仅表征「已派发 + 目标接收方 + 待确认闭环」，<strong>不声称 60s 内送达</strong>，亦不含任何时延 / SLA 测量。</div>
       </div>"""
 
 
@@ -1212,6 +1260,24 @@ def render_case_viewer(
   .risk-level {{ font-size:16px; font-weight:700; color:#d64541; }}
   .risk-card {{ border-left:4px solid #d64541; }}
   .action-card {{ border-left:4px solid #2e9e6b; }}
+  /* P1 干预派发回执卡 */
+  .receipt-list {{ list-style:none; margin:8px 0; padding:0; }}
+  .receipt-row {{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;
+                 padding:6px 0; border-top:1px solid #e3eefb; }}
+  .receipt-row:first-child {{ border-top:none; }}
+  .receipt-cmd {{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+                 background:#dcebfb; color:#1c4f7c; border-radius:6px; padding:1px 8px;
+                 white-space:nowrap; }}
+  .receipt-arrow {{ color:#8a94a6; }}
+  .receipt-role {{ font-weight:600; color:#2b3a4a; }}
+  .receipt-closure {{ font-size:13px; color:#15583b; margin-left:4px; }}
+  .receipt-closure-list {{ margin:8px 0; font-size:13px; color:#2b3a4a; }}
+  .receipt-closure-list ul {{ margin:4px 0 0; padding-left:18px; }}
+  .receipt-closure-list code {{ font-size:12px; background:#eef6ff; color:#1c4f7c;
+                               border-radius:4px; padding:0 4px; }}
+  .receipt-reach {{ margin-top:8px; font-size:13px; color:#1c4f7c; }}
+  .receipt-reach-target {{ font-weight:700; }}
+  .receipt-note {{ margin-top:6px; font-size:12px; line-height:1.5; }}
   /* 音频感知首屏面板（音频 E2E P0） */
   .audio-perception {{ display:flex; flex-direction:column; gap:10px; margin:8px 0; }}
   .audio-card {{ background:#fdf2f8; border:1px solid #f3c9de; border-left:4px solid #c2408a;
