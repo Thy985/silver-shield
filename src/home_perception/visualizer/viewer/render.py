@@ -633,6 +633,42 @@ def _render_case_header(scenario: ScenarioEvidence) -> str:
     </header>"""
 
 
+# P0-4：负向能力声明 → 人类可读标签（展示层纯映射，无业务逻辑；VM-1）。
+_SUPPRESS_REASON_LABELS: dict[str, str] = {
+    "no_trigger_events": "无触发事件：系统观测到正常环境，没有理由生成风险事件（真阴性 TN）",
+    "all_suppressed_normal": "全部证据指向常规行为：已判定为正常模式并保持克制（未误报）",
+    "unroutable_event_type": "事件类型不可路由：观测到但无对应处理通道，已安全忽略",
+}
+
+
+def _render_suppression_reason(scenario: ScenarioEvidence) -> str:
+    """Suppression Reason Card（P0-4 负向能力卡）：解释"系统为什么没报警"。
+
+    仅当场景声明了 suppress_reasons（benign / ambiguous 等负向能力场景）时渲染；
+    空元组 → 返回空串（不渲染卡片，VM-1 不伪造）。数据来自场景 meta 诚实声明，
+    非运行时检测后抑制。这是差异化最强的产品能力——把"没报警"从默认误读为
+    "漏报"，扭转成"系统主动说明为何保持沉默"。
+
+    - 标题："为什么没有报警"
+    - 每条 reason：枚举值 → 人类可读标签（未知值回退为原值，不编造）
+    """
+    reasons = scenario.get("suppress_reasons") or ()
+    if not reasons:
+        return ""
+    items: list[str] = []
+    for r in reasons:
+        label = _SUPPRESS_REASON_LABELS.get(r, r)
+        items.append(
+            f'<li><span class="suppress-tag">{_R._esc(r)}</span>'
+            f'<span class="suppress-text">{_R._esc(label)}</span></li>'
+        )
+    return f"""
+    <div class="suppress-reason">
+      <div class="suppress-head">为什么没有报警</div>
+      <ul class="suppress-list">{''.join(items)}</ul>
+    </div>"""
+
+
 def _render_scenario_case(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -739,6 +775,7 @@ def _render_scenario_case(
         {_scenario_headline(scenario)}
       </h2>
       {_render_case_header(scenario)}
+      {_render_suppression_reason(scenario)}
       {_render_provenance_banner(scenario)}
       {''.join(panel_html)}
       {details}
@@ -961,6 +998,19 @@ def render_case_viewer(
   .audio-meta {{ margin-top:2px; }}
   .audio-play {{ margin-top:8px; display:flex; gap:10px; align-items:center; }}
   .audio-play audio {{ height:34px; }}
+
+  /* P0-4：负向能力卡（"为什么没有报警"）——差异化最强能力，首屏可见 */
+  .suppress-reason {{ background:#eef6ff; border:1px solid #cfe3fb; border-left:4px solid #4a90d9;
+                      border-radius:8px; padding:12px 16px; margin:12px 0; }}
+  .suppress-head {{ font-weight:700; color:#1c4f7c; margin-bottom:6px; }}
+  .suppress-list {{ list-style:none; margin:0; padding:0; }}
+  .suppress-list li {{ display:flex; gap:10px; align-items:baseline; padding:6px 0;
+                       border-top:1px solid #e3eefb; }}
+  .suppress-list li:first-child {{ border-top:none; }}
+  .suppress-tag {{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+                  background:#dcebfb; color:#1c4f7c; border-radius:6px; padding:1px 8px;
+                  white-space:nowrap; }}
+  .suppress-text {{ font-size:13px; color:#2b3a4a; }}
 
   /* Case Video（主轴）+ Media Timeline（Case Time，VM-10/AC-14） */
   .case-video {{ background:#0e1726; border-radius:8px; padding:14px; margin:8px 0; }}

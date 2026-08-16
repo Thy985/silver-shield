@@ -294,6 +294,10 @@ class IntegrationReport:
     n_frames: int = 0
     # P0-1：产品命题一句话（场景声明静态元数据，确定性；空串也输出，键集稳定）。
     product_question: str = ""
+    # P0-4：负向能力声明——"系统为什么没报警"（场景声明静态元数据，确定性；
+    # 空元组也输出，键集稳定）。canonical 顶层键，由 Case Viewer Suppression Reason
+    # Card 消费。与 product_question 同构但多值。
+    suppress_reasons: tuple[str, ...] = ()
     scenario_fingerprint: str = ""
     expectation_fingerprint: str = ""  # Phase C：评价标准指纹（run_result 投影）
     loop_fingerprint: str = ""  # Phase C：运行血缘指纹（run_result 投影）
@@ -330,6 +334,7 @@ class IntegrationReport:
             mode=run_result.mode,
             n_frames=run_result.n_frames,
             product_question=getattr(run_result, "product_question", ""),
+            suppress_reasons=getattr(run_result, "suppress_reasons", ()),
             scenario_fingerprint=run_result.fingerprint,
             expectation_fingerprint=run_result.expectation_fingerprint,
             loop_fingerprint=run_result.loop_fingerprint,
@@ -372,6 +377,7 @@ class IntegrationReport:
             "mode": self.mode,
             "n_frames": self.n_frames,
             "product_question": self.product_question,  # P0-1（确定性，canonical 含）
+            "suppress_reasons": list(self.suppress_reasons),  # P0-4（确定性，canonical 顶层）
             "scenario_fingerprint": self.scenario_fingerprint,
             "expectation_fingerprint": self.expectation_fingerprint,
             "loop_fingerprint": self.loop_fingerprint,

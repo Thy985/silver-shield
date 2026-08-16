@@ -165,6 +165,12 @@ class MetaSpec(BaseModel):
     # 静态元数据（如 scenario_id/description），非运行时事实；缺省空 = 展示层
     # 不渲染命题（向后兼容）。VM-1 只投影既有声明。
     product_question: str = ""
+    # P0-4（产品化）：负向能力声明——"系统为什么没报警"。场景层诚实声明的
+    # suppress reason 枚举值（见 analysis/decision_trace.py 的 SuppressReason），
+    # 用于 benign / ambiguous 等场景的首屏"负向能力卡"。这是场景声明层静态元数据
+    # （非运行时检测后抑制），缺省空 = 展示层不渲染负向能力卡（向后兼容）。
+    # VM-1 只投影既有声明，绝不伪造。
+    suppress_reasons: list[str] = Field(default_factory=list)
     seed: int | None = None  # 生成期必填（仅 synthesize 时需要）
     duration_frames: int | None = None  # 生成期必填
     # —— 运行时确定性覆盖（opt-in；缺省 None = 用闭环装配默认值，向后兼容）——

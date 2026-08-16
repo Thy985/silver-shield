@@ -76,6 +76,10 @@ class IntegrationRunResult:
     run_result: RunResult
     # P0-1：产品命题一句话（场景声明静态元数据，经 canonical → loader → Case Header）。
     product_question: str = ""
+    # P0-4：负向能力声明——"系统为什么没报警"（场景声明静态元数据，经 canonical →
+    # loader → Suppression Reason Card）。tuple[str, ...] 与 product_question 同构但
+    # 多值（可能多个 suppress reason 并存）。缺省空元组 = 不渲染负向能力卡。
+    suppress_reasons: tuple[str, ...] = ()
     perception_events: tuple[Any, ...] = ()
     warnings: tuple[Any, ...] = ()
     commands: tuple[Any, ...] = ()
@@ -200,6 +204,9 @@ class IntegrationRunner:
             loop_fingerprint=loop_fp,
             # P0-1：产品命题一句话（场景声明静态元数据，随 canonical 投影到 Case Header）。
             product_question=getattr(scenario.meta, "product_question", ""),
+            # P0-4：负向能力声明（场景声明静态元数据，随 canonical 投影到 Suppression
+            # Reason Card）。缺省空 list → 空元组 = 不渲染负向能力卡。
+            suppress_reasons=tuple(getattr(scenario.meta, "suppress_reasons", []) or []),
         )
         return result
 
@@ -493,6 +500,7 @@ class IntegrationRunner:
         expectation_fingerprint: str = "",
         loop_fingerprint: str = "",
         product_question: str = "",
+        suppress_reasons: tuple[str, ...] = (),
     ) -> IntegrationRunResult:
         """从探针**只读**读回六类 artifacts 并封装为 ``IntegrationRunResult``。
 
@@ -561,5 +569,6 @@ class IntegrationRunner:
             expectation_fingerprint=expectation_fingerprint,  # Phase B.3（D7）
             loop_fingerprint=loop_fingerprint,  # Phase B.3（D7）
             product_question=product_question,  # P0-1 产品命题一句话
+            suppress_reasons=suppress_reasons,  # P0-4 负向能力声明
             context=ctx,
         )
