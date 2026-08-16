@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -286,6 +287,64 @@ def test_descriptor_no_memory_timeline_without_history():
 
     desc = build_default_case_presentation(_projection_with(1))
     assert "memory_timeline" not in desc["first_screen_layout"]["panels"]
+
+
+def test_descriptor_any_scenario_triggers_global_panel():
+    """G0-4：descriptor 是全局单例——任一场景（非 scenario_index 场景）有记忆也注入。"""
+    from home_perception.visualizer.viewer.case_presentation import (
+        build_default_case_presentation,
+    )
+
+    # 多场景投影：index 0 = 无记忆（benign 语义），index 1 = 有 3 条记忆（repeated 语义）。
+    proj = _projection_with(0)
+    proj["scenarios"] = proj["scenarios"] + _projection_with(3)["scenarios"]
+    desc = build_default_case_presentation(proj, scenario_index=0)
+    panels = desc["first_screen_layout"]["panels"]
+    assert "memory_timeline" in panels
+    assert panels.index("memory_timeline") < panels.index("current_risk")
+
+
+def test_load_case_presentation_ci_descriptor_derives_panels(tmp_path):
+    """G0-4：CI descriptor（无 first_screen_layout）→ 派生感知场景默认面板（含注入）。"""
+    from home_perception.visualizer.viewer.artifact_source import (
+        load_case_presentation,
+    )
+    from home_perception.visualizer.viewer.case_presentation import (
+        _DEFAULT_FIRST_SCREEN_PANELS,
+    )
+
+    from .conftest import make_artifacts
+
+    # canonical 形态：memory_* 前缀键（loader 从 artifacts.memory_episodes 读）。
+    mem_eps = [
+        {
+            "memory_record_id": f"ep-prior-historical_{i:03d}",
+            "memory_timestamp": f"2026-08-{13 + i:02d}T15:30:00+00:00",
+            "memory_risk_level": "LOW",
+            "memory_recommended_action": "MONITOR",
+            "memory_summary": "h",
+            "memory_reason_summary": [],
+            "memory_prior": True,
+        }
+        for i in range(3)
+    ]
+    # 注入 memory_episodes 到 canonical.artifacts（make_artifacts 生成合法 artifact 集）。
+    canon_dir = make_artifacts(
+        tmp_path / "canonical", memory_episodes=mem_eps, audio_evidence=[]
+    )
+    # CI descriptor：只有元数据，无 first_screen_layout（G0-4 关键场景）。
+    desc_path = tmp_path / "ci_desc.json"
+    desc_path.write_text(
+        json.dumps(
+            {"generated_by": "ci", "renderer_version": "1.0", "provenance_ref": "provenance.json"}
+        ),
+        encoding="utf-8",
+    )
+    _proj, desc = load_case_presentation(str(canon_dir), descriptor_path=str(desc_path))
+    panels = desc["first_screen_layout"]["panels"]
+    assert "memory_timeline" in panels  # 派生注入：ci 模式也能拿到 Memory Timeline
+    for p in _DEFAULT_FIRST_SCREEN_PANELS:  # 缺省基底不变
+        assert p in panels
 
 
 def test_render_case_viewer_memory_timeline_end_to_end():

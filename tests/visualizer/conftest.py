@@ -23,6 +23,7 @@ def _canonical(
     scenario_id: str,
     audio_evidence: list[dict] | None = None,
     cross_modal_links: list[dict] | None = None,
+    memory_episodes: list[dict] | None = None,
 ) -> dict:
     # 真实关联边数量由注入决定（默认按旧 artifact 形状给计数 1，但不注入真实 link 列表，
     # 以保留"仅计数、无真实 link"的降级路径测试）。
@@ -51,6 +52,9 @@ def _canonical(
     if cross_modal_links is not None:
         # ADR-0027 D5（P0-3.1）：真实跨模态关联边（对齐 CrossModalLink.to_dict() 形状）。
         artifacts["cross_modal_links"] = cross_modal_links
+    if memory_episodes is not None:
+        # G0-3/G0-2：历史记忆明细（memory_* 前缀键，对齐 LoopArtifactSummary 投影）。
+        artifacts["memory_episodes"] = memory_episodes
     return {
         "scenario_id": scenario_id,
         "ok": True,
@@ -110,6 +114,7 @@ def make_artifacts(
     drop_field: tuple[str, str] | None = None,
     audio_evidence: list[dict] | None = None,
     cross_modal_links: list[dict] | None = None,
+    memory_episodes: list[dict] | None = None,
 ) -> Path:
     """在 ``directory`` 生成合法 artifact 集；``drop_*`` 注入异常（fail-closed 测试）。
 
@@ -126,7 +131,10 @@ def make_artifacts(
     entries = []
     for sid in scenario_ids:
         canonical = _canonical(
-            sid, audio_evidence=audio_evidence, cross_modal_links=cross_modal_links
+            sid,
+            audio_evidence=audio_evidence,
+            cross_modal_links=cross_modal_links,
+            memory_episodes=memory_episodes,
         )
         if drop_field is not None and drop_field[0] == sid:
             canonical.pop(drop_field[1], None)

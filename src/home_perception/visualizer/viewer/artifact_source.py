@@ -13,6 +13,7 @@ import ``silver_demo`` / 生产 runtime（VM-3）。viewer/ 仍是 import 图死
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from home_perception.visualizer.loader import (
@@ -54,10 +55,19 @@ def load_case_presentation(
     - 事实：来自 ``load_case_artifact``（VM-1，EvidenceProjection 唯一事实源）；
     - 编排：``descriptor_path`` 存在则读人类提供编排（fail-closed 拒事实字段），否则派生
       默认纯展示编排（VM-11，不读事实值做判断）。
+    - G0-4：人类编排未显式指定 ``first_screen_layout``（如 CI descriptor 只有
+      generated_by 等元数据）时，派生感知场景的默认面板（含 memory_timeline 注入）——
+      否则 CI 受控生成模式拿不到 Memory Timeline 等案例专属组件。
     """
     projection = load_case_artifact(directory)
     if descriptor_path is not None:
         descriptor = load_case_descriptor(descriptor_path)
+        raw = json.loads(Path(descriptor_path).read_text(encoding="utf-8"))
+        if "first_screen_layout" not in raw:
+            default = build_default_case_presentation(
+                projection, scenario_index=scenario_index
+            )
+            descriptor["first_screen_layout"] = default["first_screen_layout"]
     else:
         descriptor = build_default_case_presentation(
             projection, scenario_index=scenario_index
