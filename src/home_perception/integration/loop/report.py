@@ -109,18 +109,26 @@ def _project_memory_episodes(result: IntegrationRunResult) -> tuple[dict, ...]:
     episodes = getattr(result, "episodes", ()) or ()
     out: list[dict] = []
     # 确定性排序：按 enter_time 升序（与 DecisionEngine._ordered 同一键，审计可对齐）。
+    # 排序键用 (enter_time, leave_time)（时间窗唯一且确定性；record_id 是运行期
+    # uuid4，参与排序会把随机性带进 canonical，违反 t1 逐字节确定性铁律）。
     ordered = sorted(
-        episodes, key=lambda ep: (ep.enter_time, ep.record_id)
+        episodes, key=lambda ep: (ep.enter_time, ep.leave_time)
     )
-    for ep in ordered:
+    for idx, ep in enumerate(ordered):
         command_types = tuple(
             getattr(act, "command_type", "")
             for act in (getattr(ep, "actions", ()) or ())
             if getattr(act, "command_type", "")
         )
+        is_prior = str(ep.record_id).startswith("ep-prior-")
+        # canonical 剔除 UUID 铁律（report 头部：canonical 只保留结构事实，uuid4 逐次
+        # 不同）：prior 记录 ID 来自场景声明（ep-prior-<episode_id>，确定性）保持原样；
+        # 运行期记录 ID 是 uuid4（ep-<event_id>/ep-<audio_session_id>）→ 重映射为
+        # 确定性序号 ep-<idx>（enter_time 排序后的稳定编号，同 seed 两次运行一致）。
+        record_id = ep.record_id if is_prior else f"ep-{idx}"
         out.append(
             {
-                "memory_record_id": ep.record_id,
+                "memory_record_id": record_id,
                 "memory_timestamp": ep.enter_time.isoformat(),
                 "memory_risk_level": ep.risk_level or "",
                 "memory_recommended_action": ep.recommended_action or "",
@@ -128,7 +136,7 @@ def _project_memory_episodes(result: IntegrationRunResult) -> tuple[dict, ...]:
                 "memory_reason_summary": list(ep.reason_summary or ()),
                 "memory_command_types": list(command_types),
                 # prior 标记：record_id 前缀 ep-prior-（G0-3 预置历史）
-                "memory_prior": str(ep.record_id).startswith("ep-prior-"),
+                "memory_prior": is_prior,
             }
         )
     return tuple(out)

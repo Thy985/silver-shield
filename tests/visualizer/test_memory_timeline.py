@@ -68,11 +68,12 @@ def test_report_projects_memory_episodes():
 
     out = _project_memory_episodes(_R())
     assert len(out) == 3
-    # 确定性排序：enter_time 升序 → prior 在前
+    # 确定性排序：enter_time 升序 → prior 在前；运行期（非 prior）record_id 重映射为
+    # 确定性序号 ep-<idx>（canonical 剔除 uuid4 铁律，t1 逐字节确定性）。
     assert [e["memory_record_id"] for e in out] == [
         "ep-prior-historical_001",
         "ep-prior-historical_002",
-        "ep-eb214cb8-0000",
+        "ep-2",
     ]
     assert out[0]["memory_prior"] is True
     assert out[2]["memory_prior"] is False
