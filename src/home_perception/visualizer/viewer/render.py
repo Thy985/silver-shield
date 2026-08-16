@@ -43,6 +43,8 @@ if TYPE_CHECKING:  # 仅类型标注
 
 # P0-1 行动闭环面板：Live WS 客户端资产文件名（render_case_viewer 内联注入）。
 _LIVE_ACTIONS_FILENAME = "live_actions.js"
+# P0 evidence_delta 增量投影客户端（Owner 2026-08-17 拍板）：浏览器只渲染、不推理。
+_LIVE_STREAM_FILENAME = "live_stream.js"
 
 # Case Video 叙事结构（D-CaseVideo · VM-12）：产品主视频，非 Analysis Video。
 _CASE_VIDEO_NARRATIVE = (
@@ -836,6 +838,17 @@ def _live_actions_inline() -> str:
     return p.read_text(encoding="utf-8")
 
 
+def _live_stream_inline() -> str:
+    """内联 P0 evidence_delta 增量投影客户端（缺失时降级为空串——页面保持快照模式，不崩）。
+
+    仅 Live 模式注入（descriptor 带 live_ws_path）；Artifact/旗舰模式不注入（无实时流语义）。
+    """
+    p = _R._ASSETS_DIR / _LIVE_STREAM_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
 def _render_action_closure(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -1288,6 +1301,9 @@ def render_case_viewer(
     media_js = _R._media_inline()
     # P0-1：行动闭环面板存在（Live 模式）时注入 Live WS 客户端；Artifact 模式无此面板 → 不注入。
     live_actions_js = _live_actions_inline() if "action_closure" in panels else ""
+    # P0 evidence_delta 增量投影：仅 Live 模式（descriptor 带 live_ws_path）注入；
+    # Artifact/旗舰模式无实时流语义 → 不注入（快照模式零成本）。
+    live_stream_js = _live_stream_inline() if descriptor.get("live_ws_path") else ""
     # P0-3：任一场景有真实音频证据时注入 AudioSync（音频轨 ↔ 证据时间线联动）；
     # 无音频场景 → 不注入（零成本降级）。audio_perception 面板在默认面板列表恒存在，
     # 但无 audio_evidence 时面板渲染为空串——以证据为准，避免空页面带无用引擎。
@@ -1534,6 +1550,9 @@ def render_case_viewer(
 </script>
 <script>
 {live_actions_js}
+</script>
+<script>
+{live_stream_js}
 </script>
 <script>
 {_R._guard_script_close(replay_inits)}

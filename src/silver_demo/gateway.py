@@ -113,6 +113,12 @@ class DemoGateway:
         # （AudioPerceptionEvent.to_dict() 形态）；缺省空 = 本场景无音频，audio_evidence 恒 ()。
         self._live_audio_events: list = []
 
+        # P0 evidence_delta 增量广播（Owner 2026-08-17 拍板）：浏览器 runtime clock 随
+        # frame_tick 推进，增量投影让 DOM/timeline/卡片"事件涌现"。只读派生 + 失败隔离，
+        # 绝不改变生产行为（VM-1/VM-9 边界：浏览器只渲染、不推理）。
+        self._prev_evidence_fp: dict | None = None
+        self._delta_seq = 0
+
         # 循环控制
         self._running = False
         self._task: asyncio.Task | None = None
@@ -256,6 +262,22 @@ class DemoGateway:
                     "loop_count": self.loop_count,
                 }
             )
+
+            # P0 evidence_delta 增量广播：对同一 EvidenceProjection 做只读 diff，把新增
+            # evidence（timeline 节点 / audio 证据 / Case Time 标记）推给浏览器增量渲染——
+            # 浏览器 runtime clock 随 frame_tick 推进，增量投影驱动"事件涌现"（Live Intelligence
+            # Viewer，Owner 2026-08-17 拍板）。无新增 → 不发（保持 frame_tick 最小心跳语义）。
+            # 失败隔离：增量投影异常吞掉+记日志，绝不改变实时循环（探针铁律）。
+            try:
+                acc = self._ensure_live_accumulator()
+                delta = acc.extract_evidence_delta(self._prev_evidence_fp)
+                self._prev_evidence_fp = acc.projection_fingerprint()
+                if delta.get("timeline") or delta.get("audio") or delta.get("case_time"):
+                    self._delta_seq += 1
+                    delta["seq"] = self._delta_seq
+                    await self.hub.broadcast(delta)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning("evidence_delta_failed", exc_info=exc)
 
             self._frame_index += 1
             if interval > 0:
@@ -505,6 +527,9 @@ class DemoGateway:
         self.store = DemoStateStore()  # 新会话：清空历史闭环状态
         # Live Adapter 投影累积器重置（新会话 = 新证据投影；GET /live 重渲染即干净状态）
         self._live_accumulator = None
+        # P0 delta 基线同步重置（新会话 = 新投影，避免陈旧指纹造成首帧全量重发）
+        self._prev_evidence_fp = None
+        self._delta_seq = 0
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())
