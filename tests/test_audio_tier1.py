@@ -534,3 +534,17 @@ def test_yamnet_runtime_export_tags_real_audio() -> None:
     wav = (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
     tags = tagger.tag(wav, sr)
     assert tags, "正确导出应产出 YAMNet 标签"
+
+
+def test_live_audio_config_points_to_runtime_yamnet_export() -> None:
+    # Gate 4 配置回归：live_audio.yaml 的 Tier1 权重必须指向可用导出 yamnet_runtime.onnx
+    # （输入动态 [samples]，可真实推理），不得指回退化导出 yamnet.onnx（输入固定 [1]，必败）。
+    # 该路径是 PR #240/#241 后 Gate 4 YAMNet 真正跑通的必备半边；回归即阻断。
+    import yaml
+
+    cfg_path = Path(__file__).resolve().parents[1] / "config" / "live_audio.yaml"
+    assert cfg_path.is_file(), cfg_path
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    mp = raw["audio"]["tier1"]["model_path"]
+    assert mp.endswith("yamnet_runtime.onnx"), mp
+    assert not mp.endswith("yamnet.onnx"), mp

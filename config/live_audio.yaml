@@ -135,7 +135,7 @@ audio:
   enabled: true                   # Gate 4（telephone_risk live audio vertical slice）：开启音频→Live 接线（run_demo --live 的 live_audio_builder 门控）
   tier1:
     enabled: true                 # 真实 YAMNet 推理（非 Stub）；需配合下方 model_path
-    model_path: data/models/yamnet/onnx/yamnet.onnx   # YAMNet .onnx 权重路径（运维受控、远端不入库）
+    model_path: data/models/yamnet/onnx/yamnet_runtime.onnx   # YAMNet 运行时导出（输入动态 [samples]，可真实推理）；yamnet.onnx 为退化导出（输入固定 [1]），勿用
     class_map_path: ""             # 可选：521 类名映射文件（yaml/json）
     threshold: 0.1                 # YAMNet 段级平均 score 阈值 [0,1]
     top_k: 10                      # 每段标签上限
