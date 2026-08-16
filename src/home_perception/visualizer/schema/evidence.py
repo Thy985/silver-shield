@@ -133,6 +133,9 @@ class ScenarioEvidence(TypedDict):
     # G0-3/G0-2：记忆时间线节点（prior 历史 + 本次会话 episodes，canonical memory_episodes
     # 投影）。无 memory 明细时恒 ``()``（AC-12 不编造）。
     memory_episodes: tuple[MemoryEpisodeNode, ...]
+    # P0-2：Case Time 主轴事件标记（音频轨 + 本次会话记忆，相对最早证据 T0）。
+    # 无事件标记时恒 ``()``（不编造）；prior 历史不进主轴。
+    case_time_tracks: tuple[CaseTimeTrack, ...]
     gate: tuple[StageVerdict, ...]
     gate_passed: bool
     gate_degraded: bool
@@ -186,6 +189,24 @@ class MemoryEpisodeNode(TypedDict):
     reason_summary: tuple[str, ...]
     command_types: tuple[str, ...]
     prior: bool
+
+
+class CaseTimeTrack(TypedDict):
+    """Case Time 主轴事件标记（P0-2 · 产品化总原则 §3）。
+
+    所有视觉元素回答「此刻发生了什么」的统一时间轴上的事件点：
+    - ``time``：相对最早证据（T0）的秒数（Case Time 基准 = 证据时间，非媒体时间；
+      VM-10 不伪造媒体对齐）；
+    - ``kind``：事件模态（audio / memory）；
+    - ``ref``：可溯源定位（canonical 引用）；
+    - ``label``：人话标签（音频 kind / 记忆 summary）。
+    只含「当前会话」事件（prior 历史不进主轴——那是背景，不是当下）。
+    """
+
+    time: float
+    kind: str
+    ref: str
+    label: str
 
 
 class AudioEvidenceNode(TypedDict):

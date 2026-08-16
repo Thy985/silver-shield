@@ -207,6 +207,51 @@ def _render_action(scenario: ScenarioEvidence) -> str:
       </div>"""
 
 
+# ---------------------------------------------------------------------------
+# P0-2 Case Time 主轴（产品化总原则 §3 · 事件标记 + 游标）
+# ---------------------------------------------------------------------------
+
+
+def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
+    """Case Time 主轴：证据时间轴上的事件标记（音频轨 + 本次会话记忆）。
+
+    - 数据：``scenario.case_time_tracks``（loader 投影，相对最早证据 T0；prior 历史
+      不进主轴——那是背景，不是当下；VM-10 不伪造媒体对齐）；
+    - 交互：点击标记 → ``window.__caseTime(sid, kind, label, time)``——移动游标 +
+      联动（audio → 播放对应样本/高亮卡片；memory → 滚动记忆面板）；
+    - 无事件标记 → 返回空串（AC-12 不编造）；无音频/记忆场景零成本。
+    """
+    tracks = scenario.get("case_time_tracks") or ()
+    if not tracks:
+        return ""
+    sid = scenario["scenario_id"]
+    sid_html = _R._esc(sid)
+    max_time = max((float(t["time"]) for t in tracks), default=0.0) or 1.0
+    marks: list[str] = []
+    for t in tracks:
+        time = float(t["time"])
+        pct = min(time / max_time * 100.0, 100.0)
+        kind = str(t["kind"])
+        cls = "mark-audio" if kind == "audio" else "mark-memory"
+        marker = "🔊" if kind == "audio" else "🧠"
+        marks.append(
+            f'<span class="case-time-mark {cls}" style="left:{pct:.1f}%" '
+            f'onclick="window.__caseTime(\'{sid_html}\',\'{_R._esc(kind)}\','
+            f'\'{_R._esc_js(str(t["label"]))}\',{time:.3f})" '
+            f'title="{time:.1f}s · {kind} · {_R._esc(str(t["label"]))}">{marker}</span>'
+        )
+    return f"""
+    <div class="case-time" id="case-time-{sid_html}">
+      <div class="case-time-track" id="case-time-track-{sid_html}" data-max="{max_time:.3f}">
+        <span class="case-time-cursor" id="case-time-cursor-{sid_html}"></span>
+        {''.join(marks)}
+      </div>
+      <div class="case-time-meta muted">
+        Case Time（证据时间轴 · 0~{max_time:.1f}s）— 点击事件标记定位；媒体时间≠证据时间（VM-10）
+      </div>
+    </div>"""
+
+
 def _render_case_video(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -326,6 +371,8 @@ def _render_case_video(
           <span class="muted">Media Timeline（Case Time 纯展示轴，经映射驱动 Evidence Timeline）</span>
         </div>"""
 
+    case_time = _render_case_time_tracks(scenario)
+
     manifest_island = ""
     if media_manifest:
         # 相对 media base 的帧模板 → 叠加 media_base_url 形成最终可解析 URL。
@@ -342,7 +389,7 @@ def _render_case_video(
     return f"""
     <section class="fs-panel" id="fs-case-video-{sid_html}">
       <h3 class="view-anchor">Case Video（主轴）</h3>
-      <div class="case-video">{media_area}{media_timeline}{binding_footnote}</div>
+      <div class="case-video">{media_area}{media_timeline}{case_time}{binding_footnote}</div>
       {manifest_island}
       <p class="muted">Case Video 叙事结构：{' → '.join(_CASE_VIDEO_NARRATIVE)}（VM-12 · 产品主视频，关联叙事而非分析回放）</p>
     </section>"""
