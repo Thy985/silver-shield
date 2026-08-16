@@ -8,6 +8,7 @@
 meta:
   schema_version: "1.0"
   scenario_id: sw_adr0034_elderly_dwell
+  product_question: "系统能识别老人异常停留并持续关注"
   version: 1
   description: "ADR-0034 Phase B.1: 老人夜间异常停留 -> abnormal_dwell -> WARN(LOW) + LOG_ONLY + episode(vision)"
   seed: 99

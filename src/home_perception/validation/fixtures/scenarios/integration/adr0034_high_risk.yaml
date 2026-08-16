@@ -27,6 +27,7 @@
 meta:
   schema_version: "1.0"
   scenario_id: sw_adr0034_high_risk
+  product_question: "系统发现风险后能够完成通知与处置闭环"
   version: 1
   description: "ADR-0036 P0-2: 同人短时三次到访+末次长停留跨入凌晨 -> high_risk_approach -> HIGH -> ESCALATE_COMMUNITY"
   seed: 99

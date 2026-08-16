@@ -161,6 +161,10 @@ class MetaSpec(BaseModel):
     scenario_id: str  # 稳定资产标识（加载期必填）
     version: int  # 场景内容修订号（加载期必填）
     description: str = ""
+    # P0-1（产品化总原则）：产品命题一句话（This case demonstrates）。场景声明的
+    # 静态元数据（如 scenario_id/description），非运行时事实；缺省空 = 展示层
+    # 不渲染命题（向后兼容）。VM-1 只投影既有声明。
+    product_question: str = ""
     seed: int | None = None  # 生成期必填（仅 synthesize 时需要）
     duration_frames: int | None = None  # 生成期必填
     # —— 运行时确定性覆盖（opt-in；缺省 None = 用闭环装配默认值，向后兼容）——

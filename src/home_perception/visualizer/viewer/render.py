@@ -544,6 +544,39 @@ def _render_action_closure(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# P0-1 Case Header（一级架构元素 · 产品化总原则 §2）
+# ---------------------------------------------------------------------------
+
+
+def _render_case_header(scenario: ScenarioEvidence) -> str:
+    """Case Header：命题一句话 + ▶ Play Case（产品化总原则一级架构元素）。
+
+    - ``This case demonstrates:`` 来自场景声明 ``product_question``（VM-1 只投影既有
+      声明；缺省空 → 不渲染命题行，仅 case 名，向后兼容）；
+    - ``▶ Play Case``：滚动到 Case Video 面板 + 触发 MediaPlayer 播放（无播放器
+      no-op 降级）；
+    - 技术噪音（sid/fingerprint/gate）不在 Header——退 Audit Details（§1 信息层级）。
+    """
+    sid = scenario["scenario_id"]
+    sid_html = _R._esc(sid)
+    prop = scenario.get("product_question") or ""
+    prop_html = ""
+    if prop:
+        prop_html = (
+            f'<p class="case-header-prop">This case demonstrates: '
+            f'{_R._esc(prop)}</p>'
+        )
+    return f"""
+    <header class="case-header">
+      <div class="case-header-main">
+        <span class="case-header-title">{_R._esc(sid.upper())}</span>
+        {prop_html}
+      </div>
+      <button type="button" class="case-play" onclick="window.__playCase('{sid_html}')">▶ Play Case</button>
+    </header>"""
+
+
 def _render_scenario_case(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -649,6 +682,7 @@ def _render_scenario_case(
         <span class="badge {status_class}">{status}</span>
         {_scenario_headline(scenario)}
       </h2>
+      {_render_case_header(scenario)}
       {_render_provenance_banner(scenario)}
       {''.join(panel_html)}
       {details}

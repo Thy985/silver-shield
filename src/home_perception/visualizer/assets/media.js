@@ -236,4 +236,19 @@
     // 暴露给测试：帧 URL 协议白名单（评审 R2-#3 / R2-#11）。
     _safeUrl: _safeUrl
   };
+
+  // P0-1 Case Header ▶ Play Case：滚动到 Case Video 面板 + 触发 MediaPlayer 播放。
+  // 无播放器 / 无元素 → no-op（降级不崩）。
+  global.__playCase = function (sid) {
+    if (typeof global.document === 'undefined') return;
+    var el = global.document.getElementById('fs-case-video-' + sid);
+    if (el && el.scrollIntoView) {
+      try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      catch (e) { el.scrollIntoView(); }
+    }
+    var p = global.__MediaPlayer && global.__MediaPlayer.get(sid);
+    if (p && typeof p.play === 'function') {
+      try { p.play(); } catch (e) { /* 降级 */ }
+    }
+  };
 })(window);

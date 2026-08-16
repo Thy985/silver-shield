@@ -74,6 +74,8 @@ class IntegrationRunResult:
     mode: str
     n_frames: int
     run_result: RunResult
+    # P0-1：产品命题一句话（场景声明静态元数据，经 canonical → loader → Case Header）。
+    product_question: str = ""
     perception_events: tuple[Any, ...] = ()
     warnings: tuple[Any, ...] = ()
     commands: tuple[Any, ...] = ()
@@ -189,14 +191,17 @@ class IntegrationRunner:
             expectation_fp=expectation_fp,
         )
         frame_results, audio_summary = self._drive(pipeline, synth, ctx)  # L3 执行 Scenario
-        return self._collect(  # L4 + L5
+        result = self._collect(  # L4 + L5
             ctx,
             synth,
             frame_results,
             audio_summary,
             expectation_fingerprint=expectation_fp,
             loop_fingerprint=loop_fp,
+            # P0-1：产品命题一句话（场景声明静态元数据，随 canonical 投影到 Case Header）。
+            product_question=getattr(scenario.meta, "product_question", ""),
         )
+        return result
 
     # ------------------------------------------------------------------ G0-3
     @staticmethod
@@ -487,6 +492,7 @@ class IntegrationRunner:
         *,
         expectation_fingerprint: str = "",
         loop_fingerprint: str = "",
+        product_question: str = "",
     ) -> IntegrationRunResult:
         """从探针**只读**读回六类 artifacts 并封装为 ``IntegrationRunResult``。
 
@@ -554,5 +560,6 @@ class IntegrationRunner:
             fingerprint=synth.fingerprint,
             expectation_fingerprint=expectation_fingerprint,  # Phase B.3（D7）
             loop_fingerprint=loop_fingerprint,  # Phase B.3（D7）
+            product_question=product_question,  # P0-1 产品命题一句话
             context=ctx,
         )

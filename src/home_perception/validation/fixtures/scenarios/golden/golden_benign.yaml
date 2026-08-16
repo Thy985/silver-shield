@@ -7,6 +7,7 @@
 meta:
   schema_version: "1.0"
   scenario_id: sw_golden_benign
+  product_question: "系统能识别正常环境，并解释为什么没有触发"
   version: 1
   description: "G0-3 golden: empty hallway, no actor -> no alarm / no command (TN with reason)"
   seed: 11
