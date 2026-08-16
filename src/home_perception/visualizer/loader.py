@@ -147,6 +147,20 @@ def _str_field(data: dict, key: str, owner: str) -> str:
     return value
 
 
+def _str_tuple_field(data: dict, key: str, owner: str) -> tuple[str, ...]:
+    """canonical 顶层 str 列表字段（P0-4 suppress_reasons）：缺键/非 list → 空元组（向后兼容）。
+
+    与 ``_str_tuple`` 的 fail-closed 不同：suppress_reasons 是**可选展示元数据**
+    （旧 artifact 无此键，且既有 conftest 未声明），缺失不抛错、给空元组——
+    展示层据此不渲染负向能力卡。值必须是 str 列表，否则退化为空元组（宽松容错，
+    不影响主链路，符合 VM-1「缺失不伪造」）。
+    """
+    value = data.get(key)
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        return ()
+    return tuple(value)
+
+
 def _build_timeline(canonical: dict, scenario_id: str, counts: Counts) -> tuple[TimelineNode, ...]:
     """从 canonical 投影 stage 级时间轴（D2 缺失粒度降级：无帧级 → stage 摘要）。
 
@@ -779,7 +793,9 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         recommended_actions=_str_tuple(artifacts, "recommended_actions", owner),
         command_types=_str_tuple(artifacts, "command_types", owner),
         trace_outcome_kinds=_str_tuple(artifacts, "trace_outcome_kinds", owner),
-        suppress_reasons=_str_tuple(artifacts, "suppress_reasons", owner),
+        # P0-4：负向能力声明（canonical 顶层投影；旧 artifact 无此键 → 空元组，向后兼容）。
+        # 与 product_question 同构，来自场景 meta 声明的诚实负向能力事实（非运行时抑制）。
+        suppress_reasons=_str_tuple_field(canonical, "suppress_reasons", owner),
         episode_action_command_types=_str_tuple(
             artifacts, "episode_action_command_types", owner
         ),
