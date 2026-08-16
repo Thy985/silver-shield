@@ -156,7 +156,17 @@ class IntegrationRunner:
         """
         ctx = context or IntegrationContext.build(self.config)  # L1 建探针
         synth = self.compiler.compile(scenario, mode=scenario.mode)  # L3 输入（编译产物）
-        pipeline = self._assemble(ctx, synth.detector)  # L2 注入 runtime
+        # G0-3：历史感知决策开关（golden opt-in）——仅当场景声明 prior 或 memory_aware 时
+        # 注入 memory_store 并启用历史感知 policy；否则 DecisionEngine 无 memory_store
+        # （Memory 可缺席，ADR-0030 D2），现有场景决策逐字不变。
+        memory_aware = bool(getattr(scenario, "memory_aware", False))
+        pipeline = self._assemble(
+            ctx, synth.detector, memory_aware=memory_aware
+        )  # L2 注入 runtime
+        # G0-3：确定性身份桥——memory_aware 场景把 actor.id 预置为确定性 visitor_id
+        # （uuid5(NS, actor.id)），使运行时 visitor 身份可预测、prior 历史可跨日匹配。
+        if memory_aware:
+            self._preset_visitor_identities(scenario, pipeline)
         # G0-3：历史记忆预置（prior_episodes → MemoryStore）。必须在驱动前完成，
         # 决策检索（get_episodic_by_visitor）才能命中历史；幂等（record_id 前缀防冲突）。
         if scenario.prior_episodes:
@@ -189,11 +199,47 @@ class IntegrationRunner:
         )
 
     # ------------------------------------------------------------------ G0-3
+    @staticmethod
+    def _golden_visitor_id(actor_id: str) -> str:
+        """actor.id → 确定性 visitor UUID（uuid5，固定命名空间；golden 身份桥）。"""
+        import uuid as _uuid
+
+        return str(
+            _uuid.uuid5(_uuid.UUID("9c5edd75-983c-fa66-df3f-4863e70cce38"), actor_id)
+        )
+
+    @staticmethod
+    def _preset_visitor_identities(scenario: Scenario, pipeline: Any) -> None:
+        """G0-3：memory_aware 场景预置确定性 visitor 身份（actor.id → uuid5 映射）。
+
+        - track_id 规则与 ``validation.simulation.generator._assign_track_ids`` 一致
+          （actor.id 排序序位 + 1），保证与编译产物 detections 的 track_id 对齐；
+        - 预置后运行时该 actor 的 visitor_id == ``_golden_visitor_id(actor.id)``，
+          prior_episodes 用同一 ID 声明即可跨日匹配（"同一访客"身份）。
+        """
+        if not scenario.actors:
+            return
+        import uuid as _uuid
+
+        from home_perception.validation.simulation.generator import (
+            _assign_track_ids,
+        )
+
+        track_map = _assign_track_ids(scenario.actors)
+        event_builder = pipeline.event_builder
+        for actor in scenario.actors:
+            event_builder.preset_visitor_id(
+                track_map[actor.id],
+                _uuid.UUID(IntegrationRunner._golden_visitor_id(actor.id)),
+            )
+
     def _seed_prior_episodes(self, ctx: IntegrationContext, scenario: Scenario) -> None:
         """G0-3：把 ``scenario.prior_episodes`` 预置进 MemoryStore（EpisodicRecord 形态）。
 
         - record_id = ``ep-prior-<episode_id>``（前缀防与运行时 episode 冲突，I1 幂等）；
         - enter/leave_time 由 ``event_time`` 与 ``duration_seconds`` 推导（确定性）；
+        - prior ``visitor_id`` 若匹配场景 actor.id → 归一为 ``_golden_visitor_id``
+          （与 ``_preset_visitor_identities`` 同一确定性身份，保证决策检索命中）；
         - 预置后决策检索（``get_episodic_by_visitor``）即可命中历史。
         """
         from datetime import datetime, timedelta
@@ -201,12 +247,18 @@ class IntegrationRunner:
         from home_perception.core.event import EvidenceModality
         from home_perception.memory.records import EpisodicRecord
 
+        actor_ids = {a.id for a in scenario.actors}
         for pe in scenario.prior_episodes:
+            vid = (
+                self._golden_visitor_id(pe.visitor_id)
+                if pe.visitor_id in actor_ids
+                else pe.visitor_id
+            )
             enter = datetime.fromtimestamp(pe.event_time, tz=UTC)
             leave = enter + timedelta(seconds=max(pe.duration_seconds, 1.0))
             record = EpisodicRecord(
                 record_id=f"ep-prior-{pe.episode_id}",
-                visitor_instance_id=pe.visitor_id,
+                visitor_instance_id=vid,
                 enter_time=enter,
                 leave_time=leave,
                 duration_seconds=max(pe.duration_seconds, 1.0),
@@ -246,7 +298,9 @@ class IntegrationRunner:
             )
         return fingerprint
 
-    def _assemble(self, ctx: IntegrationContext, detector: Any) -> Any:
+    def _assemble(
+        self, ctx: IntegrationContext, detector: Any, *, memory_aware: bool = False
+    ) -> Any:
         """装配注入了三枚探针的 ``PerceptionPipeline``（**唯一注入点**）。
 
         与 ``scripts/run_benchmark._build_torchfree_pipeline`` 同款 torch-free 装配，
@@ -290,9 +344,12 @@ class IntegrationRunner:
         )
         decision_engine = DecisionEngine(
             elder_id=self.elder_id,
-            policy=RuleBasedDecisionPolicy(),
+            policy=RuleBasedDecisionPolicy(memory_aware=memory_aware),
             now_provider=clock,
             trace_recorder=ctx.trace_recorder,  # 探针①：Decision
+            # G0-3：仅 golden（memory_aware）场景注入 memory_store——历史检索装配
+            # ReasoningInput（historical_context）；否则 None（Memory 可缺席，零行为变化）。
+            memory_store=ctx.memory_store if memory_aware else None,
         )
         executor = ActionExecutor(
             dispatcher=ActionDispatcher(DispatcherConfig()),

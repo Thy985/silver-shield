@@ -1,0 +1,84 @@
+# G0-3 · 黄金案例：repeated_visit（历史记忆让风险升级）
+# 产品命题：系统真的记得过去吗？
+# 工程断言：prior_episodes 被检索并影响 Decision（3 days ago / yesterday / today 模式重复 -> 风险升级）
+#
+# 场景几何：本次会话仅 1 次访问（abnormal_dwell，感知层不触发 repeat_visit——单次无重复）；
+# prior_episodes 预置 2 条跨日历史（同 visitor，visitor_id=actor.id → runner 归一为
+# 确定性 uuid5(NS, actor.id)，与运行时 visitor 身份一致）→ memory_aware 决策升级
+# （历史 >= 2 → LOW 升 MEDIUM、action NOTIFY_FAMILY）→
+# Decision Trace.historical_record_ids 引用 ep-prior-historical_001/002（"决策用了历史"可证）。
+meta:
+  schema_version: "1.0"
+  scenario_id: sw_golden_repeated_visit
+  version: 1
+  description: "G0-3 golden: prior 3-day pattern + current abnormal_dwell -> memory-aware escalation NOTIFY_FAMILY"
+  seed: 99
+  # 长 dwell（>=300s 触发 abnormal_dwell，不依赖 rule_overrides）：
+  # (610-3)*0.5s = 303.5s >= long_duration_seconds(300s) ✓；离场空缺 (659-610)*0.5s = 24.5s ✓
+  duration_frames: 660
+  owner: perception-team
+  category: visitor
+  difficulty: medium
+  tags: [golden, memory, prior_episodes, repeated_visit]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+  static_objects: []
+actors:
+  - id: visitor_b
+    actor_type: human
+    tracks:
+      - frame: 3
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 610
+        pos: [240.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 620
+    type: abnormal_dwell
+expects:
+  emitted_event_types: [abnormal_dwell]
+  min_risk_level: LOW
+# G0-3：历史感知决策（golden opt-in）——runner 注入 memory_store + memory_aware policy。
+memory_aware: true
+# G0-3：跨日历史记忆预置（visitor_id=actor.id，runner 归一为确定性 uuid5 身份）。
+prior_episodes:
+  - episode_id: historical_001
+    event_time: 1752516000.0    # 3 days ago（UTC）
+    visitor_id: visitor_b
+    duration_seconds: 120.0
+    risk_level: LOW
+    recommended_action: MONITOR
+    summary: "3 days ago: abnormal dwell"
+  - episode_id: historical_002
+    event_time: 1752688800.0    # 1 day ago（UTC）
+    visitor_id: visitor_b
+    duration_seconds: 120.0
+    risk_level: LOW
+    recommended_action: MONITOR
+    summary: "1 day ago: abnormal dwell"
+# ADR-0033 D3：安全评价标签。
+benchmark:
+  expected_alarm: true
+  severity: MEDIUM
+  note: "跨日模式重复 + 本次异常停留 -> 历史感知升级（NOTIFY_FAMILY）"
+# ADR-0034 D4：闭环集成期望（IntegrationValidator 消费）。
+integration:
+  perception:
+    min_perception_events: 1
+  decision:
+    outcome: WARN
+  action:
+    expected_notification: true
+    expected_command_types: [LOG_ONLY]
+  memory:
+    min_records: 2
