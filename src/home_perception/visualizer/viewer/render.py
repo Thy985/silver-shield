@@ -305,14 +305,18 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
         is_audio = kind == "audio"
         cls = "mark-audio" if is_audio else "mark-memory"
         marker = "🔊" if is_audio else "🧠"
-        label_js = _R._esc_js(str(t["label"]))
+        # 缺陷 #3 修复（Gate 4E-2 交互验收实证）：data-label 必须用 HTML 属性层转义
+        # （_esc / html.escape），不能用 JS 层 _esc_js（json.dumps 产出带引号字符串，
+        # 嵌入 " 定界的 HTML 属性会被提前终结 → onclick 截断 → 点击抛 SyntaxError）。
+        # onclick 不内联 label（data-driven）：运行时从元素 data-label 读取，零引号冲突。
+        label_attr = _R._esc(str(t["label"]))
         mark = (
             f'<span class="case-time-mark {cls}" style="left:{pct:.1f}%" '
             f'data-time="{time:.3f}" data-kind="{_R._esc(kind)}" '
-            f'data-label="{label_js}" '
+            f'data-label="{label_attr}" '
             f'onclick="window.__caseTime(\'{sid_html}\',\'{_R._esc(kind)}\','
-            f'\'{label_js}\',{time:.3f})" '
-            f'title="{time:.1f}s · {kind} · {_R._esc(str(t["label"]))}">{marker}</span>'
+            f'this.getAttribute(\'data-label\'),{time:.3f})" '
+            f'title="{time:.1f}s · {kind} · {label_attr}">{marker}</span>'
         )
         (audio_marks if is_audio else memory_marks).append(mark)
     # 双 Lane 标签：仅在该类事件存在时显示（避免空行标签噪音）。

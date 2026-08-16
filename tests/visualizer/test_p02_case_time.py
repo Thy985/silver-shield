@@ -204,6 +204,32 @@ def test_render_no_events_no_case_time(tmp_path):
     assert "Case Time（证据时间轴" not in html
 
 
+def test_render_case_time_mark_no_quote_corruption(tmp_path):
+    """缺陷 #3 回归：data-label 用 HTML 属性层转义（无 JSON 引号）；onclick 不内联 label
+    （data-driven：this.getAttribute('data-label')），不再被裸引号截断 → 点击不再抛 SyntaxError。"""
+    import re
+
+    canon = make_artifacts(tmp_path / "a", audio_evidence=_AUDIO, memory_episodes=_MEMORY)
+    proj, desc = load_case_presentation(canon)
+    html = render_case_viewer(proj, desc)
+    # 提取所有 mark 的 onclick / data-label（正则防误命中 media.js 引擎字符串）
+    marks = re.findall(
+        r'<span class="case-time-mark (?:mark-audio|mark-memory)"[^>]*>',
+        html,
+    )
+    assert marks, "应渲染 case-time 标记"
+    for m in marks:
+        # 1) data-label 值必须干净（不含多余引号：旧 bug 是 data-label=""哭腔/求助""）
+        dl = re.search(r'data-label="([^"]*)"', m)
+        assert dl, f"mark 缺 data-label: {m[:120]}"
+        assert not dl.group(1).startswith('"'), f"data-label 被引号污染: {dl.group(1)!r}"
+        # 2) onclick 必须 data-driven（含 this.getAttribute('data-label')），不得内联裸 label
+        oc = re.search(r'onclick="([^"]*)"', m)
+        assert oc, f"mark 缺 onclick: {m[:120]}"
+        assert "this.getAttribute('data-label')" in oc.group(1), f"onclick 未 data-driven: {oc.group(1)!r}"
+        assert "window.__caseTime(" in oc.group(1)
+
+
 # ---------------------------------------------------------------------------
 # 3. media.js __caseTime 行为（node vm）
 # ---------------------------------------------------------------------------
@@ -247,13 +273,17 @@ def test_case_time_js_audio_mark_plays_and_moves_cursor():
             return null;
           },
           querySelectorAll: function(sel) {
-            return sel.indexOf('.audio-card[data-kind="') === 0 ? [card] : [];
+            // 缺陷 #3 修复后：卡片高亮改遍历 .audio-card 比较 data-kind（不再拼接选择器）。
+            if (sel === '.audio-card') return [card];
+            return [];
           },
         };
+        const cardEl = card;
+        cardEl.getAttribute = function(k) { return k === 'data-kind' ? 'audio_telephone_persistent' : null; };
         global.document = doc;
         global.window = global;
         eval(fs.readFileSync(process.argv[2], 'utf-8'));
-        // 音频标记：游标移动 + play + 高亮
+        // 音频标记：游标移动 + play + 高亮（data-kind 命中 label）
         global.__caseTime('sw_t1', 'audio', 'audio_telephone_persistent', 0.0);
         const audioOk = cursor.style.left === '0%' && audioEl._played && card._added === 'audio-card-active';
         // 记忆标记：滚动面板（无 mem 卡 no-op 不崩）

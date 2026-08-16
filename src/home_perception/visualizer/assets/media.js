@@ -265,16 +265,21 @@
     }
     if (kind === 'audio' && label) {
       // 音频轨：播放对应样本（P0-3 联动键 #audio-<kind>）+ 高亮卡片。
+      // 缺陷 #3 修复：卡片高亮改**遍历比较** data-kind（不再用 label 拼接选择器——
+      // label 含引号/特殊字符时选择器注入或语法错误；且兼容 label≠kind 的映射差异）。
       var audioEl = global.document.getElementById('audio-' + label);
       if (audioEl && typeof audioEl.play === 'function') {
         try { audioEl.play(); } catch (e) { /* 降级 */ }
       }
-      var cards = global.document.querySelectorAll('.audio-card[data-kind="' + label + '"]');
+      var cards = global.document.querySelectorAll('.audio-card');
       for (var i = 0; i < cards.length; i++) {
-        cards[i].classList.add('audio-card-active');
-        (function (card) {
-          setTimeout(function () { card.classList.remove('audio-card-active'); }, 3000);
-        })(cards[i]);
+        var dk = cards[i].getAttribute('data-kind') || '';
+        if (dk === label || dk === kind) {
+          cards[i].classList.add('audio-card-active');
+          (function (card) {
+            setTimeout(function () { card.classList.remove('audio-card-active'); }, 3000);
+          })(cards[i]);
+        }
       }
     } else if (kind === 'memory') {
       // 记忆轨：滚动到 Memory Timeline 面板（高亮该场景首条记忆卡）。
