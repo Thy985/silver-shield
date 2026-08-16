@@ -71,6 +71,33 @@ class CameraSpec(BaseModel):
     viewpoint: str = ""
 
 
+class PriorEpisodeSpec(BaseModel):
+    """G0-3 历史记忆预置声明（跨日 prior episode，`EpisodicRecord` 的确定性输入）。
+
+    字段对齐 `EpisodicRecord` 核心身份/时间/语义字段：
+    - ``episode_id``：历史 episode 标识（如 ``historical_001``）；落库 record_id =
+      ``ep-prior-<episode_id>``（前缀防与运行时 episode 冲突，I1 幂等）；
+    - ``event_time``：历史事件时间（Unix 秒，**跨日**的时间真相源，如 3 days ago）；
+    - ``visitor_id``：同一访客身份（决策检索 `get_episodic_by_visitor` 按此命中）；
+    - ``risk_level`` / ``recommended_action`` / ``reason_summary`` / ``summary``：
+      历史 episode 的决策侧语义（供决策层"历史模式重复 → 风险升级"引用）。
+
+    只作**输入**（预置进 MemoryStore）；不参与场景自身感知合成（与 `expects` /
+    `integration` 语义分离）。
+    """
+
+    episode_id: str
+    event_time: float  # Unix 秒（UTC，跨日历史时间真相源）
+    visitor_id: str
+    duration_seconds: float = 30.0
+    risk_level: str = "LOW"
+    recommended_action: str = "MONITOR"
+    reason_summary: list[str] = Field(default_factory=list)
+    summary: str = ""
+    device_id: str = "home_entry"
+    modalities: list[str] = Field(default_factory=lambda: ["VISION"])
+
+
 class TrackKeyframe(BaseModel):
     """轨迹关键帧：``frame`` 处的中心位置与尺寸。"""
 
@@ -169,6 +196,10 @@ class Scenario(BaseModel):
     # 仅当声明且闭环 cross_modal_enabled=True 时，loop 才会驱动 AudioSessionRecorder
     # 产出纯音频 episode 并与视觉 episode 建跨模态边。向后兼容：旧场景无此字段。
     audio: list[AudioEventSpec] = Field(default_factory=list)
+    # G0-3：可选历史记忆预置（跨日 prior episodes）。缺省空 = 无历史。
+    # runner 在运行前经 ``memory_store.upsert_episodic`` 预置，决策检索引用
+    # （如 repeated_visit：3 days ago / yesterday / today）。
+    prior_episodes: list[PriorEpisodeSpec] = Field(default_factory=list)
     # ADR-0033：可选安全评价标签（向后兼容缺省 None；ScenarioValidator 不消费此字段，
     # 验证 ≠ 评价，职责分离）。benchmark.expected_alarm 由场景作者显式声明。
     benchmark: BenchmarkExpectation | None = None

@@ -13,6 +13,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+from typing import Any
+
 from ..common.logging import get_logger
 from ..common.timeutil import now_dt
 from .decision_contract import DecisionInput
@@ -65,6 +68,7 @@ class DecisionEngine:
         policy: DecisionPolicy | None = None,
         now_provider=None,
         trace_recorder: DecisionTraceRecorder | None = None,
+        memory_store: Any | None = None,
     ):
         if not elder_id or not str(elder_id).strip():
             raise ValueError("elder_id 不能为空（WarningEvent 必填字段）")
@@ -74,6 +78,58 @@ class DecisionEngine:
         # Slice B：可选 trace 采集接缝，默认关闭（`None` = 不采集，零行为变化，T2）。
         # 不进入 `DecisionInput`（ADR-0031 D6），避免 Trace→DecisionInput 循环依赖。
         self.trace_recorder = trace_recorder
+        # G0-3：可选 MemoryStore 注入（默认 None = Memory 缺席，ADR-0030 D2 零行为变化）。
+        # 注入后 evaluate 装配 ReasoningInput（historical_context），供 policy 历史感知
+        # 与 trace.historical_record_ids 引用（"决策引用了历史 Episode"可证）。
+        self.memory_store = memory_store
+
+    def _build_reasoning_input(
+        self, perception_events: list[PerceptionEvent]
+    ) -> Any | None:
+        """G0-3：从触发事件取 visitor → 检索 MemoryStore 历史 episodes → 最小 ReasoningInput。
+
+        - memory_store 缺席 / 无 visitor / 无历史 → None（Memory 可缺席，ADR-0030 D2）；
+        - 最小构造：``current_event`` + ``historical_context``（EpisodicRecord 列表），
+          ``visitor_profile`` / ``risk_pattern`` 显式 None（C1：不含量分数/判定）；
+        - 失败隔离：检索/构造异常仅日志返回 None（决策主链路不受影响，VM-5 探针铁律）。
+        """
+        if self.memory_store is None:
+            return None
+        visitor_id = next(
+            (
+                str(getattr(ev, "visitor_id", ""))
+                for ev in perception_events
+                if getattr(ev, "visitor_id", None)
+            ),
+            None,
+        )
+        if not visitor_id:
+            return None
+        try:
+            records = self.memory_store.get_episodic_by_visitor(visitor_id)
+            if not records:
+                return None
+
+            from home_perception.memory.consumer.contracts import (
+                CurrentEvent,
+                ReasoningInput,
+            )
+
+            current = CurrentEvent(
+                event_id=f"decision:{self.elder_id}:{self._now():%Y%m%d%H%M%S}",
+                event_type="visitor_event",
+                visitor_instance_id=visitor_id,
+                occurred_at=self._now().astimezone(UTC),
+            )
+            return ReasoningInput(
+                current_event=current,
+                historical_context=tuple(sorted(records, key=lambda ep: ep.enter_time)),
+                visitor_profile=None,
+                risk_pattern=None,
+            )
+        except Exception:  # 失败隔离：历史缺失不影响决策主链路
+            log.exception("memory.reasoning_input_failed", visitor=visitor_id)
+            return None
 
     def evaluate(self, perception_events: list[PerceptionEvent]) -> WarningEvent | None:
         """单次决策：消费 PerceptionEvent 列表，输出 WarningEvent 或 None。
@@ -83,12 +139,16 @@ class DecisionEngine:
         - 全部是 visit_normal 且无 is_odd_hour 叠加（普通访问）
         """
         ctx = DecisionContext(elder_id=self.elder_id, now=self._now())
+        # G0-3：可选装配 ReasoningInput（历史记忆上下文）。memory_store 缺席 →
+        # reasoning_input=None（ADR-0030 D2「Memory 可缺席」零行为变化）；注入时从
+        # 触发事件的 visitor 检索历史 episodes（含 prior_episodes 预置）。
+        reasoning_input = self._build_reasoning_input(perception_events)
         # Slice B：装配 DecisionInput（单入参契约）。本期记忆/推理/既往字段尚未接线，
         # 一律显式 None —— 满足 ADR-0030 D2「Memory 可缺席」原则，零行为变化。
         input = DecisionInput(
             trigger_events=tuple(perception_events),
             decision_context=ctx,
-            reasoning_input=None,
+            reasoning_input=reasoning_input,
             reasoning_result=None,
             prior_warning=None,
         )

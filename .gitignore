@@ -76,3 +76,7 @@ reports/
 # 例外：docs/reports/ 是固化的验证报告（文本资产，入库）
 !docs/reports/
 evidence_explorer.html
+
+# 黄金案例集（Golden Scenario Set）资产：AI/真实视频 + 合成音频 + 生产脚本
+# 大体积生产素材不入库（视频已由 *.mp4 全局忽略；整体忽略以覆盖 wav/yaml/png/脚本）
+data/golden/

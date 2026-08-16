@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
 from home_perception.validation.runner.runner import RunResult
@@ -156,6 +157,10 @@ class IntegrationRunner:
         ctx = context or IntegrationContext.build(self.config)  # L1 建探针
         synth = self.compiler.compile(scenario, mode=scenario.mode)  # L3 输入（编译产物）
         pipeline = self._assemble(ctx, synth.detector)  # L2 注入 runtime
+        # G0-3：历史记忆预置（prior_episodes → MemoryStore）。必须在驱动前完成，
+        # 决策检索（get_episodic_by_visitor）才能命中历史；幂等（record_id 前缀防冲突）。
+        if scenario.prior_episodes:
+            self._seed_prior_episodes(ctx, scenario)
         # ADR-0034 Phase B.3（D7）：两枚闭环指纹。期望指纹只依赖场景声明的评价标准；
         # loop 指纹依赖 输入指纹(synth) + 策略指纹(pipeline) + 装配(config)，故须在
         # _assemble 之后计算（routing_table 已就位）。任一成分缺失即 raise（fail-closed）。
@@ -182,6 +187,39 @@ class IntegrationRunner:
             expectation_fingerprint=expectation_fp,
             loop_fingerprint=loop_fp,
         )
+
+    # ------------------------------------------------------------------ G0-3
+    def _seed_prior_episodes(self, ctx: IntegrationContext, scenario: Scenario) -> None:
+        """G0-3：把 ``scenario.prior_episodes`` 预置进 MemoryStore（EpisodicRecord 形态）。
+
+        - record_id = ``ep-prior-<episode_id>``（前缀防与运行时 episode 冲突，I1 幂等）；
+        - enter/leave_time 由 ``event_time`` 与 ``duration_seconds`` 推导（确定性）；
+        - 预置后决策检索（``get_episodic_by_visitor``）即可命中历史。
+        """
+        from datetime import datetime, timedelta
+
+        from home_perception.core.event import EvidenceModality
+        from home_perception.memory.records import EpisodicRecord
+
+        for pe in scenario.prior_episodes:
+            enter = datetime.fromtimestamp(pe.event_time, tz=UTC)
+            leave = enter + timedelta(seconds=max(pe.duration_seconds, 1.0))
+            record = EpisodicRecord(
+                record_id=f"ep-prior-{pe.episode_id}",
+                visitor_instance_id=pe.visitor_id,
+                enter_time=enter,
+                leave_time=leave,
+                duration_seconds=max(pe.duration_seconds, 1.0),
+                source_event_ids=[f"prior:{pe.episode_id}"],
+                summary=pe.summary or f"历史访问 {pe.episode_id}",
+                model_version="prior-seed-v1",
+                reason_summary=list(pe.reason_summary),
+                risk_level=pe.risk_level,
+                recommended_action=pe.recommended_action,
+                device_id=pe.device_id,
+                modalities=[EvidenceModality(str(m).lower()) for m in pe.modalities],
+            )
+            ctx.memory_store.upsert_episodic(record)
 
     # ------------------------------------------------------------------ L2
     @staticmethod

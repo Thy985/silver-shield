@@ -675,18 +675,31 @@ def build_warning_trace(
     - `identity`：每次 `decide` 唯一 `decision_id`；`correlation_id` 由调用方决定
       （Slice B 单评估默认空，Slice C 双轨共享同一 `correlation_id`）——正面回答
       ADR-0030 §5 开放问题（归 trace，不归 `DecisionInput`）。
-    - `provenance.memory_refs`：Slice B 一律空（Memory 尚未接线，ADR-0030 D2）。
+    - `provenance.memory_refs`：Slice B 一律空（Memory 尚未接线，ADR-0030 D2）；
+      G0-3 起：``reasoning_input.historical_context`` 非空时填充
+      ``historical_record_ids``（"决策引用了历史 Episode"可证，与 policy 的
+      reason_summary 历史引用同源）。
     - `policy.fingerprint`：实际生效路由表摘要（D5 / T10），取代硬编码 `"v1"`。
     - `rationale`：由 `build_rationale` 从 `input.trigger_events` 重建（D3）。
     - `outcome`：WARN，携带决策产物的输出侧记录（不违反 ADR-0030 C1）。
     """
+    memory_refs = MemoryRefs()
+    reasoning_input = getattr(input, "reasoning_input", None)
+    if reasoning_input is not None:
+        historical = tuple(
+            getattr(reasoning_input, "historical_context", ()) or ()
+        )
+        memory_refs = MemoryRefs(
+            reasoning_input_present=True,
+            historical_record_ids=tuple(ep.record_id for ep in historical),
+        )
     return DecisionTrace(
         identity=TraceIdentity.new(arm=arm, correlation_id=correlation_id),
         provenance=TraceProvenance(
             input_digest=compute_input_digest(input),
             trigger_digest=compute_trigger_digest(input.trigger_events),
             trigger_refs=build_trigger_refs(input.trigger_events),
-            memory_refs=MemoryRefs(),
+            memory_refs=memory_refs,
         ),
         policy=TracePolicy(
             name=policy_name,
