@@ -157,8 +157,18 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
 
     def __init__(
         self,
+        *,
         routing_table: dict[str, tuple[str, str, str]] | None = None,
+        memory_aware: bool = False,
     ):
+        """``memory_aware``：G0-3 历史感知开关（golden opt-in，默认 False 零行为变化）。
+
+        - False（默认）：纯感知决策（现有 6 场景逐字不变，policy fingerprint 稳定）；
+        - True：决策参考 ``reasoning_input.historical_context``——同 visitor 历史
+          episodes >= 2（跨日模式重复确认）→ 升级（LOW→MEDIUM、MONITOR→NOTIFY_FAMILY）
+          + reason_summary 显式引用历史 record_id。
+        - 不影响 ``compute_policy_fingerprint(routing_table)``（D5 只 hash 配置表）。
+        """
         super().__init__()  # 初始化基类 span 状态（Slice C，零行为变化）
         """路由表：per-event (level, action, reason) 三元组。
 
@@ -169,6 +179,7 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
         可在 routing_table 中把同 level 多个 event 映射为同一 action。
         """
         self.routing_table = dict(routing_table) if routing_table else dict(DEFAULT_ROUTING_TABLE)
+        self.memory_aware = memory_aware
         # 路由表合法性校验
         for event_type, (level, action, _reason) in self.routing_table.items():
             if level not in RISK_LEVELS:
@@ -259,6 +270,11 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
             "routing_table_version": "v1",
         }
 
+        # G0-3：历史感知升级（golden opt-in；默认 False 逐字不变）。
+        final_level, final_action, reasons, meta = self._apply_memory_aware(
+            input, final_level, final_action, reasons, meta
+        )
+
         return WarningEvent(
             elder_id=ctx.elder_id,
             # device_id = 最早 timestamp 的候选事件设备（C3 规范化后确定，与传入顺序无关）
@@ -275,6 +291,51 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
             # Episode Builder 的 [enter, leave+60s] 窗口）失败。
             created_at=ctx.now,
         )
+
+    # --------------------------------------------------------------------
+    # G0-3：历史感知升级（MemoryRefs 引用可证）
+    # --------------------------------------------------------------------
+
+    def _apply_memory_aware(
+        self,
+        input: DecisionInput,
+        final_level: str,
+        final_action: str,
+        reasons: list[str],
+        meta: dict[str, object],
+    ) -> tuple[str, str, list[str], dict[str, object]]:
+        """G0-3 历史感知升级（golden opt-in）：同 visitor 历史 episodes >= 2 → 升级。
+
+        - 仅当 ``self.memory_aware`` 且 ``reasoning_input.historical_context`` 非空时生效；
+        - 历史重复（>= 2 条同 visitor 历史 episode，含 prior_episodes 预置）确认
+          "跨日模式重复" → ``LOW`` 升 ``MEDIUM``、``MONITOR`` 升 ``NOTIFY_FAMILY``；
+        - ``reason_summary`` 显式引用历史 record_id（人话："历史 N 次类似访问（ids）"），
+          与 ``trace.historical_record_ids`` 同源（"决策引用了历史 Episode"可证）；
+        - 不参与 ``compute_policy_fingerprint(routing_table)``（D5 只 hash 配置表），
+          现有场景 memory_aware=False 决策逐字不变。
+        """
+        if not self.memory_aware:
+            return final_level, final_action, reasons, meta
+        reasoning = getattr(input, "reasoning_input", None)
+        if reasoning is None:
+            return final_level, final_action, reasons, meta
+        records = tuple(getattr(reasoning, "historical_context", ()) or ())
+        if len(records) < 2:
+            return final_level, final_action, reasons, meta
+        ids = tuple(ep.record_id for ep in records)
+        reasons = list(reasons) + [
+            f"历史 {len(records)} 次类似访问（{', '.join(ids)}）"
+        ]
+        level = (
+            final_level
+            if LEVEL_PRIORITY[final_level] >= LEVEL_PRIORITY["MEDIUM"]
+            else "MEDIUM"
+        )
+        action = "NOTIFY_FAMILY" if final_action == "MONITOR" else final_action
+        meta = dict(meta)
+        meta["memory_aware"] = True
+        meta["historical_record_ids"] = list(ids)
+        return level, action, reasons, meta
 
     # --------------------------------------------------------------------
     # Slice C（ADR-0031 D6.1）：抑制 partial 写入
