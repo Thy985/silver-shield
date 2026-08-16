@@ -230,6 +230,13 @@ class AudioEvidenceNode(TypedDict):
     acoustics: NotRequired[AudioAcoustics]   # 可选声学特征
     signal_category: NotRequired[str]        # 可选证据分类（如 COMMUNICATION）
     related_visual_ref: NotRequired[str]     # 可选跨模态视觉 ref（CrossModalLink 派生）
+    # 以下为可选声学状态字段（P0-1：golden telephone_risk 声明式声学状态机透传；
+    # NotRequired：缺失即未投影，绝不占位编造，守 VM-1/AC-12）。
+    acoustic_state_change: NotRequired[str]  # 声学状态机（如 "NORMAL -> ATTENTION -> AROUSAL -> STRESS"）
+    voice_stress_score: NotRequired[float]   # 声学压力指标 (0~1，规则强度非诈骗概率)
+    f0_delta: NotRequired[float]             # F0 相对偏移
+    speech_rate_delta: NotRequired[float]    # 语速相对偏移
+    energy_delta: NotRequired[float]         # 能量相对偏移
 
 
 class EvidenceProjection(TypedDict):
