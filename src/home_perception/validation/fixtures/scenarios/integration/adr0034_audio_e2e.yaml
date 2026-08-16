@@ -16,6 +16,7 @@
 meta:
   schema_version: "1.0"
   scenario_id: sw_adr0034_audio_e2e
+  product_question: "系统能听见环境声音并作为证据参与判断"
   version: 1
   description: "ADR-0034 Audio E2E: abnormal_dwell + 3 audio kinds (telephone/voice_raised/distress_cry) -> real vision<->audio cross-modal link"
   seed: 99

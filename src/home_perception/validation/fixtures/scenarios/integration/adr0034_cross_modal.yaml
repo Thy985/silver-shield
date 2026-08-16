@@ -11,6 +11,7 @@
 meta:
   schema_version: "1.0"
   scenario_id: sw_adr0034_cross_modal
+  product_question: "系统能用多模态证据补充单一模态的不足"
   version: 1
   description: "ADR-0034 Phase B.2: abnormal_dwell + audio telephone -> real vision<->audio cross-modal link"
   seed: 99

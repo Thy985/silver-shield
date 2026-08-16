@@ -10,6 +10,7 @@
 meta:
   schema_version: "1.0"
   scenario_id: sw_golden_repeated_visit
+  product_question: "系统能使用历史事件改变当前风险判断"
   version: 1
   description: "G0-3 golden: prior 3-day pattern + current abnormal_dwell -> memory-aware escalation NOTIFY_FAMILY"
   seed: 99

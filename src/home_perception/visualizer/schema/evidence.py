@@ -111,6 +111,9 @@ class ScenarioEvidence(TypedDict):
     mode: str
     n_frames: int
     scenario_fingerprint: str
+    # P0-1（产品化总原则）：产品命题一句话（This case demonstrates）。场景声明静态
+    # 元数据，经 canonical → loader 投影；缺省空 = 展示层不渲染命题（向后兼容）。
+    product_question: str
     counts: Counts
     event_types: tuple[str, ...]
     risk_levels: tuple[str, ...]

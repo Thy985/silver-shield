@@ -134,6 +134,18 @@ def _str_tuple(data: dict, key: str, owner: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _str_field(data: dict, key: str, owner: str) -> str:
+    """canonical 顶层字符串字段（P0-1 product_question）：缺键/非 str → 空串（向后兼容）。
+
+    与 ``_str_tuple`` 的 fail-closed 不同：product_question 是**可选展示元数据**
+    （旧 artifact 无此键），缺失不抛错、给空串（展示层据此不渲染命题）。
+    """
+    value = data.get(key)
+    if not isinstance(value, str):
+        return ""
+    return value
+
+
 def _build_timeline(canonical: dict, scenario_id: str, counts: Counts) -> tuple[TimelineNode, ...]:
     """从 canonical 投影 stage 级时间轴（D2 缺失粒度降级：无帧级 → stage 摘要）。
 
@@ -706,6 +718,8 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         mode=mode,
         n_frames=n_frames,
         scenario_fingerprint=scenario_fingerprint,
+        # P0-1：产品命题一句话（canonical 顶层投影；旧 artifact 无此键 → 空，向后兼容）。
+        product_question=_str_field(canonical, "product_question", owner),
         counts=counts,
         event_types=_str_tuple(artifacts, "event_types", owner),
         risk_levels=_str_tuple(artifacts, "risk_levels", owner),

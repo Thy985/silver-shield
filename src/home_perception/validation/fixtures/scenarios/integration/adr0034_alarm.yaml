@@ -7,6 +7,7 @@
 meta:
   schema_version: "1.0"
   scenario_id: sw_adr0034_alarm
+  product_question: "系统能从弱视觉事件中发现值得关注的异常"
   version: 1
   description: "ADR-0034 Phase A: night long dwell -> abnormal_dwell -> WARN + command + episode"
   seed: 99
