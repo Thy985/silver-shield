@@ -429,18 +429,19 @@ def _render_case_video(
 
 
 def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
-    """声学状态变化叙事卡（P1 Acoustic State · telephone_risk · VM-1/VM-9 合规）。
+    """声学状态变化叙事卡（P0-1 Acoustic State · telephone_risk · VM-1/VM-9 合规）。
 
-    只投影既有 ``audio_evidence`` 字段（kind/labels/related_visual_ref）+ ``recommended_actions``，
-    **绝不推导** STRESS / 诈骗 / 当事人心理（VM-9 无 ASR/LLM）。
+    数据来源（全部来自既有 audio_evidence 投影字段，VM-1 纯派生）：
+    - kind（含 ``audio_telephone_persistent`` 触发本卡）、labels、related_visual_ref；
+    - P0-1 新增声学状态字段（golden telephone_risk 声明式声学状态机透传，NotRequired）：
+      ``acoustic_state_change``（状态机）、``voice_stress_score``、``f0_delta`` /
+      ``speech_rate_delta`` / ``energy_delta``。字段缺失即不展示（AC-12 绝不编造）。
 
-    触发：``audio_evidence`` 含 telephone 类（``audio_telephone_persistent``）才渲染——
-    本卡即 telephone_risk 声学状态卡；非电话场景不注入（避免无关叙事，VM-11 不新增事实）。
-    无音频证据（``audio_evidence`` 空）→ 返回空串（AC-12 绝不编造）。
+    绝不推导 STRESS / 诈骗 / 当事人心理（VM-9 无 ASR/LLM）：``voice_stress_score`` 仅作为
+    可观测声学指标呈现，状态机标签（NORMAL→…→STRESS）是**声学状态**枚举，非心理/语义判定。
 
-    跨模态诚实呈现：若音频节点携带 ``related_visual_ref``（真实跨模态关联，loader 由
-    CrossModalLink 派生）→ 陈述「视觉通话交互 + 音频声学偏离 相互支持（CROSS_MODAL:
-    SUPPORTS）」；缺则只陈述声学状态变化事实，绝不编造跨模态关系。
+    触发：``audio_evidence`` 含 telephone 类（``audio_telephone_persistent``）才渲染；
+    非电话场景不注入（VM-11 不新增无关事实）。无音频证据 → 返回空串（AC-12）。
     """
     audio = scenario.get("audio_evidence") or ()
     if not audio:
@@ -448,27 +449,95 @@ def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
     kinds = {str(a.get("kind", "")) for a in audio}
     if "audio_telephone_persistent" not in kinds:
         return ""  # 非电话场景：音频感知卡已陈述事实，不注入额外声学状态叙事
-    has_deviation = any(
-        k in ("audio_voice_raised", "audio_speech_rapid") for k in kinds
+
+    # --- 真实声学状态信号（P0-1：从既有投影字段纯派生，缺失即不展示）---
+    state_changes = [
+        a["acoustic_state_change"] for a in audio if a.get("acoustic_state_change")
+    ]
+    voice_stress = [
+        a["voice_stress_score"]
+        for a in audio
+        if isinstance(a.get("voice_stress_score"), (int, float))
+    ]
+    delta_items: list[tuple[str, float]] = []
+    for a in audio:
+        for label, key in (
+            ("F0", "f0_delta"),
+            ("语速", "speech_rate_delta"),
+            ("能量", "energy_delta"),
+        ):
+            v = a.get(key)
+            if isinstance(v, (int, float)):
+                delta_items.append((label, float(v)))
+
+    # 声学状态是否真发生变化（状态机含多相跃迁）→ 驱动「变化」叙事；旧式 kind 偏离兜底。
+    def _is_change(s: str) -> bool:
+        return "->" in s or "\u2192" in s
+
+    changed = any(_is_change(s) for s in state_changes)
+    kind_dev = any(k in ("audio_voice_raised", "audio_speech_rapid") for k in kinds)
+    has_deviation = bool(state_changes) or bool(voice_stress) or bool(delta_items) or kind_dev
+    stable = (
+        bool(state_changes)
+        and not changed
+        and not kind_dev
+        and not voice_stress
+        and not delta_items
     )
+
     # 真实跨模态关联：任一音频节点携带 related_visual_ref → 视觉 + 音频相互支持。
     cross_modal = any(a.get("related_visual_ref") for a in audio)
     # 决策取向（来自推荐动作，不新增事实）：升级/社区任务 → 提高关注；否则持续观察。
     recs = scenario.get("recommended_actions") or ()
     cmds = scenario.get("command_types") or ()
-    if any(r in ("ESCALATE_COMMUNITY",) for r in recs) or any(
-        c in ("CREATE_COMMUNITY_TASK",) for c in cmds
+    if any(r == "ESCALATE_COMMUNITY" for r in recs) or any(
+        c == "CREATE_COMMUNITY_TASK" for c in cmds
     ):
         decision = "提高关注 / 升级社区协同处置"
     else:
         decision = "持续观察"
-    if has_deviation:
-        lead = (
+
+    # 导语：优先陈述真实声学状态机；其次旧式偏离；稳定态单列；最次无偏离。
+    state_html = (
+        _R._esc(" \u2192 ".join(s.replace("->", "\u2192") for s in state_changes))
+        if state_changes
+        else ""
+    )
+    if stable:
+        lead_html = _R._esc(
+            "通话进行中，系统持续听到电话声音；声学状态稳定（未检测到状态跃迁）。"
+            "这是声学状态的事实记录。"
+        )
+    elif changed or state_changes:
+        lead_html = (
+            _R._esc("通话进行中，系统持续听到电话声音；声学状态随通话推进发生变化（")
+            + state_html
+            + _R._esc("）。这是声学状态变化的事实记录。")
+        )
+    elif has_deviation:
+        lead_html = _R._esc(
             "通话进行中，系统持续听到电话声音，并检测到声学偏离"
             "（音高 / 能量等可观测信号变化）。这是声学状态变化的事实记录。"
         )
     else:
-        lead = "通话进行中，系统持续听到电话声音。这是声学状态变化的事实记录。"
+        lead_html = _R._esc(
+            "通话进行中，系统持续听到电话声音。这是声学状态变化的事实记录。"
+        )
+
+    # 量化指标行（仅当真实声学字段存在时呈现，杜绝硬编码「音高/能量等」）。
+    metrics_html = ""
+    if voice_stress or delta_items:
+        parts: list[str] = []
+        if voice_stress:
+            parts.append(f"voice_stress_score = {float(voice_stress[0]):.2f}")
+        for label, val in delta_items:
+            parts.append(f"{label} \u0394={val:.2f}")
+        metrics_html = (
+            '<p class="acoustic-state-note">可观测声学指标（仅描述信号，不做语义判定）：'
+            + _R._esc("；".join(parts))
+            + "。</p>"
+        )
+
     cross_html = ""
     if cross_modal:
         cross_html = (
@@ -482,7 +551,8 @@ def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
     return f"""
     <div class="acoustic-state">
       <div class="acoustic-state-head">声学状态变化（非诈骗判定）</div>
-      <p class="acoustic-state-lead">{_R._esc(lead)}</p>
+      <p class="acoustic-state-lead">{lead_html}</p>
+      {metrics_html}
       {cross_html}
       <p class="acoustic-state-note muted">{_R._esc(disclaimer)}</p>
     </div>"""

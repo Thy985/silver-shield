@@ -480,6 +480,25 @@ def _build_audio_evidence(
         )
         if related is not None:
             node["related_visual_ref"] = related
+        # P0-1：可选声学状态字段（golden telephone_risk 声明式声学状态机透传）。
+        # 缺失即不投影（NotRequired，绝不占位编造，守 VM-1/AC-12）；类型不符则跳过
+        # （可选证据，不 fail-closed 整条 audio_evidence）。
+        state_change = entry.get("audio_acoustic_state_change")
+        if isinstance(state_change, str) and state_change.strip():
+            node["acoustic_state_change"] = " \u2192 ".join(
+                p.strip() for p in state_change.replace("\u2192", "->").split("->")
+            )
+        vss = entry.get("audio_voice_stress_score")
+        if isinstance(vss, (int, float)):
+            node["voice_stress_score"] = float(vss)
+        for src, dst in (
+            ("audio_f0_delta", "f0_delta"),
+            ("audio_speech_rate_delta", "speech_rate_delta"),
+            ("audio_energy_delta", "energy_delta"),
+        ):
+            val = entry.get(src)
+            if isinstance(val, (int, float)):
+                node[dst] = float(val)
         nodes.append(node)
     return tuple(nodes)
 
