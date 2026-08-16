@@ -11,6 +11,10 @@
 #   python scripts/run_demo.py --live --scenario live_telephone_risk \
 #       --video data/demo/CCTV_Surveillance_Final.mp4
 #
+# 注：run_demo.py 在 --live 且场景含 audio_path 时，自动以
+#   DEMO_HP_CONFIG=config/live_audio.yaml 覆盖 HP 配置（config/default.yaml 自身保持 audio
+# 关闭，以通过契约测试），无需手动设环境变量；也可自行前置环境变量覆盖。
+#
 # 红线（本 PR 严守，不破）：不开 detector 阈值、不手工制造 event、不在 viewer 兜底。
 # 若真实 runtime 音频未检出标签，说明链路已通、但 detector 真实运行质量待后续处理——
 # 这是有价值的结果，而非失败。

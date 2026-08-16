@@ -132,13 +132,12 @@ memory:
 # 开启 Tier1：enabled=true 并填入 model_path（.onnx 权重）；留空则回退 Stub（可用但非真实推理）。
 # ============================================================================
 audio:
-  enabled: true                   # Gate 4（telephone_risk live audio vertical slice）：开启音频→Live 接线（run_demo --live 的 live_audio_builder 门控）
   tier1:
-    enabled: true                 # 真实 YAMNet 推理（非 Stub）；需配合下方 model_path
-    model_path: data/models/yamnet/onnx/yamnet.onnx   # YAMNet .onnx 权重路径（运维受控、远端不入库）
-    class_map_path: ""             # 可选：521 类名映射文件（yaml/json）
-    threshold: 0.1                 # YAMNet 段级平均 score 阈值 [0,1]
-    top_k: 10                      # 每段标签上限
-    trigger: segment               # segment=每段 VAD 语音段都跑 | perception=仅 Tier0 命中时跑
-    target_sr: 16000               # YAMNet 规范采样率
+    enabled: false                 # Feature Flag：默认关闭（Tier1 不常驻，避免边缘开销）
+    model_path: ""                 # YAMNet .onnx 权重路径；留空=缺权重→Stub 回退
+    class_map_path: ""
+    threshold: 0.1
+    top_k: 10
+    trigger: segment
+    target_sr: 16000
 
