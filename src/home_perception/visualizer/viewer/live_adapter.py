@@ -757,6 +757,10 @@ class ProjectionAccumulator:
             # 已终结 Canonical case 有意义；此处恒 () 使渲染层不出现负向能力卡（诚实优先）。
             suppress_reasons=(),
             episode_action_command_types=(),
+            # P1（干预回执 + 闭环可达性）：Live 进行中、case 未终结，无已派发指令回执
+            # （真实派发回执由 Canonical loader 从 artifacts.command_types 派生）；此处恒 ()，
+            # 使渲染层呈现实诚空卡，绝不编造派发/送达/时延（AC-12）。
+            intervention_dispatch=(),
             timeline=timeline,
             decision_evidence=decision_evidence,
             # VM-13 Phase B（Owner 2026-08-16）：Live 真实摄入音频 → REAL_SENSOR 派生

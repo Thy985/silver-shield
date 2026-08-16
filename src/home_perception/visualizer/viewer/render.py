@@ -205,18 +205,66 @@ def _render_current_risk(scenario: ScenarioEvidence) -> str:
 
 
 def _render_action(scenario: ScenarioEvidence) -> str:
-    """系统行动卡片（派生展示：来自 command_types / recommended_actions，VM-1）。"""
-    cmd_str = (
-        "、".join(_R._translate_value(c) for c in scenario["command_types"]) or "—"
-    )
-    rec_str = (
-        "、".join(_R._translate_value(c) for c in scenario["recommended_actions"]) or "—"
-    )
+    """干预派发回执卡（P1 · VM-1 派生自 scenario.intervention_dispatch；VM-9 守诚实边界）。
+
+    展示：① 逐指令「真实派发类型 → 目标人类接收方 → 期望闭环状态」；② 闭环可达性陈述
+    （干预触达**可定义的人类接收方**——家属 / 社区，可闭合到具体责任人）；③ 诚实注记——
+    运行态未产出送达遥测，本回执**不声称 60s 内送达**、不含任何时延 / SLA 测量
+    （AC-12 绝不编造送达或时延）。空派发 → 返回诚实空卡，不编造回执。
+    """
+    dispatch = scenario.get("intervention_dispatch") or ()
+    if not dispatch:
+        return (
+            "<div class='card action-card'>"
+            "<div class='card-title'>干预派发回执</div>"
+            "<div class='muted'>本场景未派发任何干预指令（仅感知与记录）。</div>"
+            "</div>"
+        )
+
+    rows: list[str] = []
+    for d in dispatch:
+        ct = _R._esc(d["command_type"])
+        role = _R._esc(d["target_role"])
+        closure = d.get("closure_expectation") or ""
+        if closure:
+            closure_html = (
+                f"<span class='receipt-closure'>待确认闭环：{_R._esc(closure)}</span>"
+            )
+        else:
+            closure_html = (
+                "<span class='receipt-closure muted'>无外部接收方（仅系统记录）</span>"
+            )
+        rows.append(
+            f"<li class='receipt-row'>"
+            f"<span class='receipt-cmd'>{ct}</span>"
+            f"<span class='receipt-arrow'>→</span>"
+            f"<span class='receipt-role'>{role}</span>"
+            f"{closure_html}</li>"
+        )
+
+    closure_rows = [d for d in dispatch if d.get("closure_expectation")]
+    closure_list_html = ""
+    if closure_rows:
+        items = "".join(
+            f"<li>{_R._esc(d['target_role'])}"
+            f"（{_R._esc(d['command_type'])} → 期望闭环 "
+            f"<code>{_R._esc(d['closure_expectation'])}</code>）</li>"
+            for d in closure_rows
+        )
+        closure_list_html = (
+            "<div class='receipt-closure-list'>本案例期望的闭环确认："
+            f"<ul>{items}</ul></div>"
+        )
+
     return f"""
       <div class='card action-card'>
-        <div class='card-title'>系统行动</div>
-        <div>实际命令：{_R._esc(cmd_str)}</div>
-        <div class='muted'>建议动作：{_R._esc(rec_str)}</div>
+        <div class='card-title'>干预派发回执</div>
+        <ul class='receipt-list'>
+          {''.join(rows)}
+        </ul>
+        {closure_list_html}
+        <div class='receipt-reach'>闭环可达性：上述指令派发至<span class='receipt-reach-target'>可定义的人类接收方</span>（家属 / 社区），干预闭环可闭合到具体责任人。</div>
+        <div class='receipt-note muted'>诚实边界：运行态未产出送达遥测（送达时间 / 接收确认 / 时延）。本回执仅表征「已派发 + 目标接收方 + 待确认闭环」，<strong>不声称 60s 内送达</strong>，亦不含任何时延 / SLA 测量。</div>
       </div>"""
 
 
@@ -442,18 +490,19 @@ def _render_case_video(
 
 
 def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
-    """声学状态变化叙事卡（P1 Acoustic State · telephone_risk · VM-1/VM-9 合规）。
+    """声学状态变化叙事卡（P0-1 Acoustic State · telephone_risk · VM-1/VM-9 合规）。
 
-    只投影既有 ``audio_evidence`` 字段（kind/labels/related_visual_ref）+ ``recommended_actions``，
-    **绝不推导** STRESS / 诈骗 / 当事人心理（VM-9 无 ASR/LLM）。
+    数据来源（全部来自既有 audio_evidence 投影字段，VM-1 纯派生）：
+    - kind（含 ``audio_telephone_persistent`` 触发本卡）、labels、related_visual_ref；
+    - P0-1 新增声学状态字段（golden telephone_risk 声明式声学状态机透传，NotRequired）：
+      ``acoustic_state_change``（状态机）、``voice_stress_score``、``f0_delta`` /
+      ``speech_rate_delta`` / ``energy_delta``。字段缺失即不展示（AC-12 绝不编造）。
 
-    触发：``audio_evidence`` 含 telephone 类（``audio_telephone_persistent``）才渲染——
-    本卡即 telephone_risk 声学状态卡；非电话场景不注入（避免无关叙事，VM-11 不新增事实）。
-    无音频证据（``audio_evidence`` 空）→ 返回空串（AC-12 绝不编造）。
+    绝不推导 STRESS / 诈骗 / 当事人心理（VM-9 无 ASR/LLM）：``voice_stress_score`` 仅作为
+    可观测声学指标呈现，状态机标签（NORMAL→…→STRESS）是**声学状态**枚举，非心理/语义判定。
 
-    跨模态诚实呈现：若音频节点携带 ``related_visual_ref``（真实跨模态关联，loader 由
-    CrossModalLink 派生）→ 陈述「视觉通话交互 + 音频声学偏离 相互支持（CROSS_MODAL:
-    SUPPORTS）」；缺则只陈述声学状态变化事实，绝不编造跨模态关系。
+    触发：``audio_evidence`` 含 telephone 类（``audio_telephone_persistent``）才渲染；
+    非电话场景不注入（VM-11 不新增无关事实）。无音频证据 → 返回空串（AC-12）。
     """
     audio = scenario.get("audio_evidence") or ()
     if not audio:
@@ -461,27 +510,95 @@ def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
     kinds = {str(a.get("kind", "")) for a in audio}
     if "audio_telephone_persistent" not in kinds:
         return ""  # 非电话场景：音频感知卡已陈述事实，不注入额外声学状态叙事
-    has_deviation = any(
-        k in ("audio_voice_raised", "audio_speech_rapid") for k in kinds
+
+    # --- 真实声学状态信号（P0-1：从既有投影字段纯派生，缺失即不展示）---
+    state_changes = [
+        a["acoustic_state_change"] for a in audio if a.get("acoustic_state_change")
+    ]
+    voice_stress = [
+        a["voice_stress_score"]
+        for a in audio
+        if isinstance(a.get("voice_stress_score"), (int, float))
+    ]
+    delta_items: list[tuple[str, float]] = []
+    for a in audio:
+        for label, key in (
+            ("F0", "f0_delta"),
+            ("语速", "speech_rate_delta"),
+            ("能量", "energy_delta"),
+        ):
+            v = a.get(key)
+            if isinstance(v, (int, float)):
+                delta_items.append((label, float(v)))
+
+    # 声学状态是否真发生变化（状态机含多相跃迁）→ 驱动「变化」叙事；旧式 kind 偏离兜底。
+    def _is_change(s: str) -> bool:
+        return "->" in s or "\u2192" in s
+
+    changed = any(_is_change(s) for s in state_changes)
+    kind_dev = any(k in ("audio_voice_raised", "audio_speech_rapid") for k in kinds)
+    has_deviation = bool(state_changes) or bool(voice_stress) or bool(delta_items) or kind_dev
+    stable = (
+        bool(state_changes)
+        and not changed
+        and not kind_dev
+        and not voice_stress
+        and not delta_items
     )
+
     # 真实跨模态关联：任一音频节点携带 related_visual_ref → 视觉 + 音频相互支持。
     cross_modal = any(a.get("related_visual_ref") for a in audio)
     # 决策取向（来自推荐动作，不新增事实）：升级/社区任务 → 提高关注；否则持续观察。
     recs = scenario.get("recommended_actions") or ()
     cmds = scenario.get("command_types") or ()
-    if any(r in ("ESCALATE_COMMUNITY",) for r in recs) or any(
-        c in ("CREATE_COMMUNITY_TASK",) for c in cmds
+    if any(r == "ESCALATE_COMMUNITY" for r in recs) or any(
+        c == "CREATE_COMMUNITY_TASK" for c in cmds
     ):
         decision = "提高关注 / 升级社区协同处置"
     else:
         decision = "持续观察"
-    if has_deviation:
-        lead = (
+
+    # 导语：优先陈述真实声学状态机；其次旧式偏离；稳定态单列；最次无偏离。
+    state_html = (
+        _R._esc(" \u2192 ".join(s.replace("->", "\u2192") for s in state_changes))
+        if state_changes
+        else ""
+    )
+    if stable:
+        lead_html = _R._esc(
+            "通话进行中，系统持续听到电话声音；声学状态稳定（未检测到状态跃迁）。"
+            "这是声学状态的事实记录。"
+        )
+    elif changed or state_changes:
+        lead_html = (
+            _R._esc("通话进行中，系统持续听到电话声音；声学状态随通话推进发生变化（")
+            + state_html
+            + _R._esc("）。这是声学状态变化的事实记录。")
+        )
+    elif has_deviation:
+        lead_html = _R._esc(
             "通话进行中，系统持续听到电话声音，并检测到声学偏离"
             "（音高 / 能量等可观测信号变化）。这是声学状态变化的事实记录。"
         )
     else:
-        lead = "通话进行中，系统持续听到电话声音。这是声学状态变化的事实记录。"
+        lead_html = _R._esc(
+            "通话进行中，系统持续听到电话声音。这是声学状态变化的事实记录。"
+        )
+
+    # 量化指标行（仅当真实声学字段存在时呈现，杜绝硬编码「音高/能量等」）。
+    metrics_html = ""
+    if voice_stress or delta_items:
+        parts: list[str] = []
+        if voice_stress:
+            parts.append(f"voice_stress_score = {float(voice_stress[0]):.2f}")
+        for label, val in delta_items:
+            parts.append(f"{label} \u0394={val:.2f}")
+        metrics_html = (
+            '<p class="acoustic-state-note">可观测声学指标（仅描述信号，不做语义判定）：'
+            + _R._esc("；".join(parts))
+            + "。</p>"
+        )
+
     cross_html = ""
     if cross_modal:
         cross_html = (
@@ -495,7 +612,8 @@ def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
     return f"""
     <div class="acoustic-state">
       <div class="acoustic-state-head">声学状态变化（非诈骗判定）</div>
-      <p class="acoustic-state-lead">{_R._esc(lead)}</p>
+      <p class="acoustic-state-lead">{lead_html}</p>
+      {metrics_html}
       {cross_html}
       <p class="acoustic-state-note muted">{_R._esc(disclaimer)}</p>
     </div>"""
@@ -1155,6 +1273,24 @@ def render_case_viewer(
   .risk-level {{ font-size:16px; font-weight:700; color:#d64541; }}
   .risk-card {{ border-left:4px solid #d64541; }}
   .action-card {{ border-left:4px solid #2e9e6b; }}
+  /* P1 干预派发回执卡 */
+  .receipt-list {{ list-style:none; margin:8px 0; padding:0; }}
+  .receipt-row {{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;
+                 padding:6px 0; border-top:1px solid #e3eefb; }}
+  .receipt-row:first-child {{ border-top:none; }}
+  .receipt-cmd {{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+                 background:#dcebfb; color:#1c4f7c; border-radius:6px; padding:1px 8px;
+                 white-space:nowrap; }}
+  .receipt-arrow {{ color:#8a94a6; }}
+  .receipt-role {{ font-weight:600; color:#2b3a4a; }}
+  .receipt-closure {{ font-size:13px; color:#15583b; margin-left:4px; }}
+  .receipt-closure-list {{ margin:8px 0; font-size:13px; color:#2b3a4a; }}
+  .receipt-closure-list ul {{ margin:4px 0 0; padding-left:18px; }}
+  .receipt-closure-list code {{ font-size:12px; background:#eef6ff; color:#1c4f7c;
+                               border-radius:4px; padding:0 4px; }}
+  .receipt-reach {{ margin-top:8px; font-size:13px; color:#1c4f7c; }}
+  .receipt-reach-target {{ font-weight:700; }}
+  .receipt-note {{ margin-top:6px; font-size:12px; line-height:1.5; }}
   /* 音频感知首屏面板（音频 E2E P0） */
   .audio-perception {{ display:flex; flex-direction:column; gap:10px; margin:8px 0; }}
   .audio-card {{ background:#fdf2f8; border:1px solid #f3c9de; border-left:4px solid #c2408a;

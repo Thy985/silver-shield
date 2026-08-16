@@ -103,6 +103,25 @@ class Counts(TypedDict):
     cross_modal_links: int
 
 
+class InterventionDispatch(TypedDict):
+    """干预派发回执的一行（P1 · VM-1 派生自真实 command_types，VM-9 守诚实边界）。
+
+    - ``command_type``：运行时真实派发的 ActionCommand 类型（``LOG_ONLY`` /
+      ``SEND_FAMILY_MESSAGE`` / ``CREATE_COMMUNITY_TASK``）——原始枚举，不翻译
+      （展示可逆，证明来自真实 dispatch 而非编造）；
+    - ``target_role``：派发目标的人类接收方角色（家属 / 社区 / 系统仅记录），由 loader
+      从 ``command_types`` 派生，语义对齐 golden 闭环契约的 family / community 期望；
+    - ``closure_expectation``：期望的闭环确认状态（``family_handled`` /
+      ``community_done``）；``LOG_ONLY`` 无外部接收方 → 空串（不伪造闭环）。
+    全仓库**无**送达 / 时延 / SLA 数据 → 本结构刻意**不含** ``delivered_at`` /
+    ``latency`` / ``sla`` 字段（AC-12 绝不编造送达或时延）。
+    """
+
+    command_type: str
+    target_role: str
+    closure_expectation: str
+
+
 class ScenarioEvidence(TypedDict):
     """单场景的完整投影（D1 四视图的共享输入，D5 Evidence Graph 的节点骨架）。"""
 
@@ -122,6 +141,10 @@ class ScenarioEvidence(TypedDict):
     trace_outcome_kinds: tuple[str, ...]
     suppress_reasons: tuple[str, ...]
     episode_action_command_types: tuple[str, ...]
+    # P1（干预回执 + 闭环可达性）：干预派发回执（VM-1 派生自真实 command_types，
+    # VM-9 守诚实边界——不含送达 / 时延 / SLA）。逐指令映射目标接收方角色 + 期望闭环状态；
+    # 空 command_types → 恒 ``()``，绝不编造（AC-12）。
+    intervention_dispatch: tuple[InterventionDispatch, ...]
     timeline: tuple[TimelineNode, ...]
     decision_evidence: tuple[DecisionEvidence, ...]
     # ADR-0036 Slice C（VM-13 Phase B/C 预置）：音频证据节点。
@@ -241,6 +264,13 @@ class AudioEvidenceNode(TypedDict):
     acoustics: NotRequired[AudioAcoustics]   # 可选声学特征
     signal_category: NotRequired[str]        # 可选证据分类（如 COMMUNICATION）
     related_visual_ref: NotRequired[str]     # 可选跨模态视觉 ref（CrossModalLink 派生）
+    # 以下为可选声学状态字段（P0-1：golden telephone_risk 声明式声学状态机透传；
+    # NotRequired：缺失即未投影，绝不占位编造，守 VM-1/AC-12）。
+    acoustic_state_change: NotRequired[str]  # 声学状态机（如 "NORMAL -> ATTENTION -> AROUSAL -> STRESS"）
+    voice_stress_score: NotRequired[float]   # 声学压力指标 (0~1，规则强度非诈骗概率)
+    f0_delta: NotRequired[float]             # F0 相对偏移
+    speech_rate_delta: NotRequired[float]    # 语速相对偏移
+    energy_delta: NotRequired[float]         # 能量相对偏移
 
 
 class EvidenceProjection(TypedDict):
