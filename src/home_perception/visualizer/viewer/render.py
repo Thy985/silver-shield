@@ -424,6 +424,71 @@ def _render_case_video(
 
 
 # ---------------------------------------------------------------------------
+# P1 Acoustic State（telephone_risk · 声学状态变化，非诈骗判定 · VM-1/VM-9）
+# ---------------------------------------------------------------------------
+
+
+def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
+    """声学状态变化叙事卡（P1 Acoustic State · telephone_risk · VM-1/VM-9 合规）。
+
+    只投影既有 ``audio_evidence`` 字段（kind/labels/related_visual_ref）+ ``recommended_actions``，
+    **绝不推导** STRESS / 诈骗 / 当事人心理（VM-9 无 ASR/LLM）。
+
+    触发：``audio_evidence`` 含 telephone 类（``audio_telephone_persistent``）才渲染——
+    本卡即 telephone_risk 声学状态卡；非电话场景不注入（避免无关叙事，VM-11 不新增事实）。
+    无音频证据（``audio_evidence`` 空）→ 返回空串（AC-12 绝不编造）。
+
+    跨模态诚实呈现：若音频节点携带 ``related_visual_ref``（真实跨模态关联，loader 由
+    CrossModalLink 派生）→ 陈述「视觉通话交互 + 音频声学偏离 相互支持（CROSS_MODAL:
+    SUPPORTS）」；缺则只陈述声学状态变化事实，绝不编造跨模态关系。
+    """
+    audio = scenario.get("audio_evidence") or ()
+    if not audio:
+        return ""  # AC-12：无音频证据不渲染声学状态卡
+    kinds = {str(a.get("kind", "")) for a in audio}
+    if "audio_telephone_persistent" not in kinds:
+        return ""  # 非电话场景：音频感知卡已陈述事实，不注入额外声学状态叙事
+    has_deviation = any(
+        k in ("audio_voice_raised", "audio_speech_rapid") for k in kinds
+    )
+    # 真实跨模态关联：任一音频节点携带 related_visual_ref → 视觉 + 音频相互支持。
+    cross_modal = any(a.get("related_visual_ref") for a in audio)
+    # 决策取向（来自推荐动作，不新增事实）：升级/社区任务 → 提高关注；否则持续观察。
+    recs = scenario.get("recommended_actions") or ()
+    cmds = scenario.get("command_types") or ()
+    if any(r in ("ESCALATE_COMMUNITY",) for r in recs) or any(
+        c in ("CREATE_COMMUNITY_TASK",) for c in cmds
+    ):
+        decision = "提高关注 / 升级社区协同处置"
+    else:
+        decision = "持续观察"
+    if has_deviation:
+        lead = (
+            "通话进行中，系统持续听到电话声音，并检测到声学偏离"
+            "（音高 / 能量等可观测信号变化）。这是声学状态变化的事实记录。"
+        )
+    else:
+        lead = "通话进行中，系统持续听到电话声音。这是声学状态变化的事实记录。"
+    cross_html = ""
+    if cross_modal:
+        cross_html = (
+            '<p class="acoustic-state-note">视觉通话交互 + 音频声学偏离 相互支持'
+            "（CROSS_MODAL: SUPPORTS）→ 决策：" + _R._esc(decision) + "。</p>"
+        )
+    disclaimer = (
+        "声学状态变化仅描述可观测信号；系统不调用 ASR / LLM，"
+        "不推导当事人心理或诈骗判定（VM-9）。"
+    )
+    return f"""
+    <div class="acoustic-state">
+      <div class="acoustic-state-head">声学状态变化（非诈骗判定）</div>
+      <p class="acoustic-state-lead">{_R._esc(lead)}</p>
+      {cross_html}
+      <p class="acoustic-state-note muted">{_R._esc(disclaimer)}</p>
+    </div>"""
+
+
+# ---------------------------------------------------------------------------
 # 音频感知首屏面板（音频 E2E P0：让用户真正理解"系统听到了什么"）
 # ---------------------------------------------------------------------------
 
@@ -499,9 +564,11 @@ def _render_audio_perception(
               {play_ctrl}
             </div>"""
         )
+    acoustic_state = _render_acoustic_state_card(scenario)
     return f"""
     <section class="fs-panel" id="fs-audio-{_R._esc(scenario['scenario_id'])}">
       <h3 class="view-anchor">系统听到了什么（音频感知）</h3>
+      {acoustic_state}
       <div class="audio-perception">{''.join(cards)}</div>
       <p class="muted">音频为感知层证据（kind/score/confidence），非语义判定；样本声音为合成素材，仅供示意。</p>
     </section>"""
@@ -1085,6 +1152,12 @@ def render_case_viewer(
   .audio-meta {{ margin-top:2px; }}
   .audio-play {{ margin-top:8px; display:flex; gap:10px; align-items:center; }}
   .audio-play audio {{ height:34px; }}
+  /* P1 Acoustic State（telephone_risk · 声学状态变化，非诈骗判定，VM-9） */
+  .acoustic-state {{ background:#fff7ed; border:1px solid #f4d3a8; border-left:4px solid #d9842f;
+                    border-radius:8px; padding:10px 14px; margin:4px 0 12px; }}
+  .acoustic-state-head {{ font-weight:700; color:#8a4b12; margin-bottom:4px; }}
+  .acoustic-state-lead {{ margin:0 0 6px; color:#5a3a1e; }}
+  .acoustic-state-note {{ margin:2px 0 0; }}
 
   /* P0-4：负向能力卡（"为什么没有报警"）——差异化最强能力，首屏可见 */
   .suppress-reason {{ background:#eef6ff; border:1px solid #cfe3fb; border-left:4px solid #4a90d9;
