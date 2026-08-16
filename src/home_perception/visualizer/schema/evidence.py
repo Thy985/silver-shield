@@ -127,6 +127,9 @@ class ScenarioEvidence(TypedDict):
     # text/transcript/FORBIDDEN_AUDIO_FIELDS）。Live Adapter（Phase B）同理恒 ``()``，
     # 仅时间轴增量合并 AUDIO modality 节点。
     audio_evidence: tuple[AudioEvidenceNode, ...]
+    # G0-3/G0-2：记忆时间线节点（prior 历史 + 本次会话 episodes，canonical memory_episodes
+    # 投影）。无 memory 明细时恒 ``()``（AC-12 不编造）。
+    memory_episodes: tuple[MemoryEpisodeNode, ...]
     gate: tuple[StageVerdict, ...]
     gate_passed: bool
     gate_degraded: bool
@@ -157,6 +160,29 @@ class AudioAcoustics(TypedDict):
     vad_ratio: float
     rms: float
     speech_rate: float
+
+
+class MemoryEpisodeNode(TypedDict):
+    """记忆时间线节点（G0-3/G0-2 黄金案例 · Memory Timeline 展示的事实源）。
+
+    由 loader 从 canonical ``memory_episodes`` 投影（EpisodicRecord 确定性投影）：
+    - ``record_id``：episode 唯一标识（prior 前缀 ``ep-prior-*`` = 历史预置；
+      运行时 ``ep-<event_id>`` = 本次会话）；
+    - ``timestamp`` / ``risk_level`` / ``recommended_action`` / ``summary`` /
+      ``reason_summary``：历史 episode 的决策侧语义（供"历史模式重复 → 风险升级"展示）；
+    - ``command_types``：该 episode 派生的 ActionCommand 类型（空 = 未派发）；
+    - ``prior``：是否为预置历史（G0-3 prior_episodes），区别于本次会话运行期落库。
+    AC-12：canonical 无 memory 明细时恒 ``()``，绝不编造。
+    """
+
+    record_id: str
+    timestamp: str
+    risk_level: str
+    recommended_action: str
+    summary: str
+    reason_summary: tuple[str, ...]
+    command_types: tuple[str, ...]
+    prior: bool
 
 
 class AudioEvidenceNode(TypedDict):
