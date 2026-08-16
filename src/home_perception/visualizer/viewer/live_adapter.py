@@ -27,9 +27,11 @@ WS 传输（ADR-0036 Slice B 描述）由宿主层负责把 ``FrameResult`` 喂�
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from home_perception.visualizer.schema.evidence import (
+    AudioEvidenceNode,
+    CaseTimeTrack,
     Counts,
     DecisionEvidence,
     EvidenceProjection,
@@ -62,6 +64,16 @@ _LIVE_PANELS: tuple[str, ...] = (
 
 # 确定性 ref 前缀（Live 源，区别于 artifact 的 ``<scenario>.canonical.json#...``）。
 _LIVE_REF_PREFIX = "live"
+
+# Live Case Time 音频 Lane 标签（仅本地最小映射，不 import renderer 生产展示表；
+# 与 loader 的 audio kind → 中文标签语义对齐，缺失回落原始枚举，绝不编造）。
+_AUDIO_KIND_ZH: dict[str, str] = {
+    "audio_voice_raised": "音高升高",
+    "audio_speech_rapid": "语速加快",
+    "audio_distress_cry": "哭腔/求助",
+    "audio_telephone_persistent": "持续电话声音",
+    "audio_anomaly_other": "其他声学异常",
+}
 
 
 class LiveIngestError(ValueError):
@@ -122,6 +134,7 @@ class LiveAudioFrame(TypedDict):
     confidence: float                  # ← .confidence (0~1)，检测可信度
     source_segment_ids: tuple[str, ...]  # ← .source_segment_ids
     labels: tuple[str, ...]            # ← .labels / .scored_labels
+    event_id: NotRequired[str]         # ← AudioPerceptionEvent.event_id（透传，可选，溯源/幂等）
 
 
 def _require_float(obj: Any, key: str, *, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -177,6 +190,14 @@ def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
     confidence = _require_float(audio_result, "confidence")
     source_segment_ids = tuple(_iter_of_str(audio_result, "source_segment_ids"))
     labels = tuple(_iter_of_str(audio_result, "labels"))
+    # 可选 event_id（透传上游 AudioPerceptionEvent.event_id，仅溯源/幂等核对；非必填，
+    # 缺省不投影）。鸭子类型取值，dict/对象均可；非 str 即拒绝（fail-closed）。
+    raw_event_id = _pick(audio_result, "event_id", default=None)
+    event_id = None
+    if raw_event_id is not None:
+        if not isinstance(raw_event_id, str) or not raw_event_id:
+            raise LiveIngestError(f"live 音频 event_id 必须是非空 str，收到 {raw_event_id!r}（fail-closed）")
+        event_id = raw_event_id
     return LiveAudioFrame(
         timestamp=timestamp,
         kind=kind,
@@ -184,6 +205,7 @@ def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
         confidence=confidence,
         source_segment_ids=source_segment_ids,
         labels=labels,
+        **({"event_id": event_id} if event_id is not None else {}),
     )
 
 
@@ -614,6 +636,73 @@ class ProjectionAccumulator:
             scenario_id=sid, nodes=tuple(nodes), edges=tuple(edges)
         )
 
+    def _build_audio_evidence_live(self) -> tuple[AudioEvidenceNode, ...]:
+        """ADR-0036 VM-13 Phase B（Owner 2026-08-16 决策）：把摄入的音频感知投影为
+        ``audio_evidence``（provenance=REAL_SENSOR），与 Artifact（Phase C loader）共用同一
+        ``AudioEvidenceNode`` schema，区别仅 ``provenance_kind``。
+
+        铁律（VM-13 6 MUST / AC-12）：
+        - fail-closed：``audio_result_to_live_audio`` 已拒绝 forbidden 字段（verdict/transcript/
+          raw_audio/…），此处不再校验，但只透传上游既有字段，绝不新生成 UUID/墙钟/判定；
+        - 无 ASR/LLM：不产 text/transcript/verdict/risk 解释；
+        - 保留 provenance：每条 ``provenance_kind="REAL_SENSOR"``，``ref="live://audio/{idx}"``；
+        - 幂等（VM-8）：同一有序流重放 N 次 → 同一节点列表（滚动窗口裁剪确定性，与帧一致）；
+        - 未摄入音频（``_recent_events`` 无 audio 项）→ 恒 ``()``，绝不编造。
+        仅投影滚动窗口内（``_recent_events``）的音频项——与时间轴 AUDIO 节点同源、同窗口，
+        与摄入顺序无关地稳定（VM-8）。
+        """
+        nodes: list[AudioEvidenceNode] = []
+        for ev in self._recent_events:
+            if ev["kind"] != "audio":
+                continue
+            la = ev["audio"]
+            a_idx = ev["audio_index"]
+            node: AudioEvidenceNode = AudioEvidenceNode(
+                timestamp=la["timestamp"],
+                kind=la["kind"],
+                score=la["score"],
+                confidence=la["confidence"],
+                labels=la["labels"],
+                source_segment_ids=la["source_segment_ids"],
+                ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
+                provenance_kind="REAL_SENSOR",
+            )
+            event_id = la.get("event_id")
+            if event_id is not None:
+                node["event_id"] = event_id
+            nodes.append(node)
+        return tuple(nodes)
+
+    def _build_case_time_tracks(self) -> tuple[CaseTimeTrack, ...]:
+        """Live Case Time 主轴（Step 6 全链路同步 · VM-13 Phase B）：仅音频 Lane。
+
+        实时会话无 memory episodes（Live 不产记忆落库），故只铺音频 Lane。与 loader
+        共用 ``CaseTimeTrack`` schema，T0 = 最早音频时间戳，相对时间确定性排序（VM-8 幂等）。
+        无摄入音频 → 恒 ``()``（AC-12 / VM-13 6 MUST，绝不编造）。仅投影滚动窗口内音频项，
+        与 ``_build_audio_evidence_live`` 同源同窗口（时间轴 AUDIO 节点 ↔ Case Time 音频标记一致）。
+        """
+        audio = self._build_audio_evidence_live()
+        if not audio:
+            return ()
+        times = [float(a["timestamp"]) for a in audio]
+        t0 = min(times)
+        tracks: list[CaseTimeTrack] = []
+        # 按时间戳确定排序（同源同窗口 → 同序，重放幂等）。
+        for a in sorted(audio, key=lambda x: float(x["timestamp"])):
+            ts = float(a["timestamp"])
+            rel = ts - t0
+            kind = a["kind"]
+            label = _AUDIO_KIND_ZH.get(kind, kind)
+            tracks.append(
+                CaseTimeTrack(
+                    time=round(rel, 3),
+                    kind="audio",
+                    ref=a["ref"],
+                    label=label,
+                )
+            )
+        return tuple(tracks)
+
     def to_evidence_projection(self) -> EvidenceProjection:
         """累积状态 → ``EvidenceProjection``（确定性，fail-closed，AC-4b 幂等）。
 
@@ -621,9 +710,10 @@ class ProjectionAccumulator:
         ``gate_degraded=False`` / ``fingerprints=None`` / ``trace_outcome_kinds=()`` /
         ``suppress_reasons=()``（刻意分歧：Live 是进行中的实时流、case 未终结，负向能力卡
         "为什么没有报警"仅对※已终结的 Canonical case※有意义，故 Live 恒不显示该卡）/
-        ``episode_action_command_types=()`` / ``episodes=0`` /
-        ``cross_modal_links=0`` / ``audio_evidence=()``（AC-12：真实音频证据在 Phase C 才由
-        loader 投影；Phase B 仅时间轴增量合并 AUDIO modality 节点，绝不编造音频证据）。
+        ``episode_action_command_types=()`` / ``episodes=0`` / ``cross_modal_links=0``。
+        ``audio_evidence``（VM-13 Phase B · Owner 2026-08-16）：由 ``_build_audio_evidence_live``
+        投影摄入的 REAL_SENSOR 音频感知（与 Artifact 共用 AudioEvidenceNode 契约，区别仅
+        provenance_kind）；未摄入音频 → 恒 ``()``，绝不编造（AC-12 / 6 MUST fail-closed）。
         """
         sid = self.scenario_id
         counts = self._build_counts()
@@ -637,6 +727,10 @@ class ProjectionAccumulator:
             event_types, risk_levels, recommended_actions, command_types
         )
         graph = self._build_graph(event_types, risk_levels, recommended_actions)
+        audio_evidence = self._build_audio_evidence_live()
+        # Step 6（Case Time 全链路同步）：音频 Lane 经 CaseTimeTrack 并入统一主轴（仅音频，
+        # 实时会话无 memory episodes），与 artifact 路径（loader 双 Lane）同源 schema（VM-1）。
+        case_time_tracks = self._build_case_time_tracks()
 
         refs: list[str] = (
             [n["ref"] for n in timeline]
@@ -669,9 +763,14 @@ class ProjectionAccumulator:
             intervention_dispatch=(),
             timeline=timeline,
             decision_evidence=decision_evidence,
-            # AC-12：Phase B 音频证据恒 ``()``（真实音频在 Phase C 由 loader 投影），
-            # 本路径仅时间轴增量合并 AUDIO modality 节点，绝不编造 audio_evidence。
-            audio_evidence=(),
+            # VM-13 Phase B（Owner 2026-08-16）：Live 真实摄入音频 → REAL_SENSOR 派生
+            # audio_evidence（与 Artifact 共用 AudioEvidenceNode 契约）；未摄入恒 ``()``，
+            # 绝不编造（AC-12 / 6 MUST fail-closed）。
+            audio_evidence=audio_evidence,
+            # Step 6：Live Case Time 音频 Lane（相对最早音频 T0；无音频恒 ()）。
+            case_time_tracks=case_time_tracks,
+            # Live 不产 memory episodes（实时会话无记忆落库）→ 显式 absent（AC-8 禁伪造）。
+            memory_episodes=(),
             gate=(),
             gate_passed=False,
             gate_degraded=False,

@@ -184,6 +184,31 @@ def _register_synthetic_source() -> None:
     install_into(register_frame_source, replace=True)
 
 
+def _build_live_audio_events(hp_settings: object, scenario: object) -> list[dict]:
+    """组装层构建真实音频事件（依赖倒置接缝，网关不 import audio）。
+
+    ADR-0036 VM-13 Phase B（Owner 2026-08-16）：把 ``AudioPipeline`` 产出的真实
+    ``AudioPerceptionEvent`` 以 ``to_dict()`` 列表注入网关，由 Live Adapter 投影为
+    ``audio_evidence``（provenance=REAL_SENSOR）。
+
+    仅在 ``hp_settings.audio.enabled`` 且 ``scenario.audio_path`` 设置时运行；否则返回 ``[]``
+    （本场景无音频，诚实空）。失败隔离：任何异常 → 返回 ``[]``，绝不阻断 demo 启动/循环。
+    """
+    audio_cfg = getattr(hp_settings, "audio", None)
+    if audio_cfg is None or not getattr(audio_cfg, "enabled", False):
+        return []
+    audio_path = getattr(scenario, "audio_path", None)
+    if not audio_path:
+        return []
+    from home_perception.audio.pipeline import AudioPipeline
+    from home_perception.audio.source import FileAudioSource
+
+    src = FileAudioSource(audio_path)
+    pipeline = AudioPipeline.from_audio_config(audio_cfg, src)
+    events = pipeline.run(src)
+    return [e.to_dict() for e in events]
+
+
 def _run_live(args: argparse.Namespace) -> None:
     """Legacy Live 模式：既有实时 Dashboard + WS + YOLO（/live 次级入口）。"""
     scenario_path, temp_path = resolve_scenario(args)
@@ -204,6 +229,9 @@ def _run_live(args: argparse.Namespace) -> None:
     import silver_demo.gateway as gw  # 懒加载：预检通过后才 import（会拉 torch）
 
     _register_synthetic_source()
+    # Live 音频接入（VM-13 Phase B · Owner 2026-08-16）：把音频构建器挂到网关 DI 钩子，
+    # 由 create_app 在装配时调用并注入真实 AudioPerceptionEvent（网关自己不 import audio，守冻结边界）。
+    gw.live_audio_builder = _build_live_audio_events
     gw.main()
 
 

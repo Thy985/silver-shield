@@ -49,6 +49,11 @@ class ScenarioConfig(BaseModel):
     source: str
     source_type: str = "caviar_jpg"
     media_path: str | None = None
+    # Live 音频接入（VM-13 Phase B · Owner 2026-08-16）：可选音频文件路径（WAV/MP3 等），
+    # 经 AudioPipeline 产 AudioPerceptionEvent 流入 Live Adapter（provenance=REAL_SENSOR）。
+    # 缺省 None = 本场景无音频（audio_evidence 恒 ()，诚实空，绝不编造）。组装层（run_demo.py）
+    # 负责构建 AudioPipeline 并把事件注入网关（网关本身不 import home_perception.audio，守冻结边界）。
+    audio_path: str | None = None
     start_time: datetime
     frame_interval_s: float = 0.5
     fps_target: int = 8

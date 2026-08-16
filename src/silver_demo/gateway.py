@@ -32,7 +32,7 @@ import asyncio
 import json
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -60,6 +60,21 @@ from .scenarios import ScenarioConfig, load_scenario
 from .sources import Source
 from .state import DemoStateStore
 from .ws import ConnectionHub, handle_upstream
+
+# ===========================================================================
+# Live 音频接入（ADR-0036 VM-13 Phase B · Owner 2026-08-16 · 依赖倒置接缝）
+# ===========================================================================
+# ``silver_demo`` 冻结边界（test_freeze_boundary.py T0-1）禁止 gateway 直接 import
+# ``home_perception.audio``；音频管道（torch/YamNet）由**组装层**（scripts/run_demo.py，
+# 非 silver_demo 包内）构建后以「事件列表」注入本模块。本模块只消费注入的音频事件，
+# 绝不 import 音频生产类型（避免撞冻结白名单）。
+#
+# 组装层在调 ``main()`` 前把构建函数挂到本钩子：``gw.live_audio_builder = builder``。
+# 签名：``(hp_settings, scenario) -> list[dict]``（每条为 AudioPerceptionEvent.to_dict()）。
+# 返回空列表 = 本场景无音频（诚实空，audio_evidence 恒 ()）。
+# 失败隔离：构建/注入异常 → 记日志并跳过，绝不阻断实时循环（VM-5 / 探针铁律）。
+LiveAudioEventsBuilder = Callable[[Any, Any], "list[dict]"]
+live_audio_builder: LiveAudioEventsBuilder | None = None
 
 
 class DemoGateway:
@@ -93,6 +108,10 @@ class DemoGateway:
         # 单一事实源：每帧 FrameResult 经 Live Adapter 投影为 EvidenceProjection，
         # 不再有 aggregate_state 第二套事实模型；惰性创建，失败隔离——投影异常绝不改变生产行为。
         self._live_accumulator = None
+
+        # Live 音频接入（VM-13 Phase B · 依赖倒置接缝）：由组装层注入的真实音频事件列表
+        # （AudioPerceptionEvent.to_dict() 形态）；缺省空 = 本场景无音频，audio_evidence 恒 ()。
+        self._live_audio_events: list = []
 
         # 循环控制
         self._running = False
@@ -210,7 +229,12 @@ class DemoGateway:
             # 单一事实源：FrameResult → ProjectionAccumulator → EvidenceProjection。
             # 失败隔离：投影探针异常必须吞掉+记日志，绝不改变生产行为（VM-5 / 探针铁律）。
             try:
-                self._ensure_live_accumulator().ingest(result)
+                acc = self._ensure_live_accumulator()
+                acc.ingest(result)
+                # Live 音频接入（VM-13 Phase B · Owner 2026-08-16）：把注入的真实
+                # AudioPerceptionEvent 按帧位置流入 Live Adapter（provenance=REAL_SENSOR）。
+                # 确定性投递（frame_index==k → 第 k 条音频事件）→ 重放幂等（VM-8）。
+                self._feed_live_audio(acc)
             except Exception as exc:  # noqa: BLE001  # 投影失败不影响实时循环
                 structlog.get_logger(__name__).warning("live_projection_ingest_failed", exc_info=exc)
 
@@ -239,6 +263,46 @@ class DemoGateway:
             else:
                 # 让出事件循环，避免阻塞 WS 上行
                 await asyncio.sleep(0)
+
+    # ------------------------------------------------------------------
+    # Live 音频接入（VM-13 Phase B · 依赖倒置接缝）
+    # ------------------------------------------------------------------
+
+    def set_live_audio_events(self, events: list) -> None:
+        """注入真实音频感知事件列表（组装层经 AudioPipeline 产出，AudioPerceptionEvent.to_dict() 形态）。
+
+        冻结边界合规：本方法不 import / 构造任何 ``home_perception.audio`` 符号，只存储调用方传入的
+        字典列表；每条须含 ``timestamp`` / ``kind`` / ``score`` / ``confidence`` /
+        ``source_segment_ids`` / ``labels``（``event_id`` 可选），由 Live Adapter 的
+        ``ingest_audio`` 做 fail-closed 校验（命中 forbidden 字段 / 类型非法即拒绝）。
+        """
+        if not isinstance(events, (list, tuple)):
+            raise TypeError(f"live_audio_events 须为 list/tuple，收到 {type(events).__name__}")
+        self._live_audio_events = list(events)
+
+    def _feed_live_audio(self, acc: ProjectionAccumulator) -> None:
+        """按帧位置把注入的音频事件流入 Live Adapter（确定性、幂等）。
+
+        投递规则：``frame_index == k`` 时喂入第 k 条音频事件（k 从 0 起），超出列表长度后不再喂。
+        因 ``frame_index`` 单调递增（loop 重放不回绕），每条事件仅喂一次；同一有序流重放
+        N 次 → 同一 audio_evidence（VM-8 幂等）。失败隔离：单条音频摄入异常 → 记日志跳过，
+        绝不阻断实时帧循环（VM-5 / 探针铁律）。
+        """
+        events = self._live_audio_events
+        if not events:
+            return
+        idx = self._frame_index
+        if idx < 0 or idx >= len(events):
+            return
+        ev = events[idx]
+        # 支持 AudioPerceptionEvent 对象（to_dict）或直接 dict（组装层已转换）。
+        data = ev.to_dict() if hasattr(ev, "to_dict") else ev
+        try:
+            acc.ingest_audio(data)
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger(__name__).warning(
+                "live_audio_frame_ingest_failed", frame_index=idx, exc_info=exc
+            )
 
     def stop(self) -> None:
         """停止帧循环。"""
@@ -576,6 +640,15 @@ def create_app(
     scenario = load_scenario(demo_settings.scenario_path)
 
     gateway = DemoGateway(demo_settings, hp_settings, scenario)
+
+    # Live 音频接入（VM-13 Phase B · Owner 2026-08-16 · 依赖倒置）：组装层（scripts/run_demo.py）
+    # 经 ``live_audio_builder`` 钩子注入真实 AudioPerceptionEvent 列表（已跑过 AudioPipeline）。
+    # 失败隔离：构建/注入异常 → 记日志 + 跳过，绝不阻断实时循环（VM-5 / 探针铁律）。
+    if live_audio_builder is not None:
+        try:
+            gateway.set_live_audio_events(live_audio_builder(hp_settings, scenario))
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger(__name__).warning("live_audio_injection_failed", exc_info=exc)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

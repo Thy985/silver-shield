@@ -851,13 +851,18 @@ def test_render_rejects_too_many_scenarios():
 
 
 def test_render_multi_provenance_mixed_banner():
-    """多 provenance_kind 场景 → MIXED 徽章 + 合并文案（评审 R2-#2 多 provenance）。"""
+    """多 provenance_kind 场景 → MIXED 徽章 + 合并 badge 文案（评审 R2-#2 多 provenance）。
+
+    Owner 2026-08-16 产品级约束：角标固定为「● GOLDEN CASE · SIMULATED」/
+    「● LIVE · REAL SENSOR」（见 render.py _PROVENANCE_BADGE），故 MIXED 分支
+    合并句式亦用 badge 文案，而非旧的 _PROVENANCE_TEXT 长句。
+    """
     html = _render_provenance_banner(
         {"timeline": ({"provenance_kind": "SIMULATED"}, {"provenance_kind": "REAL_SENSOR"})}
     )
     assert "MIXED" in html, "多 provenance 应呈现 MIXED 徽章"
-    assert "程序化场景" in html, "SIMULATED 文案缺失"
-    assert "真实传感器" in html, "REAL_SENSOR 文案缺失"
+    assert "GOLDEN CASE" in html, "SIMULATED badge 文案缺失"
+    assert "LIVE" in html, "REAL_SENSOR badge 文案缺失"
 
 
 def test_render_case_video_uses_video_element_for_artifact_video():

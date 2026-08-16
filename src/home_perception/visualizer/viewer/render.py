@@ -60,6 +60,14 @@ _PROVENANCE_TEXT = {
     "REAL_SENSOR": "真实传感器 · 实时数据",
     "FIXTURE": "固定测试素材 · 非实时",
 }
+# AC-7 + Owner 2026-08-16 产品级约束：案例角标固定文案（强化既有 provenance 设计）。
+# Live 卡右上角显示「● LIVE · REAL SENSOR」，Artifact 显示「● GOLDEN CASE · SIMULATED」，
+# 二者仅 provenance 语义之差，便于评审一眼区分真实设备流与仿真闭环。
+_PROVENANCE_BADGE = {
+    "REAL_SENSOR": "● LIVE · REAL SENSOR",
+    "SIMULATED": "● GOLDEN CASE · SIMULATED",
+    "FIXTURE": "● FIXTURE · 固定测试素材",
+}
 _PROVENANCE_CLASS = {
     "SIMULATED": "prov-simulated",
     "REAL_SENSOR": "prov-real-sensor",
@@ -160,18 +168,23 @@ def _render_ci_badge(descriptor: CasePresentationDescriptor) -> str:
 
 
 def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
-    """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。"""
+    """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。
+
+    Owner 2026-08-16：角标文案固定为「● LIVE · REAL SENSOR」（Live）/「● GOLDEN CASE ·
+    SIMULATED」（Artifact），强化真实设备流与仿真闭环的区分（VM-13 6 MUST #4）。
+    """
     kinds = {n["provenance_kind"] for n in scenario["timeline"]}
     if len(kinds) == 1:
         k = next(iter(kinds))
-        text = _PROVENANCE_TEXT.get(k, k)
         badge = (
-            f"<span class='prov-badge {_PROVENANCE_CLASS.get(k, '')}'>{_R._esc(k)}</span>"
-            f" {_R._esc(text)}"
+            f"<span class='prov-badge {_PROVENANCE_CLASS.get(k, '')}'>"
+            f"{_R._esc(_PROVENANCE_BADGE.get(k, k))}</span>"
         )
     else:
-        text = " · ".join(_PROVENANCE_TEXT.get(k, k) for k in sorted(kinds))
-        badge = f"<span class='prov-badge'>MIXED</span> {_R._esc(text)}"
+        badge = (
+            "<span class='prov-badge'>MIXED</span> "
+            + " · ".join(_R._esc(_PROVENANCE_BADGE.get(k, k)) for k in sorted(kinds))
+        )
     return f"<div class='prov-banner'>provenance: {badge}</div>"
 
 
