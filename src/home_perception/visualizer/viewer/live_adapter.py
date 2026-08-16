@@ -455,6 +455,184 @@ class ProjectionAccumulator:
             self._recent_events = self._recent_events[-self.window_size:]
         return self
 
+    # ------------------------------------------------------------------
+    # P0 增量投影（EvidenceProjection delta stream · Owner 2026-08-17 拍板）
+    # ------------------------------------------------------------------
+    # 只读派生：绝不 mutate 累积状态；浏览器只渲染、不推理、不判断风险、不建第二事实模型
+    # （VM-1 / VM-9 边界）。delta 只回答"自上次以来投影发生了什么变化"。
+    # DRY 债：节点字段公式与 _build_timeline / _build_audio_evidence_live /
+    # _build_case_time_tracks 对齐（由 delta 单测锁定结构，防漂移）。
+
+    def projection_fingerprint(self) -> dict:
+        """轻量指纹（只读）：供增量广播去重。
+
+        - ``timeline_refs``：滚动窗口 + 持久音频列表的 ref 集合（与时间轴同源）；
+        - ``audio_ids``：持久音频事件 event_id 集合（去重主键，VM-8）；
+        - ``counts``：全量累计（独立于滚动窗口裁剪）。
+        """
+        return {
+            "timeline_refs": frozenset(self._delta_timeline_refs()),
+            "audio_ids": frozenset(
+                e["audio"].get("event_id")
+                for e in self._audio_events
+                if e["audio"].get("event_id")
+            ),
+            "counts": (
+                self._total_frames,
+                self._total_audio,
+                self._counts["warnings"],
+                self._counts["commands"],
+            ),
+        }
+
+    def _delta_timeline_refs(self) -> list[str]:
+        """当前时间轴 ref 序列（与 _build_timeline 同源同规则）。"""
+        refs: list[str] = []
+        for ev in self._recent_events:
+            kind = ev["kind"]
+            if kind == "frame":
+                refs.append(f"{_LIVE_REF_PREFIX}://frame/{ev['frame']['frame_index']}")
+            elif kind == "resolution":
+                refs.append(f"{_LIVE_REF_PREFIX}://resolution/{ev['resolution']['index']}")
+        for ev in self._audio_events:
+            refs.append(f"{_LIVE_REF_PREFIX}://audio/{ev['audio_index']}")
+        return refs
+
+    def _delta_timeline_nodes(self, new_refs: set[str]) -> list[dict]:
+        """按新增 ref 构造 timeline 节点 dict（字段与 _build_timeline 对齐，DRY 债）。"""
+        nodes: list[dict] = []
+        for ev in self._recent_events:
+            kind = ev["kind"]
+            if kind == "frame":
+                lf = ev["frame"]
+                fi = lf["frame_index"]
+                ref = f"{_LIVE_REF_PREFIX}://frame/{fi}"
+                if ref in new_refs:
+                    nw = len(lf["risk_levels"])
+                    nodes.append(
+                        {
+                            "timestamp": f"F{fi}",
+                            "stage": "perception",
+                            "type": "frame",
+                            "summary": f"frame {fi}: {lf['n_detections']} 检测, {nw} 警告",
+                            "verdict": "INFO",
+                            "modality": "VISION",
+                            "provenance_kind": "REAL_SENSOR",
+                            "ref": ref,
+                        }
+                    )
+            elif kind == "resolution":
+                rs = ev["resolution"]
+                ref = f"{_LIVE_REF_PREFIX}://resolution/{rs['index']}"
+                if ref in new_refs:
+                    nodes.append(
+                        {
+                            "timestamp": f"R{rs['index']}",
+                            "stage": "action",
+                            "type": "resolution",
+                            "summary": (
+                                f"处置完成：warning {rs['warning_id'][:8]} 由 "
+                                f"{rs['operator']}「{rs['action']}」（community_done）"
+                            ),
+                            "verdict": "INFO",
+                            "modality": "ACTION",
+                            "provenance_kind": "REAL_SENSOR",
+                            "ref": ref,
+                        }
+                    )
+        for ev in self._audio_events:
+            la = ev["audio"]
+            a_idx = ev["audio_index"]
+            ref = f"{_LIVE_REF_PREFIX}://audio/{a_idx}"
+            if ref in new_refs:
+                nodes.append(
+                    {
+                        "timestamp": f"A{a_idx}",
+                        "stage": "perception",
+                        "type": "audio",
+                        "summary": (
+                            f"audio {a_idx}: {la['kind']} "
+                            f"(score={la['score']:.2f}, conf={la['confidence']:.2f})"
+                        ),
+                        "verdict": "INFO",
+                        "modality": "AUDIO",
+                        "provenance_kind": "REAL_SENSOR",
+                        "ref": ref,
+                    }
+                )
+        return nodes
+
+    def _delta_audio_nodes(self, new_audio_ids: set[str]) -> list[dict]:
+        """按新增 event_id 构造 audio_evidence 节点 dict（字段与 _build_audio_evidence_live 对齐）。"""
+        nodes: list[dict] = []
+        for ev in self._audio_events:
+            la = ev["audio"]
+            event_id = la.get("event_id")
+            if event_id not in new_audio_ids:
+                continue
+            node: dict = {
+                "timestamp": la["timestamp"],
+                "kind": la["kind"],
+                "score": la["score"],
+                "confidence": la["confidence"],
+                "labels": list(la["labels"]),
+                "source_segment_ids": list(la["source_segment_ids"]),
+                "ref": f"{_LIVE_REF_PREFIX}://audio/{ev['audio_index']}",
+                "provenance_kind": "REAL_SENSOR",
+            }
+            if event_id is not None:
+                node["event_id"] = event_id
+            nodes.append(node)
+        return nodes
+
+    def _delta_case_time_marks(self, new_audio_ids: set[str]) -> list[dict]:
+        """按新增 event_id 构造 Case Time 音频 mark dict（字段与 _build_case_time_tracks 对齐）。"""
+        marks: list[dict] = []
+        new_nodes = self._delta_audio_nodes(new_audio_ids)
+        if not new_nodes:
+            return marks
+        # T0 = 全量最早音频时间（与 _build_case_time_tracks 同 T0，保证相对时间一致）。
+        all_times = [float(a["timestamp"]) for a in self._build_audio_evidence_live()]
+        t0 = min(all_times) if all_times else 0.0
+        for a in sorted(new_nodes, key=lambda x: float(x["timestamp"])):
+            rel = float(a["timestamp"]) - t0
+            kind = a["kind"]
+            label = _AUDIO_KIND_ZH.get(kind, kind)
+            marks.append(
+                {
+                    "time": round(rel, 3),
+                    "kind": "audio",
+                    "ref": a["ref"],
+                    "label": label,
+                }
+            )
+        return marks
+
+    def extract_evidence_delta(self, prev: dict | None) -> dict:
+        """只读增量：对比 ``prev`` 指纹 → evidence_delta。
+
+        ``prev=None``（尚无基线）→ 增量 = **全量**（自零开始；浏览器以快照 ref 幂等去重，
+        已渲染项被跳过，绝不重复渲染——VM-8）。返回
+        ``{"type","timeline","audio","case_time","counts"}``。
+        """
+        cur = self.projection_fingerprint()
+        prev_refs = set((prev or {}).get("timeline_refs", ()))
+        prev_audio = set((prev or {}).get("audio_ids", ()))
+        new_refs = set(cur["timeline_refs"]) - prev_refs
+        new_audio_ids = set(cur["audio_ids"]) - prev_audio
+        return {
+            "type": "evidence_delta",
+            "timeline": self._delta_timeline_nodes(new_refs),
+            "audio": self._delta_audio_nodes(new_audio_ids),
+            "case_time": self._delta_case_time_marks(new_audio_ids),
+            "counts": {
+                "n_frames": self._total_frames,
+                "n_audio": self._total_audio,
+                "warnings": self._counts["warnings"],
+                "commands": self._counts["commands"],
+            },
+        }
+
     def _accumulate(self, live: LiveFrame) -> None:
         self._recent_events.append({"kind": "frame", "frame": live})
         if len(self._recent_events) > self.window_size:

@@ -520,3 +520,85 @@ def test_audio_evidence_dedup_on_repeat_feed():
     for _ in range(2):
         acc2.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised"))
     assert len(acc2.to_evidence_projection()["scenarios"][0]["audio_evidence"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# P0 evidence_delta 增量投影（Owner 2026-08-17 拍板）
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_delta_none_prev_returns_full():
+    """无基线（服务端首帧）→ 增量 = 全量；浏览器以快照 ref 幂等去重，不重复渲染（VM-8）。"""
+    acc = ProjectionAccumulator("sess-delta0", window_size=64)
+    acc.ingest(_make_frame(0, n_detections=1, event_types=["visit_normal"]))
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", event_id="e0"))
+    delta = acc.extract_evidence_delta(None)
+    assert delta["type"] == "evidence_delta"
+    # 全量：frame + audio 两类 timeline 节点、1 条 audio 证据
+    assert {n["type"] for n in delta["timeline"]} == {"frame", "audio"}
+    assert {a["event_id"] for a in delta["audio"]} == {"e0"}
+    assert delta["counts"]["n_frames"] == 1
+
+
+def test_evidence_delta_includes_new_nodes_and_tracks():
+    """摄入新帧/音频 → 增量含对应 timeline 节点、audio 证据与 Case Time 标记。"""
+    acc = ProjectionAccumulator("sess-delta1", window_size=64)
+    acc.ingest(_make_frame(3, n_detections=2, event_types=["visit_normal"]))
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", event_id="e1"))
+    prev = acc.projection_fingerprint()
+    delta = acc.extract_evidence_delta(prev)
+    assert delta["timeline"] == []
+    assert delta["audio"] == []
+    # 再摄入新内容 → 增量出现
+    acc.ingest(_make_frame(4, n_detections=1, event_types=["visit_normal"]))
+    acc.ingest_audio(_make_audio(1700000001.0, "audio_distress_cry", event_id="e2"))
+    delta2 = acc.extract_evidence_delta(prev)
+    tl_types = {n["type"] for n in delta2["timeline"]}
+    assert "frame" in tl_types and "audio" in tl_types
+    audio_ids = {a["event_id"] for a in delta2["audio"]}
+    assert audio_ids == {"e2"}
+    assert delta2["case_time"] and delta2["case_time"][0]["kind"] == "audio"
+    assert delta2["counts"]["n_frames"] == 2
+    assert delta2["counts"]["n_audio"] == 2
+
+
+def test_evidence_delta_idempotent_second_extract_empty():
+    """同一指纹连续提取 → 第二次增量全空（去重/幂等，VM-8）。"""
+    acc = ProjectionAccumulator("sess-delta2", window_size=64)
+    acc.ingest(_make_frame(0, n_detections=1, event_types=["visit_normal"]))
+    acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", event_id="e0"))
+    fp0 = acc.projection_fingerprint()
+    # fp0 已含全部 → 提取无新增
+    d0 = acc.extract_evidence_delta(fp0)
+    assert d0["timeline"] == [] and d0["audio"] == [] and d0["case_time"] == []
+    # 无基线（None）→ 全量；随后以新指纹提取 → 空
+    d1 = acc.extract_evidence_delta(None)
+    assert d1["timeline"] and d1["audio"]
+    d2 = acc.extract_evidence_delta(acc.projection_fingerprint())
+    assert d2["timeline"] == [] and d2["audio"] == [] and d2["case_time"] == []
+
+
+def test_evidence_delta_audio_node_fields_aligned():
+    """delta 的 audio 节点字段与 _build_audio_evidence_live 对齐（防漂移 DRY 债）。"""
+    acc = ProjectionAccumulator("sess-delta3", window_size=64)
+    acc.ingest_audio(
+        _make_audio(
+            1700000000.0, "audio_voice_raised", score=0.7, confidence=0.8,
+            source_segment_ids=("seg-9",), labels=("raised",), event_id="evt_009",
+        )
+    )
+    d = acc.extract_evidence_delta(None)  # 无基线 → 全量（含该条）
+    assert len(d["audio"]) == 1
+    a = d["audio"][0]
+    assert a["event_id"] == "evt_009"
+    assert a["kind"] == "audio_voice_raised"
+    assert abs(a["score"] - 0.7) < 1e-6
+    assert abs(a["confidence"] - 0.8) < 1e-6
+    assert a["source_segment_ids"] == ["seg-9"]
+    assert a["labels"] == ["raised"]
+    assert a["provenance_kind"] == "REAL_SENSOR"
+    assert a["ref"].startswith("live://audio/")
+    # 与全量投影同源一致
+    full = acc.to_evidence_projection()["scenarios"][0]["audio_evidence"][0]
+    assert full["event_id"] == a["event_id"]
+    assert full["ref"] == a["ref"]
