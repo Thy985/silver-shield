@@ -161,6 +161,19 @@ class VisitorEventBuilder:
 
     # ---------------- 内部 ----------------
 
+    def preset_visitor_id(self, track_id: int, visitor_id: uuid.UUID) -> None:
+        """G0-3 确定性身份桥（golden opt-in）：预置 track_id → 确定性 visitor_id 映射。
+
+        - 仅当调用方（integration runner，memory_aware 场景）显式调用；默认不调用，
+          ``_get_or_assign_visitor_id`` 行为逐字不变（uuid4 随机分配）；
+        - 用途：golden 场景把 actor.id → ``uuid5(NS, actor.id)`` 预置，使运行时
+          visitor_id 可预测，prior_episodes 的历史记忆可跨日匹配（"同一访客"身份）；
+        - reset() 清空此映射（与其它内部状态一致）。
+        """
+        if not isinstance(track_id, int) or track_id < 1:
+            raise ValueError(f"track_id 必须为正 int，收到 {track_id!r}")
+        self._track_to_visitor[track_id] = visitor_id
+
     def _get_or_assign_visitor_id(self, track_id: int) -> uuid.UUID:
         """track_id 首次出现 → 分配新 UUID；后续 reenter 复用同一 UUID。
 
