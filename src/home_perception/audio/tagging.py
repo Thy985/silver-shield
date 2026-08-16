@@ -221,6 +221,43 @@ class YamNetTagger(AcousticTagger):
         )
         return self._session
 
+    # ---- 输入形状校验（Gate 4 真实缺陷 4B 根因）----
+
+    @staticmethod
+    def _validate_input_shape(sess) -> None:
+        """加载后校验 YAMNet ONNX 输入形状。
+
+        不同导出对输入 rank/dim 约定不一，喂错会在推理期抛 INVALID_ARGUMENT
+        （``Got invalid dimensions ... Expected: 1``），且被管道的失败隔离静默吞掉
+        （表现为 tier1_failed、无有效标签）。此处显式拒绝退化导出并给出可执行的修正指向，
+        把"静默失败"变成"加载/首推阶段的可读错误"。
+
+        - 合法：rank-1 动态（``[samples]`` / ``[-1]`` / 变量名维度）或 rank-2（``[1, samples]`` /
+          ``[None, N]``）。``_run_frames`` 已按声明 rank 自适应喂入。
+        - 退化：rank-1 但为固定单元素 ``[1]``（如 ``yamnet.onnx`` 的错误导出）——无法接受变长音频，
+          任何喂法都会 INVALID_ARGUMENT，必须拒绝。
+        - 无 shape 信息（测试替身 / 运行期未暴露）→ 跳过，交由运行时 rank-2 兜底行为。
+        """
+        inp = sess.get_inputs()[0]
+        shape = getattr(inp, "shape", None)
+        if shape is None:
+            return
+        if len(shape) == 1:
+            dim = shape[0]
+            if isinstance(dim, int) and dim == 1:
+                raise ValueError(
+                    f"YAMNet ONNX 输入形状退化（固定 [1]，无法接受变长音频）："
+                    f"{inp.name}{list(shape)}。请改用正确导出"
+                    f"（本项目为 data/models/yamnet/onnx/yamnet_runtime.onnx，输入为动态 [samples]）。"
+                )
+            return  # 动态 rank-1（[samples] / [-1] / 变量名维度）→ OK
+        if len(shape) == 2:
+            return  # [1, samples] / [None, N] → OK
+        raise ValueError(
+            f"YAMNet ONNX 输入形状不支持（期望 rank 1 或 2，收到 rank {len(shape)}）："
+            f"{inp.name}{list(shape)}"
+        )
+
     # ---- 推理 ----
 
     def tag(self, samples: np.ndarray, sample_rate: int) -> list[AudioTag]:
@@ -230,6 +267,7 @@ class YamNetTagger(AcousticTagger):
         if len(samples) == 0:
             return []
         sess = self._ensure_session()
+        self._validate_input_shape(sess)
         wav = self._resample_to(samples, sample_rate, self.target_sr)
         scores = self._run_frames(sess, wav, self.target_sr)
         if len(scores) == 0:

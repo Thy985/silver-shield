@@ -466,3 +466,71 @@ def test_tier1_trigger_of_helper() -> None:
     assert tier1_trigger_of(None) == "segment"
     assert tier1_trigger_of(Tier1AudioConfig(trigger="perception")) == "perception"
     assert tier1_trigger_of(Tier1AudioConfig()) == "segment"
+
+
+# ============================================================================
+# 4B Gate 4 真实缺陷：YAMNet ONNX 输入形状校验（退化导出显式拒绝，杜绝静默 tier1_failed）
+# ============================================================================
+
+
+class _FakeDegenerateOrtSession:
+    """模拟退化 YAMNet 导出（如 yamnet.onnx）：输入被固化为固定 [1]，无法接受变长音频。
+
+    真实推理期必报 INVALID_ARGUMENT（Got invalid dimensions ... Expected: 1）；管道失败隔离
+    会静默吞掉。本替身用于验证加载/首推阶段即被形状校验拒绝，且其 run 不应被调用。
+    """
+
+    def get_inputs(self):
+        return [SimpleNamespace(name="waveform:0", shape=[1])]
+
+    def run(self, _, feed):  # pragma: no cover - 不应被调用
+        raise AssertionError("退化导出不应被喂入推理（形状校验应在前拦截）")
+
+
+def test_yamnet_rejects_degenerate_fixed_input_shape() -> None:
+    tagger = YamNetTagger(model_path="fake.onnx", class_names=[f"c{i}" for i in range(521)])
+    tagger._session = _FakeDegenerateOrtSession()
+    # 形状校验在 tag() 内（_ensure_session 之后）执行，退化导出必须显式拒绝并给出修正指向。
+    with pytest.raises(ValueError, match="yamnet_runtime.onnx"):
+        tagger.tag(np.zeros(16000, dtype=np.float32), 16000)
+
+
+def test_yamnet_accepts_rank1_dynamic_input_shape() -> None:
+    # 正确导出（[samples] 动态 rank-1，如 yamnet_runtime.onnx）应过校验并按 rank-1 喂入。
+    tagger = YamNetTagger(model_path="fake.onnx", class_names=[f"c{i}" for i in range(521)])
+    sess = _FakeRank1OrtSession(_fake_scores({0: 0.9}))
+    tagger._session = sess
+    tags = tagger.tag(np.zeros(16000, dtype=np.float32), 16000)
+    assert len(tags) >= 1
+    assert sess.last_feed_rank == 1  # 动态 rank-1 模型按 rank-1 喂入（非 rank-2）
+
+
+# 真实权重回归：仅在本地/CI 装有 onnxruntime 且含权重时运行，否则 skip（torch-free 环境）。
+# 用 find_spec 探测（不实际 import），避免污染 sys.modules 破坏
+# test_yamnet_construction_does_not_import_onnxruntime 的不变量。
+import importlib.util as _importlib_util
+
+_HAVE_ORT = _importlib_util.find_spec("onnxruntime") is not None
+
+
+@pytest.mark.skipif(not _HAVE_ORT, reason="onnxruntime not installed (torch-free env)")
+def test_yamnet_runtime_export_tags_real_audio() -> None:
+    # Gate 4 真实修复回归：正确导出 yamnet_runtime.onnx（动态 [samples]）必须能真实推理，
+    # 产出非空 521 类 score，不再报形状错误（对比退化导出 yamnet.onnx 必败）。
+    mp = Path("data/models/yamnet/onnx/yamnet_runtime.onnx")
+    if not mp.exists():
+        pytest.skip("yamnet_runtime.onnx not present in this environment")
+    cfg = Tier1AudioConfig(
+        enabled=True,
+        model_path=str(mp),
+        threshold=0.1,
+        top_k=5,
+        target_sr=16000,
+    )
+    tagger = build_tagger(cfg)
+    assert isinstance(tagger, YamNetTagger)
+    sr = 16000
+    t = np.arange(sr * 2) / sr
+    wav = (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    tags = tagger.tag(wav, sr)
+    assert tags, "正确导出应产出 YAMNet 标签"
