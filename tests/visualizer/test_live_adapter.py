@@ -248,6 +248,30 @@ def test_render_case_viewer_reuses_live_projection():
     assert "无媒体绑定" in html
 
 
+def test_live_omits_negative_capability_card_by_design():
+    """Live 路径**刻意不显示**负向能力卡——与旗舰 Canonical 路径的有意分歧（ADR-0036）。
+
+    - 负向能力卡（"为什么没有报警"）只在**已终结的 Canonical case** 有意义：它解释
+      "系统观察到正常状态故未报警（TN）"或"证据不足保持克制（MONITOR）"。
+    - ``/live`` 是**进行中的实时流**，case 尚未终结，此刻声称"系统决定不报警"是
+      **不诚实**的（数秒后可能就升级报警）。故 Live 投影 ``suppress_reasons`` 恒为 ``()``，
+      渲染层不出现该卡。
+    - 此分歧是 ADR-0036 的有意设计（非遗漏）：被本测试 + ``test_live_absent_fields_explicit``
+      双重锁死，防止将来有人"好心"给 live 补上负向能力卡。
+    """
+    acc = ProjectionAccumulator("sess-negcap")
+    for f in _sample_frames():
+        acc.ingest(f)
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    assert scn["suppress_reasons"] == ()  # 数据层：刻意空
+    proj, desc = build_live_presentation(acc.to_evidence_projection())
+    html = render_case_viewer(proj, desc)
+    # 用户可见：Live 渲染绝不能出现负向能力卡（与旗舰路径的分歧被钉死）。
+    # 注意：CSS 注释里虽含"为什么没有报警"字样，但真实卡片元素用 class="suppress-reason"
+    # 标记（CSS 定义为 .suppress-reason {，带点号）；故以 class="suppress-reason" 判定实际卡片。
+    assert 'class="suppress-reason"' not in html
+
+
 def test_build_live_presentation_rejects_empty_projection():
     from home_perception.visualizer.schema.evidence import EvidenceProjection, ProjectionMeta
     empty = EvidenceProjection(meta=ProjectionMeta(generated_at="live", scenario_count=0), scenarios=())
