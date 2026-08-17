@@ -399,9 +399,23 @@ def _render_case_video(
         f'width="640" height="360"></canvas>'
     )
 
-    # 媒体区：ArtifactVideoSource 用原生 <video>；其余（SyntheticFrameSource / 无媒体）
-    # 用 canvas 播放器（MediaPlayer 主时钟驱动）。绝不占位空框。
-    if (
+    # 媒体区：LiveFrameStream 用 <img> 帧流（WS 推真实帧，浏览器只显示）；ArtifactVideoSource
+    # 用原生 <video>；其余（SyntheticFrameSource / 无媒体）用 canvas 播放器。绝不占位空框。
+    if media_manifest and media_manifest.get("source_kind") == "LiveFrameStream":
+        # LP-1：Live 真实同步帧流——<img> 显示 WS 每帧推的 base64 JPEG（浏览器零推理 VM-9）；
+        # LIVE 红点 + 帧 overlay（帧号/检测数）由 live_stream.js 驱动更新。
+        media_area = (
+            f'<div class="case-video-live">'
+            f'<img class="case-video-img" id="video-img-{sid_html}" alt="live frame">'
+            f'<span class="live-badge" id="live-badge-{sid_html}">'
+            f'<span class="ldot"></span> LIVE</span>'
+            f'<div class="live-ov muted" id="live-ov-{sid_html}">'
+            f'<span>帧 <b id="ov-frame-{sid_html}">–</b></span>'
+            f'<span class="live-ov-sep">·</span>'
+            f'<span>检测 <b id="ov-det-{sid_html}">0</b></span>'
+            f'</div></div>'
+        )
+    elif (
         media_manifest
         and media_manifest.get("source_kind") == "ArtifactVideoSource"
         and media_manifest.get("video_url")
@@ -471,7 +485,8 @@ def _render_case_video(
     case_time = _render_case_time_tracks(scenario)
 
     manifest_island = ""
-    if media_manifest:
+    if media_manifest and media_manifest.get("source_kind") != "LiveFrameStream":
+        # LP-1：LiveFrameStream 无 manifest 数据岛（帧由 WS 每帧推 base64，非文件帧模板）。
         # 相对 media base 的帧模板 → 叠加 media_base_url 形成最终可解析 URL。
         tpl = media_manifest["frame_template"]
         if media_base_url:
@@ -1116,21 +1131,25 @@ def _render_scenario_case(
     # duration 优先取真实媒体 manifest.duration_sec（P5：真实视频按自身时长驱动 Evidence 映射，
     # 避免 descriptor 默认 60s 与 3.75s 真实视频错位）；无媒体时回退 descriptor 纯 UI 进度。
     # fps 留 0 → MediaPlayer 回退到 manifest.fps（有媒体时）。
-    if media_manifest and media_manifest.get("duration_sec"):
-        duration = float(media_manifest["duration_sec"])
+    # LP-1：LiveFrameStream 帧流模式**不**生成 MediaPlayer（画面由 WS 帧流驱动，无 canvas/文件帧）。
+    if media_manifest and media_manifest.get("source_kind") == "LiveFrameStream":
+        media_init = ""
     else:
-        duration = descriptor["time_mapping"]["media_duration_s"]
-    media_init = (
-        "(function(){"
-        'var cv=document.getElementById("case-video-canvas-' + sid_html + '");'
-        'var mm=document.getElementById("media-manifest-' + sid_html + '");'
-        "var manifest=(mm&&mm.textContent)?JSON.parse(mm.textContent):null;"
-        "window.__MediaPlayer.init("
-        + _R._esc_js(sid)
-        + ",cv,manifest,"
-        + '{"duration":' + str(duration) + ',"fps":0});'
-        "})();"
-    )
+        if media_manifest and media_manifest.get("duration_sec"):
+            duration = float(media_manifest["duration_sec"])
+        else:
+            duration = descriptor["time_mapping"]["media_duration_s"]
+        media_init = (
+            "(function(){"
+            'var cv=document.getElementById("case-video-canvas-' + sid_html + '");'
+            'var mm=document.getElementById("media-manifest-' + sid_html + '");'
+            "var manifest=(mm&&mm.textContent)?JSON.parse(mm.textContent):null;"
+            "window.__MediaPlayer.init("
+            + _R._esc_js(sid)
+            + ",cv,manifest,"
+            + '{"duration":' + str(duration) + ',"fps":0});'
+            "})();"
+        )
 
     # 首屏面板（按编排顺序，AC-16）
     panel_html: list[str] = []
@@ -1280,7 +1299,7 @@ def render_case_viewer(
     media_base_url: str = "",
     audio_base_dir: str | Path | None = None,
     audio_base_url: str = "",
-    live_video_manifest: dict | None = None,
+    live_frame_stream: bool = False,
 ) -> str:
     """EvidenceProjection → 自包含 Case Viewer HTML（确定性，fail-closed）。
 
@@ -1296,11 +1315,11 @@ def render_case_viewer(
             Adapter 只读解析每场景可播放音频样本 manifest（音频 E2E）；``None`` → 无绑定
             音频样本（首屏音频面板只显示证据事实，不渲染播放控件，严格分离不编造）。
         audio_base_url: 从 HTML 到 ``audio_base_dir`` 的相对 URL 前缀；默认 ``""``。
-        live_video_manifest: P1-C1 · Live 源视频 manifest（Host 层注入）。非 ``None`` 时
-            每个场景统一用此 manifest（``source_kind=ArtifactVideoSource`` + ``video_url``
-            指向网关伺服端点），使 ``<video>`` 播放源 mp4 替代 canvas 黑屏；浏览器自解码，
-            非 JPEG over WS（不破单一事实源，VM-1/VM-9）。``None`` → 走 media_base_dir
-            只读解析（Artifact/旗舰路径）。
+        live_frame_stream: LP-1 · Live 真实同步帧流。``True`` 时每个场景媒体区渲染
+            ``<img>`` 帧流骨架（Runtime Frame N → JPEG → WS 推真实帧，浏览器只显示），
+            Frame N ↔ Detection N 天然同步（单一事实源，VM-9）；不走 media_base_dir
+            只读解析（Live 不读 artifact 媒体文件）。``False``（默认）→ 走 media_base_dir
+            只读解析（Artifact / 旗舰路径）。
 
     Raises:
         ValueError: projection 结构非法（缺场景 / 场景数超上限）。
@@ -1319,11 +1338,11 @@ def render_case_viewer(
     # Slice A.1：经 Media Source Adapter 只读解析每场景媒体 manifest（绝不生成帧）。
     mb = descriptor["media_binding"]
     media_manifests: dict[str, dict | None] = {}
-    if live_video_manifest is not None:
-        # P1-C1：Live 源视频 manifest（Host 层注入，video_url 指向 /media 伺服端点），
-        # 让 <video> 播放源 mp4（替代 canvas 黑屏）；浏览器自解码，非 JPEG over WS。
+    if live_frame_stream:
+        # LP-1：Live 真实同步帧流——媒体区渲染 <img> 帧流骨架（不解析 artifact 媒体文件），
+        # 真实帧由 WS 每帧推（frame_tick.frame_base64），浏览器只显示（VM-9）。
         for s in scenarios:
-            media_manifests[s["scenario_id"]] = live_video_manifest
+            media_manifests[s["scenario_id"]] = {"source_kind": "LiveFrameStream"}
     elif media_base_dir is not None:
         for s in scenarios:
             media_manifests[s["scenario_id"]] = resolve_media_source(
@@ -1508,6 +1527,17 @@ def render_case_viewer(
   .case-video-el {{ width:100%; border-radius:6px; display:block; background:#000; }}
   .case-video-canvas {{ width:100%; max-width:640px; aspect-ratio:16/9; border-radius:6px;
                         display:block; background:#000; margin:0 auto; }}
+  .case-video-live {{ position:relative; border-radius:6px; overflow:hidden; background:#000; }}
+  .case-video-img {{ width:100%; display:block; background:#000; }}
+  .live-badge {{ position:absolute; top:10px; right:10px; display:inline-flex; align-items:center;
+                 gap:6px; background:rgba(0,0,0,.55); color:#fff; font-size:12px; font-weight:600;
+                 padding:4px 10px; border-radius:999px; letter-spacing:.5px; }}
+  .ldot {{ width:8px; height:8px; border-radius:50%; background:#e5484d;
+          animation:live-pulse 1.2s infinite; }}
+  .live-ov {{ position:absolute; bottom:10px; left:10px; display:flex; gap:8px; align-items:center;
+              background:rgba(0,0,0,.55); color:#e6edf3; font-size:12px; padding:4px 10px; border-radius:6px; }}
+  .live-ov-sep {{ opacity:.5; }}
+  @keyframes live-pulse {{ 0% {{ opacity:1; }} 50% {{ opacity:.3; }} 100% {{ opacity:1; }} }}
   .media-timeline {{ display:flex; gap:8px; align-items:center; margin:10px 0 4px;
                      background:#f0f4f9; border:1px solid #e3e8ee; border-radius:8px;
                      padding:8px 12px; }}

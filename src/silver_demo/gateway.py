@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 import time
 import uuid
@@ -42,7 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 # 类型标注用（运行期不调构造器；仅用于 type hint 让代码可读）
 from home_perception.action.command import ActionCommand  # noqa: F401  # 类型标注
@@ -57,6 +56,7 @@ from home_perception.core.config import RealtimeRiskConfig, Settings
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 
 # === 本包内部 ===
+from .bridge import encode_frame_to_base64_jpeg
 from .config import DemoSettings
 from .scenarios import ScenarioConfig, load_scenario
 from .sources import Source
@@ -257,13 +257,17 @@ class DemoGateway:
             except Exception as exc:  # noqa: BLE001
                 structlog.get_logger(__name__).warning("workflow_store_upsert_failed", exc_info=exc)
 
-            # 心跳广播：每帧只推最小进度信号（frame_index / loop_count），
-            # 不做第二套事实模型（view / state / meta）——真实展示走 GET /live 渲染同一 EvidenceProjection。
+            # 帧广播（LP-1 真实同步帧流）：每帧推最小进度信号 + 真实帧画面（base64 JPEG）。
+            # Frame N 的 JPEG 与 Frame N 的 detection（同帧 perception_delta，case_time = N×interval）
+            # 天然同步——服务端逐帧 decode → process_frame → encode，单一事实源（VM-9），浏览器只显示。
             await self.hub.broadcast(
                 {
                     "type": "frame_tick",
                     "frame_index": self._frame_index,
                     "loop_count": self.loop_count,
+                    "frame_base64": encode_frame_to_base64_jpeg(
+                        frame, quality=50, max_width=960
+                    ),
                 }
             )
 
@@ -374,41 +378,6 @@ class DemoGateway:
                 self.scenario.scenario_id, mode="live"
             )
         return self._live_accumulator
-
-    def _build_live_video_manifest(self) -> dict | None:
-        """P1-C1 · Live 源视频 manifest（让 ``<video>`` 播放源 mp4，替代 canvas 黑屏）。
-
-        仅 ``video_file`` 源且文件存在时返回 ``ArtifactVideoSource`` 形态 manifest
-        （``video_url`` 指向 ``/media/video`` 伺服端点，浏览器自解码，非 JPEG over WS）；
-        其余（caviar_jpg / 文件缺失 / 编码不支持）→ ``None``（保持 canvas 降级，不崩）。
-
-        媒体字节绝不进 View Model（VM-10）：manifest 只持 ref/duration/fps/count，
-        真实字节由 ``/media/video`` 以 FileResponse 流式伺服。
-        """
-        if getattr(self.scenario, "source_type", None) != "video_file":
-            return None
-        mp = getattr(self.scenario, "media_path", None)
-        if not mp or not Path(mp).is_file():
-            return None
-        import cv2  # 延迟导入：仅 video_file 源需要（caviar 场景不拉 OpenCV）
-
-        cap = cv2.VideoCapture(str(mp))
-        if not cap.isOpened():
-            cap.release()
-            return None
-        n = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
-        cap.release()
-        total = int(n) if not math.isnan(n) and n > 0 else 0
-        duration = (total / src_fps) if total > 0 and src_fps > 0 else 0.0
-        return {
-            "source_kind": "ArtifactVideoSource",
-            "video_url": "/media/video",
-            "frame_count": total if total > 0 else self.n_frames,
-            "fps": float(src_fps) if src_fps > 0 else 0.0,
-            "duration_sec": duration,
-            "frame_template": "",
-        }
 
     def _validate_frame_source(self, scenario: ScenarioConfig) -> None:
         """校验帧源可用性（assemble 与 switch_source 共用，避免损坏场景静默空循环）。
@@ -820,11 +789,9 @@ def create_app(
             proj, descriptor = build_live_presentation(
                 projection, live_ws_path=demo_settings.ws_path
             )
-            # P1-C1：注入 live 源视频 manifest（<video> 播放源 mp4，替代 canvas 黑屏）。
-            live_video_manifest = gateway._build_live_video_manifest()
-            html = render_case_viewer(
-                proj, descriptor, live_video_manifest=live_video_manifest
-            )
+            # LP-1：Live 真实同步帧流（Runtime Frame N → JPEG → WS → <img>），
+            # 替代 P1-C1 的 <video> 回放（回放与 pipeline frame_index 两套时钟不同步）。
+            html = render_case_viewer(proj, descriptor, live_frame_stream=True)
             return HTMLResponse(html)
         except Exception as exc:  # noqa: BLE001  # 渲染失败 fail-closed：返回 500 + 诊断，绝不静默产残缺页
             structlog.get_logger(__name__).warning("live_case_viewer_render_failed", exc_info=exc)
@@ -833,22 +800,6 @@ def create_app(
                 f"<pre>{exc!r}</pre></body></html>",
                 status_code=500,
             )
-
-    @app.get("/media/video")
-    async def live_media_video() -> FileResponse:
-        """P1-C1 · Live 源视频伺服：``<video>`` 播放源 mp4（浏览器自解码，非 JPEG over WS）。
-
-        仅伺服已配置的 ``video_file`` 源（``scenario.media_path``）；非视频源 / 文件缺失 /
-        非视频扩展名 → 404（fail-closed，绝不兜底到任意文件，杜绝路径遍历）。
-        """
-        mp = getattr(gateway.scenario, "media_path", None)
-        if getattr(gateway.scenario, "source_type", None) != "video_file" or not mp:
-            return JSONResponse(status_code=404, content={"error": "live 视频源不可用"})
-        if not Path(mp).is_file():
-            return JSONResponse(status_code=404, content={"error": "源视频文件缺失"})
-        if Path(mp).suffix.lower() not in {".mp4", ".mpg", ".mpeg", ".avi", ".mov", ".mkv", ".webm"}:
-            return JSONResponse(status_code=404, content={"error": "不支持的视频格式"})
-        return FileResponse(mp, media_type="video/mp4")
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
