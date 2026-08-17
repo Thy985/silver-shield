@@ -58,7 +58,31 @@ def resolve_scenario(args: argparse.Namespace) -> tuple[Path, Path | None]:
 
     返回 (场景路径, 临时文件或 None)：当使用了 ``--video`` 覆盖时，第二项指向
     写入 ``data/demo/.run_demo_scenario.yaml`` 的临时文件，由调用方在退出时清理。
+
+    Golden case 入口（ADR-0036 补遗 Phase 1）：
+    - ``--scenario golden_stranger_visit`` 等 golden_* 走 ``golden_adapter`` 纯映射，
+      不再需要预渲染 yaml。
+    - 返回的路径是临时 yaml（写入 data/demo/.run_demo_golden_*.yaml），与 --video
+      路径同处理：启动后自动清理。
     """
+    # Golden case 入口（纯映射生成临时 yaml）
+    if args.scenario and args.scenario.startswith("golden_"):
+        from silver_demo.golden_adapter import load_golden_scenario
+        case = args.scenario[len("golden_"):]
+        sc = load_golden_scenario(case)
+        out_dir = ROOT / "data" / "demo"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f".run_demo_golden_{case}.yaml"
+        out_path.write_text(
+            yaml.safe_dump(sc.model_dump(), allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        # Phase 2 标记：写一个 sidecar marker file，gateway 端检测到则注入 golden pre-event。
+        # 不污染 yaml schema（不增加 is_golden 字段，round-trip 仍干净）。
+        marker_path = out_dir / f".run_demo_golden_{case}.golden"
+        marker_path.write_text(case, encoding="utf-8")
+        return out_path, out_path
+
     if args.scenario:
         s = args.scenario
         if s.endswith((".yaml", ".yml")):
@@ -73,6 +97,7 @@ def resolve_scenario(args: argparse.Namespace) -> tuple[Path, Path | None]:
             f"❌ 场景文件不存在：{base}\n"
             f"   可用场景（config/demo/scenarios/ 下）：night_visit / real_doorway\n"
             f"   或用 --scenario <name|.yaml> 指定，或用 --video <path> 直接接入本地视频。\n"
+            f"   Golden case 入口：--scenario golden_stranger_visit | golden_repeated_visit | golden_telephone_risk | golden_evidence_insufficient\n"
         )
         sys.exit(1)
 

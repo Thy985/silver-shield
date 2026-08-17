@@ -26,4 +26,4 @@ media_path: data/demo/Delivery_Courier_Final.mp4
 start_time: "2026-07-19T14:00:00+00:00"   # 白天，OddHourRule 不触发
 frame_interval_s: 0.5
 fps_target: 8
-loop: false                              # 验证：整段跑一遍即可
+loop: true                               # Demo 演示：循环重放，保持 Dashboard 持续有内容

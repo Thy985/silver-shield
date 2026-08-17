@@ -11,6 +11,8 @@
   只读证据节点，前端不宣布行动成功；
 - 无 ASR / LLM；无墙钟 / 随机数参与证据（仅 UI 反馈）。
 
+PR-C：轻量摘要 `_renderSummary` 驱动 `.closure-summary` 行（DESIGN §4.7）。
+
 降级：WS 不可达 / 无待处置警告 → 面板显示占位文案、按钮禁用，不崩（fail-open 于 UI 层）。
 */
 
@@ -25,6 +27,28 @@
 
   function _byId(panel, sid, key) {
     return panel.querySelector('#closure-' + key + '-' + sid);
+  }
+
+  // PR-C：轻量状态摘要渲染（DESIGN §4.7）。
+  // 数据源：state 快照的 cur 状态，映射为 ✓/— 符号，不进 EvidenceProjection。
+  function _renderSummary(panel, sid, cur) {
+    var famSt = global.document.getElementById('cs-family-' + sid);
+    var comSt = global.document.getElementById('cs-community-' + sid);
+    if (!famSt && !comSt) return;
+    if (!cur) {
+      // 无 active warning → 空态
+      if (famSt) { famSt.textContent = '— 未通知'; famSt.className = 'cs-status'; }
+      if (comSt) { comSt.textContent = '— 未升级'; comSt.className = 'cs-status'; }
+    } else if (cur === 'pending') {
+      if (famSt) { famSt.textContent = '— 未确认'; famSt.className = 'cs-status pending'; }
+      if (comSt) { comSt.textContent = '— 未升级'; comSt.className = 'cs-status'; }
+    } else if (cur === 'family_handled') {
+      if (famSt) { famSt.textContent = '✓ 已通知'; famSt.className = 'cs-status fulfilled'; }
+      if (comSt) { comSt.textContent = '— 未升级'; comSt.className = 'cs-status pending'; }
+    } else if (cur === 'community_done') {
+      if (famSt) { famSt.textContent = '✓ 已通知'; famSt.className = 'cs-status fulfilled'; }
+      if (comSt) { comSt.textContent = '✓ 已处置'; comSt.className = 'cs-status fulfilled'; }
+    }
   }
 
   function _render(panel, sid, state) {
@@ -52,6 +76,9 @@
       if (comSt) { comSt.textContent = '—'; }
       // PR-A：tab 角色视图同步空态（共享状态机）。
       _renderTabViews(panel, null, 'pending');
+      // PR-C：轻量摘要空态。
+      _renderSummary(panel, sid, null);
+      _renderTaskCards(panel, sid, __LiveState && __LiveState.commandMap || {});
       return;
     }
 
@@ -60,6 +87,8 @@
     var cur = state[active].status || 'pending';
     if (famSt) { famSt.textContent = _STATUS_ZH[cur] || cur; }
     if (comSt) { comSt.textContent = _STATUS_ZH[cur] || cur; }
+    // PR-C：轻量摘要更新。
+    _renderSummary(panel, sid, cur);
     // 家属按钮仅 pending 可点；社区按钮仅 family_handled 可点；终态全部禁用。
     if (famAck) { famAck.disabled = (cur !== 'pending'); }
     if (famNot) { famNot.disabled = (cur !== 'pending'); }
@@ -94,6 +123,112 @@
     }
   }
 
+  // P1-2: 三端任务卡渲染（从 commandMap 累积数据驱动，对齐原 Demo b593a01）
+  function _renderTaskCards(panel, sid, commandMap) {
+    // 家属端任务卡
+    var famCard = global.document.getElementById('task-family-' + sid);
+    if (famCard) {
+      var famStatus = global.document.getElementById('task-family-status-' + sid);
+      var famBody = global.document.getElementById('task-family-body-' + sid);
+      var famSub = global.document.getElementById('task-family-sub-' + sid);
+      if (!famStatus || !famBody) return;
+      // 找 family 命令
+      var famCmd = null;
+      for (var wid in commandMap) {
+        if (!commandMap.hasOwnProperty(wid)) continue;
+        var m = commandMap[wid];
+        if (m && m.family && m.family.size > 0) {
+          famCmd = Array.from(m.family.values())[0];
+          break;
+        }
+      }
+      if (famCmd) {
+        famStatus.textContent = '已下发';
+        famStatus.style.color = '#2563eb';
+        var fp = famCmd.payload || {};
+        famBody.textContent = fp.message || '通知消息';
+        var contact = fp.contact || {};
+        var subParts = [];
+        if (contact.name) subParts.push('收件人：' + contact.name);
+        if (contact.relation) subParts.push('(' + contact.relation + ')');
+        if (contact.phone) {
+          var phone = contact.phone;
+          if (phone.length > 4) phone = phone.slice(0, 3) + '****' + phone.slice(-4);
+          subParts.push(phone);
+        }
+        famSub.textContent = subParts.join(' · ');
+      } else {
+        famStatus.textContent = '—';
+        famStatus.style.color = '';
+        famBody.textContent = '暂无命令下发';
+        famSub.textContent = '';
+      }
+    }
+    // 社区端任务卡
+    var comCard = global.document.getElementById('task-community-' + sid);
+    if (comCard) {
+      var comStatus = global.document.getElementById('task-community-status-' + sid);
+      var comBody = global.document.getElementById('task-community-body-' + sid);
+      var comSub = global.document.getElementById('task-community-sub-' + sid);
+      if (!comStatus || !comBody) return;
+      var comCmd = null;
+      for (var wid in commandMap) {
+        if (!commandMap.hasOwnProperty(wid)) continue;
+        var m = commandMap[wid];
+        if (m && m.community && m.community.size > 0) {
+          comCmd = Array.from(m.community.values())[0];
+          break;
+        }
+      }
+      if (comCmd) {
+        comStatus.textContent = '已派单';
+        comStatus.style.color = '#16a34a';
+        var cp = comCmd.payload || {};
+        var reasons = (cp.reasons || cp.reason_summary || []).join('、');
+        comBody.textContent = '工单原因：' + (reasons || '—');
+        var subParts = [];
+        if (cp.risk_level) subParts.push('风险 ' + cp.risk_level);
+        if (cp.endpoint) subParts.push('端点 ' + cp.endpoint);
+        if (cp.perception_score != null) subParts.push('强度 ' + Number(cp.perception_score).toFixed(2));
+        comSub.textContent = subParts.join(' · ');
+      } else {
+        comStatus.textContent = '—';
+        comStatus.style.color = '';
+        comBody.textContent = '暂无工单';
+        comSub.textContent = '';
+      }
+    }
+    // 日志任务卡
+    var logCard = global.document.getElementById('task-log-' + sid);
+    if (logCard) {
+      var logStatus = global.document.getElementById('task-log-status-' + sid);
+      var logBody = global.document.getElementById('task-log-body-' + sid);
+      var logSub = global.document.getElementById('task-log-sub-' + sid);
+      if (!logStatus || !logBody) return;
+      var logCmd = null;
+      for (var wid in commandMap) {
+        if (!commandMap.hasOwnProperty(wid)) continue;
+        var m = commandMap[wid];
+        if (m && m.log_only && m.log_only.size > 0) {
+          logCmd = Array.from(m.log_only.values())[0];
+          break;
+        }
+      }
+      if (logCmd) {
+        logStatus.textContent = '已记录';
+        logStatus.style.color = '#64748b';
+        var lp = logCmd.payload || {};
+        logBody.textContent = (lp.reason_summary || []).join('、') || '风险已记入日志';
+        logSub.textContent = lp.risk_level ? ('风险级别 ' + lp.risk_level) : '';
+      } else {
+        logStatus.textContent = '—';
+        logStatus.style.color = '';
+        logBody.textContent = '仅记录，无需人工处置';
+        logSub.textContent = '';
+      }
+    }
+  }
+
   function _init(panel) {
     var wsPath = panel.getAttribute('data-ws-path') || '/ws';
     var sid = panel.getAttribute('data-scenario') || '';
@@ -124,6 +259,11 @@
       });
     });
 
+    // P1-2: 监听来自 live_stream.js 的命令更新事件
+    document.addEventListener('__liveCommandsUpdated', function (evt) {
+      if (!evt || !evt.detail || !evt.detail.commandMap) return;
+      _renderTaskCards(panel, sid, evt.detail.commandMap);
+    });
     // PR-A：绑定 tab ②/③ 角色聚焦视图（.closure-tabview[data-scenario=<sid>]）——
     // 与主面板共享同一 WS 连接（切 Tab 不重订）与同一 active warning（data-warning-id
     // 由主面板 _render 写入）。

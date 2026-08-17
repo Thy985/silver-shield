@@ -670,37 +670,60 @@ def test_perception_delta_empty_detections():
 
 
 def test_risk_delta_change_and_idempotent():
-    """LP-3 risk_delta：None→全量；指纹变化→推；未变→空（覆盖式"当前 AI 判断"）。"""
+    """LP-3 risk_delta：None→全量；指纹变化→推；未变→空（覆盖式"当前 AI 判断"）。
+
+    PR-B：risk_transition 服务端状态机（Owner 锁死 §4.6）——
+    空→非空=raised；非空→空=cleared；指纹未变=None（不推信号）。
+    """
     acc = ProjectionAccumulator("sess-rd", window_size=64)
     acc.ingest(_make_frame(
         0, risk_levels=["HIGH"], recommended_actions=["ESCALATE_COMMUNITY"],
         reason_summary=["夜间访问", "长时间停留"], command_types=["CREATE_COMMUNITY_TASK"],
     ))
-    # None（首连）→ 携带当前风险状态
+    # None（首连）→ 携带当前风险状态；空→非空 = raised
     d0 = acc.extract_risk_delta(None)
     assert d0["type"] == "risk_delta"
     assert d0["risk_levels"] == ["HIGH"]
     assert d0["reason_summary"] == ["夜间访问", "长时间停留"]
     assert d0["recommended_actions"] == ["ESCALATE_COMMUNITY"]
     assert d0["command_types"] == ["CREATE_COMMUNITY_TASK"]
+    assert d0["risk_transition"] == "raised"
     fp = acc.risk_fingerprint()
-    # 指纹未变 → 空（不推）
+    # 指纹未变 → 空（不推）；无 transition
     d1 = acc.extract_risk_delta(fp)
     assert d1["risk_levels"] == []
     assert d1["reason_summary"] == []
-    # 风险清除（无 warning 帧）→ 变化 → 推空风险（回到 MONITOR 语义）
+    assert d1["risk_transition"] is None
+    # 风险清除（无 warning 帧）→ 变化 → 推空风险 + cleared（前端只渲染，不猜空=CLEARED）
     acc.ingest(_make_frame(1))
     d2 = acc.extract_risk_delta(fp)
     assert d2["risk_levels"] == []
     assert d2["reason_summary"] == []
     assert d2["frame_index"] == 1
+    assert d2["risk_transition"] == "cleared"
+
+
+def test_risk_delta_transition_active_on_content_change():
+    """PR-B：持续非空但内容变化 → active（更新风险内容，非重新亮卡）。"""
+    acc = ProjectionAccumulator("sess-rd3", window_size=64)
+    acc.ingest(_make_frame(0, risk_levels=["MEDIUM"], recommended_actions=["MONITOR"]))
+    fp0 = acc.risk_fingerprint()
+    assert acc.extract_risk_delta(None)["risk_transition"] == "raised"
+    acc.ingest(_make_frame(1, risk_levels=["HIGH"], recommended_actions=["ESCALATE_COMMUNITY"]))
+    d = acc.extract_risk_delta(fp0)
+    assert d["risk_levels"] == ["HIGH"]
+    assert d["risk_transition"] == "active"
 
 
 def test_risk_delta_no_warning_initial_monitor():
-    """无 warning 帧：首连 risk_delta 为空列表（前端据此显示 MONITOR 继续观察）。"""
+    """无 warning 帧：首连 risk_delta 为空列表（前端据此显示 MONITOR 继续观察）。
+
+    PR-B：首连无风险 → risk_transition=None（无 transition 不推信号，§4.6 契约表）。
+    """
     acc = ProjectionAccumulator("sess-rd2", window_size=64)
     acc.ingest(_make_frame(0))
     d = acc.extract_risk_delta(None)
     assert d["risk_levels"] == []
     assert d["reason_summary"] == []
     assert d["frame_index"] == 0
+    assert d["risk_transition"] is None

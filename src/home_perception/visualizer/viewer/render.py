@@ -390,40 +390,50 @@ def _render_case_video_inner(
     # 用原生 <video>；其余（SyntheticFrameSource / 无媒体）用 canvas 播放器。绝不占位空框。
     # live_ai_state：仅 Live 帧流模式的"实时 AI 状态"卡（LP-2/3），其余模式空串。
     live_ai_state = ""
+    live_demo_stat = ""
     if media_manifest and media_manifest.get("source_kind") == "LiveFrameStream":
         # LP-1：Live 真实同步帧流——<img> 显示 WS 每帧推的 base64 JPEG（浏览器零推理 VM-9）；
         # LIVE 红点 + 帧 overlay（帧号/检测数）由 live_stream.js 驱动更新。
         media_area = (
             f'<div class="case-video-live">'
+            f'<div class="video-ph" id="video-ph-{sid_html}">等待第一帧…</div>'
             f'<img class="case-video-img" id="video-img-{sid_html}" alt="live frame">'
             f'<span class="live-badge" id="live-badge-{sid_html}">'
             f'<span class="ldot"></span> LIVE</span>'
             f'<div class="live-ov muted" id="live-ov-{sid_html}">'
             f'<span>帧 <b id="ov-frame-{sid_html}">–</b></span>'
             f'<span class="live-ov-sep">·</span>'
+            f'<span>Case Time <b id="ov-time-{sid_html}">0.0s</b></span>'
+            f'<span class="live-ov-sep">·</span>'
             f'<span>检测 <b id="ov-det-{sid_html}">0</b></span>'
+            f'<span class="live-ov-sep">·</span>'
+            f'<span>访客事件 <b id="ov-ve-{sid_html}">0</b></span>'
             f'</div></div>'
         )
-        # LP-2/3：实时 AI 状态卡（CURRENT STATE + AI 看到了 + 为什么关注 + 下一步），
-        # 由 live_stream.js 经 perception_delta（感知）+ risk_delta（风险/决策）实时填充（VM-9 只渲染）。
+        # PR-B：Live 感知摘要卡（"AI 看到了"），由 live_stream.js 经 perception_delta（视觉）
+        # + evidence_delta（音频）实时填充（VM-9 只渲染）。LP-2/3 的 CURRENT STATE / 为什么 /
+        # 下一步已迁移到区域③ 风险解释卡片（DESIGN-live-product-ui-restore §4.5）。
         live_ai_state = (
             f'<div class="live-ai-state" id="live-ai-state-{sid_html}">'
-            f'<div class="ai-row ai-current">'
-            f'<span class="ai-k">CURRENT STATE</span>'
-            f'<span class="ai-v ai-risk" id="ai-risk-{sid_html}">MONITOR</span>'
-            f'</div>'
             f'<div class="ai-row">'
             f'<span class="ai-k">AI 看到了</span>'
             f'<span class="ai-v" id="ai-see-{sid_html}">等待检测…</span>'
             f'</div>'
             f'<div class="ai-row">'
-            f'<span class="ai-k">为什么关注</span>'
-            f'<span class="ai-v" id="ai-why-{sid_html}">—</span>'
-            f'</div>'
-            f'<div class="ai-row">'
-            f'<span class="ai-k">下一步</span>'
-            f'<span class="ai-v" id="ai-next-{sid_html}">继续观察</span>'
+            f'<span class="ai-k">AI 判断中</span>'
+            f'<span class="ai-v" id="ai-think-{sid_html}">—</span>'
             f'</div></div>'
+        )
+        # P2：Demo 状态面板（证明这是实时系统，非静态页面）。视觉权重低于主叙事区（muted 样式）。
+        # 消费 gateway /health + frame_index 计时，由 live_stream.js 每秒刷新。
+        live_demo_stat = (
+            f'<div class="demo-stat" id="demo-stat-{sid_html}" style="display:none">'
+            f'<div class="ds-row"><span class="ds-k">源</span><span class="ds-v" id="ds-src-{sid_html}">—</span></div>'
+            f'<div class="ds-row"><span class="ds-k">帧</span><span class="ds-v" id="ds-frame-{sid_html}">0</span></div>'
+            f'<div class="ds-row"><span class="ds-k">循环</span><span class="ds-v" id="ds-loop-{sid_html}">0</span></div>'
+            f'<div class="ds-row"><span class="ds-k">延迟</span><span class="ds-v" id="ds-latency-{sid_html}">—</span></div>'
+            f'<div class="ds-row"><span class="ds-k">Session</span><span class="ds-v" id="ds-session-{sid_html}">00:00</span></div>'
+            f'</div>'
         )
     elif (
         media_manifest
@@ -519,6 +529,7 @@ def _render_case_video_inner(
 
     inner_html = (
         f"{media_area}{live_ai_state}{live_perception}"
+        f"{live_demo_stat}"
         f"{media_timeline}{case_time}{binding_footnote}"
     )
     return inner_html, manifest_island
@@ -940,30 +951,53 @@ def _render_action_closure(
     ws_path = _R._esc(str(descriptor.get("live_ws_path", "/ws")))
     return f"""
     <section class="fs-panel" id="fs-action-closure-{sid_html}">
-      <h3 class="view-anchor">行动闭环（家属 / 社区协同处置）</h3>
-      <div class="closure-panel" id="closure-{sid_html}" data-ws-path="{ws_path}" data-scenario="{sid_html}">
-        <div class="closure-warning">暂无待处置警告</div>
-        <div class="closure-grid">
-          <div class="closure-role">
-            <div class="closure-role-title">家属端</div>
-            <div class="closure-status" id="closure-family-status-{sid_html}">—</div>
-            <div class="closure-actions">
-              <button class="rp-btn closure-btn" data-operator="family" data-action="acknowledge" id="closure-family-ack-{sid_html}">我知道了</button>
-              <button class="rp-btn closure-btn" data-operator="family" data-action="notify_community" id="closure-family-notify-{sid_html}">通知社区</button>
+       <h3 class="view-anchor">行动闭环（家属 / 社区协同处置）</h3>
+       <div class="closure-panel" id="closure-{sid_html}" data-ws-path="{ws_path}" data-scenario="{sid_html}">
+         <div class="closure-warning">暂无待处置警告</div>
+         <!-- PR-C：轻量状态摘要（产品语义优先于工程计数，DESIGN §4.7） -->
+         <div class="closure-summary" id="closure-summary-{sid_html}">
+           <span class="cs-row"><span class="cs-role">家属</span> <span class="cs-status" id="cs-family-{sid_html}">—</span></span>
+           <span class="cs-row"><span class="cs-role">社区</span> <span class="cs-status" id="cs-community-{sid_html}">—</span></span>
+         </div>
+          <!-- P1-2: 三端任务卡联动（对齐原 Demo b593a01） -->
+          <div class="tasks" id="task-cards-{sid_html}">
+            <div class="task family" id="task-family-{sid_html}">
+              <div class="task-h"><span class="task-dot f"></span>家属端任务<span class="task-status" id="task-family-status-{sid_html}">—</span></div>
+              <div class="task-body" id="task-family-body-{sid_html}">暂无命令下发</div>
+              <div class="task-sub" id="task-family-sub-{sid_html}"></div>
+            </div>
+            <div class="task community" id="task-community-{sid_html}">
+              <div class="task-h"><span class="task-dot c"></span>社区端任务<span class="task-status" id="task-community-status-{sid_html}">—</span></div>
+              <div class="task-body" id="task-community-body-{sid_html}">暂无工单</div>
+              <div class="task-sub" id="task-community-sub-{sid_html}"></div>
+            </div>
+            <div class="task log" id="task-log-{sid_html}">
+              <div class="task-h"><span class="task-dot l"></span>风险日志<span class="task-status" id="task-log-status-{sid_html}">—</span></div>
+              <div class="task-body" id="task-log-body-{sid_html}">仅记录，无需人工处置</div>
+              <div class="task-sub" id="task-log-sub-{sid_html}"></div>
             </div>
           </div>
-          <div class="closure-role">
-            <div class="closure-role-title">社区端</div>
-            <div class="closure-status" id="closure-community-status-{sid_html}">—</div>
-            <div class="closure-actions">
-              <button class="rp-btn closure-btn" data-operator="community" data-action="accept" id="closure-community-accept-{sid_html}">接受任务</button>
-              <button class="rp-btn closure-btn" data-operator="community" data-action="complete" id="closure-community-complete-{sid_html}">完成处置</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <p class="muted">按钮与状态为实时工作流态（UI/Workflow，不进 EvidenceProjection）；「完成处置」后产生的 Resolution 事实由后端投影为 Evidence Timeline 的 ACTION 节点（只读证据）。</p>
-    </section>"""
+         <div class="closure-grid">
+           <div class="closure-role">
+             <div class="closure-role-title">家属端</div>
+             <div class="closure-status" id="closure-family-status-{sid_html}">—</div>
+             <div class="closure-actions">
+               <button class="rp-btn closure-btn" data-operator="family" data-action="acknowledge" id="closure-family-ack-{sid_html}">我知道了</button>
+               <button class="rp-btn closure-btn" data-operator="family" data-action="notify_community" id="closure-family-notify-{sid_html}">通知社区</button>
+             </div>
+           </div>
+           <div class="closure-role">
+             <div class="closure-role-title">社区端</div>
+             <div class="closure-status" id="closure-community-status-{sid_html}">—</div>
+             <div class="closure-actions">
+               <button class="rp-btn closure-btn" data-operator="community" data-action="accept" id="closure-community-accept-{sid_html}">接受任务</button>
+               <button class="rp-btn closure-btn" data-operator="community" data-action="complete" id="closure-community-complete-{sid_html}">完成处置</button>
+             </div>
+           </div>
+         </div>
+       </div>
+       <p class="muted">按钮与状态为实时工作流态（UI/Workflow，不进 EvidenceProjection）；「完成处置」后产生的 Resolution 事实由后端投影为 Evidence Timeline 的 ACTION 节点（只读证据）。</p>
+     </section>"""
 
 
 # ---------------------------------------------------------------------------
@@ -1062,7 +1096,32 @@ def _render_live_shell(
     )
     # 区域②：实时音频摘要（无音频证据 → 空串，AC-12）+ 统一 Evidence Timeline。
     audio_panel = _render_audio_perception(scenario, audio_manifest, audio_base_url)
-    timeline_html = _R._render_timeline(scenario)
+    # P0-1 修复（视频静止/timeline 一次性刷出 bug）：Live 模式不预渲染 runtime timeline 节点，
+    # 让 JS 端 evidence_delta 增量涌现。Artifact 模式保留完整时间轴渲染。
+    # Phase 2：golden pre-event 节点（provenance_kind=SIMULATED + type 起步 golden_）不依赖 runtime 流，
+    # 即使在 Live 模式也预渲染（否则 manifest 派生的预期事件看不到）。
+    # P2-1 修复（用户反馈"打开就 210+ 节点塞满"）：即使是 Live + golden，**只**预渲染 golden_ 节点，
+    # **不**预渲染 runtime frame 节点（这些由 evidence_delta 增量推送）。
+    is_live = scenario.get("mode") == "live"
+    has_golden_pre = any(
+        isinstance(n, dict) and n.get("type", "").startswith("golden_")
+        for n in (scenario.get("timeline") or ())
+    )
+    if is_live:
+        # Live：只预渲染 golden 节点（runtime 节点由 JS 增量涌现）
+        if has_golden_pre:
+            # 构造只含 golden 节点的 scenario 副本，调用 _R._render_timeline
+            golden_only_scenario = dict(scenario)
+            golden_only_scenario["timeline"] = tuple(
+                n for n in (scenario.get("timeline") or ())
+                if isinstance(n, dict) and n.get("type", "").startswith("golden_")
+            )
+            timeline_html = _R._render_timeline(golden_only_scenario)
+        else:
+            timeline_html = f"<ul class='timeline' id='timeline-list-{sid_html}'></ul>"
+    else:
+        # Artifact：完整渲染
+        timeline_html = _R._render_timeline(scenario)
     # 区域④：行动闭环面板（live descriptor 含 action_closure；缺省 → 诚实占位）。
     if "action_closure" in panels:
         closure_body = _render_action_closure(scenario, descriptor)
@@ -1110,14 +1169,38 @@ def _render_live_shell(
           </section>
           <section class="region lv-risk">
             <h2>③ 风险解释卡片 <span class="tag">人话原因 · 建议动作</span></h2>
-            <div class="body" id="live-risk-{sid_html}">
-              {_render_current_risk(scenario)}
-              <p class="muted">风险卡 ✓ 人话格式随 risk_delta 实时恢复（PR-B）。</p>
+            <div class="body">
+              <div class="lrk-card" id="lrk-card-{sid_html}" style="display:none">
+                <div class="lrk-head">
+                  <span class="lrk-level" id="lrk-level-{sid_html}">—</span>
+                  <span class="lrk-wid muted" id="lrk-wid-{sid_html}"></span>
+                  <span class="lrk-frame muted" id="lrk-frame-{sid_html}"></span>
+                </div>
+                <div class="lrk-section">
+                  <div class="lrk-label">人话原因</div>
+                  <ul class="lrk-reasons" id="lrk-reasons-{sid_html}"></ul>
+                </div>
+                <div class="lrk-section" id="lrk-triggers-{sid_html}" style="display:none">
+                  <div class="lrk-label">触发规则</div>
+                  <div class="lrk-trig-chips" id="lrk-trig-{sid_html}"></div>
+                </div>
+                <div class="lrk-section" id="lrk-bar-wrap-{sid_html}" style="display:none">
+                  <div class="lrk-label">规则命中强度</div>
+                  <div class="lrk-meter"><div class="lrk-bar" id="lrk-bar-{sid_html}"></div><span class="lrk-score" id="lrk-score-{sid_html}"></span></div>
+                </div>
+                <div class="lrk-rec" id="lrk-rec-{sid_html}"></div>
+                <div class="lrk-meta" id="lrk-meta-{sid_html}"></div>
+              </div>
+              <div class="tl-empty observing" id="lrk-empty-{sid_html}">🔴 实时观察中 · 当前 0 人在场，风险尚未触发</div>
             </div>
           </section>
           <section class="region lv-timeline">
             <h2>② AI 行为时间线 <span class="tag">感知 → 风险 → 行动</span></h2>
-            <div class="body">{audio_panel}{timeline_html}</div>
+             <div class="body">
+               <!-- P0-3: 行为里程碑（从 perception_events 推导，跨帧累积） -->
+               <div class="behavior-timeline" id="behavior-timeline-{sid_html}"></div>
+               {audio_panel}{timeline_html}
+             </div>
           </section>
           <section class="region lv-signal">
             <h2>③.5 实时风险信号 <span class="tag">RAISED / CLEARED</span></h2>
@@ -1133,12 +1216,39 @@ def _render_live_shell(
           <section class="region lv-memory">
             <h2>⑥ Memory Context <span class="tag">认知层 · 只读</span></h2>
             <div class="body">
-              <div class="tl-empty">🧠 Memory Context · Not connected（认知层未接入 Live Runtime）</div>
+              <!-- PR-C：开发/展示态分文案（DESIGN §4.9）；data-display-mode="showcase" 时切换展示态文案 -->
+              <div class="tl-empty" id="memory-msg-{sid_html}">🧠 历史记忆 · 当前案例无历史事件可供引用</div>
             </div>
           </section>
         </div>
         {details}
       </div>
+      <!-- PR-C：⑤ 系统原理（折叠 / 次级模块 · DESIGN §4.8）—— 不抢主叙事，默认折叠 -->
+      <details class="lv-sysarch" id="lv-sysarch-{sid_html}">
+        <summary>⑤ 系统原理（How it works）</summary>
+        <div class="sysarch-body">
+          <p class="muted">底层架构三框：Home 端感知内核 → Demo Gateway 投影层 → Case Viewer 展示层。实时帧流 / delta 流经 ProjectionAccumulator 汇聚为 EvidenceProjection，浏览器只渲染、零推理（VM-9）。</p>
+          <svg class="sysarch-svg" viewBox="0 0 960 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="系统原理图：Home 感知内核 → Demo Gateway → Case Viewer">
+            <rect x="10" y="30" width="280" height="100" rx="8" fill="#f0f7ff" stroke="#4a90d9" stroke-width="1.5"/>
+            <text x="150" y="55" text-anchor="middle" font-size="13" font-weight="700" fill="#1c4f7c">Home 端感知内核</text>
+            <text x="150" y="75" text-anchor="middle" font-size="11" fill="#3b4a5a">home_perception</text>
+            <text x="150" y="95" text-anchor="middle" font-size="10" fill="#6b7a8a">PerceptionPipeline</text>
+            <text x="150" y="110" text-anchor="middle" font-size="10" fill="#6b7a8a">→ FrameResult → WarningEvent/ActionCommand</text>
+            <polygon points="300,80 320,80 320,72 330,80 320,88 320,80 300,80" fill="#4a90d9"/>
+            <polygon points="300,80 320,80 320,72 330,80 320,88 320,80 300,80" transform="translate(340,0)" fill="#4a90d9"/>
+            <rect x="660" y="30" width="290" height="100" rx="8" fill="#f0f7ff" stroke="#4a90d9" stroke-width="1.5"/>
+            <text x="805" y="55" text-anchor="middle" font-size="13" font-weight="700" fill="#1c4f7c">展示层 · Case Viewer</text>
+            <text x="805" y="75" text-anchor="middle" font-size="11" fill="#3b4a5a">银色盾 Web UI</text>
+            <text x="805" y="95" text-anchor="middle" font-size="10" fill="#6b7a8a">Live Viewer（帧流 + delta 流）</text>
+            <text x="805" y="110" text-anchor="middle" font-size="10" fill="#6b7a8a">浏览器只渲染、零推理（VM-9）</text>
+            <rect x="340" y="30" width="310" height="100" rx="8" fill="#fff7e6" stroke="#e0922f" stroke-width="1.5"/>
+            <text x="495" y="55" text-anchor="middle" font-size="13" font-weight="700" fill="#7a4a00">Demo Gateway · silver_demo</text>
+            <text x="495" y="75" text-anchor="middle" font-size="11" fill="#3b4a5a">ws.py / gateway.py</text>
+            <text x="495" y="95" text-anchor="middle" font-size="10" fill="#6b7a8a">帧循环 → ProjectionAccumulator</text>
+            <text x="495" y="110" text-anchor="middle" font-size="10" fill="#6b7a8a">→ EvidenceProjection → delta 流广播</text>
+          </svg>
+        </div>
+      </details>
       {_render_live_role_view(scenario, "family")}
       {_render_live_role_view(scenario, "community")}
     </section>"""
@@ -1842,6 +1952,9 @@ def render_case_viewer(
   /* Timeline（复用 renderer） */
   .timeline {{ list-style:none; margin:0; padding:0 0 0 18px; border-left:2px solid #d8dee6; }}
   .tl-item {{ position:relative; margin:10px 0; }}
+  /* Phase 2：golden pre-event 节点（manifest 派生预期，非 runtime 实测）——视觉降饱和度 + ⓘ 标识 */
+  .tl-item-golden {{ opacity:0.78; background:#f8fafc; border-left:2px dashed #94a3b8; padding-left:6px; margin-left:-6px; }}
+  .tl-golden-icon {{ color:#64748b; font-size:11px; font-weight:700; cursor:help; }}
   .tl-dot {{ position:absolute; left:-25px; top:4px; width:12px; height:12px;
              border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #ccc; }}
   .tl-body {{ }}
@@ -1942,9 +2055,113 @@ def render_case_viewer(
   .lv-memory {{ grid-column:span 4; }}
   .lv-roleview {{ grid-column:span 12; margin-top:14px; }}
   .tl-empty {{ color:#6b7a8a; font-size:12px; text-align:center; padding:20px 0; }}
+  .tl-empty.observing {{ color:#d64541; font-weight:600;
+                         animation:obs-pulse 1.4s ease-in-out infinite; }}
+  @keyframes obs-pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.45; }} }}
+  /* ③ 风险解释卡片（PR-B · ✓ 人话原因格式，risk_delta 驱动） */
+  .lrk-card {{ border:1px solid #e3e8ee; border-left:4px solid #d64541; border-radius:10px;
+               padding:10px 12px; background:#fcfdff; }}
+  .lrk-head {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+  .lrk-level {{ font-size:11px; font-weight:700; padding:1px 8px; border-radius:6px;
+                color:#fff; background:#d64541; }}
+  .lrk-level.medium {{ background:#e0a030; }}
+  .lrk-level.low {{ background:#2e9e6b; }}
+  .lrk-frame {{ margin-left:auto; font-variant-numeric:tabular-nums; }}
+  .lrk-section {{ margin-top:8px; }}
+  .lrk-label {{ font-size:11px; font-weight:700; color:#6b7a8a; margin-bottom:4px; }}
+  .lrk-reasons {{ margin:0; padding-left:4px; list-style:none; }}
+  .lrk-reasons li {{ margin:2px 0; font-size:13px; color:#1c2733; }}
+  .lrk-wid {{ font-size:10.5px; color:#6b7a8a; font-family:monospace; }}
+  .lrk-trig-chips {{ display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }}
+  .trig-chip {{ font-size:11px; padding:1px 7px; border-radius:999px;
+                background:#f0f4fb; border:1px solid #c5d8f0; color:#2b5a8a; }}
+  .lrk-meter {{ height:8px; background:#e3e8ee; border-radius:4px; overflow:hidden;
+                margin-top:4px; }}
+  .lrk-bar {{ height:100%; background:linear-gradient(90deg,#d64541,#e0a030);
+              transition:width .3s; border-radius:4px; }}
+  .lrk-score {{ font-size:11px; color:#6b7a8a; margin-top:2px;
+                font-variant-numeric:tabular-nums; }}
+  .lrk-meta {{ margin-top:8px; font-size:11px; color:#6b7a8a; display:flex; gap:12px; flex-wrap:wrap; }}
+  .lrk-meta span {{ display:inline-flex; align-items:center; gap:3px; }}
+  .lrk-rec {{ margin-top:10px; font-size:13px; color:#2b3a4a; }}
+  /* ③.5 实时风险信号（PR-B · risk_transition 服务端状态机驱动 RAISED/CLEARED） */
+  .rt-card {{ border:1px solid #e3e8ee; border-left:4px solid #d64541; border-radius:10px;
+              padding:10px 12px; background:#fff7f7; transition:opacity .4s; }}
+  .rt-card.cleared {{ border-left-color:#2e9e6b; background:#f2fbf6; opacity:.85; }}
+  .rt-head {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+  .rt-badge {{ font-size:10.5px; font-weight:800; padding:1px 8px; border-radius:6px;
+               color:#fff; background:#d64541; letter-spacing:.5px; }}
+  .rt-badge.live {{ animation:rt-pulse 1.3s ease-in-out infinite; }}
+  .rt-card.cleared .rt-badge {{ background:#2e9e6b; }}
+  @keyframes rt-pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.55; }} }}
+  .rt-id {{ font-size:11px; color:#6b7a8a; font-family:ui-monospace,Menlo,Consolas,monospace; }}
+  .rt-time {{ font-size:11px; color:#6b7a8a; margin-left:auto;
+              font-variant-numeric:tabular-nums; }}
+  .rt-sig {{ margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;
+             font-size:11px; color:#6b7a8a; align-items:center; }}
+  .rt-sid {{ font-family:monospace; background:#f0f4fb; border:1px solid #d0e3f7;
+             border-radius:4px; padding:1px 6px; }}
+  .rt-cat {{ background:#fff7e6; border:1px solid #fde68a; border-radius:4px;
+             padding:1px 6px; color:#92400e; }}
+  .rt-sev {{ background:#fef2f2; border:1px solid #fecaca; border-radius:4px;
+             padding:1px 6px; color:#991b1b; }}
+  .rt-subj {{ color:#4a5568; }}
+              font-variant-numeric:tabular-nums; }}
   @media (max-width: 960px) {{
     .lv-video, .lv-risk, .lv-timeline, .lv-signal, .lv-closure, .lv-memory {{ grid-column:span 12; }}
   }}
+  /* PR-C：④ 行动轻量摘要（DESIGN §4.7） */
+  .closure-summary {{ display:flex; gap:16px; align-items:center; margin:8px 0 10px;
+                      padding:6px 10px; background:#f0f7ff; border:1px solid #d0e3f7;
+                      border-radius:6px; font-size:13px; }}
+  .cs-row {{ display:flex; align-items:center; gap:6px; }}
+  .cs-role {{ font-weight:600; color:#3b4a5a; }}
+  .cs-status {{ font-size:12px; padding:1px 8px; border-radius:999px;
+                background:#e3e8ee; color:#6b7a8a; }}
+  .cs-status.fulfilled {{ background:#d1fae5; color:#065f46; }}
+  .cs-status.pending {{ background:#fef3c7; color:#92400e; }}
+  /* P2：Demo 状态面板（运行时元数据，证明实时系统而非静态页面） */
+  .demo-stat {{ display:flex; gap:14px; align-items:center; padding:6px 12px;
+               background:#f8fafc; border:1px solid #e3e8ee; border-radius:6px;
+               font-size:12px; margin-top:8px; flex-wrap:wrap; }}
+  .ds-row {{ display:flex; align-items:center; gap:4px; }}
+  .ds-k {{ color:#6b7a8a; font-weight:600; }}
+  .ds-v {{ color:#1c2733; font-variant-numeric:tabular-nums; }}
+  /* P1-2: 三端任务卡（对齐原 Demo b593a01 · 家属/社区/日志 各卡片含 payload 预览 + 状态徽章） */
+  .tasks {{ display:flex; flex-direction:column; gap:8px; margin:8px 0; }}
+  .task {{ border:1px solid #e3e8ee; border-radius:9px; padding:8px 10px; background:#fff; }}
+  .task.family {{ border-left:3px solid #2563eb; }}
+  .task.community {{ border-left:3px solid #16a34a; }}
+  .task.log {{ border-left:3px solid #94a3b8; background:#fafafa; }}
+  .task-h {{ display:flex; align-items:center; gap:7px; font-size:12px; font-weight:700; }}
+  .task-dot {{ width:8px; height:8px; border-radius:50%; }}
+  .task-dot.f {{ background:#2563eb; }}
+  .task-dot.c {{ background:#16a34a; }}
+  .task-dot.l {{ background:#94a3b8; }}
+  .task-status {{ margin-left:auto; font-size:10.5px; font-weight:700; color:#475569;
+                  background:#f1f5f9; padding:1px 7px; border-radius:6px; }}
+  .task-body {{ font-size:12px; color:#1f2933; margin-top:5px; line-height:1.45; }}
+  .task-sub {{ font-size:11px; color:#6b7a8a; margin-top:3px; }}
+  /* P0-3: 行为里程碑样式 */
+  .behavior-timeline {{ margin-bottom:12px; padding:8px 10px; background:#f8fafc;
+                        border:1px solid #e3e8ee; border-radius:8px; }}
+  .behavior-timeline .tl-item {{ margin:3px 0; }}
+  .behavior-timeline .tl-type {{ font-weight:600; font-size:12px; }}
+  .behavior-timeline .tl-meta {{ font-size:11px; color:#6b7a8a; }}
+  /* Video placeholder */
+  .video-ph {{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+               color:#64748b; font-size:13px; pointer-events:none; }}
+  .case-video-live {{ position:relative; }}
+  /* PR-C：⑤ 系统原理折叠区（DESIGN §4.8 · 次级模块） */
+  .lv-sysarch {{ margin-top:14px; background:#fff; border:1px solid #e3e8ee;
+                 border-radius:10px; overflow:hidden; }}
+  .lv-sysarch summary {{ cursor:pointer; padding:10px 14px; font-size:13px;
+                         font-weight:600; color:#6b7a8a; list-style:none;
+                         display:flex; align-items:center; gap:8px; }}
+  .lv-sysarch summary::before {{ content:'▶'; font-size:10px; transition:transform .2s; }}
+  .lv-sysarch[open] summary::before {{ transform:rotate(90deg); }}
+  .sysarch-body {{ padding:10px 14px 14px; }}
+  .sysarch-svg {{ width:100%; max-width:960px; height:auto; display:block; margin:8px auto; }}
 </style>
 </head>
 <body>
@@ -1978,10 +2195,10 @@ def render_case_viewer(
 {audio_sync_js}
 </script>
 <script>
-{live_actions_js}
+{live_stream_js}
 </script>
 <script>
-{live_stream_js}
+{live_actions_js}
 </script>
 <script>
 {live_tabs_js}
