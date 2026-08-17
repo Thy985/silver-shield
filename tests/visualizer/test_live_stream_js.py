@@ -198,3 +198,85 @@ def test_live_stream_js_missing_containers_noop():
     )
     assert r.returncode == 0, f"live_stream.js no-op 断言失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
     assert "LIVE_STREAM_NOOP_OK" in r.stdout
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("node"),
+    reason="CI 无 node 则跳过（html-inline-js 纪律）",
+)
+def test_live_stream_js_perception_delta_renders():
+    """Node vm：收 perception_delta → 渲染感知状态 + 记录延迟样本（零推理，只渲染）。"""
+    import subprocess
+    import tempfile
+
+    src = _live_stream_source()
+    harness = textwrap.dedent(
+        r"""
+        const fs = require('fs');
+        function makeEl() {
+          var el = { attrs: {}, html: '', text: '', innerHTML: '',
+            getAttribute: function (k) { return this.attrs[k] != null ? this.attrs[k] : null; },
+            setAttribute: function (k, v) { this.attrs[k] = String(v); },
+            insertAdjacentHTML: function (pos, h) { this.html += h; } };
+          Object.defineProperty(el, 'textContent', {
+            set: function (v) { this.text = String(v); }, get: function () { return this.text; } });
+          return el;
+        }
+        const lp = makeEl();                       // #live-perception-live_telephone_risk
+        lp.attrs['data-scenario'] = 'live_telephone_risk';
+        const closurePanel = makeEl();
+        closurePanel.getAttribute = function (k) { return k === 'data-ws-path' ? '/ws' : null; };
+        const doc = {
+          querySelector: function (sel) {
+            // 回退路径：.scenario-title code 缺失（render.py live 页无 <code>），
+            // sid 从 .live-perception 容器 data-scenario 取。
+            if (sel === '.scenario-title code') return null;
+            if (sel === '.live-perception') return lp;
+            if (sel === '.closure-panel') return closurePanel;
+            return null;
+          },
+          querySelectorAll: function () { return []; },
+          getElementById: function (id) { return id === 'live-perception-live_telephone_risk' ? lp : null; },
+        };
+        global.document = doc;
+        global.location = { protocol: 'http:', host: '127.0.0.1:8765' };
+        global.WebSocket = function () { global._ws = this; };
+        global.window = global;
+        eval(fs.readFileSync(process.argv[2], 'utf-8'));
+        // 发 perception_delta
+        const nowMs = Date.now();
+        global._ws.onmessage({ data: JSON.stringify({
+          type: 'perception_delta', frame_index: 42, case_time: 5.25, server_ts: nowMs / 1000,
+          detections: [
+            { class: 'person', bbox: [10.5, 20.6, 300.0, 400.0], confidence: 0.91 },
+            { class: 'car', bbox: [0, 0, 50, 50], confidence: 0.55 },
+          ],
+        })});
+        const rendered = lp.innerHTML.indexOf('person') !== -1 && lp.innerHTML.indexOf('car') !== -1
+          && lp.innerHTML.indexOf('0.91') !== -1 && lp.innerHTML.indexOf('F42') !== -1;
+        const latencyRecorded = typeof window.__LiveStream.lastLatencyMs === 'number';
+        // 幂等：同检测再发一次 → innerHTML 覆盖式（当前状态），不累积
+        global._ws.onmessage({ data: JSON.stringify({
+          type: 'perception_delta', frame_index: 43, case_time: 5.38, server_ts: nowMs / 1000,
+          detections: [{ class: 'person', bbox: [11, 21, 301, 401], confidence: 0.92 }],
+        })});
+        const overwrite = lp.innerHTML.indexOf('F43') !== -1 && lp.innerHTML.indexOf('car') === -1;
+        console.log(rendered && latencyRecorded && overwrite ? 'PERCEPTION_OK' : JSON.stringify({ rendered: rendered, latencyRecorded: latencyRecorded, overwrite: overwrite, html: lp.innerHTML }));
+        process.exit(rendered && latencyRecorded && overwrite ? 0 : 1);
+        """
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        harness_path = f.name
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(src)
+        src_path = f.name
+    r = subprocess.run(
+        ["node", harness_path, src_path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert r.returncode == 0, f"perception_delta 渲染失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
+    assert "PERCEPTION_OK" in r.stdout

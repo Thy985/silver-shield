@@ -23,7 +23,7 @@ from home_perception.visualizer.viewer.render import render_case_viewer
 
 
 def _make_frame(frame_index, *, n_detections=0, n_visitor_events=0, event_types=(),
-                risk_levels=(), recommended_actions=(), command_types=()):
+                risk_levels=(), recommended_actions=(), command_types=(), detections=()):
     """构造 FrameResult 契约的 dict 形态（鸭子类型摄入，不依赖生产对象）。"""
     return {
         "frame_index": frame_index,
@@ -35,6 +35,7 @@ def _make_frame(frame_index, *, n_detections=0, n_visitor_events=0, event_types=
             for rl, ra in zip(risk_levels, recommended_actions)
         ],
         "commands": [{"command_type": ct} for ct in command_types],
+        "detections": list(detections),
     }
 
 
@@ -602,3 +603,63 @@ def test_evidence_delta_audio_node_fields_aligned():
     full = acc.to_evidence_projection()["scenarios"][0]["audio_evidence"][0]
     assert full["event_id"] == a["event_id"]
     assert full["ref"] == a["ref"]
+
+
+# ---------------------------------------------------------------------------
+# P1-A 实时感知状态流（Live Perception Delta · Owner 2026-08-17 拍板）
+# ---------------------------------------------------------------------------
+
+
+def test_frame_result_to_live_frame_extracts_detections():
+    """detections 鸭子类型提取结构化子集（class/bbox/confidence，round 3 位，裁剪上限）。"""
+    from home_perception.visualizer.viewer.live_adapter import frame_result_to_live_frame
+
+    dets = [
+        {"class_name": "person", "bbox": [1.2345, 2.3456, 100.9999, 200.0001], "confidence": 0.9134},
+        {"class_name": "car", "bbox": [0.0, 0.0, 50.0, 50.0], "confidence": 0.55},
+    ]
+    lf = frame_result_to_live_frame(_make_frame(0, detections=dets))
+    assert lf["detections"] == (
+        {"class": "person", "bbox": [1.234, 2.346, 101.0, 200.0], "confidence": 0.913},
+        {"class": "car", "bbox": [0.0, 0.0, 50.0, 50.0], "confidence": 0.55},
+    )
+
+
+def test_frame_result_to_live_frame_caps_detections():
+    """检测数超 _MAX_DETECTIONS → 裁剪（事实投影，非原始 detector 仓库）。"""
+    from home_perception.visualizer.viewer.live_adapter import frame_result_to_live_frame
+
+    dets = [
+        {"class_name": f"c{i}", "bbox": [0.0, 0.0, 1.0, 1.0], "confidence": 0.9}
+        for i in range(20)
+    ]
+    lf = frame_result_to_live_frame(_make_frame(0, detections=dets))
+    assert len(lf["detections"]) <= 8
+
+
+def test_perception_delta_change_and_idempotent():
+    """perception_delta：None→全量；指纹变化→推；未变→空（避免 8fps 全量刷原始框）。"""
+    acc = ProjectionAccumulator("sess-pd", window_size=64)
+    acc.ingest(_make_frame(0, detections=[{"class_name": "person", "bbox": [0, 0, 10, 10], "confidence": 0.9}]))
+    # None（首连）→ 携带当前检测
+    d0 = acc.extract_perception_delta(None)
+    assert d0["type"] == "perception_delta"
+    assert d0["detections"] == [{"class": "person", "bbox": [0.0, 0.0, 10.0, 10.0], "confidence": 0.9}]
+    fp = acc.perception_fingerprint()
+    # 指纹未变 → 空（不推）
+    d1 = acc.extract_perception_delta(fp)
+    assert d1["detections"] == []
+    # 摄入变化 → 推新检测
+    acc.ingest(_make_frame(1, detections=[{"class_name": "car", "bbox": [0, 0, 20, 20], "confidence": 0.8}]))
+    d2 = acc.extract_perception_delta(fp)
+    assert d2["detections"] == [{"class": "car", "bbox": [0.0, 0.0, 20.0, 20.0], "confidence": 0.8}]
+    assert d2["frame_index"] == 1
+
+
+def test_perception_delta_empty_detections():
+    """无检测帧：指纹（空）一致 → 不推；首连 None → 空列表（非报错）。"""
+    acc = ProjectionAccumulator("sess-pd2", window_size=64)
+    acc.ingest(_make_frame(0))
+    d = acc.extract_perception_delta(None)
+    assert d["detections"] == []
+    assert d["frame_index"] == 0

@@ -76,6 +76,30 @@
     }
   }
 
+  // P1-A：实时感知状态（perception_delta → 结构化渲染）。浏览器只渲染服务端投影的
+  // 检测子集（class/bbox/confidence），零推理、不判断风险（VM-9）。
+  function _applyPerceptionDelta(msg) {
+    var el = global.document.getElementById('live-perception-' + sid);
+    if (!el) return;
+    var rows = (msg.detections || []).map(function (d) {
+      var b = (d.bbox || []).map(function (v) { return Math.round(v); }).join(',');
+      return '<li><span class="lp-class">' + _esc(d.class) + '</span>' +
+        '<span class="muted"> conf ' + Number(d.confidence).toFixed(2) + '</span>' +
+        '<span class="muted"> · bbox [' + b + ']</span></li>';
+    }).join('');
+    var head = 'F' + msg.frame_index +
+      (msg.case_time != null ? ' · ' + Number(msg.case_time).toFixed(1) + 's' : '');
+    el.innerHTML = '<div class="lp-head">Visual perception <span class="muted">' + head + '</span></div>' +
+      (rows ? '<ul>' + rows + '</ul>' : '<span class="muted">（当前无检测）</span>');
+    // 端到端延迟样本（server_ts 为网关 time.time()，仅延迟度量，不进 EvidenceProjection）。
+    if (msg.server_ts != null) {
+      var now = Date.now();
+      global.__LiveStream.lastLatencyMs = now - (msg.server_ts * 1000);
+      global.__LiveStream.latencySamples = global.__LiveStream.latencySamples || [];
+      global.__LiveStream.latencySamples.push(global.__LiveStream.lastLatencyMs);
+    }
+  }
+
   function _applyDelta(msg) {
     // timeline 追加（幂等：ref 去重）
     (msg.timeline || []).forEach(function (n) {
@@ -112,6 +136,12 @@
     if (typeof global.document === 'undefined' || typeof WebSocket === 'undefined') return;
     var code = global.document.querySelector('.scenario-title code');
     if (code) sid = (code.textContent || '').trim();
+    // 回退：live 页 scenario-title 无 <code>（render.py 用 _scenario_headline），改从
+    // live-perception 容器的 data-scenario 属性取 sid（容器本身带 sid，最可靠）。
+    if (!sid) {
+      var lp = global.document.querySelector('.live-perception');
+      if (lp) sid = lp.getAttribute('data-scenario') || '';
+    }
     // 首屏快照即基线：预填已渲染 refs，绝不重放重复（VM-8）。
     var items = global.document.querySelectorAll('.tl-item[data-ref]');
     for (var i = 0; i < items.length; i++) seenRefs.add(items[i].getAttribute('data-ref'));
@@ -126,7 +156,9 @@
     ws.onmessage = function (evt) {
       var msg;
       try { msg = JSON.parse(evt.data); } catch (e) { return; }
-      if (msg && msg.type === 'evidence_delta') _applyDelta(msg);
+      if (!msg) return;
+      if (msg.type === 'evidence_delta') _applyDelta(msg);
+      else if (msg.type === 'perception_delta') _applyPerceptionDelta(msg);
     };
   }
 
