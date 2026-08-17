@@ -317,6 +317,45 @@ def test_viewer_ac17_no_media_canvas_no_placeholder(tmp_path):
     assert 'id="media-manifest-sw_t1"' not in html
 
 
+def test_viewer_p1c1_live_video_manifest_renders_video(tmp_path):
+    """P1-C1：render_case_viewer 接受 ``live_video_manifest`` 注入，渲染原生 ``<video>``
+    （ArtifactVideoSource + video_url），替代 canvas 黑屏。``live_video_manifest`` 优先级
+    高于 ``media_base_dir``（不进 Media Source Adapter，只读解析）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    live_manifest = {
+        "source_kind": "ArtifactVideoSource",
+        "video_url": "/media/video",
+        "frame_count": 100,
+        "fps": 30.0,
+        "duration_sec": 60.5,
+        "frame_template": "",
+    }
+    html = render_case_viewer(proj, live_video_manifest=live_manifest)
+    # 渲染 <video>（case-video-el），不再用 canvas
+    assert 'id="case-video-el-sw_t1"' in html
+    assert 'src="/media/video"' in html
+    assert 'id="case-video-canvas-sw_t1"' not in html
+    # manifest 数据岛仍注入（MediaPlayer 消费 video_url / duration_sec / fps）
+    assert 'id="media-manifest-sw_t1"' in html
+    assert "ArtifactVideoSource" in html
+    assert "60.5" in html
+
+
+def test_viewer_p1c1_live_manifest_overrides_media_base_dir(tmp_path):
+    """P1-C1：``live_video_manifest`` 非 None 时**不**调 ``resolve_media_source``（不读
+    ``media_base_dir``），即使 media_base_dir 指向另一处，video_url 仍由 live_manifest 决定。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    # media_base_dir 指向 d（应解析为 SyntheticFrameSource），但 live_manifest 应胜出。
+    html_with = render_case_viewer(proj, media_base_dir=d, live_video_manifest={
+        "source_kind": "ArtifactVideoSource", "video_url": "/media/video",
+        "frame_count": 0, "fps": 30.0, "duration_sec": 60.0, "frame_template": "",
+    })
+    assert 'src="/media/video"' in html_with
+    assert "SyntheticFrameSource" not in html_with  # 未走 resolve_media_source 路径
+
+
 def test_viewer_ac17_media_base_url_normalizes_separators(tmp_path):
     """AC-17 回归：CLI 把 artifact 相对 URL 归一为正斜杠，浏览器才能解析帧 URL。
 

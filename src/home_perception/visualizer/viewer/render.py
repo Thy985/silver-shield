@@ -1280,6 +1280,7 @@ def render_case_viewer(
     media_base_url: str = "",
     audio_base_dir: str | Path | None = None,
     audio_base_url: str = "",
+    live_video_manifest: dict | None = None,
 ) -> str:
     """EvidenceProjection → 自包含 Case Viewer HTML（确定性，fail-closed）。
 
@@ -1295,6 +1296,11 @@ def render_case_viewer(
             Adapter 只读解析每场景可播放音频样本 manifest（音频 E2E）；``None`` → 无绑定
             音频样本（首屏音频面板只显示证据事实，不渲染播放控件，严格分离不编造）。
         audio_base_url: 从 HTML 到 ``audio_base_dir`` 的相对 URL 前缀；默认 ``""``。
+        live_video_manifest: P1-C1 · Live 源视频 manifest（Host 层注入）。非 ``None`` 时
+            每个场景统一用此 manifest（``source_kind=ArtifactVideoSource`` + ``video_url``
+            指向网关伺服端点），使 ``<video>`` 播放源 mp4 替代 canvas 黑屏；浏览器自解码，
+            非 JPEG over WS（不破单一事实源，VM-1/VM-9）。``None`` → 走 media_base_dir
+            只读解析（Artifact/旗舰路径）。
 
     Raises:
         ValueError: projection 结构非法（缺场景 / 场景数超上限）。
@@ -1313,7 +1319,12 @@ def render_case_viewer(
     # Slice A.1：经 Media Source Adapter 只读解析每场景媒体 manifest（绝不生成帧）。
     mb = descriptor["media_binding"]
     media_manifests: dict[str, dict | None] = {}
-    if media_base_dir is not None:
+    if live_video_manifest is not None:
+        # P1-C1：Live 源视频 manifest（Host 层注入，video_url 指向 /media 伺服端点），
+        # 让 <video> 播放源 mp4（替代 canvas 黑屏）；浏览器自解码，非 JPEG over WS。
+        for s in scenarios:
+            media_manifests[s["scenario_id"]] = live_video_manifest
+    elif media_base_dir is not None:
         for s in scenarios:
             media_manifests[s["scenario_id"]] = resolve_media_source(
                 media_base_dir, s["scenario_id"], mb["source_kind"]
