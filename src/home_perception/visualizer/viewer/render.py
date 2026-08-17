@@ -45,6 +45,8 @@ if TYPE_CHECKING:  # 仅类型标注
 _LIVE_ACTIONS_FILENAME = "live_actions.js"
 # P0 evidence_delta 增量投影客户端（Owner 2026-08-17 拍板）：浏览器只渲染、不推理。
 _LIVE_STREAM_FILENAME = "live_stream.js"
+# P1-B 叙事分幕客户端（Artifact Story Replay）：浏览器只读服务端派生分幕，不推理。
+_STORY_REPLAY_FILENAME = "story_replay.js"
 
 # Case Video 叙事结构（D-CaseVideo · VM-12）：产品主视频，非 Analysis Video。
 _CASE_VIDEO_NARRATIVE = (
@@ -853,6 +855,17 @@ def _live_stream_inline() -> str:
     return p.read_text(encoding="utf-8")
 
 
+def _story_replay_inline() -> str:
+    """内联 P1-B 叙事分幕客户端（缺失时降级为空串——章节导航静态可读、无聚焦，不崩）。
+
+    仅 Artifact 模式注入（descriptor 无 live_ws_path）；Live 模式不注入（实时流无完整故事）。
+    """
+    p = _R._ASSETS_DIR / _STORY_REPLAY_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
 def _render_action_closure(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -1038,6 +1051,40 @@ def _render_narrative_band(scenario: ScenarioEvidence) -> str:
     </div>"""
 
 
+def _render_story_nav(scenario: ScenarioEvidence) -> str:
+    """P1-B 叙事分幕导航（Artifact-only Story Replay）。
+
+    从 EvidenceProjection 派生分幕（``build_story_chapters``，事实驱动、省略空幕），渲染
+    章节按钮 + 当前幕叙述文案。按钮自带 ``data-start/end/refs/copy``（服务端派生），
+    前端 ``story_replay.js`` 只读这些属性做点击聚焦（``__Replay.seek`` + 高亮 focus refs），
+    **绝不自己生成"这一幕代表风险升级"**（VM-1 / VM-9）。无叙事（空幕）→ 空串。
+    """
+    from home_perception.visualizer.viewer.story_chapters import build_story_chapters
+
+    chapters = build_story_chapters(scenario)
+    if not chapters:
+        return ""
+    sid = scenario["scenario_id"]
+    sid_html = _R._esc(sid)
+    buttons: list[str] = []
+    for ch in chapters:
+        refs = "|".join(_R._esc(str(r)) for r in ch.get("focus_refs", ()))
+        buttons.append(
+            f'<button type="button" class="story-chapter" '
+            f'data-start="{ch["start_idx"]}" data-end="{ch["end_idx"]}" '
+            f'data-refs="{refs}" data-copy="{_R._esc(ch["display_copy"])}">'
+            f'{_R._esc(ch["label"])}</button>'
+        )
+    first_copy = _R._esc(chapters[0]["display_copy"])
+    return f"""
+    <div class="story-nav">
+      <div class="story-chapters" id="story-chapters-{sid_html}" data-scenario="{sid_html}">
+        {''.join(buttons)}
+      </div>
+      <div class="story-copy muted" id="story-copy-{sid_html}">{first_copy}</div>
+    </div>"""
+
+
 def _render_scenario_case(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -1145,6 +1192,7 @@ def _render_scenario_case(
       </h2>
       {_render_case_header(scenario)}
       {_render_narrative_band(scenario)}
+      {_render_story_nav(scenario)}
       {_render_suppression_reason(scenario)}
       {_render_provenance_banner(scenario)}
       {''.join(panel_html)}
@@ -1308,6 +1356,9 @@ def render_case_viewer(
     # P0 evidence_delta 增量投影：仅 Live 模式（descriptor 带 live_ws_path）注入；
     # Artifact/旗舰模式无实时流语义 → 不注入（快照模式零成本）。
     live_stream_js = _live_stream_inline() if descriptor.get("live_ws_path") else ""
+    # P1-B 叙事分幕客户端：仅 Artifact 模式（无 live_ws_path）注入；Live 不注入
+    # （实时流无完整故事，两个时间语义不混）。无分幕场景 bind 时 no-op 零成本。
+    story_replay_js = _story_replay_inline() if not descriptor.get("live_ws_path") else ""
     # P0-3：任一场景有真实音频证据时注入 AudioSync（音频轨 ↔ 证据时间线联动）；
     # 无音频场景 → 不注入（零成本降级）。audio_perception 面板在默认面板列表恒存在，
     # 但无 audio_evidence 时面板渲染为空串——以证据为准，避免空页面带无用引擎。
@@ -1557,6 +1608,9 @@ def render_case_viewer(
 </script>
 <script>
 {live_stream_js}
+</script>
+<script>
+{story_replay_js}
 </script>
 <script>
 {_R._guard_script_close(replay_inits)}
