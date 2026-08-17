@@ -347,6 +347,20 @@ def test_viewer_lp1_live_frame_stream_overrides_media_base_dir(tmp_path):
     assert "SyntheticFrameSource" not in html_with  # 未走 resolve_media_source 路径
 
 
+def test_viewer_lp2_live_ai_state_card_renders(tmp_path):
+    """LP-2/3：live_frame_stream 模式渲染"实时 AI 状态"卡（CURRENT STATE / AI 看到了 /
+    为什么关注 / 下一步），由 live_stream.js 经 perception_delta + risk_delta 实时填充。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    html = render_case_viewer(proj, live_frame_stream=True)
+    assert 'id="live-ai-state-sw_t1"' in html
+    assert 'id="ai-risk-sw_t1"' in html
+    assert 'id="ai-see-sw_t1"' in html
+    assert 'id="ai-why-sw_t1"' in html
+    assert 'id="ai-next-sw_t1"' in html
+    assert "CURRENT STATE" in html
+
+
 def test_viewer_ac17_media_base_url_normalizes_separators(tmp_path):
     """AC-17 回归：CLI 把 artifact 相对 URL 归一为正斜杠，浏览器才能解析帧 URL。
 

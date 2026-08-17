@@ -122,6 +122,8 @@ class DemoGateway:
         self._delta_seq = 0
         # P1-A 实时感知状态流：检测指纹基线（变化才推，避免 8fps 全量刷原始框）。
         self._prev_perception_fp = None
+        # LP-3 实时风险与决策流：风险指纹基线（变化才推）。
+        self._prev_risk_fp = None
 
         # 循环控制
         self._running = False
@@ -301,6 +303,23 @@ class DemoGateway:
                     await self.hub.broadcast(pdelta)
             except Exception as exc:  # noqa: BLE001
                 structlog.get_logger(__name__).warning("perception_delta_failed", exc_info=exc)
+
+            # LP-3 实时风险与决策流（risk_delta）：Perception → Risk → Decision → Action
+            # 的实时投影（risk_levels/recommended_actions/command_types，覆盖式"当前 AI 判断"）。
+            # 风险指纹变化才推；浏览器据此渲染 CURRENT STATE / Why / Next action（VM-9）。
+            try:
+                acc = self._ensure_live_accumulator()
+                rdelta = acc.extract_risk_delta(self._prev_risk_fp)
+                self._prev_risk_fp = acc.risk_fingerprint()
+                if (
+                    rdelta.get("risk_levels")
+                    or rdelta.get("reason_summary")
+                    or rdelta.get("recommended_actions")
+                    or rdelta.get("command_types")
+                ):
+                    await self.hub.broadcast(rdelta)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning("risk_delta_failed", exc_info=exc)
 
             self._frame_index += 1
             if interval > 0:
@@ -555,6 +574,8 @@ class DemoGateway:
         self._delta_seq = 0
         # P1-A 感知指纹同步重置
         self._prev_perception_fp = None
+        # LP-3 风险指纹同步重置
+        self._prev_risk_fp = None
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())

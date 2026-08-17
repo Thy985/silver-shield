@@ -23,17 +23,21 @@ from home_perception.visualizer.viewer.render import render_case_viewer
 
 
 def _make_frame(frame_index, *, n_detections=0, n_visitor_events=0, event_types=(),
-                risk_levels=(), recommended_actions=(), command_types=(), detections=()):
+                risk_levels=(), recommended_actions=(), reason_summary=(),
+                command_types=(), detections=()):
     """构造 FrameResult 契约的 dict 形态（鸭子类型摄入，不依赖生产对象）。"""
+    warnings = [
+        {"risk_level": rl, "recommended_action": ra}
+        for rl, ra in zip(risk_levels, recommended_actions)
+    ]
+    if reason_summary and warnings:
+        warnings[0]["reason_summary"] = list(reason_summary)
     return {
         "frame_index": frame_index,
         "n_detections": n_detections,
         "n_visitor_events": n_visitor_events,
         "perception_events": [{"event_type": et} for et in event_types],
-        "warnings": [
-            {"risk_level": rl, "recommended_action": ra}
-            for rl, ra in zip(risk_levels, recommended_actions)
-        ],
+        "warnings": warnings,
         "commands": [{"command_type": ct} for ct in command_types],
         "detections": list(detections),
     }
@@ -662,4 +666,41 @@ def test_perception_delta_empty_detections():
     acc.ingest(_make_frame(0))
     d = acc.extract_perception_delta(None)
     assert d["detections"] == []
+    assert d["frame_index"] == 0
+
+
+def test_risk_delta_change_and_idempotent():
+    """LP-3 risk_delta：None→全量；指纹变化→推；未变→空（覆盖式"当前 AI 判断"）。"""
+    acc = ProjectionAccumulator("sess-rd", window_size=64)
+    acc.ingest(_make_frame(
+        0, risk_levels=["HIGH"], recommended_actions=["ESCALATE_COMMUNITY"],
+        reason_summary=["夜间访问", "长时间停留"], command_types=["CREATE_COMMUNITY_TASK"],
+    ))
+    # None（首连）→ 携带当前风险状态
+    d0 = acc.extract_risk_delta(None)
+    assert d0["type"] == "risk_delta"
+    assert d0["risk_levels"] == ["HIGH"]
+    assert d0["reason_summary"] == ["夜间访问", "长时间停留"]
+    assert d0["recommended_actions"] == ["ESCALATE_COMMUNITY"]
+    assert d0["command_types"] == ["CREATE_COMMUNITY_TASK"]
+    fp = acc.risk_fingerprint()
+    # 指纹未变 → 空（不推）
+    d1 = acc.extract_risk_delta(fp)
+    assert d1["risk_levels"] == []
+    assert d1["reason_summary"] == []
+    # 风险清除（无 warning 帧）→ 变化 → 推空风险（回到 MONITOR 语义）
+    acc.ingest(_make_frame(1))
+    d2 = acc.extract_risk_delta(fp)
+    assert d2["risk_levels"] == []
+    assert d2["reason_summary"] == []
+    assert d2["frame_index"] == 1
+
+
+def test_risk_delta_no_warning_initial_monitor():
+    """无 warning 帧：首连 risk_delta 为空列表（前端据此显示 MONITOR 继续观察）。"""
+    acc = ProjectionAccumulator("sess-rd2", window_size=64)
+    acc.ingest(_make_frame(0))
+    d = acc.extract_risk_delta(None)
+    assert d["risk_levels"] == []
+    assert d["reason_summary"] == []
     assert d["frame_index"] == 0
