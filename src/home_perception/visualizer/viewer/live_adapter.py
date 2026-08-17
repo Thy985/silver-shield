@@ -95,6 +95,7 @@ class LiveFrame(TypedDict):
     event_types: tuple[str, ...]      # 来自 perception_events[].event_type
     risk_levels: tuple[str, ...]       # 来自 warnings[].risk_level
     recommended_actions: tuple[str, ...]  # 来自 warnings[].recommended_action
+    reason_summary: tuple[str, ...]    # 来自 warnings[].reason_summary（人话触发原因，LP-3 Why）
     command_types: tuple[str, ...]     # 来自 commands[].command_type
     # P1-A：本帧检测的结构化子集（class/bbox/confidence，非原始 Detection 对象——
     # 事实投影：只保留产品渲染所需字段，坐标 round、数量裁剪）。默认空 tuple。
@@ -334,9 +335,17 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
 
     risk_levels: list[str] = []
     recommended_actions: list[str] = []
+    reason_summary: list[str] = []
     for w in _iter_of(frame_result, "warnings"):
         risk_levels.append(_require_str(w, "risk_level"))
         recommended_actions.append(_require_str(w, "recommended_action"))
+        # LP-3：人话触发原因（reason_summary，无"诈骗/犯罪"字样，VM-9）。
+        for r in _iter_of(w, "reason_summary"):
+            if not isinstance(r, str):
+                raise LiveIngestError(
+                    f"warning.reason_summary 元素必须是 str，收到 {r!r}（fail-closed）"
+                )
+            reason_summary.append(r)
 
     command_types: list[str] = []
     for c in _iter_of(frame_result, "commands"):
@@ -363,6 +372,7 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
         event_types=tuple(event_types),
         risk_levels=tuple(risk_levels),
         recommended_actions=tuple(recommended_actions),
+        reason_summary=tuple(reason_summary),
         command_types=tuple(command_types),
         detections=tuple(detections),
     )
@@ -421,6 +431,14 @@ class ProjectionAccumulator:
         # P1-A：最近一帧检测子集（覆盖式"当前感知状态"，生命周期=最近一帧）。
         self._last_detections: tuple[dict, ...] = ()
         self._last_detection_frame: int = -1
+        # LP-3：最近一帧风险/决策状态（覆盖式"当前风险状态"，生命周期=最近一帧；
+        # 与累积 set _risk_levels/_recommended_actions/_command_types 区分——后者是历史去重，
+        # 前者是"此刻 AI 判断"，驱动实时 CURRENT STATE / Why / Next action）。
+        self._last_risk_levels: tuple[str, ...] = ()
+        self._last_recommended_actions: tuple[str, ...] = ()
+        self._last_reason_summary: tuple[str, ...] = ()
+        self._last_command_types: tuple[str, ...] = ()
+        self._last_risk_frame: int = -1
 
     @property
     def n_frames(self) -> int:
@@ -706,6 +724,39 @@ class ProjectionAccumulator:
             "detections": [dict(d) for d in self._last_detections] if changed else [],
         }
 
+    # ------------------------------------------------------------------
+    # LP-3 实时风险与决策（Risk Delta · 覆盖式"当前 AI 判断"，非累积历史）
+    # ------------------------------------------------------------------
+    # Perception → Risk → Decision → Action 的实时投影：只保留最近一帧的
+    # risk_levels / recommended_actions / command_types，浏览器据此渲染
+    # CURRENT STATE / Why / Next action。指纹未变 → 不推（避免无意义刷屏）。
+
+    def risk_fingerprint(self) -> tuple:
+        """当前风险状态指纹（risk_levels/reason_summary/recommended_actions/command_types 元组）。"""
+        return (
+            self._last_risk_levels,
+            self._last_reason_summary,
+            self._last_recommended_actions,
+            self._last_command_types,
+        )
+
+    def extract_risk_delta(self, prev_fp) -> dict:
+        """只读：对比 ``prev_fp`` 风险指纹 → risk_delta（覆盖式"当前风险状态"）。
+
+        ``prev_fp=None``（首连）或指纹变化 → 携带当前风险状态；未变 → 空列表
+        （无变化不推）。返回 ``{"type","frame_index","risk_levels","reason_summary","recommended_actions","command_types"}``。
+        """
+        cur = self.risk_fingerprint()
+        changed = (prev_fp is None) or (prev_fp != cur)
+        return {
+            "type": "risk_delta",
+            "frame_index": self._last_risk_frame,
+            "risk_levels": list(self._last_risk_levels) if changed else [],
+            "reason_summary": list(self._last_reason_summary) if changed else [],
+            "recommended_actions": list(self._last_recommended_actions) if changed else [],
+            "command_types": list(self._last_command_types) if changed else [],
+        }
+
     def _accumulate(self, live: LiveFrame) -> None:
         self._recent_events.append({"kind": "frame", "frame": live})
         if len(self._recent_events) > self.window_size:
@@ -714,6 +765,12 @@ class ProjectionAccumulator:
         # P1-A：最近一帧检测子集（覆盖式，非累积——"当前感知状态"语义 + 明确生命周期）。
         self._last_detections = live.get("detections", ())
         self._last_detection_frame = live["frame_index"]
+        # LP-3：覆盖式当前风险/决策状态（最近一帧的 warning/command 分类，非累积）。
+        self._last_risk_levels = tuple(live.get("risk_levels", ()))
+        self._last_recommended_actions = tuple(live.get("recommended_actions", ()))
+        self._last_reason_summary = tuple(live.get("reason_summary", ()))
+        self._last_command_types = tuple(live.get("command_types", ()))
+        self._last_risk_frame = live["frame_index"]
         self._total_frames += 1
         self._counts["perception_events"] += len(live["event_types"])
         self._counts["warnings"] += len(live["risk_levels"])

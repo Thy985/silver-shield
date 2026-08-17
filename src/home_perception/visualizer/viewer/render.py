@@ -401,6 +401,8 @@ def _render_case_video(
 
     # 媒体区：LiveFrameStream 用 <img> 帧流（WS 推真实帧，浏览器只显示）；ArtifactVideoSource
     # 用原生 <video>；其余（SyntheticFrameSource / 无媒体）用 canvas 播放器。绝不占位空框。
+    # live_ai_state：仅 Live 帧流模式的"实时 AI 状态"卡（LP-2/3），其余模式空串。
+    live_ai_state = ""
     if media_manifest and media_manifest.get("source_kind") == "LiveFrameStream":
         # LP-1：Live 真实同步帧流——<img> 显示 WS 每帧推的 base64 JPEG（浏览器零推理 VM-9）；
         # LIVE 红点 + 帧 overlay（帧号/检测数）由 live_stream.js 驱动更新。
@@ -413,6 +415,27 @@ def _render_case_video(
             f'<span>帧 <b id="ov-frame-{sid_html}">–</b></span>'
             f'<span class="live-ov-sep">·</span>'
             f'<span>检测 <b id="ov-det-{sid_html}">0</b></span>'
+            f'</div></div>'
+        )
+        # LP-2/3：实时 AI 状态卡（CURRENT STATE + AI 看到了 + 为什么关注 + 下一步），
+        # 由 live_stream.js 经 perception_delta（感知）+ risk_delta（风险/决策）实时填充（VM-9 只渲染）。
+        live_ai_state = (
+            f'<div class="live-ai-state" id="live-ai-state-{sid_html}">'
+            f'<div class="ai-row ai-current">'
+            f'<span class="ai-k">CURRENT STATE</span>'
+            f'<span class="ai-v ai-risk" id="ai-risk-{sid_html}">MONITOR</span>'
+            f'</div>'
+            f'<div class="ai-row">'
+            f'<span class="ai-k">AI 看到了</span>'
+            f'<span class="ai-v" id="ai-see-{sid_html}">等待检测…</span>'
+            f'</div>'
+            f'<div class="ai-row">'
+            f'<span class="ai-k">为什么关注</span>'
+            f'<span class="ai-v" id="ai-why-{sid_html}">—</span>'
+            f'</div>'
+            f'<div class="ai-row">'
+            f'<span class="ai-k">下一步</span>'
+            f'<span class="ai-v" id="ai-next-{sid_html}">继续观察</span>'
             f'</div></div>'
         )
     elif (
@@ -510,7 +533,7 @@ def _render_case_video(
     return f"""
     <section class="fs-panel" id="fs-case-video-{sid_html}">
       <h3 class="view-anchor">Case Video（主轴）</h3>
-      <div class="case-video">{media_area}{live_perception}{media_timeline}{case_time}{binding_footnote}</div>
+      <div class="case-video">{media_area}{live_ai_state}{live_perception}{media_timeline}{case_time}{binding_footnote}</div>
       {manifest_island}
       <p class="muted">Case Video 叙事结构：{' → '.join(_CASE_VIDEO_NARRATIVE)}（VM-12 · 产品主视频，关联叙事而非分析回放）</p>
     </section>"""
@@ -1406,6 +1429,14 @@ def render_case_viewer(
     )
     audio_sync_js = _R._audio_sync_inline() if has_audio_evidence else ""
 
+    # LP-4：产品标题区分 Live / Artifact——Live 是"守护中"的产品，不是"案例回放"。
+    if live_frame_stream:
+        page_title = "银龄盾 · 居家智能守护中"
+        page_subtitle = "AI 正在实时理解居家状态：谁在门口 → 发生了什么 → AI 怎么判断 → 系统怎么响应"
+    else:
+        page_title = "银龄盾 · 安全案例回放"
+        page_subtitle = "一次运行，看懂一起安全案例：发生了什么 → 为什么值得关注 → 系统做了什么"
+
     return f"""<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -1538,6 +1569,26 @@ def render_case_viewer(
               background:rgba(0,0,0,.55); color:#e6edf3; font-size:12px; padding:4px 10px; border-radius:6px; }}
   .live-ov-sep {{ opacity:.5; }}
   @keyframes live-pulse {{ 0% {{ opacity:1; }} 50% {{ opacity:.3; }} 100% {{ opacity:1; }} }}
+  /* LP-2/3 实时 AI 状态卡（CURRENT STATE + AI 看到了 + 为什么关注 + 下一步） */
+  .live-ai-state {{ margin-top:12px; background:#0e1726; border:1px solid #1e2a3a;
+                    border-radius:8px; padding:12px 14px; }}
+  .ai-row {{ display:flex; gap:12px; align-items:baseline; padding:5px 0;
+            border-bottom:1px solid #1e2a3a; }}
+  .ai-row:last-child {{ border-bottom:none; }}
+  .ai-k {{ flex:0 0 92px; color:#8a9bb0; font-size:12px; font-weight:600;
+          letter-spacing:.5px; text-transform:uppercase; }}
+  .ai-v {{ color:#e6edf3; font-size:14px; }}
+  .ai-current .ai-risk {{ font-size:15px; font-weight:700; color:#7dffb0; }}
+  .ai-risk.high {{ color:#ff6b6b; }}
+  .ai-risk.medium {{ color:#ffb84d; }}
+  /* LP-4 Toast 事件涌现（右下角飞入，新事件/风险变化的视觉反馈） */
+  #live-toasts {{ position:fixed; bottom:20px; right:20px; z-index:99;
+                 display:flex; flex-direction:column; gap:8px; }}
+  .live-toast {{ background:#1c2733; color:#fff; padding:10px 14px; border-radius:8px;
+                font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.25);
+                animation:toast-in .3s ease; }}
+  .live-toast.out {{ opacity:0; transform:translateY(8px); transition:all .4s; }}
+  @keyframes toast-in {{ from {{ opacity:0; transform:translateY(8px); }} to {{ opacity:1; transform:none; }} }}
   .media-timeline {{ display:flex; gap:8px; align-items:center; margin:10px 0 4px;
                      background:#f0f4f9; border:1px solid #e3e8ee; border-radius:8px;
                      padding:8px 12px; }}
@@ -1624,8 +1675,8 @@ def render_case_viewer(
 </head>
 <body>
 <div class="wrap">
-  <h1>银龄盾 · 安全案例回放</h1>
-  <p class="subtitle">一次运行，看懂一起安全案例：发生了什么 → 为什么值得关注 → 系统做了什么</p>
+  <h1>{page_title}</h1>
+  <p class="subtitle">{page_subtitle}</p>
   {ci_badge}
   <p class="prov-note">{_R._esc(prov_note)}</p>
   {''.join(scenario_blocks)}

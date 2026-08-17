@@ -15,6 +15,18 @@
   var _REF_PREFIX = 'live://';
   var _MARKERS = { VISION: '👁', AUDIO: '🔊', ACTION: '⚡' };
   var _COLORS = { VISION: '#4a90d9', AUDIO: '#9b59b6', ACTION: '#d68910' };
+  // LP-2：检测 class → 人话标签（仅视觉类别，非语义判定 VM-9）。
+  var _CLASS_ZH = { person: '人', car: '车辆', dog: '动物', cat: '动物' };
+  // LP-2：音频 kind → 人话标签（与 live_adapter._AUDIO_KIND_ZH 语义对齐，回落原枚举）。
+  var _AUDIO_KIND_ZH = {
+    audio_voice_raised: '音高升高',
+    audio_speech_rapid: '语速加快',
+    audio_distress_cry: '哭腔/求助',
+    audio_telephone_persistent: '持续电话声',
+    audio_anomaly_other: '其他声学异常'
+  };
+  // LP-2：实时感知聚合状态（视觉 + 音频），perception_delta 更新 vision、evidence_delta 更新 audio。
+  var seeState = { vision: [], audio: [] };
   var seenRefs = new Set();
   var seenAudio = new Set();
   var seenCaseTime = new Set();
@@ -25,6 +37,26 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // LP-4：Toast 事件涌现（右下角飞入，3.2s 后淡出）。新证据/风险变化的视觉反馈。
+  function _toast(text) {
+    if (typeof global.document === 'undefined') return;
+    if (typeof global.document.createElement !== 'function') return;  // 测试/极端环境降级 no-op
+    var host = global.document.getElementById('live-toasts');
+    if (!host) {
+      host = global.document.createElement('div');
+      host.id = 'live-toasts';
+      global.document.body.appendChild(host);
+    }
+    var t = global.document.createElement('div');
+    t.className = 'live-toast';
+    t.textContent = text;
+    host.appendChild(t);
+    setTimeout(function () {
+      t.classList.add('out');
+      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 400);
+    }, 3200);
   }
 
   function _buildTimelineNode(n) {
@@ -94,6 +126,11 @@
     // 帧 overlay 检测数联动（LP-1：检测数与画面同帧同步）。
     var od = global.document.getElementById('ov-det-' + sid);
     if (od) od.textContent = (msg.detections || []).length;
+    // LP-2：更新"AI 看到了"视觉部分（人话 class，非裸 bbox）。
+    seeState.vision = (msg.detections || []).map(function (d) {
+      return { class: _CLASS_ZH[d.class] || d.class };
+    });
+    _renderSee();
     // 端到端延迟样本（server_ts 为网关 time.time()，仅延迟度量，不进 EvidenceProjection）。
     if (msg.server_ts != null) {
       var now = Date.now();
@@ -111,6 +148,8 @@
       var ul = global.document.querySelector('.timeline');
       if (!ul) return;
       ul.insertAdjacentHTML('beforeend', _buildTimelineNode(n));
+      // LP-4：新事件涌现 toast（非 session 根节点才提示，避免首连刷屏）。
+      if (n.type !== 'session' && n.summary) _toast(n.summary);
     });
     // audio 证据行追加（幂等：event_id 去重）
     (msg.audio || []).forEach(function (a) {
@@ -120,6 +159,10 @@
       var table = global.document.querySelector('table.audio-table');
       if (!table) return;
       table.insertAdjacentHTML('beforeend', _buildAudioRow(a));
+      // LP-2：更新"AI 听到了"音频部分（人话 kind）。
+      var kz = _AUDIO_KIND_ZH[a.kind] || a.kind;
+      if (seeState.audio.indexOf(kz) < 0) seeState.audio.push(kz);
+      _renderSee();
     });
     // Case Time 标记追加（幂等：kind@time 去重）
     (msg.case_time || []).forEach(function (m) {
@@ -146,6 +189,53 @@
     if (badge) badge.style.display = 'inline-flex';
     var f = global.document.getElementById('ov-frame-' + sid);
     if (f) f.textContent = msg.frame_index;
+  }
+
+  // LP-2：渲染"AI 看到了"（视觉 + 音频聚合的人话感知，非裸 bbox 数字）。
+  function _renderSee() {
+    var el = global.document.getElementById('ai-see-' + sid);
+    if (!el) return;
+    var parts = [];
+    if (seeState.vision.length) {
+      parts.push(seeState.vision.map(function (d) {
+        return '👤 ' + _esc(d.class);
+      }).join(' · '));
+    } else {
+      parts.push('画面中暂无人物');
+    }
+    if (seeState.audio.length) {
+      parts.push('🔊 ' + seeState.audio.join(' · '));
+    }
+    el.textContent = parts.join('　');
+  }
+
+  // LP-3：实时风险与决策（risk_delta → CURRENT STATE / 为什么关注 / 下一步）。
+  function _applyRiskDelta(msg) {
+    var riskEl = global.document.getElementById('ai-risk-' + sid);
+    var whyEl = global.document.getElementById('ai-why-' + sid);
+    var nextEl = global.document.getElementById('ai-next-' + sid);
+    var levels = msg.risk_levels || [];
+    var reasons = msg.reason_summary || [];
+    var actions = msg.recommended_actions || [];
+    var commands = msg.command_types || [];
+    // CURRENT STATE：有风险级别 → 展示之；无 → MONITOR（继续观察）。
+    if (riskEl) {
+      var state = levels.length ? levels.join(' / ') : 'MONITOR';
+      riskEl.textContent = state;
+      var cls = 'ai-v ai-risk';
+      if (levels.indexOf('HIGH') >= 0) cls += ' high';
+      else if (levels.indexOf('MEDIUM') >= 0) cls += ' medium';
+      riskEl.className = cls;
+    }
+    // LP-4：风险变化 toast（仅当有风险级别时，避免无风险帧刷屏）。
+    if (levels.length) _toast('风险变化：' + levels.join(' / '));
+    // 为什么关注：人话 reason_summary（无"诈骗/犯罪"字样）；空 → 诚实"—"。
+    if (whyEl) whyEl.textContent = reasons.length ? reasons.join(' · ') : '—';
+    // 下一步：优先 recommended_actions（策略建议），其次 command_types（实际命令）。
+    if (nextEl) {
+      var next = actions.length ? actions : commands;
+      nextEl.textContent = next.length ? next.join(' · ') : '继续观察';
+    }
   }
 
   function _init() {
@@ -176,6 +266,7 @@
       if (msg.type === 'evidence_delta') _applyDelta(msg);
       else if (msg.type === 'perception_delta') _applyPerceptionDelta(msg);
       else if (msg.type === 'frame_tick') _applyFrame(msg);
+      else if (msg.type === 'risk_delta') _applyRiskDelta(msg);
     };
   }
 
