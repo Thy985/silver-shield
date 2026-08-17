@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -118,6 +119,8 @@ class DemoGateway:
         # 绝不改变生产行为（VM-1/VM-9 边界：浏览器只渲染、不推理）。
         self._prev_evidence_fp: dict | None = None
         self._delta_seq = 0
+        # P1-A 实时感知状态流：检测指纹基线（变化才推，避免 8fps 全量刷原始框）。
+        self._prev_perception_fp = None
 
         # 循环控制
         self._running = False
@@ -278,6 +281,21 @@ class DemoGateway:
                     await self.hub.broadcast(delta)
             except Exception as exc:  # noqa: BLE001
                 structlog.get_logger(__name__).warning("evidence_delta_failed", exc_info=exc)
+
+            # P1-A 实时感知状态流（perception_delta）：事实的实时投影（class/bbox/confidence），
+            # 检测指纹变化才推；浏览器只渲染、零推理（VM-9）。带 case_time（帧序×帧间隔）
+            # + server_ts（墙钟，仅延迟度量，不进 EvidenceProjection）。失败隔离。
+            try:
+                acc = self._ensure_live_accumulator()
+                pdelta = acc.extract_perception_delta(self._prev_perception_fp)
+                self._prev_perception_fp = acc.perception_fingerprint()
+                if pdelta.get("detections"):
+                    interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
+                    pdelta["case_time"] = round(self._frame_index * interval, 3)
+                    pdelta["server_ts"] = time.time()
+                    await self.hub.broadcast(pdelta)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning("perception_delta_failed", exc_info=exc)
 
             self._frame_index += 1
             if interval > 0:
@@ -530,6 +548,8 @@ class DemoGateway:
         # P0 delta 基线同步重置（新会话 = 新投影，避免陈旧指纹造成首帧全量重发）
         self._prev_evidence_fp = None
         self._delta_seq = 0
+        # P1-A 感知指纹同步重置
+        self._prev_perception_fp = None
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())

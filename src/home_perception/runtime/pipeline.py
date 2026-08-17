@@ -151,6 +151,10 @@ class FrameResult:
     perception_events: list[PerceptionEvent] = field(default_factory=list)
     warnings: list[WarningEvent] = field(default_factory=list)
     commands: list[Any] = field(default_factory=list)
+    # —— P1-A 实时感知状态流（Owner 2026-08-17 拍板）：detections 携带本帧原始检测
+    # （class_name/bbox/confidence），供 Live 展示层做**事实投影**（非原始仓库——投影层
+    # 只取结构化子集 + 窗口裁剪）。默认空列表 = 向后兼容（flag 关闭时与基线逐字段一致）。
+    detections: list[Detection] = field(default_factory=list)
     # —— Stage B 新增（默认空列表 = 向后兼容，flag 关闭时与基线逐字段一致）——
     # behavior_states 即实时观察（Observation）：每帧在场访客的纯实时快照，
     # 供 Demo Dashboard / 调试层展示"此刻门口正在发生什么"。Stage B 不产信号。
@@ -850,6 +854,7 @@ class PerceptionPipeline:
             perception_events=perception_events,
             warnings=warnings,
             commands=commands,
+            detections=dets,
             behavior_states=behavior_states,
             risk_signals=risk_signals,
             reasoning_results=reasoning_results,

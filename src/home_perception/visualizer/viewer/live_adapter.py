@@ -96,6 +96,9 @@ class LiveFrame(TypedDict):
     risk_levels: tuple[str, ...]       # 来自 warnings[].risk_level
     recommended_actions: tuple[str, ...]  # 来自 warnings[].recommended_action
     command_types: tuple[str, ...]     # 来自 commands[].command_type
+    # P1-A：本帧检测的结构化子集（class/bbox/confidence，非原始 Detection 对象——
+    # 事实投影：只保留产品渲染所需字段，坐标 round、数量裁剪）。默认空 tuple。
+    detections: tuple[dict, ...]
 
 
 _MISSING = object()
@@ -286,6 +289,31 @@ def _iter_of(obj: Any, key: str) -> list[Any]:
     return list(value)
 
 
+# P1-A 检测子集裁剪上限：每帧最多投影 N 个检测（事实投影，非原始 detector 仓库）。
+_MAX_DETECTIONS = 8
+
+
+def _detection_bbox(d: Any, idx: int) -> float:
+    """读检测 bbox 第 idx 维（[x1,y1,x2,y2]，round 3 位；缺/非 4 元 → fail-closed）。"""
+    bbox = _pick(d, "bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise LiveIngestError(
+            f"detection.bbox 必须是 4 元 [x1,y1,x2,y2]，收到 {bbox!r}（fail-closed）"
+        )
+    v = bbox[idx]
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        raise LiveIngestError(f"detection.bbox[{idx}] 必须是数值，收到 {v!r}（fail-closed）")
+    return round(float(v), 3)
+
+
+def _detection_confidence(d: Any) -> float:
+    """读检测置信度（round 3 位；缺/非数值 → fail-closed）。"""
+    v = _pick(d, "confidence")
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        raise LiveIngestError(f"detection.confidence 必须是数值，收到 {v!r}（fail-closed）")
+    return round(float(v), 3)
+
+
 def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
     """``FrameResult`` 契约 → ``LiveFrame``（鸭子类型映射，不 import 生产类型，VM-3）。
 
@@ -314,6 +342,20 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
     for c in _iter_of(frame_result, "commands"):
         command_types.append(_require_str(c, "command_type"))
 
+    # P1-A：结构化检测子集（事实投影，非原始 Detection 仓库）。鸭子类型读
+    # class_name/bbox/confidence；坐标/置信度 round 到 3 位、数量裁剪，防膨胀。
+    detections: list[dict] = []
+    for d in _iter_of(frame_result, "detections"):
+        detections.append(
+            {
+                "class": _require_str(d, "class_name"),
+                "bbox": [_detection_bbox(d, i) for i in range(4)],
+                "confidence": _detection_confidence(d),
+            }
+        )
+    if len(detections) > _MAX_DETECTIONS:
+        detections = detections[:_MAX_DETECTIONS]
+
     return LiveFrame(
         frame_index=frame_index,
         n_detections=n_detections,
@@ -322,6 +364,7 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
         risk_levels=tuple(risk_levels),
         recommended_actions=tuple(recommended_actions),
         command_types=tuple(command_types),
+        detections=tuple(detections),
     )
 
 
@@ -375,6 +418,9 @@ class ProjectionAccumulator:
         self._audio_dedup_keys: set[str] = set()
         # P0-1 处置闭环：Resolution 事实累计序号（确定性 ref 标签）。
         self._resolution_index = 0
+        # P1-A：最近一帧检测子集（覆盖式"当前感知状态"，生命周期=最近一帧）。
+        self._last_detections: tuple[dict, ...] = ()
+        self._last_detection_frame: int = -1
 
     @property
     def n_frames(self) -> int:
@@ -633,11 +679,41 @@ class ProjectionAccumulator:
             },
         }
 
+    # ------------------------------------------------------------------
+    # P1-A 实时感知状态流（Live Perception Delta · Owner 2026-08-17 拍板）
+    # ------------------------------------------------------------------
+    # 事实的实时投影（非原始 detector 仓库）：只保留产品渲染所需的结构化字段
+    # （class/bbox/confidence），覆盖式"当前感知状态"（生命周期=最近一帧），
+    # 检测指纹未变 → 不推（避免 8fps 全量刷原始框）。浏览器只渲染、零推理。
+
+    def perception_fingerprint(self) -> tuple:
+        """当前检测指纹（class+bbox+confidence 元组，用于变化判定去重）。"""
+        return tuple(
+            (d["class"], tuple(d["bbox"]), d["confidence"]) for d in self._last_detections
+        )
+
+    def extract_perception_delta(self, prev_fp) -> dict:
+        """只读：对比 ``prev_fp`` 检测指纹 → perception_delta。
+
+        ``prev_fp=None``（首连）或指纹变化 → 携带当前检测子集；未变 → ``detections=()``
+        （无变化不推）。返回 ``{"type","frame_index","detections"}``。
+        """
+        cur = self.perception_fingerprint()
+        changed = (prev_fp is None) or (prev_fp != cur)
+        return {
+            "type": "perception_delta",
+            "frame_index": self._last_detection_frame,
+            "detections": [dict(d) for d in self._last_detections] if changed else [],
+        }
+
     def _accumulate(self, live: LiveFrame) -> None:
         self._recent_events.append({"kind": "frame", "frame": live})
         if len(self._recent_events) > self.window_size:
             # 确定性裁剪：仅保留末尾 window_size 事件（滚动窗口逐帧/逐音频细节）。
             self._recent_events = self._recent_events[-self.window_size:]
+        # P1-A：最近一帧检测子集（覆盖式，非累积——"当前感知状态"语义 + 明确生命周期）。
+        self._last_detections = live.get("detections", ())
+        self._last_detection_frame = live["frame_index"]
         self._total_frames += 1
         self._counts["perception_events"] += len(live["event_types"])
         self._counts["warnings"] += len(live["risk_levels"])

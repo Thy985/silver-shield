@@ -481,10 +481,19 @@ def _render_case_video(
             f'{_R._sanitize_for_js(json.dumps(inj, ensure_ascii=False))}</script>'
         )
 
+    # P1-A：Live 实时感知状态容器（仅 live 模式注入；由 live_stream.js 经 WS perception_delta
+    # 填充。浏览器只渲染服务端投影的结构化检测子集，零推理——VM-1/VM-9）。
+    live_perception = ""
+    if descriptor.get("live_ws_path"):
+        live_perception = (
+            f'<div class="live-perception" id="live-perception-{sid_html}" '
+            f'data-scenario="{sid_html}"></div>'
+        )
+
     return f"""
     <section class="fs-panel" id="fs-case-video-{sid_html}">
       <h3 class="view-anchor">Case Video（主轴）</h3>
-      <div class="case-video">{media_area}{media_timeline}{case_time}{binding_footnote}</div>
+      <div class="case-video">{media_area}{live_perception}{media_timeline}{case_time}{binding_footnote}</div>
       {manifest_island}
       <p class="muted">Case Video 叙事结构：{' → '.join(_CASE_VIDEO_NARRATIVE)}（VM-12 · 产品主视频，关联叙事而非分析回放）</p>
     </section>"""
