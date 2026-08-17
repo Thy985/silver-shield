@@ -349,30 +349,17 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
     </div>"""
 
 
-def _render_case_video(
+def _render_case_video_inner(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
     media_manifest: dict | None,
     media_base_url: str,
-) -> str:
-    """Case Video 主轴（D-CaseVideo · VM-12）+ Media Timeline（Case Time，VM-10/AC-14）。
+) -> tuple[str, str]:
+    """Case Video 内部内容 + manifest 数据岛（Artifact 面板与 Live 产品骨架区域①共用）。
 
-    Slice A.1 改造（对齐用户决策）：
-    - 媒体字节不进 View Model（VM-10/AC-11）：经 Media Source Adapter 解析的
-      ``media_manifest`` 只持 ref/template/count，画布用 ``<canvas>`` 实时绘制帧，
-      **绝不** base64 内联 660 帧；
-    - ``<video>`` 仅当源为 ``ArtifactVideoSource`` 且含 ``video_url``（原生控件播放；
-      P1 整改：加 ``autoplay muted playsinline``，10 秒内即可看到画面）；
-    - 绑定文案（源类型 + ref）**降级为脚注**（方案 3），不再占主轴 C 位；
-    - P11 整改：脚注的 ``source_kind`` / ``ref`` 从**已解析的 media_manifest** 读取
-      （manifest 与 prepare_case_media 登记的 ``ArtifactVideoSource`` 一致），而非
-      ``descriptor.media_binding`` 默认值（SyntheticFrameSource + 占位 ref，可能与
-      实际媒体矛盾）；无 manifest 时才显示"无媒体绑定"；
-    - 注入 ``media-manifest-{sid}`` 数据岛（manifest 的 frame_template 已叠加
-      ``media_base_url``），供前端 MediaPlayer 消费。
-
-    ``descriptor`` 参数保留：VM-11 纯展示编排的签名契约（测试直接调用本函数），
-    脚注事实以 manifest 为准（P11）。
+    返回 ``(inner_html, manifest_island)``：inner_html 为 ``.case-video`` 容器内的全部
+    内容（媒体区 + Live AI 状态卡 + Live 感知容器 + Media Timeline + Case Time + 绑定
+    脚注）；manifest_island 为 ``media-manifest-{sid}`` 数据岛（LiveFrameStream 为空串）。
     """
     sid = scenario["scenario_id"]
     sid_html = _R._esc(sid)
@@ -530,10 +517,32 @@ def _render_case_video(
             f'data-scenario="{sid_html}"></div>'
         )
 
+    inner_html = (
+        f"{media_area}{live_ai_state}{live_perception}"
+        f"{media_timeline}{case_time}{binding_footnote}"
+    )
+    return inner_html, manifest_island
+
+
+def _render_case_video(
+    scenario: ScenarioEvidence,
+    descriptor: CasePresentationDescriptor,
+    media_manifest: dict | None,
+    media_base_url: str,
+) -> str:
+    """Case Video 主轴（D-CaseVideo · VM-12）+ Media Timeline（Case Time，VM-10/AC-14）。
+
+    面板壳（``fs-panel`` + 叙事脚注）；内部内容经 ``_render_case_video_inner`` 构建，
+    与 Live 产品骨架区域①共用同一构建器（单一事实源，防漂移）。
+    """
+    sid_html = _R._esc(scenario["scenario_id"])
+    inner_html, manifest_island = _render_case_video_inner(
+        scenario, descriptor, media_manifest, media_base_url
+    )
     return f"""
     <section class="fs-panel" id="fs-case-video-{sid_html}">
       <h3 class="view-anchor">Case Video（主轴）</h3>
-      <div class="case-video">{media_area}{live_ai_state}{live_perception}{media_timeline}{case_time}{binding_footnote}</div>
+      <div class="case-video">{inner_html}</div>
       {manifest_island}
       <p class="muted">Case Video 叙事结构：{' → '.join(_CASE_VIDEO_NARRATIVE)}（VM-12 · 产品主视频，关联叙事而非分析回放）</p>
     </section>"""
@@ -958,6 +967,186 @@ def _render_action_closure(
 
 
 # ---------------------------------------------------------------------------
+# Live 产品骨架（DESIGN-live-product-ui-restore · Owner 2026-08-17 批准）
+# 初版 Demo 产品信息架构（阶段叙事 tabs + 6 区域 12 列 Grid）× EvidenceProjection 事实流
+# ---------------------------------------------------------------------------
+
+# PR-A：阶段叙事 tabs 切换客户端（Live 专属；可直切，不强制顺序）。
+_LIVE_TABS_FILENAME = "live_tabs.js"
+
+
+def _live_tabs_inline() -> str:
+    """内联阶段叙事 tabs 客户端（缺失时降级为空串——三视图堆叠可见，不崩）。"""
+    p = _R._ASSETS_DIR / _LIVE_TABS_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def _render_live_role_view(scenario: ScenarioEvidence, role: str) -> str:
+    """Tab ②/③ 角色聚焦视图（家属确认 / 社区处置）。
+
+    - 与主视图 ④ 行动闭环**共享同一 WS 会话与状态机**（切 Tab 不重连，live_actions.js
+      经 ``.closure-tabview[data-scenario]`` 同步渲染状态徽章与按钮禁用态）；
+    - 按钮/状态徽章为 UI/Workflow 态（不进 EvidenceProjection，VM-1）；
+    - 视图切换纯 ``[hidden]``（live_tabs.js），无事实再造。
+    """
+    sid_html = _R._esc(scenario["scenario_id"])
+    if role == "family":
+        idx, title, tag = "②", "家属确认", "SEND_FAMILY_MESSAGE"
+        buttons = (
+            f'<button class="rp-btn closure-btn" data-operator="family" '
+            f'data-action="acknowledge" id="tabview-family-ack-{sid_html}">我知道了</button>'
+            f'<button class="rp-btn closure-btn" data-operator="family" '
+            f'data-action="notify_community" id="tabview-family-notify-{sid_html}">通知社区</button>'
+        )
+        hint = "家属视角：确认「我知道了」或「通知社区」，与主视图 ④ 行动闭环共享同一状态机。"
+    else:
+        idx, title, tag = "③", "社区处置", "CREATE_COMMUNITY_TASK"
+        buttons = (
+            f'<button class="rp-btn closure-btn" data-operator="community" '
+            f'data-action="accept" id="tabview-community-accept-{sid_html}">接受任务</button>'
+            f'<button class="rp-btn closure-btn" data-operator="community" '
+            f'data-action="complete" id="tabview-community-complete-{sid_html}">完成处置</button>'
+        )
+        hint = "社区视角：接受任务并完成处置，与主视图 ④ 行动闭环共享同一状态机。"
+    return f"""
+  <div class="live-view" id="view-{role}-{sid_html}" hidden>
+    <section class="region lv-roleview">
+      <h2>{idx} {title} <span class="tag">{tag}</span></h2>
+      <div class="body">
+        <div class="closure-tabview" data-role="{role}" data-scenario="{sid_html}">
+          <div class="closure-warning" id="tabview-{role}-warning-{sid_html}">暂无待处置警告（实时会话未触发风险）</div>
+          <div class="closure-role">
+            <div class="closure-role-title">{'家属端' if role == 'family' else '社区端'}</div>
+            <div class="closure-status" id="tabview-{role}-status-{sid_html}">—</div>
+            <div class="closure-actions">{buttons}</div>
+          </div>
+        </div>
+        <p class="muted">{_R._esc(hint)}</p>
+      </div>
+    </section>
+  </div>"""
+
+
+def _render_live_shell(
+    scenario: ScenarioEvidence,
+    descriptor: CasePresentationDescriptor,
+    panels: tuple[str, ...],
+    media_manifest: dict | None,
+    media_base_url: str,
+    audio_manifest: dict | None,
+    audio_base_url: str,
+) -> tuple[str, str]:
+    """Live 产品骨架（PR-A）：阶段叙事 tabs + 6 区域 12 列 Grid + Live 帧流容器。
+
+    纪律（DESIGN-live-product-ui-restore §3/§7）：
+    - **UI 蓝图 = 初版 Demo，事实架构 = 现状**：本函数只做**展示编排**（VM-11），
+      全部内容仍消费既有构建器（``_render_case_video_inner`` / ``_R._render_timeline``
+      / ``_render_action_closure`` / 详细证据折叠区），**零新事实**；
+    - 数据源唯一：``EvidenceProjection`` + delta 流（frame_tick / evidence_delta /
+      perception_delta / risk_delta / state_update），无第二套 view model；
+    - tab ②/③ 角色视图与 ④ 行动闭环共享 WS 状态机（切 Tab 不重连）；
+    - ③ 风险解释卡片区域在 PR-A 为占位（``_render_current_risk`` 投影卡），PR-B 恢复
+      初版 ✓ 人话卡格式；③.5 实时风险信号 / ⑥ Memory Context 为诚实占位（PR-B/C 补全）。
+    """
+    sid = scenario["scenario_id"]
+    sid_html = _R._esc(sid)
+    # 图 IIFE（详细证据折叠区：主 Evidence Graph + Cross Modal 子图）
+    g_html, g_js = _R._render_evidence_graph(scenario)
+    cm_html, cm_js = _R._render_graph(scenario)
+
+    # 区域①：Live 帧流容器（与 Artifact Case Video 共用内部构建器，单一事实源）。
+    video_inner, manifest_island = _render_case_video_inner(
+        scenario, descriptor, media_manifest, media_base_url
+    )
+    # 区域②：实时音频摘要（无音频证据 → 空串，AC-12）+ 统一 Evidence Timeline。
+    audio_panel = _render_audio_perception(scenario, audio_manifest, audio_base_url)
+    timeline_html = _R._render_timeline(scenario)
+    # 区域④：行动闭环面板（live descriptor 含 action_closure；缺省 → 诚实占位）。
+    if "action_closure" in panels:
+        closure_body = _render_action_closure(scenario, descriptor)
+    else:
+        closure_body = (
+            '<div class="tl-empty">行动闭环未启用（descriptor 未声明 action_closure 面板）</div>'
+        )
+
+    # 详细证据（二级视图，折叠）：为什么 / 系统行动 / 音频明细 / Graph / Fingerprint / Gate。
+    details = f"""
+      <section class="fs-panel" id="fs-details-{sid_html}">
+        <details>
+          <summary>详细证据（为什么 / 系统行动 / 音频 / Graph / Fingerprint / Gate）</summary>
+          <p class="muted">场景标识：<code>{sid_html}</code> · mode={_R._esc(scenario['mode'])} · frames={scenario['n_frames']}</p>
+          <h3 class="view-anchor">为什么值得关注</h3>
+          {_R._render_decision(scenario)}
+          <h3 class="view-anchor">系统行动</h3>
+          {_render_action(scenario)}
+          {_R._render_audio_evidence(scenario)}
+          <h3 class="view-anchor">Evidence Graph（因果链）</h3>
+          {g_html}
+          <h3 class="view-anchor">Cross Modal Graph（supports 子图）</h3>
+          {cm_html}
+          <h3 class="view-anchor">Fingerprint / Gate</h3>
+          {_R._render_gate(scenario)}
+        </details>
+      </section>"""
+
+    html_block = f"""
+    <section class="scenario live-scenario" data-scenario="{sid_html}">
+      {_render_provenance_banner(scenario)}
+      <nav class="tabs" id="role-tabs-{sid_html}" data-live-tabs data-scenario="{sid_html}">
+        <button type="button" class="tab active" data-view="discover">① 风险发现</button>
+        <button type="button" class="tab" data-view="family">② 家属确认</button>
+        <button type="button" class="tab" data-view="community">③ 社区处置</button>
+      </nav>
+      <div class="live-view" id="view-discover-{sid_html}">
+        <div class="live-grid">
+          <section class="region lv-video">
+            <h2>① 实时视频 <span class="tag">Home 端实时画面</span></h2>
+            <div class="body">
+              <div class="case-video">{video_inner}</div>
+              {manifest_island}
+            </div>
+          </section>
+          <section class="region lv-risk">
+            <h2>③ 风险解释卡片 <span class="tag">人话原因 · 建议动作</span></h2>
+            <div class="body" id="live-risk-{sid_html}">
+              {_render_current_risk(scenario)}
+              <p class="muted">风险卡 ✓ 人话格式随 risk_delta 实时恢复（PR-B）。</p>
+            </div>
+          </section>
+          <section class="region lv-timeline">
+            <h2>② AI 行为时间线 <span class="tag">感知 → 风险 → 行动</span></h2>
+            <div class="body">{audio_panel}{timeline_html}</div>
+          </section>
+          <section class="region lv-signal">
+            <h2>③.5 实时风险信号 <span class="tag">RAISED / CLEARED</span></h2>
+            <div class="body">
+              <div id="live-signals-{sid_html}"></div>
+              <div class="tl-empty" id="live-signals-empty-{sid_html}">当前无进行中风险信号</div>
+            </div>
+          </section>
+          <section class="region lv-closure">
+            <h2>④ 行动闭环 <span class="tag">家属 / 社区协同处置</span></h2>
+            <div class="body">{closure_body}</div>
+          </section>
+          <section class="region lv-memory">
+            <h2>⑥ Memory Context <span class="tag">认知层 · 只读</span></h2>
+            <div class="body">
+              <div class="tl-empty">🧠 Memory Context · Not connected（认知层未接入 Live Runtime）</div>
+            </div>
+          </section>
+        </div>
+        {details}
+      </div>
+      {_render_live_role_view(scenario, "family")}
+      {_render_live_role_view(scenario, "community")}
+    </section>"""
+    js_block = "\n".join(x for x in (g_js, cm_js) if x).strip()
+    return html_block, js_block
+
+
+# ---------------------------------------------------------------------------
 # 单场景组装（首屏叙事 + 折叠详细证据）
 # ---------------------------------------------------------------------------
 
@@ -1140,8 +1329,23 @@ def _render_scenario_case(
     media_base_url: str,
     audio_manifest: dict | None = None,
     audio_base_url: str = "",
+    live_shell: bool = False,
 ) -> tuple[str, str]:
-    """单场景 HTML + 该场景的 graph/media JS（一次遍历产出两块，评审 R3-#3 对称）。"""
+    """单场景 HTML + 该场景的 graph/media JS（一次遍历产出两块，评审 R3-#3 对称）。
+
+    ``live_shell=True``（Live 产品骨架，DESIGN-live-product-ui-restore PR-A）→ 阶段叙事
+    tabs + 6 区域 Grid；``False``（默认）→ ADR-0036 竖向瀑布流（Artifact / 旗舰路径不变）。
+    """
+    if live_shell:
+        return _render_live_shell(
+            scenario,
+            descriptor,
+            panels,
+            media_manifest,
+            media_base_url,
+            audio_manifest,
+            audio_base_url,
+        )
     sid = scenario["scenario_id"]
     sid_html = _R._esc(sid)
     status = "PASS" if scenario["ok"] else "FAIL"
@@ -1392,6 +1596,7 @@ def render_case_viewer(
             media_base_url,
             audio_manifests.get(s["scenario_id"]),
             audio_base_url,
+            live_shell=live_frame_stream,
         )
         scenario_blocks.append(html_block)
         if js_block:
@@ -1433,9 +1638,29 @@ def render_case_viewer(
     if live_frame_stream:
         page_title = "银龄盾 · 居家智能守护中"
         page_subtitle = "AI 正在实时理解居家状态：谁在门口 → 发生了什么 → AI 怎么判断 → 系统怎么响应"
+        # PR-A：Live 产品 header（初版 topbar 蓝图）——标题 + Demo 数据真实性声明（角标，
+        # 点开说明）+ WS 连接 pill（live_stream.js 实时维护 未连接/已连接）。
+        page_header = f"""
+  <header class="topbar">
+    <div class="topbar-main">
+      <h1>{page_title}</h1>
+      <p class="subtitle">{page_subtitle}</p>
+    </div>
+    <span class="spacer"></span>
+    <details class="auth-badge">
+      <summary>Demo 数据真实性声明</summary>
+      <p>本页面为受控演示输入（确定性场景 / 视频源）驱动的实时运行，非 7×24 真实设备直连；
+      风险等级为规则命中强度，非诈骗概率判定。</p>
+    </details>
+    <span class="pill offline" id="ws-pill"><span class="dot"></span><span id="ws-text">未连接</span></span>
+  </header>"""
     else:
         page_title = "银龄盾 · 安全案例回放"
         page_subtitle = "一次运行，看懂一起安全案例：发生了什么 → 为什么值得关注 → 系统做了什么"
+        page_header = f"<h1>{page_title}</h1>\n  <p class=\"subtitle\">{page_subtitle}</p>"
+
+    # PR-A：阶段叙事 tabs 客户端（仅 Live 骨架注入；Artifact 无 tabs，零成本）。
+    live_tabs_js = _live_tabs_inline() if live_frame_stream else ""
 
     return f"""<!DOCTYPE html>
 <html lang="zh">
@@ -1671,12 +1896,60 @@ def render_case_viewer(
   .glossary ul {{ margin:8px 0 0; padding-left:20px; font-size:13px; }}
   .glossary li {{ margin:3px 0; }}
   code {{ background:#eef2f7; border-radius:4px; padding:1px 5px; font-size:12px; }}
+  /* ===== Live 产品骨架（PR-A · 初版 Demo 产品 IA × EvidenceProjection 事实流） ===== */
+  /* header topbar：标题 + 真实性声明角标 + WS 连接 pill */
+  .topbar {{ display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+             background:#fff; border:1px solid #e3e8ee; border-radius:10px;
+             padding:12px 16px; margin-bottom:14px; }}
+  .topbar-main {{ min-width:0; }}
+  .spacer {{ flex:1 1 auto; }}
+  .pill {{ display:inline-flex; align-items:center; gap:6px; padding:4px 10px;
+           border-radius:999px; font-size:12px; font-weight:600;
+           border:1px solid #e3e8ee; background:#f8fafc; }}
+  .pill .dot {{ width:8px; height:8px; border-radius:50%; background:#6b7a8a; }}
+  .pill.online .dot {{ background:#2e9e6b; box-shadow:0 0 0 3px rgba(46,158,107,.18); }}
+  .pill.offline .dot {{ background:#d64541; }}
+  .auth-badge {{ font-size:11px; color:#92400e; background:#fef3c7; border:1px solid #fde68a;
+                 border-radius:999px; font-weight:600; }}
+  .auth-badge summary {{ cursor:pointer; padding:3px 9px; list-style:none; }}
+  .auth-badge[open] {{ border-radius:10px; }}
+  .auth-badge p {{ margin:6px 9px 8px; font-weight:400; font-size:12px; color:#7a5a00;
+                   max-width:420px; line-height:1.5; }}
+  /* 阶段叙事 tabs（默认停①，可直切，不强制顺序） */
+  .tabs {{ display:flex; gap:6px; margin:14px 0 0; padding:0 4px;
+           border-bottom:1px solid #e3e8ee; }}
+  .tab {{ background:transparent; border:1px solid #e3e8ee; border-bottom:none;
+          border-radius:8px 8px 0 0; padding:8px 16px; font-size:13px; font-weight:600;
+          color:#6b7a8a; cursor:pointer; transition:.15s; }}
+  .tab:hover {{ background:#fff; color:#1c2733; }}
+  .tab.active {{ background:#fff; color:#1c4f7c; border-color:#4a90d9;
+                 border-bottom:1px solid #fff; margin-bottom:-1px; }}
+  .live-view[hidden] {{ display:none; }}
+  /* 12 列 Grid + 6 区域（初版蓝图；region 类名加 lv- 前缀防与 renderer 既有类冲突） */
+  .live-grid {{ display:grid; grid-template-columns:repeat(12,1fr); gap:14px; margin-top:14px; }}
+  .region {{ background:#fff; border:1px solid #e3e8ee; border-radius:10px;
+             display:flex; flex-direction:column; min-width:0; }}
+  .region > h2 {{ margin:0; padding:10px 14px; font-size:14px; font-weight:700;
+                  border-bottom:1px solid #e3e8ee; display:flex; align-items:center; gap:8px; }}
+  .region > h2 .tag {{ font-size:11px; font-weight:600; color:#1c4f7c; background:#dcebfb;
+                       padding:2px 8px; border-radius:999px; }}
+  .region .body {{ padding:12px 14px; overflow:auto; }}
+  .lv-video {{ grid-column:span 8; }}
+  .lv-risk {{ grid-column:span 4; }}
+  .lv-timeline {{ grid-column:span 8; }}
+  .lv-signal {{ grid-column:span 4; }}
+  .lv-closure {{ grid-column:span 8; }}
+  .lv-memory {{ grid-column:span 4; }}
+  .lv-roleview {{ grid-column:span 12; margin-top:14px; }}
+  .tl-empty {{ color:#6b7a8a; font-size:12px; text-align:center; padding:20px 0; }}
+  @media (max-width: 960px) {{
+    .lv-video, .lv-risk, .lv-timeline, .lv-signal, .lv-closure, .lv-memory {{ grid-column:span 12; }}
+  }}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>{page_title}</h1>
-  <p class="subtitle">{page_subtitle}</p>
+  {page_header}
   {ci_badge}
   <p class="prov-note">{_R._esc(prov_note)}</p>
   {''.join(scenario_blocks)}
@@ -1709,6 +1982,9 @@ def render_case_viewer(
 </script>
 <script>
 {live_stream_js}
+</script>
+<script>
+{live_tabs_js}
 </script>
 <script>
 {story_replay_js}
