@@ -91,6 +91,9 @@
       (msg.case_time != null ? ' · ' + Number(msg.case_time).toFixed(1) + 's' : '');
     el.innerHTML = '<div class="lp-head">Visual perception <span class="muted">' + head + '</span></div>' +
       (rows ? '<ul>' + rows + '</ul>' : '<span class="muted">（当前无检测）</span>');
+    // 帧 overlay 检测数联动（LP-1：检测数与画面同帧同步）。
+    var od = global.document.getElementById('ov-det-' + sid);
+    if (od) od.textContent = (msg.detections || []).length;
     // 端到端延迟样本（server_ts 为网关 time.time()，仅延迟度量，不进 EvidenceProjection）。
     if (msg.server_ts != null) {
       var now = Date.now();
@@ -132,6 +135,19 @@
     if (msg.counts && msg.counts.n_frames != null) _updateFrames(msg.counts.n_frames);
   }
 
+  // LP-1：真实同步帧流（frame_tick → <img> 显示 base64 JPEG，浏览器零推理 VM-9）。
+  // Frame N 的画面与同帧 detection（perception_delta，case_time = N×interval）天然同步。
+  function _applyFrame(msg) {
+    var img = global.document.getElementById('video-img-' + sid);
+    if (img && msg.frame_base64) {
+      img.src = 'data:image/jpeg;base64,' + msg.frame_base64;
+    }
+    var badge = global.document.getElementById('live-badge-' + sid);
+    if (badge) badge.style.display = 'inline-flex';
+    var f = global.document.getElementById('ov-frame-' + sid);
+    if (f) f.textContent = msg.frame_index;
+  }
+
   function _init() {
     if (typeof global.document === 'undefined' || typeof WebSocket === 'undefined') return;
     var code = global.document.querySelector('.scenario-title code');
@@ -159,6 +175,7 @@
       if (!msg) return;
       if (msg.type === 'evidence_delta') _applyDelta(msg);
       else if (msg.type === 'perception_delta') _applyPerceptionDelta(msg);
+      else if (msg.type === 'frame_tick') _applyFrame(msg);
     };
   }
 
