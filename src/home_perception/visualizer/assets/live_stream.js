@@ -238,6 +238,15 @@
     }
   }
 
+  // PR-A：WS 连接状态 pill（header 实时反馈 未连接/已连接；元素缺失 → no-op）。
+  function _setWsPill(online) {
+    var pill = global.document.getElementById('ws-pill');
+    if (!pill) return;
+    pill.className = 'pill ' + (online ? 'online' : 'offline');
+    var t = global.document.getElementById('ws-text');
+    if (t) t.textContent = online ? '已连接' : '未连接';
+  }
+
   function _init() {
     if (typeof global.document === 'undefined' || typeof WebSocket === 'undefined') return;
     var code = global.document.querySelector('.scenario-title code');
@@ -253,21 +262,32 @@
     for (var i = 0; i < items.length; i++) seenRefs.add(items[i].getAttribute('data-ref'));
     var panel = global.document.querySelector('.closure-panel');
     var wsPath = (panel && panel.getAttribute('data-ws-path')) || '/ws';
-    try {
-      ws = new WebSocket(
-        (global.location.protocol === 'https:' ? 'wss://' : 'ws://') +
-        global.location.host + wsPath
-      );
-    } catch (e) { return; }
-    ws.onmessage = function (evt) {
-      var msg;
-      try { msg = JSON.parse(evt.data); } catch (e) { return; }
-      if (!msg) return;
-      if (msg.type === 'evidence_delta') _applyDelta(msg);
-      else if (msg.type === 'perception_delta') _applyPerceptionDelta(msg);
-      else if (msg.type === 'frame_tick') _applyFrame(msg);
-      else if (msg.type === 'risk_delta') _applyRiskDelta(msg);
-    };
+    var reconnectTimer = null;
+    function _scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(function () { reconnectTimer = null; _connect(); }, 2500);
+    }
+    function _connect() {
+      try {
+        ws = new WebSocket(
+          (global.location.protocol === 'https:' ? 'wss://' : 'ws://') +
+          global.location.host + wsPath
+        );
+      } catch (e) { _scheduleReconnect(); return; }
+      ws.onopen = function () { _setWsPill(true); };
+      ws.onclose = function () { _setWsPill(false); _scheduleReconnect(); };
+      ws.onerror = function () { _setWsPill(false); };
+      ws.onmessage = function (evt) {
+        var msg;
+        try { msg = JSON.parse(evt.data); } catch (e) { return; }
+        if (!msg) return;
+        if (msg.type === 'evidence_delta') _applyDelta(msg);
+        else if (msg.type === 'perception_delta') _applyPerceptionDelta(msg);
+        else if (msg.type === 'frame_tick') _applyFrame(msg);
+        else if (msg.type === 'risk_delta') _applyRiskDelta(msg);
+      };
+    }
+    _connect();
   }
 
   _init();

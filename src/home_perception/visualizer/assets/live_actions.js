@@ -50,6 +50,8 @@
       buttons.forEach(function (b) { b.disabled = true; });
       if (famSt) { famSt.textContent = '—'; }
       if (comSt) { comSt.textContent = '—'; }
+      // PR-A：tab 角色视图同步空态（共享状态机）。
+      _renderTabViews(panel, null, 'pending');
       return;
     }
 
@@ -63,6 +65,33 @@
     if (famNot) { famNot.disabled = (cur !== 'pending'); }
     if (comAcc) { comAcc.disabled = (cur !== 'family_handled'); }
     if (comCom) { comCom.disabled = (cur !== 'family_handled'); }
+    // PR-A：同步渲染 tab ②/③ 角色聚焦视图（共享同一 WS 会话与状态机，切 Tab 不重连）。
+    _renderTabViews(panel, active, cur);
+  }
+
+  // PR-A：tab 角色视图渲染（家属确认 / 社区处置）。与主面板同一 active warning、同一
+  // 状态机映射；视图元素缺失 → no-op（非 Live 骨架页零成本）。
+  function _renderTabViews(panel, active, cur) {
+    var views = panel._tabViews || [];
+    for (var i = 0; i < views.length; i++) {
+      var v = views[i];
+      var role = v.getAttribute('data-role');
+      var warn = v.querySelector('.closure-warning');
+      var st = v.querySelector('.closure-status');
+      var btns = v.querySelectorAll('.closure-btn');
+      if (!active) {
+        if (warn) { warn.textContent = '暂无待处置警告（实时会话未触发风险）'; }
+        if (st) { st.textContent = '—'; }
+        for (var b0 = 0; b0 < btns.length; b0++) { btns[b0].disabled = true; }
+        continue;
+      }
+      if (warn) { warn.textContent = '待处置警告：' + active.slice(0, 8) + '…'; }
+      if (st) { st.textContent = _STATUS_ZH[cur] || cur; }
+      for (var b = 0; b < btns.length; b++) {
+        // 家属视图按钮仅 pending 可点；社区视图按钮仅 family_handled 可点。
+        btns[b].disabled = (role === 'family') ? (cur !== 'pending') : (cur !== 'family_handled');
+      }
+    }
   }
 
   function _init(panel) {
@@ -94,6 +123,31 @@
         }));
       });
     });
+
+    // PR-A：绑定 tab ②/③ 角色聚焦视图（.closure-tabview[data-scenario=<sid>]）——
+    // 与主面板共享同一 WS 连接（切 Tab 不重订）与同一 active warning（data-warning-id
+    // 由主面板 _render 写入）。
+    var views = global.document.querySelectorAll('.closure-tabview');
+    panel._tabViews = [];
+    for (var vi = 0; vi < views.length; vi++) {
+      if (views[vi].getAttribute('data-scenario') !== sid) continue;
+      panel._tabViews.push(views[vi]);
+      (function (view) {
+        view.querySelectorAll('.closure-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (!ws || ws.readyState !== 1) { return; }
+            var wid = panel.getAttribute('data-warning-id');
+            if (!wid) { return; }
+            ws.send(JSON.stringify({
+              type: 'action',
+              warning_id: wid,
+              operator: btn.getAttribute('data-operator'),
+              action: btn.getAttribute('data-action')
+            }));
+          });
+        });
+      })(views[vi]);
+    }
   }
 
   // 页面加载后初始化所有行动闭环面板（body 末尾注入，DOM 已就绪）。
