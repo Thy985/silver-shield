@@ -791,11 +791,12 @@ def _render_audio_perception(
     audio_manifest: dict | None,
     audio_base_url: str,
 ) -> str:
-    """音频感知首屏面板分发器（Gate 3 产品拍板 2026-08-16）。
+    """音频感知首屏面板分发器（Gate 3 产品拍板 2026-08-16 · P0-11.x 改造 2026-08-18）。
 
-    - Live（``mode == "live"``，provenance=REAL_SENSOR）→ 渲染**实时摘要**
-      （"此刻传感器检测到什么"），完整 event / provenance / 原始技术细节留在 details 区；
-    - Artifact（SIMULATED）→ 渲染完整"系统听到了什么"卡片（既有 P0 行为，不变）。
+    P0-11.x 决策（用户硬约束）：解除 Live 截断 —— Live 与 Artifact 一律走
+    ``_render_audio_perception_full``（含可播放 ``<audio id="audio-{kind}" controls>``）。
+    Live 模式不再使用 `_render_live_audio_summary`（仅时间戳摘要无控件），以满足
+    11.x-1 验收：访客打开 /live 后能真正听到对应音频（评委可验证）。
 
     两者均遵守：``audio_evidence`` 空 → 返回空串（AC-12 绝不编造面板）；
     证据与媒体严格分离（可播放样本仅在 details 区由独立 Audio Source Adapter 绑定呈现）。
@@ -803,9 +804,86 @@ def _render_audio_perception(
     audio = scenario.get("audio_evidence") or ()
     if not audio:
         return ""  # AC-12：无音频证据不渲染首屏面板
-    if str(scenario.get("mode", "")) == "live":
-        return _render_live_audio_summary(scenario, audio_manifest, audio_base_url)
     return _render_audio_perception_full(scenario, audio_manifest, audio_base_url)
+
+
+def _render_audio_sensor_status(
+    scenario: ScenarioEvidence,
+) -> str:
+    """P0-11.x · 音频传感器状态卡（与视频并列同层，Live 必须可见）。
+
+    设计（用户硬约束 2026-08-18 拍板）：
+
+    - **ACTIVE 真实源**：仅当 ``scenario.audio_evidence`` 含
+      ``provenance_kind == "REAL_SENSOR"`` 节点时显示 ``ACTIVE``。这是 runtime
+      真实产出（loader 仅对 Live audio_evidence 注入 REAL_SENSOR；Artifact
+      模式 SIMULATED）—— 不是 manifest 声明、不是 fixture 存在、不是 frames counter
+      滚动。绝不做"manifest 有 track 就 ACTIVE"那种伪 ACTIVE。
+    - 缺 REAL_SENSOR evidence / Live 未启动 / audio_evidence 空 → 显示 ``IDLE``。
+    - 字段真实源：
+        * ``Source`` → provenance 翻译表（VM-7 一等视觉）。
+        * ``Perception events`` → REAL_SENSOR 节点计数（若无则总 audio_evidence）。
+        * ``Kinds detected`` → REAL_SENSOR 节点中 kinds 去重（无 → ``—``）。
+    - AC-12 / VM-9 守诚实边界：缺任何字段显示 ``—``，绝不编造。
+
+    不依赖 audio_manifest / audio_base_url / 任何文件系统 IO —— 完全投影于
+    EvidenceProjection（VM-1 / VM-3）。
+    """
+    audio = scenario.get("audio_evidence") or ()
+    real_sensor = [a for a in audio if a.get("provenance_kind") == "REAL_SENSOR"]
+    active = len(real_sensor) > 0
+    status_text = "ACTIVE" if active else "IDLE"
+    status_class = "audio-active" if active else "audio-idle"
+
+    # REAL_SENSOR 节点数（= runtime 真实处理的事件数）。无 REAL_SENSOR 时回退到
+    # 总 audio_evidence 数（保持卡上的"事件"读数对评委真实可见）。
+    n_events = len(real_sensor) if active else len(audio)
+
+    # kinds 去重保序（REAL_SENSOR only；无 → "—"）。
+    kinds: list[str] = []
+    for a in real_sensor:
+        k = str(a.get("kind", "") or "")
+        if k and k not in kinds:
+            kinds.append(k)
+    if kinds:
+        kinds_html = (
+            '<ul class="audio-sensor-kinds">'
+            + "".join(
+                f'<li><code>{_R._esc(_R._translate_audio_kind(k))}</code>'
+                f'<span class="muted audio-sensor-kind-id">{_R._esc(k)}</span></li>'
+                for k in kinds
+            )
+            + "</ul>"
+        )
+    else:
+        kinds_html = '<span class="muted">—</span>'
+
+    # provenance 文本：来自 loader 投影的 REAL_SENSOR 节点存在性 → 受控演示输入
+    # （与 _PROVENANCE_BADGE["REAL_SENSOR"] 单一来源保持一致，避免文案漂移）。
+    provenance_text = _PROVENANCE_TEXT.get("REAL_SENSOR", "受控演示输入")
+    provenance_class = _PROVENANCE_CLASS.get("REAL_SENSOR", "")
+
+    sid_html = _R._esc(scenario["scenario_id"])
+    return f"""
+    <div class="sensor-card sensor-audio {status_class}"
+         id="audio-sensor-{sid_html}" data-status="{status_text.lower()}">
+      <div class="sensor-card-head">
+        <h3 class="sensor-card-title">
+          <span class="audio-status-dot {status_class}" aria-hidden="true"></span>
+          <span>🔊 AUDIO SENSOR</span>
+          <span class="sensor-card-status {status_class}">{status_text}</span>
+        </h3>
+      </div>
+      <dl class="sensor-card-meta">
+        <dt>Source</dt><dd>{_R._esc(provenance_text)}</dd>
+        <dt>Perception events</dt><dd><b data-audio-events>{n_events}</b></dd>
+        <dt>Kinds detected</dt><dd>{kinds_html}</dd>
+      </dl>
+      <p class="sensor-card-note muted">
+        ACTIVE 标记仅当 runtime 真实产出 REAL_SENSOR evidence 时显示；
+        无 evidence / 未启动 → IDLE，不伪造（P0-11.x VM-7 fail-closed）。
+      </p>
+    </div>"""
 
 
 def _render_live_audio_summary(
@@ -1383,11 +1461,23 @@ def _render_live_shell(
       </nav>
       <div class="live-view" id="view-discover-{sid_html}">
         <div class="live-grid">
-          <!-- ① 实时画面：全宽 -->
+          <!-- ① 实时画面：全宽；内部 sensor-pair 双列（VIDEO ↔ AUDIO SENSOR 并列同层） -->
           <section class="region lv-now">
-            <h2>① 实时画面 <span class="tag">Home 端实时画面</span></h2>
+            <h2>① 实时画面 <span class="tag">Home 端实时画面 · 双传感器同层</span></h2>
             <div class="body">
-              <div class="case-video">{video_inner}</div>
+              <div class="sensor-pair">
+                <div class="sensor-card sensor-video" id="video-sensor-{sid_html}">
+                  <div class="sensor-card-head">
+                    <h3 class="sensor-card-title">
+                      <span class="video-status-dot" aria-hidden="true"></span>
+                      <span>📹 VIDEO SENSOR</span>
+                      <span class="sensor-card-status video-live">LIVE</span>
+                    </h3>
+                  </div>
+                  <div class="case-video">{video_inner}</div>
+                </div>
+                {_render_audio_sensor_status(scenario)}
+              </div>
               {manifest_island}
             </div>
           </section>
@@ -2285,6 +2375,36 @@ def render_case_viewer(
   .lv-action {{ grid-column:span 12; }}
   .lv-history {{ grid-column:span 12; }}
   .lv-roleview {{ grid-column:span 12; margin-top:14px; }}
+  /* P0-11.x · VIDEO ↔ AUDIO SENSOR 同层双列（用户拍板 2026-08-18） */
+  .sensor-pair {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:stretch; }}
+  @media (max-width:900px) {{ .sensor-pair {{ grid-template-columns:1fr; }} }}
+  .sensor-card {{ background:#f8fafc; border:1px solid #e3e8ee; border-radius:8px;
+                  padding:10px 12px; min-width:0; display:flex; flex-direction:column; gap:8px; }}
+  .sensor-card-head {{ margin:0; }}
+  .sensor-card-title {{ display:flex; align-items:center; gap:8px; margin:0;
+                        font-size:13px; font-weight:700; color:#1c2733; }}
+  .sensor-card-status {{ margin-left:auto; font-size:11px; font-weight:700;
+                          padding:2px 8px; border-radius:999px; }}
+  .sensor-card-status.audio-active {{ background:#dcfce7; color:#16a34a; }}
+  .sensor-card-status.audio-idle {{ background:#f1f5f9; color:#64748b; }}
+  .sensor-card-status.video-live {{ background:#fee2e2; color:#dc2626; }}
+  .sensor-card-meta {{ margin:0; display:grid; grid-template-columns:auto 1fr; gap:4px 10px;
+                        font-size:12px; }}
+  .sensor-card-meta dt {{ color:#64748b; font-weight:600; }}
+  .sensor-card-meta dd {{ margin:0; color:#1c2733; }}
+  .sensor-card-note {{ font-size:11px; line-height:1.4; margin:0; }}
+  .audio-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; }}
+  .audio-status-dot.audio-active {{ background:#16a34a;
+                                     box-shadow:0 0 0 3px rgba(22,163,74,0.18); }}
+  .audio-status-dot.audio-idle {{ background:#94a3b8; }}
+  .video-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%;
+                        background:#dc2626; box-shadow:0 0 0 3px rgba(220,38,38,0.18); }}
+  .audio-sensor-kinds {{ list-style:none; margin:0; padding:0; display:flex;
+                          flex-direction:column; gap:2px; }}
+  .audio-sensor-kinds li {{ display:flex; gap:8px; align-items:baseline; }}
+  .audio-sensor-kinds code {{ font-size:11px; background:#f3e8ff; color:#7e22ce;
+                               border-radius:4px; padding:1px 6px; }}
+  .audio-sensor-kind-id {{ font-size:10px; }}
   .tl-empty {{ color:#6b7a8a; font-size:12px; text-align:center; padding:20px 0; }}
   .tl-empty.observing {{ color:#d64541; font-weight:600;
                          animation:obs-pulse 1.4s ease-in-out infinite; }}
