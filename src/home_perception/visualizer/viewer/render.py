@@ -1004,12 +1004,23 @@ def _render_audio_perception_full(
             </div>"""
         )
     acoustic_state = _render_acoustic_state_card(scenario)
+    # P0-11.x-3：注入 audio manifest 数据岛（供 audio_sync.js 点击 timeline / case-time-mark
+    # → 查 track.start_time → clamp → seek/play）。无 manifest → 不注入（audio_sync.js 降级
+    # 为从头播放，不崩）。数据岛只含 tracks（start_time / kind），不含媒体字节（VM-10/AC-11）。
+    manifest_island = ""
+    if audio_manifest and audio_manifest.get("tracks"):
+        manifest_island = (
+            f'<script type="application/json" id="audio-manifest-{_R._esc(scenario["scenario_id"])}">'
+            f'{_R._sanitize_for_js(json.dumps({"tracks": list(audio_manifest["tracks"])}, ensure_ascii=False))}'
+            f'</script>'
+        )
     return f"""
     <section class="fs-panel" id="fs-audio-{_R._esc(scenario['scenario_id'])}">
       <h3 class="view-anchor">系统听到了什么（音频感知）</h3>
       {acoustic_state}
       <div class="audio-perception">{''.join(cards)}</div>
       <p class="muted">音频为感知层证据（kind/score/confidence），非语义判定；样本声音为合成素材，仅供示意。</p>
+      {manifest_island}
     </section>"""
 
 

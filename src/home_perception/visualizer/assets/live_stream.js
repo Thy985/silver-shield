@@ -316,21 +316,28 @@
     _renderRiskSignals();
   }
 
+  // T1.3：时间轴节点「人话优先」——首字段为人话 summary，技术信息收进 meta 灰字（不新增事实，仅改渲染）。
+  // P0-11.x-3：AUDIO 节点加 data-kind + data-time（case_time 秒），供 audio_sync.js 点击 → seek/play。
   function _buildTimelineNode(n) {
     var marker = _MARKERS[n.modality] || '•';
     var color = _COLORS[n.modality] || '#3b4a5a';
-    var verdictCls = 'node-neutral';
-    return '<li class="tl-item" data-step="' + _esc(n.timestamp) + '" data-ref="' + _esc(n.ref) + '">' +
+    var summary = _humanSummary(n) || _esc(n.type);
+    var metaParts = [ _esc(n.timestamp), marker + ' ' + _esc(n.modality), _esc(n.stage) ];
+    // P0-11.x-3：AUDIO 节点附加 data-kind（= n.type，AudioPerceptionKind 枚举）+ data-time（case_time 秒）。
+    // n.case_time 由 live_adapter._build_timeline 在 audio 节点注入（相对最早证据 T0 的秒）；
+    // 缺失 → 不加 data-time（audio_sync.js 回退到 0，即从头播放）。
+    var audioAttrs = '';
+    if (n.modality === 'AUDIO') {
+      audioAttrs = ' data-kind="' + _esc(n.type || '') + '"';
+      if (n.case_time != null && isFinite(Number(n.case_time))) {
+        audioAttrs += ' data-time="' + Number(n.case_time).toFixed(3) + '"';
+      }
+    }
+    return '<li class="tl-item" data-step="' + _esc(n.timestamp) + '" data-ref="' + _esc(n.ref) + '"' + audioAttrs + '>' +
       '<span class="tl-dot" style="background:' + color + '"></span>' +
       '<div class="tl-body">' +
-      '<div class="tl-head">' +
-      '<span class="tl-step">' + _esc(n.timestamp) + '</span>' +
-      '<span class="tl-modality" style="color:' + color + '">' + marker + ' ' + _esc(n.modality) + '</span>' +
-      '<span class="tl-stage" style="color:' + color + '">' + _esc(n.stage) + '</span>' +
-      '<span class="tl-kind">' + _esc(n.type) + '</span>' +
-      '<span class="tl-verdict ' + verdictCls + '">' + _esc(_humanSummary(n)) + '</span>' +
-      '</div>' +
-      '<div class="tl-meta muted">provenance: ' + _esc(n.provenance_kind) + ' · source: ' + _esc(n.ref) + '</div>' +
+      '<div class="tl-summary">' + _esc(summary) + '</div>' +
+      '<div class="tl-meta muted">' + metaParts.join(' · ') + '</div>' +
       '</div></li>';
   }
 
