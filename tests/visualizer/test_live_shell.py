@@ -16,6 +16,7 @@ from home_perception.visualizer.viewer.live_adapter import (
     ProjectionAccumulator,
     build_live_presentation,
 )
+from home_perception.visualizer.viewer.render import _render_provenance_banner
 
 
 def _frame(frame_index: int, *, risk_levels=()) -> dict:
@@ -97,7 +98,23 @@ def test_live_shell_honest_placeholders():
     assert 'id="live-signals-live_shell_t"' in html
     assert "当前无进行中风险信号" in html
     assert "Memory Context" in html
-    assert "Not connected" in html  # 诚实标注未接入，不编造 profile
+    assert "当前案例无历史事件可供引用" in html  # 诚实标注未接入，不编造 profile
+
+
+def test_live_shell_risk_card_skeleton():
+    """PR-B：③ 风险解释卡片骨架（✓ 人话原因容器 + 空态"实时观察中"），risk_delta 驱动。"""
+    html = _live_html()
+    # 卡片骨架（初始隐藏，risk_delta.risk_levels 非空时亮起）
+    assert 'id="lrk-card-live_shell_t"' in html
+    assert 'id="lrk-level-live_shell_t"' in html
+    assert 'id="lrk-reasons-live_shell_t"' in html
+    assert 'id="lrk-rec-live_shell_t"' in html
+    assert 'id="lrk-frame-live_shell_t"' in html
+    # 空态（诚实边界 AC-12：无风险 → 实时观察中，非"无数据"）
+    assert 'id="lrk-empty-live_shell_t"' in html
+    assert "实时观察中" in html and "风险尚未触发" in html
+    # ③.5 信号容器（risk_transition 服务端状态机驱动）
+    assert 'id="live-signals-empty-live_shell_t"' in html
 
 
 def test_live_shell_artifact_mode_unaffected():
@@ -121,3 +138,70 @@ def test_live_shell_no_legacy_view_protocol():
     assert '"view":{' not in html.replace(" ", "")
     assert "frame_result_to_view" not in html
     assert "demo_time" not in html  # Owner 锁死：不新增 demo_time 字段
+
+
+def test_live_shell_overlay_chips_pr_c():
+    """PR-C：① overlay chips 补全 Case Time + 访客事件（DESIGN §4.3）。"""
+    html = _live_html()
+    assert 'id="ov-frame-live_shell_t"' in html
+    assert 'id="ov-time-live_shell_t"' in html   # 新增 Case Time chip
+    assert 'id="ov-det-live_shell_t"' in html
+    assert 'id="ov-ve-live_shell_t"' in html     # 新增访客事件 chip
+    assert "Case Time" in html
+    assert "访客事件" in html
+
+
+def test_live_shell_closure_summary_pr_c():
+    """PR-C：④ 行动轻量摘要骨架（cs-family / cs-community hooks，live_actions.js 驱动）。"""
+    html = _live_html()
+    assert 'id="closure-summary-live_shell_t"' in html
+    assert 'id="cs-family-live_shell_t"' in html
+    assert 'id="cs-community-live_shell_t"' in html
+    assert "家属" in html and "社区" in html
+
+
+def test_live_shell_sysarch_foldable_pr_c():
+    """PR-C：⑤ 系统原理折叠区（SVG 架构图 · 次级模块，默认折叠）。"""
+    html = _live_html()
+    assert 'class="lv-sysarch"' in html
+    assert 'id="lv-sysarch-live_shell_t"' in html
+    assert "⑤ 系统原理" in html
+    assert "How it works" in html
+    assert 'class="sysarch-svg"' in html
+    # 三框：Home 端感知内核 / Demo Gateway / Case Viewer
+    assert "Home 端感知内核" in html
+    assert "Demo Gateway" in html
+    assert "Case Viewer" in html
+
+
+def test_live_shell_memory_msg_element_pr_c():
+    """PR-C：⑥ Memory Context 诚实占位（dev 态文案可被前端切换展示态）。"""
+    html = _live_html()
+    assert 'id="memory-msg-live_shell_t"' in html
+    # dev 态默认文案：Not connected（诚实标注未接入）
+    assert "当前案例无历史事件可供引用" in html
+
+
+def _scenario_with_provenance(kind: str) -> dict:
+    """最小 ScenarioEvidence：仅含一条带指定 provenance_kind 的 timeline 节点。"""
+    return {"timeline": [{"provenance_kind": kind}]}
+
+
+def test_live_banner_honest_controlled_demo_label():
+    """T1.1：Live（REAL_SENSOR）角标诚实标注「受控演示输入」+ 副标题，不再标榜 REAL SENSOR。
+
+    验收（DESIGN-golden-case-live-product P0-1 / TASKS T1.1）：
+    - 产物含「受控演示输入」与副标题「非 7×24 真实设备 · 演示素材」；
+    - 不再含误导的「REAL SENSOR」字样。
+    """
+    html = _render_provenance_banner(_scenario_with_provenance("REAL_SENSOR"))
+    assert "受控演示输入" in html
+    assert "非 7×24 真实设备 · 演示素材" in html
+    assert "REAL SENSOR" not in html
+
+
+def test_artifact_banner_simulated_unchanged():
+    """T1.1：Artifact（SIMULATED）角标文案不变（「● GOLDEN CASE · SIMULATED」），且无 Live 副标题。"""
+    html = _render_provenance_banner(_scenario_with_provenance("SIMULATED"))
+    assert "● GOLDEN CASE · SIMULATED" in html
+    assert "非 7×24" not in html

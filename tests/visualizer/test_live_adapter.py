@@ -206,7 +206,7 @@ def test_empty_session_still_valid_and_renders():
     assert acc.n_frames == 0
     proj, desc = build_live_presentation(acc.to_evidence_projection())
     html = render_case_viewer(proj, desc)
-    assert "真实传感器" in html
+    assert "受控演示输入" in html            # AC-7 诚实标注：Live=受控演示输入（非 REAL SENSOR 标榜）
 
 
 # —— AC-5 / VM-3：fail-closed 摄入（缺字段/类型非法） ——
@@ -248,7 +248,7 @@ def test_render_case_viewer_reuses_live_projection():
     # 展示编排绑定 LiveFrameSource（媒体字节不进 View Model）
     assert desc["media_binding"]["source_kind"] == "LiveFrameSource"
     html = render_case_viewer(proj, desc)
-    assert "真实传感器" in html            # AC-7 provenance 一等视觉
+    assert "受控演示输入" in html            # AC-7 provenance 一等视觉（诚实标注受控演示输入）
     assert "无 Gate 评估" in html          # AC-8 gate absent 显式表达
     assert "无（实时模式" in html          # AC-8 fingerprints absent 显式表达
     # Live 无媒体资产（resolve_media_source 对 LiveFrameSource 返回 None）→ 诚实呈现
@@ -392,7 +392,7 @@ def test_render_live_with_audio_marker():
     html = render_case_viewer(proj, desc)
     assert "🔊" in html            # AUDIO modality 徽章
     assert "AUDIO" in html          # modality 标签
-    assert "真实传感器" in html      # AC-7 provenance 一等视觉（音频节点同为 REAL_SENSOR）
+    assert "受控演示输入" in html      # AC-7 provenance 一等视觉（音频节点同为 REAL_SENSOR，诚实标注）
 
 
 # —— ADR-0036 VM-13 Phase B（#509 验证）：Live audio_evidence 投影字段契约 ——
@@ -670,37 +670,60 @@ def test_perception_delta_empty_detections():
 
 
 def test_risk_delta_change_and_idempotent():
-    """LP-3 risk_delta：None→全量；指纹变化→推；未变→空（覆盖式"当前 AI 判断"）。"""
+    """LP-3 risk_delta：None→全量；指纹变化→推；未变→空（覆盖式"当前 AI 判断"）。
+
+    PR-B：risk_transition 服务端状态机（Owner 锁死 §4.6）——
+    空→非空=raised；非空→空=cleared；指纹未变=None（不推信号）。
+    """
     acc = ProjectionAccumulator("sess-rd", window_size=64)
     acc.ingest(_make_frame(
         0, risk_levels=["HIGH"], recommended_actions=["ESCALATE_COMMUNITY"],
         reason_summary=["夜间访问", "长时间停留"], command_types=["CREATE_COMMUNITY_TASK"],
     ))
-    # None（首连）→ 携带当前风险状态
+    # None（首连）→ 携带当前风险状态；空→非空 = raised
     d0 = acc.extract_risk_delta(None)
     assert d0["type"] == "risk_delta"
     assert d0["risk_levels"] == ["HIGH"]
     assert d0["reason_summary"] == ["夜间访问", "长时间停留"]
     assert d0["recommended_actions"] == ["ESCALATE_COMMUNITY"]
     assert d0["command_types"] == ["CREATE_COMMUNITY_TASK"]
+    assert d0["risk_transition"] == "raised"
     fp = acc.risk_fingerprint()
-    # 指纹未变 → 空（不推）
+    # 指纹未变 → 空（不推）；无 transition
     d1 = acc.extract_risk_delta(fp)
     assert d1["risk_levels"] == []
     assert d1["reason_summary"] == []
-    # 风险清除（无 warning 帧）→ 变化 → 推空风险（回到 MONITOR 语义）
+    assert d1["risk_transition"] is None
+    # 风险清除（无 warning 帧）→ 变化 → 推空风险 + cleared（前端只渲染，不猜空=CLEARED）
     acc.ingest(_make_frame(1))
     d2 = acc.extract_risk_delta(fp)
     assert d2["risk_levels"] == []
     assert d2["reason_summary"] == []
     assert d2["frame_index"] == 1
+    assert d2["risk_transition"] == "cleared"
+
+
+def test_risk_delta_transition_active_on_content_change():
+    """PR-B：持续非空但内容变化 → active（更新风险内容，非重新亮卡）。"""
+    acc = ProjectionAccumulator("sess-rd3", window_size=64)
+    acc.ingest(_make_frame(0, risk_levels=["MEDIUM"], recommended_actions=["MONITOR"]))
+    fp0 = acc.risk_fingerprint()
+    assert acc.extract_risk_delta(None)["risk_transition"] == "raised"
+    acc.ingest(_make_frame(1, risk_levels=["HIGH"], recommended_actions=["ESCALATE_COMMUNITY"]))
+    d = acc.extract_risk_delta(fp0)
+    assert d["risk_levels"] == ["HIGH"]
+    assert d["risk_transition"] == "active"
 
 
 def test_risk_delta_no_warning_initial_monitor():
-    """无 warning 帧：首连 risk_delta 为空列表（前端据此显示 MONITOR 继续观察）。"""
+    """无 warning 帧：首连 risk_delta 为空列表（前端据此显示 MONITOR 继续观察）。
+
+    PR-B：首连无风险 → risk_transition=None（无 transition 不推信号，§4.6 契约表）。
+    """
     acc = ProjectionAccumulator("sess-rd2", window_size=64)
     acc.ingest(_make_frame(0))
     d = acc.extract_risk_delta(None)
     assert d["risk_levels"] == []
     assert d["reason_summary"] == []
     assert d["frame_index"] == 0
+    assert d["risk_transition"] is None

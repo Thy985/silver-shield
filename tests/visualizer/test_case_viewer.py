@@ -348,17 +348,21 @@ def test_viewer_lp1_live_frame_stream_overrides_media_base_dir(tmp_path):
 
 
 def test_viewer_lp2_live_ai_state_card_renders(tmp_path):
-    """LP-2/3：live_frame_stream 模式渲染"实时 AI 状态"卡（CURRENT STATE / AI 看到了 /
-    为什么关注 / 下一步），由 live_stream.js 经 perception_delta + risk_delta 实时填充。"""
+    """LP-2/PR-B：live_frame_stream 模式渲染 Live 感知摘要卡（"AI 看到了"），
+    由 live_stream.js 经 perception_delta（视觉）+ evidence_delta（音频）实时填充。
+
+    PR-B（DESIGN-live-product-ui-restore §4.5）：LP-2/3 的 CURRENT STATE / 为什么关注 /
+    下一步已迁移到区域③ 风险解释卡片（lrk-card，risk_delta 驱动），本卡只保留感知摘要。
+    """
     d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
     proj = load_case_artifact(d)
     html = render_case_viewer(proj, live_frame_stream=True)
     assert 'id="live-ai-state-sw_t1"' in html
-    assert 'id="ai-risk-sw_t1"' in html
     assert 'id="ai-see-sw_t1"' in html
-    assert 'id="ai-why-sw_t1"' in html
-    assert 'id="ai-next-sw_t1"' in html
-    assert "CURRENT STATE" in html
+    # PR-B：CURRENT STATE/why/next 不再位于感知卡（迁移到区域③ lrk-card）。
+    assert 'id="ai-risk-sw_t1"' not in html
+    assert 'id="ai-why-sw_t1"' not in html
+    assert 'id="ai-next-sw_t1"' not in html
 
 
 def test_viewer_ac17_media_base_url_normalizes_separators(tmp_path):

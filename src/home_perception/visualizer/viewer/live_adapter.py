@@ -87,6 +87,8 @@ class LiveFrame(TypedDict):
     """单帧规范化结构（FrameResult 契约的视觉子集，鸭子类型摄入后落定）。
 
     不含生产对象引用、不含媒体字节（VM-10/AC-11）；只持投影所需的原始字符串分类。
+    P0-1 补全：trigger_events/perception_scores/warning_ids/device_id/elder_id/risk_signals
+    （产品解释事实 + 风险信号实体，Owner 锁死：不进第二套 view model，仅投影已有 Runtime 字段）。
     """
 
     frame_index: int
@@ -100,6 +102,26 @@ class LiveFrame(TypedDict):
     # P1-A：本帧检测的结构化子集（class/bbox/confidence，非原始 Detection 对象——
     # 事实投影：只保留产品渲染所需字段，坐标 round、数量裁剪）。默认空 tuple。
     detections: tuple[dict, ...]
+    # P0-1：产品解释事实（风险卡 trigger chips / 强度条）——来自 warnings[].trigger_events
+    # / perception_score；不推原始 WarningEvent 对象，只投影渲染所需子集（VM-9）。
+    trigger_events: tuple[dict, ...]
+    perception_scores: tuple[float, ...]
+    # P0-1：风险信号实体标识（signal identity / 跨帧保活 / TTL 续期）
+    warning_ids: tuple[str, ...]
+    # P0-1：身份上下文事实（device/elder，放 context 而非主叙事）
+    device_id: str | None
+    elder_id: str | None
+    # P0-1：RiskSignal 投影（signal_id/subject/severity/features/ttl/status）
+    # 来自 FrameResult.risk_signals（Pipeline 直接产出，ADR-0021 Phase 1）
+    risk_signals: tuple[dict, ...]
+    # P0-1 修复（behavior-timeline / task-cards 数据通路）：
+    # 行为事件原始对象（visitor_id / event_type / score / location / repeat_count），
+    # 供前端 behavior-timeline 渲染"首次出现/停留/再现"等里程碑。
+    perception_event_objects: tuple[dict, ...]
+    # WarningEvent 原始对象（warning_id / risk_level / reason_summary /
+    # recommended_action / trigger_events / perception_score / device_id / elder_id），
+    # 供 risk_delta / task-cards 消费。projection 不 mutate（VM-6）。
+    warning_objects: tuple[dict, ...]
 
 
 _MISSING = object()
@@ -365,6 +387,80 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
     if len(detections) > _MAX_DETECTIONS:
         detections = detections[:_MAX_DETECTIONS]
 
+    # P0-1：产品解释事实投影（trigger_events + perception_score，来自 warnings）。
+    # 诚实投影：只取已存在字段，不扩展语义（VM-9）。
+    trigger_events_list: list[dict] = []
+    perception_scores_list: list[float] = []
+    warning_ids_list: list[str] = []
+    device_id_val: str | None = None
+    elder_id_val: str | None = None
+    for w in _iter_of(frame_result, "warnings"):
+        # trigger_events：每个 warning 的触发规则列表（event_type + score）
+        for te in _iter_of(w, "trigger_events"):
+            if isinstance(te, dict):
+                trigger_events_list.append({
+                    "event_type": te.get("event_type", ""),
+                    "score": round(float(te.get("score", 0)), 3) if isinstance(te.get("score"), (int, float)) else 0.0,
+                })
+        # perception_score：风险命中强度（浮点）
+        ps = _pick(w, "perception_score", default=None)
+        if isinstance(ps, (int, float)) and not isinstance(ps, bool):
+            perception_scores_list.append(round(float(ps), 3))
+        # warning_id：风险信号实体标识（用于跨帧保活 + signal identity）。
+        # 转 str 避免后续 JSON 序列化失败（UUID 对象不能 json.dumps）。
+        wid = _pick(w, "warning_id", default=None)
+        if isinstance(wid, (str, __import__("uuid").UUID)) and wid:
+            warning_ids_list.append(str(wid))
+        # device_id / elder_id：身份上下文（仅首条 warning 取，全帧同源稳定）
+        if device_id_val is None:
+            did = _pick(w, "device_id", default=None)
+            if isinstance(did, str) and did:
+                device_id_val = did
+        if elder_id_val is None:
+            eid = _pick(w, "elder_id", default=None)
+            if isinstance(eid, str) and eid:
+                elder_id_val = eid
+
+    # P0-1：RiskSignal 投影（FrameResult.risk_signals → dict 列表）。
+    # 来自 Pipeline Stage C RealTimeRiskEvaluator，含 signal_id/subject/severity/features。
+    risk_signals_list: list[dict] = []
+    for rs in _iter_of(frame_result, "risk_signals"):
+        d: dict[str, Any] = {}
+        if isinstance(rs, dict):
+            d = rs
+        elif hasattr(rs, "to_dict"):
+            try:
+                d = rs.to_dict()
+            except Exception:  # noqa: BLE001  (fail-closed 投影：单个对象 to_dict 失败退回空 dict，不中断整帧)
+                d = {}
+        if d:
+            risk_signals_list.append(d)
+
+    # P0-1 修复：行为事件原始对象（dict 形态透传，VM-9 零推断）。
+    # 给前端 behavior-timeline 提供 visitor_id / event_type / score / location / repeat_count。
+    # 数据源：FrameResult.perception_events（每个都是 PerceptionEvent，鸭子读 to_dict()）。
+    perception_event_objects: list[dict] = []
+    for pe in _iter_of(frame_result, "perception_events"):
+        if isinstance(pe, dict):
+            perception_event_objects.append(pe)
+        elif hasattr(pe, "to_dict"):
+            try:
+                perception_event_objects.append(pe.to_dict())
+            except Exception:  # noqa: BLE001, S110  (fail-closed 投影：跳过损坏对象，不中断整帧)
+                pass
+    # WarningEvent 原始对象（含 warning_id / risk_level / reason_summary /
+    # recommended_action / trigger_events / perception_score / device_id / elder_id），
+    # 给 task-cards / risk_delta 提供 payload 投影。
+    warning_objects: list[dict] = []
+    for w in _iter_of(frame_result, "warnings"):
+        if isinstance(w, dict):
+            warning_objects.append(w)
+        elif hasattr(w, "to_dict"):
+            try:
+                warning_objects.append(w.to_dict())
+            except Exception:  # noqa: BLE001, S110  (fail-closed 投影：跳过损坏对象，不中断整帧)
+                pass
+
     return LiveFrame(
         frame_index=frame_index,
         n_detections=n_detections,
@@ -375,6 +471,14 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
         reason_summary=tuple(reason_summary),
         command_types=tuple(command_types),
         detections=tuple(detections),
+        trigger_events=tuple(trigger_events_list),
+        perception_scores=tuple(perception_scores_list),
+        warning_ids=tuple(warning_ids_list),
+        device_id=device_id_val,
+        elder_id=elder_id_val,
+        risk_signals=tuple(risk_signals_list),
+        perception_event_objects=tuple(perception_event_objects),
+        warning_objects=tuple(warning_objects),
     )
 
 
@@ -439,6 +543,25 @@ class ProjectionAccumulator:
         self._last_reason_summary: tuple[str, ...] = ()
         self._last_command_types: tuple[str, ...] = ()
         self._last_risk_frame: int = -1
+        # PR-B（DESIGN-live-product-ui-restore §4.6 · Owner 锁死）：风险信号状态机。
+        # RAISED/CLEARED 由服务端明确判定（risk_levels 空→非空=raised，非空→空=cleared，
+        # 持续非空=active），前端只渲染，绝不自行解释"空=CLEARED"（空可能是风险解除/
+        # 窗口无风险/服务暂无事件/初始化等多种原因，前端无法区分）。
+        # 状态机确定性：纯摄入序列函数，无墙钟/随机数（VM-8 重放逐字段一致）。
+        self._risk_active: bool = False
+        self._last_risk_transition: str | None = None
+        # P0-1 修复：行为/警告增量广播缓存（持久化、不进滚动窗口）。
+        # 真实会话里的 perception_events（visitor 进出/停留/再现）和 warnings
+        # 都是稀疏事件，必须跨整个实时会话可投影；否则一旦滚动窗口裁掉早期事件，
+        # 前端 behavior-timeline / task-cards 永远没数据。
+        # 去重：每条 event_id（perception）/ warning_id（warning）→ 已记录则跳过（VM-8）。
+        # 序列号：用于增量 delta（指纹变化才推）。
+        self._perception_events_cache: list[dict] = []  # [{seq, frame_index, event_type, visitor_id, score, location, repeat_count, ...}]
+        self._perception_event_ids: set[str] = set()
+        self._perception_event_seq: int = 0
+        self._warnings_cache: list[dict] = []  # [{seq, warning_id, frame_index, risk_level, reason_summary, recommended_action, perception_score, trigger_events, device_id, elder_id}]
+        self._warning_ids_cache: set[str] = set()
+        self._warning_seq: int = 0
 
     @property
     def n_frames(self) -> int:
@@ -532,6 +655,8 @@ class ProjectionAccumulator:
 
         - ``timeline_refs``：滚动窗口 + 持久音频列表的 ref 集合（与时间轴同源）；
         - ``audio_ids``：持久音频事件 event_id 集合（去重主键，VM-8）；
+        - ``perception_event_seqs``：累积序号集合（仅含新增部分用于 delta 判定）；
+        - ``warning_seqs``：累积序号集合（仅含新增部分用于 delta 判定）；
         - ``counts``：全量累计（独立于滚动窗口裁剪）。
         """
         return {
@@ -540,6 +665,12 @@ class ProjectionAccumulator:
                 e["audio"].get("event_id")
                 for e in self._audio_events
                 if e["audio"].get("event_id")
+            ),
+            "perception_event_seqs": frozenset(
+                pe["seq"] for pe in self._perception_events_cache
+            ),
+            "warning_seqs": frozenset(
+                w["seq"] for w in self._warnings_cache
             ),
             "counts": (
                 self._total_frames,
@@ -677,24 +808,51 @@ class ProjectionAccumulator:
 
         ``prev=None``（尚无基线）→ 增量 = **全量**（自零开始；浏览器以快照 ref 幂等去重，
         已渲染项被跳过，绝不重复渲染——VM-8）。返回
-        ``{"type","timeline","audio","case_time","counts"}``。
+        ``{"type","timeline","audio","case_time","counts","perception_events","warnings"}``。
+
+        P0-1：新增 ``commands`` 字段（完整 command_payload，Action Evidence 任务卡消费）。
+        仅首连（prev=None）时携带，增量模式下为空列表（避免冗余传输）。
+
+        P0-1 修复：新增 ``perception_events`` / ``warnings`` 增量列表（行为时间线 +
+        任务卡数据通路）。持久缓存 → seq 递增 → 指纹对比得到新增子集。
         """
         cur = self.projection_fingerprint()
         prev_refs = set((prev or {}).get("timeline_refs", ()))
         prev_audio = set((prev or {}).get("audio_ids", ()))
+        prev_pe_seqs = set((prev or {}).get("perception_event_seqs", ()))
+        prev_w_seqs = set((prev or {}).get("warning_seqs", ()))
         new_refs = set(cur["timeline_refs"]) - prev_refs
         new_audio_ids = set(cur["audio_ids"]) - prev_audio
+        new_pe_seqs = set(cur["perception_event_seqs"]) - prev_pe_seqs
+        new_w_seqs = set(cur["warning_seqs"]) - prev_w_seqs
+        is_first_connect = prev is None
         return {
             "type": "evidence_delta",
             "timeline": self._delta_timeline_nodes(new_refs),
             "audio": self._delta_audio_nodes(new_audio_ids),
             "case_time": self._delta_case_time_marks(new_audio_ids),
+            # P0-1 修复：行为事件增量（供 behavior-timeline 消费）。
+            "perception_events": [
+                pe for pe in self._perception_events_cache
+                if pe["seq"] in new_pe_seqs
+            ],
+            # P0-1 修复：Warning 增量（供 risk_delta / task-cards 消费）。
+            "warnings": [
+                w for w in self._warnings_cache
+                if w["seq"] in new_w_seqs
+            ],
             "counts": {
                 "n_frames": self._total_frames,
                 "n_audio": self._total_audio,
+                "perception_events": self._counts["perception_events"],
                 "warnings": self._counts["warnings"],
                 "commands": self._counts["commands"],
             },
+            # P0-1：首连携带完整 command_payload（Action Evidence 任务卡消费，VM-9 只渲染）。
+            "commands": [
+                {"command_type": ct, "status": "SENT"}
+                for ct in self._last_command_types
+            ] if is_first_connect else [],
         }
 
     # ------------------------------------------------------------------
@@ -732,22 +890,46 @@ class ProjectionAccumulator:
     # CURRENT STATE / Why / Next action。指纹未变 → 不推（避免无意义刷屏）。
 
     def risk_fingerprint(self) -> tuple:
-        """当前风险状态指纹（risk_levels/reason_summary/recommended_actions/command_types 元组）。"""
+        """当前风险状态指纹（risk_levels/reason_summary/recommended_actions/command_types + P0-1 扩展字段）。"""
+        # P0-1 修复：把 warnings_cache 的 seq 集合纳入指纹，使新增 warning 触发 risk_delta 推送。
         return (
             self._last_risk_levels,
             self._last_reason_summary,
             self._last_recommended_actions,
             self._last_command_types,
+            self._last_trigger_events,
+            self._last_perception_scores,
+            self._last_warning_ids,
+            self._last_risk_signals,
+            frozenset(w["seq"] for w in self._warnings_cache),
         )
 
     def extract_risk_delta(self, prev_fp) -> dict:
         """只读：对比 ``prev_fp`` 风险指纹 → risk_delta（覆盖式"当前风险状态"）。
 
         ``prev_fp=None``（首连）或指纹变化 → 携带当前风险状态；未变 → 空列表
-        （无变化不推）。返回 ``{"type","frame_index","risk_levels","reason_summary","recommended_actions","command_types"}``。
+        （无变化不推）。返回 ``{"type","frame_index","risk_levels","reason_summary",
+        "recommended_actions","command_types","risk_transition","risk_signals",
+        "trigger_events","perception_scores","warning_ids","device_id","elder_id",
+        "active_warnings"}``。
+
+        ``risk_transition``（PR-B · Owner 锁死）：服务端状态机对**本次变化**的判定
+        （``raised`` / ``cleared`` / ``active``）；指纹未变 → ``None``（不推信号）。
+        前端只按本字段渲染 RAISED/CLEARED，绝不自行解释 risk_levels 空/非空。
+
+        P0-1：内嵌 ``risk_signals``（Owner Q1 · 方案 B）—— 一个 risk_delta = 一个
+        风险状态切片，浏览器单消息消费，无需多流时间关联。
+
+        P0-1 修复（P0-2 audit bug）：增加 ``active_warnings`` 字段——把 _warnings_cache
+        中的活跃 warning 完整对象（warning_id / risk_level / reason_summary /
+        trigger_events / perception_score / device_id / elder_id）作为数据源。
+        原因：Pipeline 单帧 emit warning 之后，下一帧 risk_levels 会变空，但前端
+        仍需看到这条 warning 的完整事实（VM-9 零推断），否则风险卡"已通知/已处置"渲染不出来。
         """
         cur = self.risk_fingerprint()
         changed = (prev_fp is None) or (prev_fp != cur)
+        # P0-1 修复：从缓存取活跃 warning 列表（完整对象，事实投影）。
+        active_warnings = [w for w in self._warnings_cache]
         return {
             "type": "risk_delta",
             "frame_index": self._last_risk_frame,
@@ -755,6 +937,16 @@ class ProjectionAccumulator:
             "reason_summary": list(self._last_reason_summary) if changed else [],
             "recommended_actions": list(self._last_recommended_actions) if changed else [],
             "command_types": list(self._last_command_types) if changed else [],
+            "risk_transition": self._last_risk_transition if changed else None,
+            # P0-1：产品解释事实（owner 锁死：仅投影已有 Runtime 字段，不扩展语义）
+            "trigger_events": list(self._last_trigger_events) if changed else [],
+            "perception_scores": list(self._last_perception_scores) if changed else [],
+            "warning_ids": list(self._last_warning_ids) if changed else [],
+            "risk_signals": list(self._last_risk_signals) if changed else [],
+            "device_id": self._last_device_id if changed else None,
+            "elder_id": self._last_elder_id if changed else None,
+            # P0-1 修复（P0-2 audit bug）：活跃 warning 完整对象（task-cards 数据源）。
+            "active_warnings": active_warnings if changed else [],
         }
 
     def _accumulate(self, live: LiveFrame) -> None:
@@ -770,7 +962,68 @@ class ProjectionAccumulator:
         self._last_recommended_actions = tuple(live.get("recommended_actions", ()))
         self._last_reason_summary = tuple(live.get("reason_summary", ()))
         self._last_command_types = tuple(live.get("command_types", ()))
+        # P0-1：产品解释事实 + 风险信号实体（跨帧保活 + 叙事）
+        self._last_trigger_events = tuple(live.get("trigger_events", ()))
+        self._last_perception_scores = tuple(live.get("perception_scores", ()))
+        self._last_warning_ids = tuple(live.get("warning_ids", ()))
+        self._last_device_id = live.get("device_id")
+        self._last_elder_id = live.get("elder_id")
+        self._last_risk_signals = tuple(live.get("risk_signals", ()))
         self._last_risk_frame = live["frame_index"]
+        # P0-1 修复：行为事件持久化（不进滚动窗口）。去重：event_id（PerceptionEvent.event_id）优先，
+        # 缺失回退 (frame_index, event_type, visitor_id) 组合键（VM-8 重放幂等）。
+        for pe in live.get("perception_event_objects", ()):
+            pe_id = pe.get("event_id") or f"{pe.get('frame_index')}|{pe.get('event_type')}|{pe.get('visitor_id')}"
+            if pe_id in self._perception_event_ids:
+                continue
+            self._perception_event_ids.add(pe_id)
+            self._perception_event_seq += 1
+            self._perception_events_cache.append({
+                "seq": self._perception_event_seq,
+                "frame_index": pe.get("frame_index", live["frame_index"]),
+                "event_id": pe_id,
+                "event_type": pe.get("event_type", ""),
+                # 转 str 避免 JSON 序列化失败（UUID / 对象）。
+                "visitor_id": str(pe.get("visitor_id", "") or ""),
+                "visitor_instance_id": str(pe.get("visitor_instance_id", "") or ""),
+                "score": pe.get("score"),
+                "location": pe.get("location", ""),
+                "repeat_count": pe.get("repeat_count"),
+                "meta": pe.get("meta", {}),
+            })
+        # P0-1 修复：WarningEvent 持久化（不进滚动窗口）。去重：warning_id 为主键。
+        for w in live.get("warning_objects", ()):
+            wid = str(w.get("warning_id", ""))
+            if not wid or wid in self._warning_ids_cache:
+                continue
+            self._warning_ids_cache.add(wid)
+            self._warning_seq += 1
+            self._warnings_cache.append({
+                "seq": self._warning_seq,
+                "warning_id": wid,
+                "frame_index": w.get("frame_index", live["frame_index"]),
+                "risk_level": w.get("risk_level", ""),
+                "recommended_action": w.get("recommended_action", ""),
+                "reason_summary": list(w.get("reason_summary", []) or []),
+                "trigger_events": list(w.get("trigger_events", []) or []),
+                "perception_score": w.get("perception_score"),
+                "device_id": w.get("device_id"),
+                "elder_id": w.get("elder_id"),
+            })
+        # PR-B：risk_transition 状态机（服务端权威判定，前端只渲染——红线 §7.8）。
+        # P0-1 修复说明：判定仍用 _last_risk_levels（保持单帧边界一致性），
+        # 但 payload 加入 active_warnings 完整对象（P0-2 fix），使前端能拿到 warning 事实。
+        cur_risky = bool(self._last_risk_levels)
+        if cur_risky and not self._risk_active:
+            self._last_risk_transition = "raised"
+        elif not cur_risky and self._risk_active:
+            self._last_risk_transition = "cleared"
+        elif cur_risky:
+            self._last_risk_transition = "active"
+        else:
+            # 持续无风险（含首连初始化）→ 无 transition（不推信号，§4.6 契约表）。
+            self._last_risk_transition = None
+        self._risk_active = cur_risky
         self._total_frames += 1
         self._counts["perception_events"] += len(live["event_types"])
         self._counts["warnings"] += len(live["risk_levels"])

@@ -262,13 +262,21 @@ class DemoGateway:
             # 帧广播（LP-1 真实同步帧流）：每帧推最小进度信号 + 真实帧画面（base64 JPEG）。
             # Frame N 的 JPEG 与 Frame N 的 detection（同帧 perception_delta，case_time = N×interval）
             # 天然同步——服务端逐帧 decode → process_frame → encode，单一事实源（VM-9），浏览器只显示。
+            # PR-C：frame_tick 补 case_time（红线 §7.7：frame_index + case_time 双标识贯穿
+            # frame_tick / perception_delta / risk_delta，Case Time chip 由此驱动）。
+            try:
+                interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
+                ft_case_time = round(self._frame_index * interval, 3)
+            except Exception:  # noqa: BLE001  (fail-closed：case_time 计算失败退回 0.0)
+                ft_case_time = 0.0
             await self.hub.broadcast(
                 {
                     "type": "frame_tick",
                     "frame_index": self._frame_index,
                     "loop_count": self.loop_count,
+                    "case_time": ft_case_time,
                     "frame_base64": encode_frame_to_base64_jpeg(
-                        frame, quality=50, max_width=960
+                        frame, quality=35, max_width=720
                     ),
                 }
             )
@@ -282,7 +290,9 @@ class DemoGateway:
                 acc = self._ensure_live_accumulator()
                 delta = acc.extract_evidence_delta(self._prev_evidence_fp)
                 self._prev_evidence_fp = acc.projection_fingerprint()
-                if delta.get("timeline") or delta.get("audio") or delta.get("case_time"):
+                # P0-1 修复：新增 perception_events / warnings 触发条件（behavior-timeline / task-cards 数据通路）。
+                if (delta.get("timeline") or delta.get("audio") or delta.get("case_time")
+                        or delta.get("perception_events") or delta.get("warnings")):
                     self._delta_seq += 1
                     delta["seq"] = self._delta_seq
                     await self.hub.broadcast(delta)
@@ -307,16 +317,32 @@ class DemoGateway:
             # LP-3 实时风险与决策流（risk_delta）：Perception → Risk → Decision → Action
             # 的实时投影（risk_levels/recommended_actions/command_types，覆盖式"当前 AI 判断"）。
             # 风险指纹变化才推；浏览器据此渲染 CURRENT STATE / Why / Next action（VM-9）。
+            # PR-B：risk_transition（raised/cleared/active，服务端状态机判定）也是广播条件——
+            # cleared 时 risk_levels 为空列表，无 transition 条件会吞掉熄卡信号（Owner 锁死：
+            # 前端绝不自行解释"空=CLEARED"）。case_time 补同步标识（红线 §7.7：
+            # frame_index + case_time 双标识贯穿 frame_tick / perception_delta / risk_delta）。
+            # P0-1：risk_delta 内嵌 risk_signals + trigger_events + perception_scores +
+            # device_id/elder_id（Owner Q1 方案 B）—— 一个 risk_delta = 一个风险状态切片，
+            # 浏览器单消息消费，无需多流时间关联。
             try:
                 acc = self._ensure_live_accumulator()
                 rdelta = acc.extract_risk_delta(self._prev_risk_fp)
                 self._prev_risk_fp = acc.risk_fingerprint()
                 if (
-                    rdelta.get("risk_levels")
+                    rdelta.get("risk_transition")
+                    or rdelta.get("risk_levels")
                     or rdelta.get("reason_summary")
                     or rdelta.get("recommended_actions")
                     or rdelta.get("command_types")
+                    or rdelta.get("trigger_events")
+                    or rdelta.get("perception_scores")
+                    or rdelta.get("warning_ids")
+                    or rdelta.get("risk_signals")
+                    or rdelta.get("device_id")
+                    or rdelta.get("elder_id")
                 ):
+                    interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
+                    rdelta["case_time"] = round(self._frame_index * interval, 3)
                     await self.hub.broadcast(rdelta)
             except Exception as exc:  # noqa: BLE001
                 structlog.get_logger(__name__).warning("risk_delta_failed", exc_info=exc)
@@ -576,6 +602,9 @@ class DemoGateway:
         self._prev_perception_fp = None
         # LP-3 风险指纹同步重置
         self._prev_risk_fp = None
+        # P0-1 修复：行为/警告缓存基线重置（新增的 perception_events / warnings 缓存）
+        self._prev_pe_seqs_fp = None
+        self._prev_w_seqs_fp = None
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())
@@ -806,7 +835,16 @@ def create_app(
             from home_perception.visualizer.viewer import render_case_viewer
             from home_perception.visualizer.viewer.live_adapter import build_live_presentation
 
+            from .golden_adapter import GOLDEN_CASES
+            from .golden_evidence_injector import inject_golden_evidence
+
             projection = gateway._ensure_live_accumulator().to_evidence_projection()
+            # Phase 2: golden case 注入 manifest 派生的 pre-event 节点。
+            # 检测方法：scenario.scenario_id 在 GOLDEN_CASES 集合内（run_demo.py 已经写入 golden_*
+            # yaml，scenario_id 是 case 名如 "repeated_visit"）。其他 demo scenario 走原路径。
+            scenario = gateway.scenario
+            if scenario.scenario_id in GOLDEN_CASES:
+                inject_golden_evidence(projection, scenario.scenario_id)
             proj, descriptor = build_live_presentation(
                 projection, live_ws_path=demo_settings.ws_path
             )

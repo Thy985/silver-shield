@@ -43,10 +43,38 @@ def test_live_stream_js_delta_renders_and_dedups():
         const fs = require('fs');
         function makeEl() {
           var el = {
-            attrs: {}, html: '', text: '',
+            attrs: {}, html: '', text: '', className: '', style: {}, onclick: null, _children: [],
+            classList: { add: function () {}, remove: function () {} },
+            parentNode: { querySelector: function () { return null; }, insertBefore: function () {}, removeChild: function () {}, nextSibling: null },
             getAttribute: function (k) { return this.attrs[k] != null ? this.attrs[k] : null; },
             setAttribute: function (k, v) { this.attrs[k] = String(v); },
             insertAdjacentHTML: function (pos, h) { this.html += h; },
+            appendChild: function (child) {
+              var h = (child && child.outerHTML != null) ? child.outerHTML
+                    : (child && child.html != null) ? child.html
+                    : (child != null ? String(child) : '');
+              this.html += h;
+              this._children.push(child);
+              if (child) child.parentNode = this;
+              return child;
+            },
+            querySelector: function () { return null; },
+            querySelectorAll: function (sel) {
+              if (sel === 'li.tl-item[data-ref]') {
+                var re = /data-ref="([^"]*)"/g, m, out = [];
+                while ((m = re.exec(this.html)) !== null) {
+                  (function (ref) {
+                    out.push({ getAttribute: function (k) { return k === 'data-ref' ? ref : null; }, parentNode: null });
+                  })(m[1]);
+                }
+                return out;
+              }
+              return [];
+            },
+            removeChild: function (child) {
+              this._children = this._children.filter(function (c) { return c !== child; });
+              if (child && child.outerHTML != null) this.html = this.html.split(child.outerHTML).join('');
+            },
           };
           Object.defineProperty(el, 'textContent', {
             set: function (v) { this.text = String(v); },
@@ -64,6 +92,21 @@ def test_live_stream_js_delta_renders_and_dedups():
         const framesMuted = makeEl(); framesMuted.text = 'mode=live · frames=253';  // .scenario-title .muted
 
         const doc = {
+          createElement: function () {
+            // 最小 DOM 解析：innerHTML 设入 → firstChild.outerHTML 透出节点 HTML（_applyDelta 用其重建/追加）
+            var e = makeEl();
+            var _inner = '';
+            Object.defineProperty(e, 'innerHTML', {
+              set: function (v) {
+                _inner = String(v);
+                e.firstChild = { outerHTML: _inner, getAttribute: function () { return null; },
+                  parentNode: null, className: '', style: {}, textContent: '', onclick: null };
+              },
+              get: function () { return _inner; },
+              configurable: true,
+            });
+            return e;
+          },
           querySelector: function (sel) {
             if (sel === '.scenario-title code') return codeEl;
             if (sel === '.timeline') return ul;
@@ -77,6 +120,7 @@ def test_live_stream_js_delta_renders_and_dedups():
             return [];
           },
           getElementById: function (id) { return id === 'case-time-track-live_telephone_risk' ? track : null; },
+          body: makeEl(),
         };
         global.document = doc;
         global.location = { protocol: 'http:', host: '127.0.0.1:8765' };
@@ -280,3 +324,127 @@ def test_live_stream_js_perception_delta_renders():
     )
     assert r.returncode == 0, f"perception_delta 渲染失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
     assert "PERCEPTION_OK" in r.stdout
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("node"),
+    reason="CI 无 node 则跳过（html-inline-js 纪律）",
+)
+def test_live_stream_js_risk_card_and_signal():
+    """PR-B（Node vm）：risk_delta → ③ ✓ 人话风险卡 + ③.5 RAISED/CLEARED 信号。
+
+    - raised：卡亮起（✓ 人话原因 + 建议动作人话映射）+ 信号卡 RAISED；
+    - cleared（risk_levels 空 + 服务端 transition）：风险卡熄灭回空态 + 信号 CLEARED 徽章；
+      且风险信号卡 DOM **保留**（T1.2：不再 setTimeout 清空，避免 RAISED→CLEARED 闪烁，
+      新 RAISED 由 raised 分支整体覆盖旧卡）。
+    """
+    import subprocess
+    import tempfile
+
+    src = _live_stream_source()
+    harness = textwrap.dedent(
+        r"""
+        const fs = require('fs');
+        function makeEl() {
+          var el = { attrs: {}, html: '', text: '', style: {},
+            getAttribute: function (k) { return this.attrs[k] != null ? this.attrs[k] : null; },
+            setAttribute: function (k, v) { this.attrs[k] = String(v); } };
+          Object.defineProperty(el, 'textContent', {
+            set: function (v) { this.text = String(v); }, get: function () { return this.text; } });
+          Object.defineProperty(el, 'innerHTML', {
+            set: function (v) { this.html = String(v); }, get: function () { return this.html; } });
+          return el;
+        }
+        const sid = 'live_t1';
+        const els = {};
+        ['lrk-card', 'lrk-empty', 'lrk-level', 'lrk-frame', 'lrk-reasons', 'lrk-rec',
+         'live-signals-empty'].forEach(function (k) { els[k + '-' + sid] = makeEl(); });
+        // 信号容器：innerHTML 写入含 rt-card 时同步提供 querySelector('.rt-card') mock。
+        const sigBox = { html: '', style: {}, _card: null,
+          querySelector: function (sel) { return sel === '.rt-card' ? this._card : null; } };
+        Object.defineProperty(sigBox, 'innerHTML', {
+          configurable: true,
+          set: function (v) {
+            this.html = String(v);
+            if (this.html.indexOf('rt-card') !== -1) {
+              const card = { classes: {},
+                badge: { textContent: 'RAISED', classList: { add: function () {}, remove: function () {} } } };
+              card.classList = { add: function (c) { card.classes[c] = true; },
+                                 remove: function (c) { delete card.classes[c]; } };
+              card.querySelector = function (sel) { return sel === '.rt-badge' ? card.badge : null; };
+              this._card = card;
+            } else { this._card = null; }
+          },
+          get: function () { return this.html; },
+        });
+        els['live-signals-' + sid] = sigBox;
+        const lp = makeEl(); lp.attrs['data-scenario'] = sid;
+        const closurePanel = makeEl();
+        closurePanel.getAttribute = function (k) { return k === 'data-ws-path' ? '/ws' : null; };
+        const doc = {
+          querySelector: function (sel) {
+            if (sel === '.live-perception') return lp;
+            if (sel === '.closure-panel') return closurePanel;
+            return null;
+          },
+          querySelectorAll: function () { return []; },
+          getElementById: function (id) { return els[id] || null; },
+        };
+        global.document = doc;
+        global.location = { protocol: 'http:', host: '127.0.0.1:8765' };
+        global.WebSocket = function () { global._ws = this; };
+        global.window = global;
+        eval(fs.readFileSync(process.argv[2], 'utf-8'));
+
+        // ① raised：风险卡亮起（✓ 人话原因 + 建议人话映射）+ 信号 RAISED
+        global._ws.onmessage({ data: JSON.stringify({
+          type: 'risk_delta', frame_index: 23, case_time: 2.875, risk_transition: 'raised',
+          risk_levels: ['HIGH'], reason_summary: ['夜间访问', 'repeated_visit_detected'],
+          recommended_actions: ['ESCALATE_COMMUNITY'], command_types: ['CREATE_COMMUNITY_TASK'],
+        })});
+        const raised = {
+          cardShown: els['lrk-card-' + sid].style.display === '',
+          emptyHidden: els['lrk-empty-' + sid].style.display === 'none',
+          level: els['lrk-level-' + sid].textContent === 'HIGH 风险',
+          frame: els['lrk-frame-' + sid].textContent.indexOf('F23') !== -1
+            && els['lrk-frame-' + sid].textContent.indexOf('2.9s') !== -1,
+          reasons: els['lrk-reasons-' + sid].innerHTML.indexOf('✓ 夜间访问') !== -1
+            && els['lrk-reasons-' + sid].innerHTML.indexOf('✓ 检测到重复访问') !== -1,
+          rec: els['lrk-rec-' + sid].innerHTML.indexOf('升级社区') !== -1,
+          sigRaised: sigBox.html.indexOf('RAISED') !== -1 && sigBox.html.indexOf('2.9s') !== -1,
+          sigEmptyHidden: els['live-signals-empty-' + sid].style.display === 'none',
+        };
+        // ② cleared：risk_levels 空 + 服务端 transition=cleared → 熄卡 + 回空态
+        global._ws.onmessage({ data: JSON.stringify({
+          type: 'risk_delta', frame_index: 40, case_time: 5.0, risk_transition: 'cleared',
+          risk_levels: [], reason_summary: [], recommended_actions: [], command_types: [],
+        })});
+        const cleared = {
+          cardHidden: els['lrk-card-' + sid].style.display === 'none',
+          emptyShown: els['lrk-empty-' + sid].style.display === '',
+          emptyText: els['lrk-empty-' + sid].textContent.indexOf('风险尚未触发') !== -1,
+          sigCleared: sigBox._card && sigBox._card.badge.textContent === 'CLEARED',
+          // T1.2 回归：cleared 后信号卡 DOM 保留（rt-card 仍在），不闪烁消失
+          sigRetained: sigBox.html.indexOf('rt-card') !== -1,
+        };
+        const ok = Object.keys(raised).every(function (k) { return raised[k]; })
+          && Object.keys(cleared).every(function (k) { return cleared[k]; });
+        console.log(ok ? 'RISK_CARD_OK' : JSON.stringify({ raised: raised, cleared: cleared }));
+        process.exit(ok ? 0 : 1);
+        """
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        harness_path = f.name
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(src)
+        src_path = f.name
+    r = subprocess.run(
+        ["node", harness_path, src_path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert r.returncode == 0, f"risk card/signal 断言失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
+    assert "RISK_CARD_OK" in r.stdout
