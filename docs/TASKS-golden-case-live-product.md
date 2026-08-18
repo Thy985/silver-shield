@@ -10,8 +10,9 @@
 
 | Phase | 任务 | 状态 |
 |-------|------|------|
-| Phase 1 | UI 修复（产品骨架） | 🔄 进行中（T1.1/T1.2 已落地） |
-| Phase 2 | 技术修复（数据通路） | ⬜ |
+| Phase 1 | UI 修复（产品骨架） | 🔄 进行中（T1.1/T1.2/T1.3 已落地） |
+| Phase 1.5 | 数据契约对齐（M1-M5 · §9.4 最高优先级） | 🔴 待执行（M1 优先） |
+| Phase 2 | 技术修复（数据通路 · §9.4 降为③） | ⬜ |
 | Phase 3 | 扩展 Golden Cases | ⬜ |
 | Phase 4 | Demo Mode（待 Owner 决策） | ⬜ |
 
@@ -121,7 +122,7 @@ def test_live_banner_honest_demo_label():
 
 ---
 
-### T1.3 — Timeline 节点文案人话化 [P0]
+### T1.3 — Timeline 节点文案人话化 [P0] ✅ 已落地（commit fc46cd3）
 
 **文件**：`src/home_perception/visualizer/assets/live_stream.js:298-314` `_buildTimelineNode`
 
@@ -329,7 +330,102 @@ function _renderAcousticProgression(stateChanges) {
 
 ---
 
-## Phase 2：技术修复（Week 2）
+## Phase 1.5：数据契约对齐（M1-M5 · DIAGNOSIS §9.4 修正后最高优先级）
+
+> **优先级反转说明**（DIAGNOSIS v0.2 §9.4）：
+> 原推荐"先修 audio 链（T2.2/T2.3）+ telephone_risk"经 4 维度评估后**反转**。
+> 路径 B（M1 manifest 映射）成本最低、4 个 case 全受益，优先级最高。
+> 路径 A（T2.2/T2.3 修 IEEE_FLOAT + YAMNet）降为③，仅 telephone_risk 受益。
+
+### M1 — Manifest 语义 → AudioPerceptionKind 5 类映射表 [P0] 🔴 最高优先级
+
+> **DIAGNOSIS §6 Mismatch-F / §9.4 路径 B**：Golden manifest 用领域语义标签
+>（`doorbell_ring` / `voice_stressed` / `telephone_interaction` / `phone_interaction`），
+> Live runtime 用 `AudioPerceptionKind` 5 类（`audio_telephone_persistent` / `audio_voice_raised` ...）。
+> 两者无正式映射表 → 4 个 golden case 都无法接入 Live audio 事件链路。
+
+**文件**：`src/silver_demo/golden_evidence.py`（manifest → live 桥接层，已处理 acoustic_progression）
+
+**新增映射表**：
+```python
+MANIFEST_TO_AUDIO_KIND: dict[str, str | None] = {
+    # telephone_risk
+    "voice_stressed": "audio_voice_raised",
+    "voice_stress_elevated": "audio_voice_raised",
+    "telephone_interaction": "audio_telephone_persistent",
+    "phone_interaction": "audio_telephone_persistent",
+    # stranger_visit
+    "doorbell_ring": "audio_anomaly_other",
+    "doorbell": "audio_anomaly_other",
+    "footsteps_in": "audio_anomaly_other",
+    "footsteps_out": "audio_anomaly_other",
+    "footsteps": "audio_anomaly_other",
+    # 通用
+    "distress_cry": "audio_distress_cry",
+    "voice_normal": None,    # 正常语音不映射
+    "ambient": None,          # 环境音不映射
+    "silence_response": None, # 静音不映射
+}
+```
+
+**新增函数**：`manifest_audio_to_live_audio_kinds(manifest) -> list[dict]`
+- 扫描 `manifest.audio`（dict key）+ `manifest.segments[].evidence.audio` + `manifest.variants[].evidence.audio`
+- 映射为 `LiveAudioFrame`-shape dict（`kind` 用 AudioPerceptionKind value 字符串）
+- 未映射的标签跳过（fail-soft，不编造）
+
+**在 `golden_evidence_projection` 返回值增加**：`audio_events: list[dict]`
+
+**验收**：
+- [ ] `telephone_risk` → 至少 1 个 `audio_telephone_persistent` + 1 个 `audio_voice_raised`
+- [ ] `stranger_visit` → 至少 1 个 `audio_anomaly_other`（doorbell）
+- [ ] `repeated_visit` → 至少 1 个 `audio_anomaly_other`（footsteps/doorbell）
+- [ ] `evidence_insufficient` → 0 个（无 audio 声明）
+- [ ] 所有产出的 `kind` ∈ `AudioPerceptionKind` 5 类
+- [ ] 不 import `home_perception.audio.event`（freeze boundary，用字符串）
+
+**测试**：`tests/demo/test_golden_evidence.py` 增加 M1 用例
+
+---
+
+### M2 — golden_telephone_risk 接入后端到端验证 [P1]
+
+> 依赖 M1 完成。验证 telephone_risk 经 M1 映射后能跑出 `audio_telephone_persistent` + `audio_voice_raised` 事件。
+
+**新增**：`scripts/verify_golden_telephone_live.py`
+- 启动 `golden_telephone_risk` live scenario
+- WS 客户端收集事件
+- 断言 audio_events 含两类 kind
+
+---
+
+### M3 — golden_repeated_visit 三幕循环接入 [P1]
+
+> 依赖 M1 + Live Adapter memory 通道（⑥ 跨日叙事）。
+
+**目标**：让 `golden_repeated_visit` 跑起来，演示"系统记得过去"。
+- 接入 `memory_episode_nodes`（M1 已派生）到 Live Adapter memory_episodes 字段
+- 验证 ⑥ 历史上下文区域显示 3 条跨日记录
+
+---
+
+### M4 — golden_evidence_insufficient "克制"叙事 [P2]
+
+> 依赖 M1。验证 `evidence_insufficient` 跑出"不报警"叙事（NOT_TRIGGERED）。
+
+---
+
+### M5 — 跨 case Demo Mode 顺序播放 [P3]
+
+> 依赖 M1-M4 全部完成。评委模式自动推进 case、自动高亮。
+> **需要 Owner 决策**：是否本期做。
+
+---
+
+## Phase 2：技术修复（Week 2 · DIAGNOSIS §9.4 降为③）
+
+> **优先级降级说明**：原 Phase 2（T2.2/T2.3 修 audio 链）仅 telephone_risk 受益，
+> 成本高（2 个外部依赖）。M1 完成后，4 个 case 已能接入，telephone_risk 的 audio 链
+> 修复可推迟到 M1-M4 之后。
 
 ### T2.1 — 补 Golden Case Scenario YAML [P0]
 
@@ -529,28 +625,39 @@ def test_risk_path_telephone_risk():
 
 ---
 
-## 执行顺序（最终建议）
+## 执行顺序（最终建议 · DIAGNOSIS §9.4 修正后）
 
 ```
-Phase 1（Week 1）— 先做产品骨架
-  Day 1: T1.1 + T1.2
-  Day 2: T1.3 + T1.5
+Phase 1.5（最高优先级）— 数据契约对齐（让 4 个 case 都能接入）
+  Day 1: M1（Manifest 语义 → AudioPerceptionKind 5 类映射表）
+  Day 2: M1 测试 + 4 case 端到端验证
+  Day 3: M2（telephone_risk 端到端验证）
+  Day 4: M3（repeated_visit memory 通道接入）
+  Day 5: M4（evidence_insufficient 克制叙事）
+
+Phase 1（并行可做）— UI 修复（产品骨架）
+  Day 1: T1.1 + T1.2（已落地）
+  Day 2: T1.3（已落地）+ T1.5
   Day 3: T1.4
   Day 4: T1.6
   Day 5: T1.7 + visual polish
 
-Phase 2（Week 2）— 让数据跑通
+Phase 2（降为③）— audio 链修复（仅 telephone_risk 深耕需要）
   Day 1: T2.1（YAML）
   Day 2: T2.2（IEEE_FLOAT）
   Day 3-4: T2.3（class_names）
   Day 5: T2.4（端到端验证）
 
-Phase 3（Week 3）— 扩展 Case
+Phase 3 — 扩展 Case
   Day 1-2: T3.1（E2E 测试）
   Day 3-5: T3.2（repeated_visit 接入）
 
-Phase 4（可选）：T4.1（Demo Mode）
+Phase 4（可选）：T4.1 / M5（Demo Mode · 待 Owner 决策）
 ```
+
+**优先级反转依据**：DIAGNOSIS v0.2 §9.4 —— 路径 B（M1）成本最低、4 case 全受益；
+路径 A（T2.2/T2.3）成本高、仅 telephone_risk 受益。先做 M1 让 4 case 都跑通设计意图，
+再选 case 深耕。
 
 ---
 

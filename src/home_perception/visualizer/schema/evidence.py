@@ -60,6 +60,11 @@ class TimelineNode(TypedDict):
     # 仅当真实跨模态关联派生（音频节点 → 关联视觉节点）时由 loader 投影产出；
     # 缺失即未投影，绝不占位编造（对齐 AudioEvidenceNode.related_visual_ref）。
     related_visual_ref: NotRequired[str]
+    # P0-11.x-3：Case Time 秒（相对最早证据 T0）。**仅 AUDIO 节点允许**此字段——
+    # 由 live_adapter._build_timeline 在 audio 节点注入；非 AUDIO 节点不得携带。
+    # 供 audio_sync.js 点击 timeline 节点 → seek/play audio at (case_time - track.start_time)。
+    # 缺失 → audio_sync.js 回退到 0（从头播放）。非事件契约字段，纯展示层元数据。
+    case_time: NotRequired[float]
 
 
 class StageVerdict(TypedDict):

@@ -490,6 +490,20 @@ def _build_audio_evidence(
             node["related_visual_ref"] = related
         if event_id is not None:
             node["event_id"] = event_id
+        # P0-1 声学状态字段（可选，canonical 有则透传；缺失即不展示，AC-12）
+        for ckey, akey in (
+            ("acoustic_state_change", "audio_acoustic_state_change"),
+            ("voice_stress_score", "audio_voice_stress_score"),
+            ("f0_delta", "audio_f0_delta"),
+            ("speech_rate_delta", "audio_speech_rate_delta"),
+            ("energy_delta", "audio_energy_delta"),
+        ):
+            val = entry.get(akey)
+            if val is not None:
+                if isinstance(val, (int, float)) and ckey != "acoustic_state_change":
+                    node[ckey] = float(val)
+                elif ckey == "acoustic_state_change" and isinstance(val, str):
+                    node[ckey] = val
         nodes.append(node)
     return tuple(nodes)
 

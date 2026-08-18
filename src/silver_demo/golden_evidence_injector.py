@@ -72,25 +72,49 @@ def inject_golden_evidence(
     if ev["timeline_nodes"]:
         scenario["timeline"] = tuple(existing_timeline) + tuple(ev["timeline_nodes"])
 
-    # 2. 追加 graph.nodes（memory episode 节点）
-    if ev["memory_episode_nodes"]:
+    # 2. 追加 graph.nodes（仅 timeline 节点；memory episode 不进 evidence graph，只进 memory_episodes）
+    if ev["timeline_nodes"]:
         graph = scenario.get("graph")
         if isinstance(graph, dict):
             existing_nodes = graph.get("nodes") or ()
-            graph["nodes"] = tuple(existing_nodes) + tuple(ev["memory_episode_nodes"])
+            graph["nodes"] = tuple(existing_nodes) + tuple(ev["timeline_nodes"])
 
     # 3. 填充 memory_episodes（用于 ⑥ 跨日叙事）
     if ev["memory_episode_nodes"]:
         scenario["memory_episodes"] = tuple(ev["memory_episode_nodes"])
 
     # 4. 同步追加 refs（schema: refs 在 scenario 层）
-    new_refs = (
-        [n["ref"] for n in ev["timeline_nodes"]]
-        + [n["ref"] for n in ev["memory_episode_nodes"]]
-    )
+    new_refs = [n["ref"] for n in ev["timeline_nodes"]]
+    if ev["memory_episode_nodes"]:
+        new_refs += [n["ref"] for n in ev["memory_episode_nodes"]]
     if new_refs:
         existing_refs = scenario.get("refs") or ()
         scenario["refs"] = tuple(existing_refs) + tuple(new_refs)
+
+    # 5. M1: 注入 manifest 派生的 audio_events → audio_evidence（provenance=SIMULATED）
+    # 仅当 runtime 未摄入真实音频（audio_evidence 为空）时注入，避免覆盖 REAL_SENSOR 数据
+    if ev["audio_events"]:
+        existing_audio = scenario.get("audio_evidence") or ()
+        if not existing_audio:  # 只填充空槽位，不覆盖真实 runtime 音频
+            audio_nodes = []
+            for idx, ae in enumerate(ev["audio_events"]):
+                audio_nodes.append({
+                    "timestamp": ae["timestamp"],
+                    "kind": ae["kind"],
+                    "score": ae["score"],
+                    "confidence": ae["confidence"],
+                    "labels": list(ae["labels"]),
+                    "source_segment_ids": list(ae["source_segment_ids"]),
+                    "ref": f"live://audio/golden/{idx}",
+                    "provenance_kind": "SIMULATED",
+                })
+            scenario["audio_evidence"] = tuple(audio_nodes)
+            # 同步追加 refs
+            for an in audio_nodes:
+                new_refs.append(an["ref"])
+            if new_refs:
+                existing_refs = scenario.get("refs") or ()
+                scenario["refs"] = tuple(existing_refs) + tuple(new_refs)
 
     return projection
 

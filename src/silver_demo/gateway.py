@@ -259,10 +259,11 @@ class DemoGateway:
             except Exception as exc:  # noqa: BLE001
                 structlog.get_logger(__name__).warning("workflow_store_upsert_failed", exc_info=exc)
 
-            # 帧广播（LP-1 真实同步帧流）：每帧推最小进度信号 + 真实帧画面（base64 JPEG）。
-            # Frame N 的 JPEG 与 Frame N 的 detection（同帧 perception_delta，case_time = N×interval）
-            # 天然同步——服务端逐帧 decode → process_frame → encode，单一事实源（VM-9），浏览器只显示。
-            # PR-C：frame_tick 补 case_time（红线 §7.7：frame_index + case_time 双标识贯穿
+            # 帧广播（LP-1 真实同步帧流）：每帧推最小进度心跳（frame_index / case_time / loop_count）。
+            # 真实帧画面改由 MJPEG 端点 (/mjpeg/{scenario_id}) 流式传输，浏览器原生解码，
+            # 避免 Base64 over WS 的 CPU/带宽开销。Frame N 的 case_time 与同帧 perception_delta
+            # 天然同步（单一事实源 VM-9）。
+            # PR-C：frame_tick 携带 case_time（红线 §7.7：frame_index + case_time 双标识贯穿
             # frame_tick / perception_delta / risk_delta，Case Time chip 由此驱动）。
             try:
                 interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
@@ -275,9 +276,7 @@ class DemoGateway:
                     "frame_index": self._frame_index,
                     "loop_count": self.loop_count,
                     "case_time": ft_case_time,
-                    "frame_base64": encode_frame_to_base64_jpeg(
-                        frame, quality=35, max_width=720
-                    ),
+                    # frame_base64 已移除：视频流改用 MJPEG (/mjpeg/{scenario_id})
                 }
             )
 
@@ -1088,6 +1087,103 @@ def create_app(
             "frame_index": 0,
             "loop_count": 0,
         }
+
+    # ------------------------------------------------------------------
+    # MJPEG Streaming 端点（P0-11 视频流优化：替代 Base64 over WS）
+    # ------------------------------------------------------------------
+    @app.get("/mjpeg/{scenario_id}")
+    async def mjpeg_stream(scenario_id: str) -> "StreamingResponse":
+        """MJPEG 视频流 (multipart/x-mixed-replace)。
+
+        浏览器原生解码 MJPEG，无 Base64 开销，CPU/延迟显著降低。
+        仅 live_enabled 时可用；帧源来自 gateway.source（与帧循环共用同一 Source）。
+        """
+        if not demo_settings.live_enabled:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Live 入口未启用（DEMO_LIVE=1 才暴露 /mjpeg）"},
+            )
+        # 校验 scenario_id 匹配（防止任意 ID 访问）
+        if scenario_id != gateway.scenario.scenario_id:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"场景不匹配: {scenario_id} != {gateway.scenario.scenario_id}"},
+            )
+
+        from fastapi.responses import StreamingResponse
+
+        boundary = "frame"
+        quality = 50  # JPEG quality
+        max_width = 720  # 同 frame_tick 编码参数
+
+        async def frame_generator() -> AsyncIterator[bytes]:
+            """生成 MJPEG 帧流。独立于主帧循环，直接从 Source 读取并编码。"""
+            # 创建独立的帧迭代器（不影响主循环的 frame_index / clock）
+            # 注意：source 是共享的，但 MP4 Source 每次迭代会重新打开文件，
+            # CAVIAR Source 是列表迭代。这里创建新迭代器避免与主循环竞争。
+            import cv2
+
+            # 获取帧源配置
+            scenario = gateway.scenario
+            hp_settings = gateway.hp_settings
+
+            # 创建临时 Source 实例用于 MJPEG 流（不影响主循环）
+            temp_source = Source()
+            temp_source.load(scenario, hp_settings)
+
+            while True:  # loop 模式下无限循环
+                try:
+                    for _, frame in temp_source:
+                        if frame is None:
+                            continue
+                        # 编码 JPEG
+                        try:
+                            if max_width and max_width > 0:
+                                _, w = frame.shape[:2]
+                                if w > max_width:
+                                    scale = max_width / float(w)
+                                    frame = cv2.resize(
+                                        frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+                                    )
+                            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+                            if not ok:
+                                continue
+                            jpeg_bytes = buf.tobytes()
+                        except Exception:
+                            continue
+
+                        # MJPEG 边界格式
+                        yield (
+                            f"--{boundary}\r\n"
+                            f"Content-Type: image/jpeg\r\n"
+                            f"Content-Length: {len(jpeg_bytes)}\r\n\r\n"
+                        ).encode("ascii") + jpeg_bytes + b"\r\n"
+
+                        # 限速：按 scenario.fps_target 控制帧率
+                        if scenario.fps_target and scenario.fps_target > 0:
+                            await asyncio.sleep(1.0 / scenario.fps_target)
+                        else:
+                            await asyncio.sleep(0)  # 让出事件循环
+
+                    # 流结束（视频结束）
+                    if not scenario.loop:
+                        break
+                    # loop 模式：重新创建 Source 继续
+                    temp_source = Source()
+                    temp_source.load(scenario, hp_settings)
+                except Exception:
+                    # 生成器异常时静默结束
+                    break
+
+        return StreamingResponse(
+            frame_generator(),
+            media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
     # 把 gateway 挂到 app.state，便于测试 / 调试访问
     app.state.gateway = gateway

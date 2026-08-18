@@ -217,3 +217,92 @@ def test_inject_preserves_existing_graph_edges():
     edges = p["scenarios"][0]["graph"]["edges"]
     assert len(edges) == 1
     assert edges[0]["ref"] == "live://event[0]"
+
+
+# ===========================================================================
+# M1-AudioMap: audio_events 注入测试
+# ===========================================================================
+
+
+def test_telephone_risk_inject_audio_events():
+    """telephone_risk → audio_evidence 注入 audio_telephone_persistent + audio_voice_raised。"""
+    case = "telephone_risk"
+    p = _make_minimal_projection(case)
+    inject_golden_evidence(p, case)
+    audio_ev = p["scenarios"][0]["audio_evidence"]
+    assert len(audio_ev) == 2, f"期望 2 个 audio events，实际 {len(audio_ev)}"
+    kinds = {e["kind"] for e in audio_ev}
+    assert "audio_telephone_persistent" in kinds
+    assert "audio_voice_raised" in kinds
+    # provenance 必须是 SIMULATED
+    for e in audio_ev:
+        assert e["provenance_kind"] == "SIMULATED"
+    # ref 格式
+    for e in audio_ev:
+        assert e["ref"].startswith("live://audio/golden/")
+
+
+def test_stranger_visit_inject_audio_events():
+    """stranger_visit → audio_evidence 注入 audio_anomaly_other（doorbell）。"""
+    case = "stranger_visit"
+    p = _make_minimal_projection(case)
+    inject_golden_evidence(p, case)
+    audio_ev = p["scenarios"][0]["audio_evidence"]
+    assert len(audio_ev) == 1
+    assert audio_ev[0]["kind"] == "audio_anomaly_other"
+    assert audio_ev[0]["provenance_kind"] == "SIMULATED"
+
+
+def test_repeated_visit_inject_audio_events():
+    """repeated_visit → audio_evidence 注入 audio_anomaly_other（episodes.evidence.doorbell）。"""
+    case = "repeated_visit"
+    p = _make_minimal_projection(case)
+    inject_golden_evidence(p, case)
+    audio_ev = p["scenarios"][0]["audio_evidence"]
+    assert len(audio_ev) == 1
+    assert audio_ev[0]["kind"] == "audio_anomaly_other"
+    assert audio_ev[0]["provenance_kind"] == "SIMULATED"
+
+
+def test_evidence_insufficient_no_audio_events():
+    """evidence_insufficient 无 audio 声明 → audio_evidence 保持空。"""
+    case = "evidence_insufficient"
+    p = _make_minimal_projection(case)
+    inject_golden_evidence(p, case)
+    assert p["scenarios"][0]["audio_evidence"] == ()
+
+
+def test_audio_events_refs_synced():
+    """audio_evidence 的 ref 必须同步到 scenario.refs。"""
+    case = "telephone_risk"
+    p = _make_minimal_projection(case)
+    inject_golden_evidence(p, case)
+    audio_ev = p["scenarios"][0]["audio_evidence"]
+    refs = p["scenarios"][0]["refs"]
+    audio_refs = {e["ref"] for e in audio_ev}
+    assert audio_refs.issubset(set(refs))
+
+
+def test_audio_events_do_not_overwrite_real_audio():
+    """若 runtime 已有 REAL_SENSOR audio_evidence，注入不覆盖（保护真实数据）。"""
+    case = "telephone_risk"
+    p = _make_minimal_projection(case)
+    # 模拟 runtime 已摄入真实音频
+    p["scenarios"][0]["audio_evidence"] = (
+        {
+            "timestamp": "1.0",
+            "kind": "audio_telephone_persistent",
+            "score": 0.9,
+            "confidence": 0.95,
+            "labels": ("telephone_interaction",),
+            "source_segment_ids": ("live://audio/0",),
+            "ref": "live://audio/0",
+            "provenance_kind": "REAL_SENSOR",
+        },
+    )
+    inject_golden_evidence(p, case)
+    audio_ev = p["scenarios"][0]["audio_evidence"]
+    # 必须保留原 REAL_SENSOR 节点
+    assert len(audio_ev) == 1
+    assert audio_ev[0]["provenance_kind"] == "REAL_SENSOR"
+    assert audio_ev[0]["ref"] == "live://audio/0"

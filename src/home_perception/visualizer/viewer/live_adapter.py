@@ -1121,9 +1121,13 @@ class ProjectionAccumulator:
                     )
                 )
         # 音频证据节点（持久，跨会话可见）：与时间轴 AUDIO 节点 ↔ audio_evidence 同源一致。
+        # P0-11.x-3：注入 case_time（相对最早音频 T0 的秒），供 audio_sync.js 点击 → seek/play。
+        all_audio_times = [float(ev["audio"]["timestamp"]) for ev in self._audio_events]
+        audio_t0 = min(all_audio_times) if all_audio_times else 0.0
         for ev in self._audio_events:
             la = ev["audio"]
             a_idx = ev["audio_index"]
+            audio_case_time = round(float(la["timestamp"]) - audio_t0, 3)
             nodes.append(
                 TimelineNode(
                     timestamp=f"A{a_idx}",
@@ -1137,6 +1141,7 @@ class ProjectionAccumulator:
                     modality="AUDIO",
                     provenance_kind="REAL_SENSOR",
                     ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
+                    case_time=audio_case_time,
                 )
             )
         return tuple(nodes)
