@@ -176,12 +176,95 @@ def _render_ci_badge(descriptor: CasePresentationDescriptor) -> str:
     )
 
 
+_PROVENANCE_SOURCE_LABEL: dict[str, str] = {
+    "REAL_SENSOR": "Live 设备流（受控演示输入）",
+    "SIMULATED": "Golden Case 录制（仿真闭环）",
+    "FIXTURE": "固定测试素材",
+}
+
+
+def _render_provenance_details(scenario: ScenarioEvidence) -> str:
+    """P0-11.x-4：provenance banner 可展开说明（4 行证据链来源审计）。
+
+    评委点击「证据链来源」展开后看到 4 行：
+    1. 视频源 — 从 timeline provenance_kind 派生
+    2. 音频源 — 从 audio_evidence provenance_kind 派生；无音频 → 显式标注
+    3. 感知事件 — 检查 timeline 中 REAL_SENSOR 节点数（runtime 真实产出）
+    4. 决策证据 — 检查 decision_evidence 条数（runtime 真实产出）
+
+    ACTIVE 语义（Owner 2026-08-18 拍板）：Perception/Decision 不从 provenance 类型
+    推导执行状态，而是检查当前 session 是否已产生真实事件 / 证据。
+    """
+    timeline = scenario["timeline"]
+    kinds = {n["provenance_kind"] for n in timeline}
+    if len(kinds) == 1:
+        video_src = _PROVENANCE_SOURCE_LABEL.get(next(iter(kinds)), "未知")
+    else:
+        video_src = "混合来源：" + " · ".join(
+            _PROVENANCE_SOURCE_LABEL.get(k, k) for k in sorted(kinds)
+        )
+
+    audio_ev = scenario.get("audio_evidence") or ()
+    if audio_ev:
+        audio_kinds = {n["provenance_kind"] for n in audio_ev}
+        if len(audio_kinds) == 1:
+            audio_src = _PROVENANCE_SOURCE_LABEL.get(next(iter(audio_kinds)), "未知")
+        else:
+            audio_src = "混合来源：" + " · ".join(
+                _PROVENANCE_SOURCE_LABEL.get(k, k) for k in sorted(audio_kinds)
+            )
+    else:
+        audio_src = "无音频证据"
+
+    real_sensor_nodes = [n for n in timeline if n["provenance_kind"] == "REAL_SENSOR"]
+    if real_sensor_nodes:
+        perception_status = f"ACTIVE · Runtime 已产出 {len(real_sensor_nodes)} 条感知事件"
+        perception_cls = "prov-detail-active"
+    else:
+        perception_status = "IDLE · 未产出运行时感知事件"
+        perception_cls = "prov-detail-idle"
+
+    decision_ev = scenario.get("decision_evidence") or ()
+    if decision_ev:
+        decision_status = f"ACTIVE · Runtime 已产出 {len(decision_ev)} 步决策推理"
+        decision_cls = "prov-detail-active"
+    else:
+        decision_status = "IDLE · 未产出决策证据"
+        decision_cls = "prov-detail-idle"
+
+    return f"""
+      <details class='prov-details'>
+        <summary>证据链来源</summary>
+        <div class='prov-detail-rows'>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>视频源</span>
+            <span class='prov-detail-value'>{_R._esc(video_src)}</span>
+          </div>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>音频源</span>
+            <span class='prov-detail-value'>{_R._esc(audio_src)}</span>
+          </div>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>感知事件</span>
+            <span class='prov-detail-value {perception_cls}'>{_R._esc(perception_status)}</span>
+          </div>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>决策证据</span>
+            <span class='prov-detail-value {decision_cls}'>{_R._esc(decision_status)}</span>
+          </div>
+        </div>
+      </details>"""
+
+
 def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
     """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。
 
     2026-08-18 Owner 决策（DESIGN-golden-case-live-product §七 Q1）：Live 角标改为
     「● LIVE · 受控演示输入」+ 副标题「非 7×24 真实设备 · 演示素材」，诚实标注 Golden
     Case 是受控录制素材而非真实设备流（VM-13 6 MUST #4 + 模块边界诚实纪律）。
+
+    P0-11.x-4：banner 下方追加 ``<details>`` 可展开说明（4 行证据链来源审计），
+    评委可验证"音频证据从哪里来、Runtime 是否真在跑"。
     """
     kinds = {n["provenance_kind"] for n in scenario["timeline"]}
     if len(kinds) == 1:
@@ -197,7 +280,8 @@ def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
             "<span class='prov-badge'>MIXED</span> "
             + " · ".join(_R._esc(_PROVENANCE_BADGE.get(k, k)) for k in sorted(kinds))
         )
-    return f"<div class='prov-banner'>provenance: {badge}</div>"
+    details = _render_provenance_details(scenario)
+    return f"<div class='prov-banner'>provenance: {badge}{details}</div>"
 
 
 def _render_current_risk(scenario: ScenarioEvidence) -> str:
@@ -2141,6 +2225,17 @@ def render_case_viewer(
   .prov-badge {{ display:inline-flex; align-items:center; gap:8px; padding:1px 8px; border-radius:8px; font-size:11px;
                  color:#fff; font-weight:600; }}
   .prov-subtitle {{ font-size:11px; color:#888; margin-left:8px; }}
+  .prov-details {{ margin-top:6px; }}
+  .prov-details > summary {{ cursor:pointer; font-size:11px; color:#4a90d9;
+                             user-select:none; list-style:none; }}
+  .prov-details > summary::before {{ content:'▸ '; }}
+  .prov-details[open] > summary::before {{ content:'▾ '; }}
+  .prov-detail-rows {{ margin-top:6px; display:flex; flex-direction:column; gap:3px; }}
+  .prov-detail-row {{ display:flex; gap:8px; font-size:11px; line-height:1.6; }}
+  .prov-detail-label {{ color:#888; min-width:64px; flex-shrink:0; }}
+  .prov-detail-value {{ color:#3b4a5a; }}
+  .prov-detail-active {{ color:#2e9e6b; font-weight:600; }}
+  .prov-detail-idle {{ color:#aaa; }}
   .prov-simulated {{ background:#7b5cd6; }}
   .prov-real-sensor {{ background:#2e9e6b; }}
   .prov-fixture {{ background:#8a8a8a; }}
