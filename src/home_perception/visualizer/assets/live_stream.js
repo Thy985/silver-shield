@@ -61,7 +61,20 @@
     ESCALATE_COMMUNITY: '升级社区'
   };
   // PR-B：reason_summary 语义整理（枚举→人话同义映射，Owner 红线 §7.9）。
+  // 来源：RuleBasedDecisionPolicy.routing_table 的 human_reason（第三元素）+ 实时风险评估器补充。
+  // risk_delta.reason_summary 直接包含这些人话字符串，映射做同义润色/兜底。
   var _REASON_ZH = {
+    // Routing table 原始 reason → 显示文案（同义润色）
+    '异常停留': '停留超过阈值',
+    '重复访问': '检测到重复访问',
+    '未在白名单': '待核实到访',
+    '异常时段访问': '夜间异常访问',
+    '多风险规则同时命中': '高风险逼近（多规则命中）',
+    // 实时风险评估器 / 声学风险补充
+    'acoustic_state_change': '声学状态变化',
+    'voice_stress_elevated': '语音应激升高',
+    'telephone_interaction': '电话交互进行中',
+    // 兼容旧 event_type 键（去重兜底）
     repeated_visit_detected: '检测到重复访问',
     abnormal_dwell: '停留超过阈值',
     visit_normal: '异常时段访问',
@@ -129,19 +142,52 @@
   }
 
   // PR-B：时间线节点 summary → 人话（DESIGN §4.4：只改前端渲染文案映射，不新增事实）。
+  // 支持类型：frame / audio / resolution / golden_audio_state / golden_memory_ref / golden_variant / golden_cross_modal
   function _humanSummary(n) {
     var s = n.summary || '';
-    if (n.type === 'frame') {
+    var t = n.type || '';
+
+    if (t === 'frame') {
       var m = /frame \d+: (\d+) 检测, (\d+) 警告/.exec(s);
       if (m) {
         if (Number(m[2]) > 0) return '检测到 ' + m[1] + ' 个目标 · 风险升级（' + m[2] + ' 项警告）';
         if (Number(m[1]) > 0) return '检测到 ' + m[1] + ' 个目标';
         return '画面中暂无目标';
       }
-    } else if (n.type === 'audio') {
+    } else if (t === 'audio') {
       var am = /audio \d+: (\S+)/.exec(s);
       if (am) return '听到 ' + (_AUDIO_KIND_ZH[am[1]] || am[1]);
+    } else if (t === 'resolution') {
+      // "处置完成：warning abc123 由 family「NOTIFY_FAMILY」（community_done）"
+      return s.replace(/处置完成：warning ([a-f0-9]+) 由 (\w+)「(\w+)」.*/,
+        '处置完成：预警 ${1} 由 ${2}「${3}」');
+    } else if (t === 'golden_audio_state') {
+      // "声学状态 ATTENTION" → "声学状态变化：ATTENTION（关注态）"
+      var phaseMatch = /声学状态\s+(\w+)/.exec(s);
+      if (phaseMatch) {
+        var phase = phaseMatch[1];
+        var phaseZh = { NORMAL: '平静态', ATTENTION: '关注态', AROUSAL: '唤起态', STRESS: '应激态' }[phase] || phase;
+        return '声学状态变化：' + phase + '（' + phaseZh + '）';
+      }
+      return s;
+    } else if (t === 'golden_memory_ref') {
+      // "引用历史 ep_001（ep_002）" → "跨日记忆关联：引用 ep_001（当前 ep_002）"
+      return s.replace(/引用历史\s+(\S+)（(\S+)）/, '跨日记忆关联：引用 $1（当前 $2）');
+    } else if (t === 'golden_variant') {
+      // "A/B variant: case_a (Normal telephone conversation - baseline)"
+      var varMatch = /case_([ab])/.exec(s);
+      if (varMatch) {
+        var v = varMatch[1];
+        var label = v === 'a' ? '基线对话（正常通话）' : '声学应激升级（风险信号）';
+        return '场景切换：Case ' + v.toUpperCase() + ' — ' + label;
+      }
+      return s;
+    } else if (t === 'golden_cross_modal') {
+      // "Cross-modal: phone_interaction ↔ voice_stress_elevated (SUPPORTS)"
+      return s.replace(/Cross-modal:\s*(\S+)\s*↔\s*(\S+)\s*\((\w+)\)/,
+        '跨模态佐证：$1 ↔ $2 （$3）');
     }
+    // 兜底：直接返回 summary（golden 节点的 summary 已是人话）
     return s;
   }
 
@@ -255,7 +301,7 @@
     var ol = global.document.getElementById('ds-loop-' + sid);
     if (ol && snapMeta.loop_count != null) ol.textContent = snapMeta.loop_count;
     var oc = global.document.getElementById('ov-time-' + sid);
-    if (oc) oc.textContent = '0.0s';
+    if (oc) oc.textContent = '00:00';
     var os = global.document.getElementById('demo-stat-' + sid);
     if (os) os.style.display = 'flex';
     var odsf = global.document.getElementById('ds-frame-' + sid);
@@ -582,38 +628,41 @@
     }
   }
 
-  // LP-1：真实同步帧流（frame_tick → <img> 显示 base64 JPEG，浏览器零推理 VM-9）。
-  // Frame N 的画面与同帧 detection（perception_delta，case_time = N×interval）天然同步。
-  // PR-C：frame_tick 携带 case_time（红线 §7.7 双标识），Case Time chip 由本函数驱动。
+  // LP-1：真实同步帧流（frame_tick 心跳：frame_index / case_time / loop_count）。
+  // 真实帧画面由 MJPEG 端点 (/mjpeg/{scenario_id}) 流式传输，浏览器原生解码 <img src="...">，
+  // 无 Base64 over WS 开销。Frame N 的 case_time 与同帧 perception_delta 天然同步（VM-9）。
   // P2：Demo 状态面板实时更新（帧计数 / 循环次数 / 延迟 / Session 计时）。
-  // P2-1：视频帧节流（用户反馈"视频有些卡"）
-  // gateway 端 8fps 推 base64，每帧 ~20-40KB 浏览器要重新解码 → 浏览器压力大
-  // 节流策略：JS 端只保留每 ~150ms 内的最新帧（≈6.7fps 显示），丢弃中间帧
-  // 实际帧率 = 150ms / frame_interval（视觉无明显跳跃）
+  // 同步节流 overlay chips（帧号/Case Time），避免"画面不动、数字狂跳"体验差。
   var _lastFrameTs = 0;
   var FRAME_DISPLAY_INTERVAL_MS = 150;
   function _applyFrame(msg) {
     var img = global.document.getElementById('video-img-' + sid);
-    if (img && msg.frame_base64) {
-      var now = (typeof performance !== 'undefined' && performance.now)
-        ? performance.now() : Date.now();
-      // 节流：仅当距上次显示帧 > 150ms 时才更新
-      if (now - _lastFrameTs >= FRAME_DISPLAY_INTERVAL_MS) {
-        img.src = 'data:image/jpeg;base64,' + msg.frame_base64;
-        img.style.display = 'block';
-        var ph = global.document.getElementById('video-ph-' + sid);
-        if (ph) ph.style.display = 'none';
-        _lastFrameTs = now;
-      }
+    // 首帧心跳到达：隐藏 placeholder（MJPEG 已在加载视频）
+    if (img) {
+      img.style.display = 'block';
+      var ph = global.document.getElementById('video-ph-' + sid);
+      if (ph) ph.style.display = 'none';
     }
     var badge = global.document.getElementById('live-badge-' + sid);
     if (badge) badge.style.display = 'inline-flex';
-    var f = global.document.getElementById('ov-frame-' + sid);
-    if (f) f.textContent = msg.frame_index;
-    // PR-C：Case Time chip（frame_tick.case_time，红线 §7.7 双标识）。
-    var ct = global.document.getElementById('ov-time-' + sid);
-    if (ct && msg.case_time != null) {
-      ct.textContent = Number(msg.case_time).toFixed(1) + 's';
+
+    // 节流：仅每 150ms 刷新一次 overlay chips，避免数字狂跳
+    var now = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now();
+    var shouldUpdateChips = (now - _lastFrameTs >= FRAME_DISPLAY_INTERVAL_MS);
+    if (shouldUpdateChips) {
+      _lastFrameTs = now;
+      var f = global.document.getElementById('ov-frame-' + sid);
+      if (f) f.textContent = msg.frame_index;
+      // PR-C：Case Time chip（frame_tick.case_time，红线 §7.7 双标识）。
+      // 显示为 MM:SS 格式（如 00:15），更符合人类阅读习惯。
+      var ct = global.document.getElementById('ov-time-' + sid);
+      if (ct && msg.case_time != null) {
+        var totalSec = Math.floor(Number(msg.case_time));
+        var mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+        var ss = String(totalSec % 60).padStart(2, '0');
+        ct.textContent = mm + ':' + ss;
+      }
     }
     // P2：Demo 状态面板（首帧时显示，后续每秒刷新 Session 计时）。
     var stat = global.document.getElementById('demo-stat-' + sid);

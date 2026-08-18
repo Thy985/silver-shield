@@ -8,13 +8,24 @@
 5. stranger_visit 派生空（无 pre-event 字段）
 6. 不解析 episodes/acts/variants 作为启动参数（只用顶层字段）
 7. 所有节点 provenance_kind 都是 SIMULATED（不污染 REAL_SENSOR）
+
+M1-AudioMap（DIAGNOSIS §9.4 路径 B）：
+8. manifest 语义 → AudioPerceptionKind 5 类映射
+9. 4 case 的 audio_events 产物符合预期
+10. 映射表覆盖所有 manifest 出现的标签
+11. 产物结构 duck-type LiveAudioFrame
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from silver_demo.golden_evidence import golden_evidence_projection
+from silver_demo.golden_evidence import (
+    MANIFEST_TO_AUDIO_KIND,
+    golden_evidence_projection,
+    manifest_audio_to_live_audio_kinds,
+)
+from silver_demo.golden_adapter import _load_manifest
 
 # ===========================================================================
 # 1. 4 case 都能 derive
@@ -190,3 +201,138 @@ def test_expected_decision_outcome():
     # stranger_visit: LOW
     r = golden_evidence_projection("stranger_visit")
     assert r["expected_decision_outcome"] == "LOW"
+
+
+# ===========================================================================
+# 10. M1-AudioMap: manifest 语义 → AudioPerceptionKind 5 类映射
+# ===========================================================================
+
+
+_AUDIO_PERCEPTION_KIND_VALUES = frozenset(
+    {
+        "audio_speech_rapid",
+        "audio_voice_raised",
+        "audio_telephone_persistent",
+        "audio_distress_cry",
+        "audio_anomaly_other",
+    }
+)
+
+
+def test_manifest_to_audio_kind_mapping_values():
+    """MANIFEST_TO_AUDIO_KIND 映射值必须是 AudioPerceptionKind 5 类之一或 None。"""
+    for label, kind in MANIFEST_TO_AUDIO_KIND.items():
+        if kind is None:
+            continue
+        assert kind in _AUDIO_PERCEPTION_KIND_VALUES, (
+            f"映射 {label!r} → {kind!r} 不在 AudioPerceptionKind 5 类中"
+        )
+
+
+def test_telephone_risk_audio_events():
+    """telephone_risk → audio_telephone_persistent + audio_voice_raised。"""
+    r = golden_evidence_projection("telephone_risk")
+    events = r["audio_events"]
+    kinds = {e["kind"] for e in events}
+    assert "audio_telephone_persistent" in kinds, (
+        f"telephone_risk 应映射出 audio_telephone_persistent，实际 kinds={kinds}"
+    )
+    assert "audio_voice_raised" in kinds, (
+        f"telephone_risk 应映射出 audio_voice_raised（voice_stressed），实际 kinds={kinds}"
+    )
+
+
+def test_stranger_visit_audio_events():
+    """stranger_visit → audio_anomaly_other（doorbell + footsteps）。"""
+    r = golden_evidence_projection("stranger_visit")
+    events = r["audio_events"]
+    kinds = {e["kind"] for e in events}
+    assert "audio_anomaly_other" in kinds, (
+        f"stranger_visit 应映射出 audio_anomaly_other（doorbell），实际 kinds={kinds}"
+    )
+
+
+def test_repeated_visit_audio_events():
+    """repeated_visit → audio_anomaly_other（doorbell in episodes.evidence）。"""
+    r = golden_evidence_projection("repeated_visit")
+    events = r["audio_events"]
+    kinds = {e["kind"] for e in events}
+    assert "audio_anomaly_other" in kinds, (
+        f"repeated_visit 应映射出 audio_anomaly_other（doorbell），实际 kinds={kinds}"
+    )
+
+
+def test_evidence_insufficient_audio_events_empty():
+    """evidence_insufficient → 0 audio events（无 audio 语义标签声明）。"""
+    r = golden_evidence_projection("evidence_insufficient")
+    assert r["audio_events"] == [], (
+        f"evidence_insufficient 无 audio 声明，应产 0 events，实际 {r['audio_events']}"
+    )
+
+
+def test_audio_events_kind_in_five_classes():
+    """所有产出的 kind ∈ AudioPerceptionKind 5 类（契约校验）。"""
+    for case in ("stranger_visit", "repeated_visit", "telephone_risk", "evidence_insufficient"):
+        r = golden_evidence_projection(case)
+        for e in r["audio_events"]:
+            assert e["kind"] in _AUDIO_PERCEPTION_KIND_VALUES, (
+                f"{case}: kind {e['kind']!r} 不在 5 类中"
+            )
+
+
+def test_audio_events_provenance_simulated():
+    """M1 产物 provenance_kind 都是 SIMULATED（不污染 REAL_SENSOR，VM-1 守护）。"""
+    for case in ("stranger_visit", "repeated_visit", "telephone_risk", "evidence_insufficient"):
+        r = golden_evidence_projection(case)
+        for e in r["audio_events"]:
+            assert e["provenance_kind"] == "SIMULATED", (
+                f"{case}: audio_event provenance_kind={e['provenance_kind']}"
+            )
+
+
+def test_audio_events_dedup_by_kind():
+    """同一 kind 多次出现只保留第一个（去重，避免重复 audio event）。"""
+    for case in ("stranger_visit", "repeated_visit", "telephone_risk"):
+        r = golden_evidence_projection(case)
+        kinds = [e["kind"] for e in r["audio_events"]]
+        assert len(kinds) == len(set(kinds)), (
+            f"{case}: audio_events 有重复 kind={kinds}"
+        )
+
+
+def test_audio_events_live_frame_shape():
+    """产物结构 duck-type LiveAudioFrame（kind/score/confidence/labels/source_segment_ids/timestamp）。"""
+    r = golden_evidence_projection("telephone_risk")
+    for e in r["audio_events"]:
+        assert "kind" in e and isinstance(e["kind"], str)
+        assert "score" in e and isinstance(e["score"], (int, float))
+        assert 0.0 <= e["score"] <= 1.0
+        assert "confidence" in e and isinstance(e["confidence"], (int, float))
+        assert 0.0 <= e["confidence"] <= 1.0
+        assert "labels" in e and isinstance(e["labels"], tuple)
+        assert "source_segment_ids" in e and isinstance(e["source_segment_ids"], tuple)
+        assert "timestamp" in e
+
+
+def test_manifest_audio_to_live_audio_kinds_direct():
+    """manifest_audio_to_live_audio_kinds 直接调用（不经过 golden_evidence_projection）。"""
+    manifest = _load_manifest("telephone_risk")
+    events = manifest_audio_to_live_audio_kinds(manifest)
+    assert len(events) >= 2, f"telephone_risk 应至少 2 个 audio events，实际 {len(events)}"
+    kinds = {e["kind"] for e in events}
+    assert "audio_telephone_persistent" in kinds
+    assert "audio_voice_raised" in kinds
+
+
+def test_unmapped_labels_skipped():
+    """未在 MANIFEST_TO_AUDIO_KIND 中的标签跳过（fail-soft，不编造）。"""
+    manifest = {
+        "audio": {
+            "unknown_label": {"asset": "foo.wav"},
+            "voice_stressed": {"asset": "bar.wav"},
+        }
+    }
+    events = manifest_audio_to_live_audio_kinds(manifest)
+    kinds = {e["kind"] for e in events}
+    assert "audio_voice_raised" in kinds
+    assert len(events) == 1, f"unknown_label 应被跳过，实际 {events}"

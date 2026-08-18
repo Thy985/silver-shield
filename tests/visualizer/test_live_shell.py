@@ -53,8 +53,8 @@ def test_live_shell_has_tabs_and_grid_regions():
     assert 'id="view-discover-live_shell_t"' in html
     assert 'id="view-family-live_shell_t" hidden' in html
     assert 'id="view-community-live_shell_t" hidden' in html
-    # 6 区域 Grid
-    for cls in ("lv-video", "lv-risk", "lv-timeline", "lv-signal", "lv-closure", "lv-memory"):
+    # 5 认知区域 Grid（T1.6 重组：① lv-now / ② lv-perception / ③ lv-why / ⑤ lv-action / ⑥ lv-history）
+    for cls in ("lv-now", "lv-perception", "lv-why", "lv-action", "lv-history"):
         assert f'region {cls}' in html, cls
     # ① Live 帧流容器（LP-1 既有契约不回退）
     assert 'id="video-img-live_shell_t"' in html
@@ -78,7 +78,10 @@ def test_live_shell_header_auth_badge_and_ws_pill():
 
 
 def test_live_shell_role_views_share_closure_state_machine():
-    """tab ②/③ 角色视图：closure-tabview 钩子 + 角色按钮（共享 WS，切 Tab 不重连）。"""
+    """tab ②/③ 角色视图：closure-tabview 钩子 + 角色按钮（共享 WS，切 Tab 不重连）。
+
+    T1.5 降维后：不再有 closure-status，改为 role-card / role-summary / role-risk / role-actions
+    """
     html = _live_html()
     assert 'class="closure-tabview" data-role="family"' in html
     assert 'class="closure-tabview" data-role="community"' in html
@@ -86,8 +89,11 @@ def test_live_shell_role_views_share_closure_state_machine():
     assert 'id="tabview-family-notify-live_shell_t"' in html
     assert 'id="tabview-community-accept-live_shell_t"' in html
     assert 'id="tabview-community-complete-live_shell_t"' in html
-    assert 'id="tabview-family-status-live_shell_t"' in html
-    assert 'id="tabview-community-status-live_shell_t"' in html
+    # 新结构：role-card / role-summary / role-risk / role-actions
+    assert 'class="role-card"' in html
+    assert 'class="role-summary"' in html
+    assert 'class="role-risk"' in html
+    assert 'class="role-actions"' in html
     # live_actions.js 同步渲染钩子（_renderTabViews）
     assert "_renderTabViews" in html
 
@@ -97,8 +103,8 @@ def test_live_shell_honest_placeholders():
     html = _live_html()
     assert 'id="live-signals-live_shell_t"' in html
     assert "当前无进行中风险信号" in html
-    assert "Memory Context" in html
-    assert "当前案例无历史事件可供引用" in html  # 诚实标注未接入，不编造 profile
+    assert "⑥ 历史上下文" in html
+    assert "本次通话暂无历史相关事件" in html  # 诚实标注未接入，不编造 profile
 
 
 def test_live_shell_risk_card_skeleton():
@@ -177,9 +183,10 @@ def test_live_shell_sysarch_foldable_pr_c():
 def test_live_shell_memory_msg_element_pr_c():
     """PR-C：⑥ Memory Context 诚实占位（dev 态文案可被前端切换展示态）。"""
     html = _live_html()
-    assert 'id="memory-msg-live_shell_t"' in html
-    # dev 态默认文案：Not connected（诚实标注未接入）
-    assert "当前案例无历史事件可供引用" in html
+    # Memory Context section uses id="memory-context-{sid}" (not memory-msg)
+    assert 'id="memory-context-live_shell_t"' in html
+    # dev 态默认文案：诚实占位
+    assert "本次通话暂无历史相关事件" in html
 
 
 def _scenario_with_provenance(kind: str) -> dict:
