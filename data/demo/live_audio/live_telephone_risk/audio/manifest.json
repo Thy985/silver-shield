@@ -1,0 +1,43 @@
+{
+  "source_kind": "AudioFileSource",
+  "files": {
+    "audio_telephone_persistent": "live_telephone_risk/audio/audio_telephone_persistent.wav",
+    "audio_voice_raised": "live_telephone_risk/audio/audio_voice_raised.wav",
+    "audio_voice_normal": "live_telephone_risk/audio/audio_voice_normal.wav",
+    "audio_distress_cry": "live_telephone_risk/audio/audio_distress_cry.wav"
+  },
+  "tracks": [
+    {
+      "id": "audio_telephone_persistent",
+      "kind": "audio_telephone_persistent",
+      "url": "live_telephone_risk/audio/audio_telephone_persistent.wav",
+      "start_time": 0.0,
+      "end_time": null,
+      "provenance_kind": "REAL_SENSOR"
+    },
+    {
+      "id": "audio_voice_raised",
+      "kind": "audio_voice_raised",
+      "url": "live_telephone_risk/audio/audio_voice_raised.wav",
+      "start_time": 6.0,
+      "end_time": null,
+      "provenance_kind": "REAL_SENSOR"
+    },
+    {
+      "id": "audio_voice_normal",
+      "kind": "audio_voice_normal",
+      "url": "live_telephone_risk/audio/audio_voice_normal.wav",
+      "start_time": 0.0,
+      "end_time": null,
+      "provenance_kind": "REAL_SENSOR"
+    },
+    {
+      "id": "audio_distress_cry",
+      "kind": "audio_distress_cry",
+      "url": "live_telephone_risk/audio/audio_distress_cry.wav",
+      "start_time": 0.0,
+      "end_time": null,
+      "provenance_kind": "REAL_SENSOR"
+    }
+  ]
+}
