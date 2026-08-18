@@ -93,18 +93,22 @@
         if (typeof audioEl.removeEventListener === 'function') {
           audioEl.removeEventListener('loadedmetadata', onReady);
         }
-        try { audioEl.play(); } catch (e) { /* 降级 */ }
+        // 超时：loadedmetadata 未触发（如音频 404）→ warn + 静默 pause，不从头播放。
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[AudioSync] loadedmetadata timeout, audio may be unavailable');
+        }
+        try { audioEl.pause(); } catch (e) { /* 降级 */ }
       }, 3000);
     }
   };
 
   // P0-11.x-3：中文标签 → kind 枚举（case-time-mark 的 data-label 是中文）。
+  // 严格匹配，不兜底 tracks[0]——兜底会导致点击任意音频 mark 都播放同一首样本。
   AudioSync.prototype._resolveKindFromLabel = function (manifest, label) {
     if (!manifest || !manifest.tracks) return null;
     for (var i = 0; i < manifest.tracks.length; i++) {
       if (manifest.tracks[i].kind === label) return manifest.tracks[i].kind;
     }
-    if (manifest.tracks.length > 0) return manifest.tracks[0].kind;
     return null;
   };
 

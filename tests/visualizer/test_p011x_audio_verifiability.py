@@ -194,8 +194,8 @@ def test_r1_live_with_audio_has_audio_element_and_active():
     html = _live_html_with_audio()
     assert "<audio" in html, "Live 模式应渲染 <audio> 播放控件"
     assert "AUDIO SENSOR" in html, "应渲染 AUDIO SENSOR 卡"
-    assert "ACTIVE" in html, "REAL_SENSOR audio_evidence → ACTIVE"
     assert "audio-active" in html, "ACTIVE 状态 CSS class"
+    assert 'data-status="active"' in html, "data-status=active"
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +206,7 @@ def test_r1_live_with_audio_has_audio_element_and_active():
 def test_r2_live_no_audio_no_empty_player():
     """R2：Live 模式 + 无音频 → 不渲染空 <audio> 播放器。"""
     html = _live_html_no_audio()
+    assert "<audio" not in html, "无音频 → 不渲染 <audio> 标签"
     assert "AUDIO SENSOR" in html, "AUDIO SENSOR 卡仍渲染（IDLE 态）"
     assert "IDLE" in html, "无音频 → IDLE"
     assert "audio-idle" in html, "IDLE 状态 CSS class"

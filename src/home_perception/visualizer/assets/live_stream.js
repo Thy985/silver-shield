@@ -160,7 +160,7 @@
     } else if (t === 'resolution') {
       // "处置完成：warning abc123 由 family「NOTIFY_FAMILY」（community_done）"
       return s.replace(/处置完成：warning ([a-f0-9]+) 由 (\w+)「(\w+)」.*/,
-        '处置完成：预警 ${1} 由 ${2}「${3}」');
+        '处置完成：预警 $1 由 $2「$3」');
     } else if (t === 'golden_audio_state') {
       // "声学状态 ATTENTION" → "声学状态变化：ATTENTION（关注态）"
       var phaseMatch = /声学状态\s+(\w+)/.exec(s);
