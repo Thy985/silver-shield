@@ -122,9 +122,18 @@
   }
 
   // LP-4：Toast 事件涌现（右下角飞入，3.2s 后淡出）。新证据/风险变化的视觉反馈。
-  function _toast(text) {
+  var _lastToastTs = 0;
+  var _lastToastText = '';
+  function _toast(text, opts) {
     if (typeof global.document === 'undefined') return;
-    if (typeof global.document.createElement !== 'function') return;  // 测试/极端环境降级 no-op
+    if (typeof global.document.createElement !== 'function') return;
+    // 节流：同类 toast 5 秒内不重复弹（opts.throttle=true 时启用）。
+    var now = Date.now();
+    if (opts && opts.throttle) {
+      if (text === _lastToastText && now - _lastToastTs < 5000) return;
+    }
+    _lastToastTs = now;
+    _lastToastText = text;
     var host = global.document.getElementById('live-toasts');
     if (!host) {
       host = global.document.createElement('div');
@@ -596,7 +605,19 @@
       _trimTimelineDom(ul);
       _renderTimelineMoreButton(ul);
       // LP-4：新事件涌现 toast（非 session 根节点才提示，避免首连刷屏）。
-      if (n.type !== 'session' && n.summary) _toast(_humanSummary(n));
+      // frame 节点节流（5 秒内同类不重复）；非 frame 节点立即弹。
+      if (n.type !== 'session' && n.summary) {
+        var summary = _humanSummary(n);
+        var isFrame = n.type === 'frame';
+        // 非风险帧 → 静态"目标检测中"，不逐帧弹"检测到 N 个目标"。
+        if (isFrame && summary.indexOf('风险升级') < 0) {
+          _toast('目标检测中', { throttle: true });
+        } else if (isFrame) {
+          _toast(summary, { throttle: false });
+        } else {
+          _toast(summary, { throttle: true });
+        }
+      }
     });
     // P0-3: 行为里程碑累积（从 perception_events + warnings 推导）
     _ingestBehavior(msg.perception_events, msg.warnings || []);

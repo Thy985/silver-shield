@@ -804,6 +804,18 @@ def create_app(
             name="case_artifacts",
         )
 
+    # P0-11.x：Live 模式音频样本静态伺服（data/demo/live_audio → /live_audio）。
+    # resolve_audio_source 读 {base_dir}/{sid}/audio/manifest.json → 渲染 <audio controls>。
+    _live_audio_dir = Path(__file__).resolve().parent.parent.parent / "data" / "demo" / "live_audio"
+    if _live_audio_dir.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount(
+            "/live_audio",
+            StaticFiles(directory=_live_audio_dir, check_dir=True),
+            name="live_audio",
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def verified_case() -> HTMLResponse:
         """旗舰入口：Verified Case / 主展示。
@@ -841,15 +853,27 @@ def create_app(
             # Phase 2: golden case 注入 manifest 派生的 pre-event 节点。
             # 检测方法：scenario.scenario_id 在 GOLDEN_CASES 集合内（run_demo.py 已经写入 golden_*
             # yaml，scenario_id 是 case 名如 "repeated_visit"）。其他 demo scenario 走原路径。
+            # P0-11.x：live_telephone_risk → 映射到 golden case "telephone_risk" 注入证据。
             scenario = gateway.scenario
-            if scenario.scenario_id in GOLDEN_CASES:
-                inject_golden_evidence(projection, scenario.scenario_id)
+            _GOLDEN_MAP = {"live_telephone_risk": "telephone_risk"}
+            _golden_case = _GOLDEN_MAP.get(scenario.scenario_id, scenario.scenario_id)
+            if _golden_case in GOLDEN_CASES:
+                # P0-11.x：对 demo 映射场景，清空 runtime audio_evidence（energy backend 的
+                # audio_distress_cry）让 golden 注入器填入电话音频 kinds。
+                for _s in projection.get("scenarios", ()):
+                    _s["audio_evidence"] = ()
+                inject_golden_evidence(projection, _golden_case)
             proj, descriptor = build_live_presentation(
                 projection, live_ws_path=demo_settings.ws_path
             )
             # LP-1：Live 真实同步帧流（Runtime Frame N → JPEG → WS → <img>），
             # 替代 P1-C1 的 <video> 回放（回放与 pipeline frame_index 两套时钟不同步）。
-            html = render_case_viewer(proj, descriptor, live_frame_stream=True)
+            html = render_case_viewer(
+                proj, descriptor,
+                live_frame_stream=True,
+                audio_base_dir=_live_audio_dir,
+                audio_base_url="/live_audio/",
+            )
             return HTMLResponse(html)
         except Exception as exc:  # noqa: BLE001  # 渲染失败 fail-closed：返回 500 + 诊断，绝不静默产残缺页
             structlog.get_logger(__name__).warning("live_case_viewer_render_failed", exc_info=exc)
