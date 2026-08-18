@@ -206,7 +206,7 @@ def test_empty_session_still_valid_and_renders():
     assert acc.n_frames == 0
     proj, desc = build_live_presentation(acc.to_evidence_projection())
     html = render_case_viewer(proj, desc)
-    assert "真实传感器" in html
+    assert "受控演示输入" in html            # AC-7 诚实标注：Live=受控演示输入（非 REAL SENSOR 标榜）
 
 
 # —— AC-5 / VM-3：fail-closed 摄入（缺字段/类型非法） ——
@@ -248,7 +248,7 @@ def test_render_case_viewer_reuses_live_projection():
     # 展示编排绑定 LiveFrameSource（媒体字节不进 View Model）
     assert desc["media_binding"]["source_kind"] == "LiveFrameSource"
     html = render_case_viewer(proj, desc)
-    assert "真实传感器" in html            # AC-7 provenance 一等视觉
+    assert "受控演示输入" in html            # AC-7 provenance 一等视觉（诚实标注受控演示输入）
     assert "无 Gate 评估" in html          # AC-8 gate absent 显式表达
     assert "无（实时模式" in html          # AC-8 fingerprints absent 显式表达
     # Live 无媒体资产（resolve_media_source 对 LiveFrameSource 返回 None）→ 诚实呈现
@@ -392,7 +392,7 @@ def test_render_live_with_audio_marker():
     html = render_case_viewer(proj, desc)
     assert "🔊" in html            # AUDIO modality 徽章
     assert "AUDIO" in html          # modality 标签
-    assert "真实传感器" in html      # AC-7 provenance 一等视觉（音频节点同为 REAL_SENSOR）
+    assert "受控演示输入" in html      # AC-7 provenance 一等视觉（音频节点同为 REAL_SENSOR，诚实标注）
 
 
 # —— ADR-0036 VM-13 Phase B（#509 验证）：Live audio_evidence 投影字段契约 ——

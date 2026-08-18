@@ -804,15 +804,17 @@
     } else if (t === 'cleared') {
       var cur = box.querySelector('.rt-card');
       if (cur) {
-        // 熄卡：CLEARED 徽章 + 淡出清空，空态回来（服务端 volatile 语义由状态机保证）。
-        cur.classList.add('cleared');
+        // T1.2 修复（P0-5）：保留「已解除」卡在 DOM 中，加 cleared class，不自动清空。
+        // 避免 RAISED→CLEARED 时整卡闪烁消失；新 RAISED 触发时由上方 raised 分支
+        // 以 box.innerHTML 整体覆盖（替换而非堆叠），满足"覆盖旧卡"。
         cur.classList.remove('live');
+        cur.classList.add('cleared');
         var badge = cur.querySelector('.rt-badge');
-        if (badge) { badge.textContent = 'CLEARED'; badge.classList.remove('live'); }
-        setTimeout(function () {
-          box.innerHTML = '';
-          if (empty) empty.style.display = '';
-        }, 1200);
+        if (badge) {
+          badge.textContent = 'CLEARED';
+          badge.classList.remove('live');
+          badge.classList.add('cleared');
+        }
       } else if (empty) {
         empty.style.display = '';
       }

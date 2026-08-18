@@ -334,8 +334,9 @@ def test_live_stream_js_risk_card_and_signal():
     """PR-B（Node vm）：risk_delta → ③ ✓ 人话风险卡 + ③.5 RAISED/CLEARED 信号。
 
     - raised：卡亮起（✓ 人话原因 + 建议动作人话映射）+ 信号卡 RAISED；
-    - cleared（risk_levels 空 + 服务端 transition）：卡熄灭回空态 + 信号 CLEARED 徽章
-      （前端零推断，只渲染 risk_transition，红线 §7.8）。
+    - cleared（risk_levels 空 + 服务端 transition）：风险卡熄灭回空态 + 信号 CLEARED 徽章；
+      且风险信号卡 DOM **保留**（T1.2：不再 setTimeout 清空，避免 RAISED→CLEARED 闪烁，
+      新 RAISED 由 raised 分支整体覆盖旧卡）。
     """
     import subprocess
     import tempfile
@@ -367,7 +368,7 @@ def test_live_stream_js_risk_card_and_signal():
             this.html = String(v);
             if (this.html.indexOf('rt-card') !== -1) {
               const card = { classes: {},
-                badge: { textContent: 'RAISED', classList: { remove: function () {} } } };
+                badge: { textContent: 'RAISED', classList: { add: function () {}, remove: function () {} } } };
               card.classList = { add: function (c) { card.classes[c] = true; },
                                  remove: function (c) { delete card.classes[c]; } };
               card.querySelector = function (sel) { return sel === '.rt-badge' ? card.badge : null; };
@@ -423,6 +424,8 @@ def test_live_stream_js_risk_card_and_signal():
           emptyShown: els['lrk-empty-' + sid].style.display === '',
           emptyText: els['lrk-empty-' + sid].textContent.indexOf('风险尚未触发') !== -1,
           sigCleared: sigBox._card && sigBox._card.badge.textContent === 'CLEARED',
+          // T1.2 回归：cleared 后信号卡 DOM 保留（rt-card 仍在），不闪烁消失
+          sigRetained: sigBox.html.indexOf('rt-card') !== -1,
         };
         const ok = Object.keys(raised).every(function (k) { return raised[k]; })
           && Object.keys(cleared).every(function (k) { return cleared[k]; });

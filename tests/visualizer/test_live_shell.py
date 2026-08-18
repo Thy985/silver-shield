@@ -16,6 +16,7 @@ from home_perception.visualizer.viewer.live_adapter import (
     ProjectionAccumulator,
     build_live_presentation,
 )
+from home_perception.visualizer.viewer.render import _render_provenance_banner
 
 
 def _frame(frame_index: int, *, risk_levels=()) -> dict:
@@ -179,3 +180,28 @@ def test_live_shell_memory_msg_element_pr_c():
     assert 'id="memory-msg-live_shell_t"' in html
     # dev 态默认文案：Not connected（诚实标注未接入）
     assert "当前案例无历史事件可供引用" in html
+
+
+def _scenario_with_provenance(kind: str) -> dict:
+    """最小 ScenarioEvidence：仅含一条带指定 provenance_kind 的 timeline 节点。"""
+    return {"timeline": [{"provenance_kind": kind}]}
+
+
+def test_live_banner_honest_controlled_demo_label():
+    """T1.1：Live（REAL_SENSOR）角标诚实标注「受控演示输入」+ 副标题，不再标榜 REAL SENSOR。
+
+    验收（DESIGN-golden-case-live-product P0-1 / TASKS T1.1）：
+    - 产物含「受控演示输入」与副标题「非 7×24 真实设备 · 演示素材」；
+    - 不再含误导的「REAL SENSOR」字样。
+    """
+    html = _render_provenance_banner(_scenario_with_provenance("REAL_SENSOR"))
+    assert "受控演示输入" in html
+    assert "非 7×24 真实设备 · 演示素材" in html
+    assert "REAL SENSOR" not in html
+
+
+def test_artifact_banner_simulated_unchanged():
+    """T1.1：Artifact（SIMULATED）角标文案不变（「● GOLDEN CASE · SIMULATED」），且无 Live 副标题。"""
+    html = _render_provenance_banner(_scenario_with_provenance("SIMULATED"))
+    assert "● GOLDEN CASE · SIMULATED" in html
+    assert "非 7×24" not in html

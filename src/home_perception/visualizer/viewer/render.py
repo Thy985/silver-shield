@@ -59,18 +59,23 @@ _CASE_VIDEO_NARRATIVE = (
 )
 
 # AC-7 provenance 文案映射（一等视觉，绝默认隐藏）。
+# 2026-08-18 Owner 决策（DESIGN-golden-case-live-product §七 Q1）：Live 角标不再标榜
+# "REAL SENSOR"——Golden Case 是受控录制演示素材，非 7×24 真实设备，必须诚实标注，
+# 避免误导评委。SIMULATED/FIXTURE 文案不变。
 _PROVENANCE_TEXT = {
     "SIMULATED": "程序化场景 · 可复现",
-    "REAL_SENSOR": "真实传感器 · 实时数据",
+    "REAL_SENSOR": "受控演示输入 · 演示素材",
     "FIXTURE": "固定测试素材 · 非实时",
 }
-# AC-7 + Owner 2026-08-16 产品级约束：案例角标固定文案（强化既有 provenance 设计）。
-# Live 卡右上角显示「● LIVE · REAL SENSOR」，Artifact 显示「● GOLDEN CASE · SIMULATED」，
-# 二者仅 provenance 语义之差，便于评审一眼区分真实设备流与仿真闭环。
+# AC-7 案例角标固定文案。Live = 受控演示输入（诚实标注）；Artifact = GOLDEN CASE · SIMULATED。
 _PROVENANCE_BADGE = {
-    "REAL_SENSOR": "● LIVE · REAL SENSOR",
+    "REAL_SENSOR": "● LIVE · 受控演示输入",
     "SIMULATED": "● GOLDEN CASE · SIMULATED",
     "FIXTURE": "● FIXTURE · 固定测试素材",
+}
+# AC-7 副标题（小灰字，进一步诚实说明 Live 输入的受控性质）。
+_PROVENANCE_SUBTITLE = {
+    "REAL_SENSOR": "非 7×24 真实设备 · 演示素材",
 }
 _PROVENANCE_CLASS = {
     "SIMULATED": "prov-simulated",
@@ -174,15 +179,18 @@ def _render_ci_badge(descriptor: CasePresentationDescriptor) -> str:
 def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
     """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。
 
-    Owner 2026-08-16：角标文案固定为「● LIVE · REAL SENSOR」（Live）/「● GOLDEN CASE ·
-    SIMULATED」（Artifact），强化真实设备流与仿真闭环的区分（VM-13 6 MUST #4）。
+    2026-08-18 Owner 决策（DESIGN-golden-case-live-product §七 Q1）：Live 角标改为
+    「● LIVE · 受控演示输入」+ 副标题「非 7×24 真实设备 · 演示素材」，诚实标注 Golden
+    Case 是受控录制素材而非真实设备流（VM-13 6 MUST #4 + 模块边界诚实纪律）。
     """
     kinds = {n["provenance_kind"] for n in scenario["timeline"]}
     if len(kinds) == 1:
         k = next(iter(kinds))
+        sub = _PROVENANCE_SUBTITLE.get(k, "")
         badge = (
             f"<span class='prov-badge {_PROVENANCE_CLASS.get(k, '')}'>"
             f"{_R._esc(_PROVENANCE_BADGE.get(k, k))}</span>"
+            + (f"<span class='prov-subtitle'>{_R._esc(sub)}</span>" if sub else "")
         )
     else:
         badge = (
@@ -1806,8 +1814,9 @@ def render_case_viewer(
   /* Provenance（AC-7 一等视觉） */
   .prov-banner {{ background:#eef6ff; border:1px solid #cfe3fb; border-left:4px solid #4a90d9;
                   border-radius:6px; padding:8px 14px; margin:12px 0; font-size:13px; }}
-  .prov-badge {{ display:inline-block; padding:1px 8px; border-radius:8px; font-size:11px;
+  .prov-badge {{ display:inline-flex; align-items:center; gap:8px; padding:1px 8px; border-radius:8px; font-size:11px;
                  color:#fff; font-weight:600; }}
+  .prov-subtitle {{ font-size:11px; color:#888; margin-left:8px; }}
   .prov-simulated {{ background:#7b5cd6; }}
   .prov-real-sensor {{ background:#2e9e6b; }}
   .prov-fixture {{ background:#8a8a8a; }}
