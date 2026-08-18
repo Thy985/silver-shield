@@ -10,7 +10,7 @@
 
 | Phase | 任务 | 状态 |
 |-------|------|------|
-| Phase 1 | UI 修复（产品骨架） | ⬜ |
+| Phase 1 | UI 修复（产品骨架） | 🔄 进行中（T1.1/T1.2 已落地） |
 | Phase 2 | 技术修复（数据通路） | ⬜ |
 | Phase 3 | 扩展 Golden Cases | ⬜ |
 | Phase 4 | Demo Mode（待 Owner 决策） | ⬜ |
@@ -19,7 +19,9 @@
 
 ## Phase 1：UI 修复（Week 1）
 
-### T1.1 — 修复 Provenance Banner 文案 [P0]
+### T1.1 — 修复 Provenance Banner 文案 [P0] ✅ 已落地（commit f367fec）
+
+> Owner 2026-08-18 决策（DESIGN §七 Q1）：采用「● LIVE · 受控演示输入」+ 副标题方案（诚实标注）。
 
 **文件**：`src/home_perception/visualizer/viewer/render.py:71`
 
@@ -63,7 +65,7 @@ def test_live_banner_honest_demo_label():
 
 ---
 
-### T1.2 — risk_signal 不闪烁 [P0]
+### T1.2 — risk_signal 不闪烁 [P0] ✅ 已落地（commit f367fec）
 
 **文件**：`src/home_perception/visualizer/assets/live_stream.js:707-723`
 
