@@ -13,17 +13,39 @@ import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-from playwright.sync_api import sync_playwright
+import pytest
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:  # pragma: no cover
+    pytest.skip("playwright not installed, skipping e2e test", allow_module_level=True)
 
 URL = "http://127.0.0.1:8765/live"
 SID = "delivery_courier_normal"
 N_FRAMES = 323
 
 
+def _server_available() -> bool:
+    """Check if the demo server is running."""
+    try:
+        import requests
+        r = requests.get("http://127.0.0.1:8765/health", timeout=2)
+        return r.status_code == 200
+    except Exception:  # noqa: BLE001 (health check fail is benign)
+        return False
+
+
 def _get_health():
+    """Get demo server health status."""
     import requests
-    r = requests.get("http://127.0.0.1:8765/health")
+    r = requests.get("http://127.0.0.1:8765/health", timeout=5)
     return r.json()
+
+
+pytestmark = pytest.mark.skipif(
+    not _server_available(),
+    reason="Demo server not running — e2e tests require active gateway"
+)
 
 
 def test_live_page_loads_and_connects():

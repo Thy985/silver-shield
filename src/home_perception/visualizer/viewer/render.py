@@ -284,6 +284,49 @@ def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
     return f"<div class='prov-banner'>provenance: {badge}{details}</div>"
 
 
+def _render_audio_sensor_status(scenario: ScenarioEvidence) -> str:
+    """AC-1c：音频传感器状态卡片（P0-11.x Live Audio Verifiability）。
+
+    根据 ``audio_evidence`` 的 provenance 派生传感器状态：
+    - 无音频证据 → IDLE
+    - 含 REAL_SENSOR 证据 → ACTIVE
+    - 仅 SIMULATED/FIXTURE 证据 → IDLE（非实时，不触发 ACTIVE）
+
+    遵循 AC-12：无音频证据绝不编造 ACTIVE 状态。
+    """
+    audio_ev = scenario.get("audio_evidence") or ()
+    if not audio_ev:
+        return """
+      <div class="sensor-card audio-sensor" data-status="idle">
+        <h3>
+          <span>🔊 AUDIO SENSOR</span>
+          <span class="sensor-card-status audio-idle">IDLE</span>
+        </h3>
+        <p class="muted">Kinds detected: —</p>
+      </div>"""
+
+    kinds = {str(a.get("kind", "")) for a in audio_ev}
+    kind_labels = sorted(kinds)
+
+    # 只有 REAL_SENSOR 才激活（SIMULATED/FIXTURE 是演示素材，非实时）
+    has_real = any(
+        a.get("provenance_kind") == "REAL_SENSOR" for a in audio_ev
+    )
+    status = "ACTIVE" if has_real else "IDLE"
+    status_class = "audio-active" if has_real else "audio-idle"
+
+    kinds_html = " · ".join(_R._esc(k) for k in kind_labels) if kind_labels else "—"
+
+    return f"""
+      <div class="sensor-card audio-sensor" data-status="{'active' if has_real else 'idle'}">
+        <h3>
+          <span>🔊 AUDIO SENSOR</span>
+          <span class="sensor-card-status {status_class}">{status}</span>
+        </h3>
+        <p class="muted">Kinds detected: {_R._esc(kinds_html)}</p>
+      </div>"""
+
+
 def _render_current_risk(scenario: ScenarioEvidence) -> str:
     """当前风险卡片（派生展示：来自 risk_levels / trace_outcome_kinds，VM-1）。"""
     risk_str = (
@@ -844,7 +887,7 @@ def _render_acoustic_state_panel(scenario: ScenarioEvidence) -> str:
                 phase = p
                 break
         ts = node.get("timestamp", "")
-        ref = node.get("ref", "")
+
         phases_html.append(f"""
         <li class="acoustic-phase phase-{phase.lower()}">
           <span class="phase-time">{_R._esc(str(ts))}s</span>

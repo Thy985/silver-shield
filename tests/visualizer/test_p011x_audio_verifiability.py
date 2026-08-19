@@ -40,7 +40,6 @@ from home_perception.visualizer.viewer.render import (
 
 from .conftest import make_artifacts
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -307,7 +306,7 @@ def test_r7_timeline_audio_node_has_case_time():
     acc = ProjectionAccumulator("p011x_r7c")
     acc.ingest(_frame(0))
     acc.ingest_audio(_audio_event(timestamp=1752952800.0))
-    proj, desc = build_live_presentation(acc.to_evidence_projection())
+    proj, _desc = build_live_presentation(acc.to_evidence_projection())
     audio_nodes = [
         n for s in proj["scenarios"] for n in s["timeline"]
         if n.get("modality") == "AUDIO"

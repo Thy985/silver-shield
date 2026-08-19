@@ -44,7 +44,6 @@ from typing import Any
 
 from .golden_adapter import _load_manifest
 
-
 # ============================================================================
 # M1: Manifest 语义 → AudioPerceptionKind 5 类映射表（DIAGNOSIS §9.4 路径 B）
 # ============================================================================
@@ -372,7 +371,7 @@ def golden_evidence_projection(case: str) -> dict[str, Any]:
             "recommended_action": str(ep.get("decision_detail", "")),
             "summary": str(ep.get("label", "")),
             "reason_summary": tuple(str(e) for e in (ep.get("evidence") or ())),
-            "command_types": tuple(),
+            "command_types": [],
             "prior": not is_current,
             # Extra fields for injector / rendering compatibility
             "ref": f"golden://{case_name}/episodes/{ep_id}",
