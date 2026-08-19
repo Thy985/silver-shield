@@ -1,0 +1,25 @@
+{
+  "package": "silvershield-trusted-case",
+  "spec": "ADR-0036 P0-4.1 Trusted Case Factory",
+  "generated_at": "2026-08-18T22:43:12.815080+00:00",
+  "generated_by": "ci",
+  "renderer_version": "1.0.0",
+  "code_version": "91e6322",
+  "artifact_bundle_hash": "6bdce88cb6f8da6f6f8b4ec7c9029aa968449c2cbf8dcb7bd0c1a980d0690254",
+  "case_ids": [
+    "sw_adr0034_high_risk"
+  ],
+  "scenario_count": 1,
+  "gate_passed": true,
+  "contents": {
+    "case_viewer": "case_viewer.html",
+    "manifest": "manifest.json",
+    "provenance": "provenance.json",
+    "fingerprints": "fingerprints.json",
+    "gate": "gate.json",
+    "ci_descriptor": "case_descriptor.ci.json",
+    "canonical_reports": {
+      "sw_adr0034_high_risk": "canonical/sw_adr0034_high_risk.canonical.json"
+    }
+  }
+}

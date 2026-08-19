@@ -27,9 +27,11 @@ WS 传输（ADR-0036 Slice B 描述）由宿主层负责把 ``FrameResult`` 喂�
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from home_perception.visualizer.schema.evidence import (
+    AudioEvidenceNode,
+    CaseTimeTrack,
     Counts,
     DecisionEvidence,
     EvidenceProjection,
@@ -66,6 +68,16 @@ _LIVE_PANELS: tuple[str, ...] = (
 # 确定性 ref 前缀（Live 源，区别于 artifact 的 ``<scenario>.canonical.json#...``）。
 _LIVE_REF_PREFIX = "live"
 
+# Live Case Time 音频 Lane 标签（仅本地最小映射，不 import renderer 生产展示表；
+# 与 loader 的 audio kind → 中文标签语义对齐，缺失回落原始枚举，绝不编造）。
+_AUDIO_KIND_ZH: dict[str, str] = {
+    "audio_voice_raised": "音高升高",
+    "audio_speech_rapid": "语速加快",
+    "audio_distress_cry": "哭腔/求助",
+    "audio_telephone_persistent": "持续电话声音",
+    "audio_anomaly_other": "其他声学异常",
+}
+
 
 class LiveIngestError(ValueError):
     """Live 帧摄入契约违规（fail-closed：字段缺失/类型非法 → 拒绝累积，不产残缺投影）。"""
@@ -75,6 +87,8 @@ class LiveFrame(TypedDict):
     """单帧规范化结构（FrameResult 契约的视觉子集，鸭子类型摄入后落定）。
 
     不含生产对象引用、不含媒体字节（VM-10/AC-11）；只持投影所需的原始字符串分类。
+    P0-1 补全：trigger_events/perception_scores/warning_ids/device_id/elder_id/risk_signals
+    （产品解释事实 + 风险信号实体，Owner 锁死：不进第二套 view model，仅投影已有 Runtime 字段）。
     """
 
     frame_index: int
@@ -83,7 +97,31 @@ class LiveFrame(TypedDict):
     event_types: tuple[str, ...]      # 来自 perception_events[].event_type
     risk_levels: tuple[str, ...]       # 来自 warnings[].risk_level
     recommended_actions: tuple[str, ...]  # 来自 warnings[].recommended_action
+    reason_summary: tuple[str, ...]    # 来自 warnings[].reason_summary（人话触发原因，LP-3 Why）
     command_types: tuple[str, ...]     # 来自 commands[].command_type
+    # P1-A：本帧检测的结构化子集（class/bbox/confidence，非原始 Detection 对象——
+    # 事实投影：只保留产品渲染所需字段，坐标 round、数量裁剪）。默认空 tuple。
+    detections: tuple[dict, ...]
+    # P0-1：产品解释事实（风险卡 trigger chips / 强度条）——来自 warnings[].trigger_events
+    # / perception_score；不推原始 WarningEvent 对象，只投影渲染所需子集（VM-9）。
+    trigger_events: tuple[dict, ...]
+    perception_scores: tuple[float, ...]
+    # P0-1：风险信号实体标识（signal identity / 跨帧保活 / TTL 续期）
+    warning_ids: tuple[str, ...]
+    # P0-1：身份上下文事实（device/elder，放 context 而非主叙事）
+    device_id: str | None
+    elder_id: str | None
+    # P0-1：RiskSignal 投影（signal_id/subject/severity/features/ttl/status）
+    # 来自 FrameResult.risk_signals（Pipeline 直接产出，ADR-0021 Phase 1）
+    risk_signals: tuple[dict, ...]
+    # P0-1 修复（behavior-timeline / task-cards 数据通路）：
+    # 行为事件原始对象（visitor_id / event_type / score / location / repeat_count），
+    # 供前端 behavior-timeline 渲染"首次出现/停留/再现"等里程碑。
+    perception_event_objects: tuple[dict, ...]
+    # WarningEvent 原始对象（warning_id / risk_level / reason_summary /
+    # recommended_action / trigger_events / perception_score / device_id / elder_id），
+    # 供 risk_delta / task-cards 消费。projection 不 mutate（VM-6）。
+    warning_objects: tuple[dict, ...]
 
 
 _MISSING = object()
@@ -125,6 +163,7 @@ class LiveAudioFrame(TypedDict):
     confidence: float                  # ← .confidence (0~1)，检测可信度
     source_segment_ids: tuple[str, ...]  # ← .source_segment_ids
     labels: tuple[str, ...]            # ← .labels / .scored_labels
+    event_id: NotRequired[str]         # ← AudioPerceptionEvent.event_id（透传，可选，溯源/幂等）
 
 
 def _require_float(obj: Any, key: str, *, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -180,6 +219,14 @@ def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
     confidence = _require_float(audio_result, "confidence")
     source_segment_ids = tuple(_iter_of_str(audio_result, "source_segment_ids"))
     labels = tuple(_iter_of_str(audio_result, "labels"))
+    # 可选 event_id（透传上游 AudioPerceptionEvent.event_id，仅溯源/幂等核对；非必填，
+    # 缺省不投影）。鸭子类型取值，dict/对象均可；非 str 即拒绝（fail-closed）。
+    raw_event_id = _pick(audio_result, "event_id", default=None)
+    event_id = None
+    if raw_event_id is not None:
+        if not isinstance(raw_event_id, str) or not raw_event_id:
+            raise LiveIngestError(f"live 音频 event_id 必须是非空 str，收到 {raw_event_id!r}（fail-closed）")
+        event_id = raw_event_id
     return LiveAudioFrame(
         timestamp=timestamp,
         kind=kind,
@@ -187,7 +234,23 @@ def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
         confidence=confidence,
         source_segment_ids=source_segment_ids,
         labels=labels,
+        **({"event_id": event_id} if event_id is not None else {}),
     )
+
+
+def _audio_dedup_key(la: LiveAudioFrame) -> str:
+    """无 event_id 时的去重键（护 VM-8 重放幂等）：kind+timestamp+segments+score+conf 组合。
+
+    仅作回退——优先用 event_id（上游 AudioPerceptionEvent.event_id，跨重放稳定）。
+    """
+    segs = ",".join(la["source_segment_ids"]) if la.get("source_segment_ids") else ""
+    return "|".join([
+        str(la["kind"]),
+        str(la["timestamp"]),
+        segs,
+        repr(la["score"]),
+        repr(la["confidence"]),
+    ])
 
 
 def _coerce_timestamp(audio_result: Any) -> str:
@@ -249,6 +312,31 @@ def _iter_of(obj: Any, key: str) -> list[Any]:
     return list(value)
 
 
+# P1-A 检测子集裁剪上限：每帧最多投影 N 个检测（事实投影，非原始 detector 仓库）。
+_MAX_DETECTIONS = 8
+
+
+def _detection_bbox(d: Any, idx: int) -> float:
+    """读检测 bbox 第 idx 维（[x1,y1,x2,y2]，round 3 位；缺/非 4 元 → fail-closed）。"""
+    bbox = _pick(d, "bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise LiveIngestError(
+            f"detection.bbox 必须是 4 元 [x1,y1,x2,y2]，收到 {bbox!r}（fail-closed）"
+        )
+    v = bbox[idx]
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        raise LiveIngestError(f"detection.bbox[{idx}] 必须是数值，收到 {v!r}（fail-closed）")
+    return round(float(v), 3)
+
+
+def _detection_confidence(d: Any) -> float:
+    """读检测置信度（round 3 位；缺/非数值 → fail-closed）。"""
+    v = _pick(d, "confidence")
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        raise LiveIngestError(f"detection.confidence 必须是数值，收到 {v!r}（fail-closed）")
+    return round(float(v), 3)
+
+
 def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
     """``FrameResult`` 契约 → ``LiveFrame``（鸭子类型映射，不 import 生产类型，VM-3）。
 
@@ -269,13 +357,109 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
 
     risk_levels: list[str] = []
     recommended_actions: list[str] = []
+    reason_summary: list[str] = []
     for w in _iter_of(frame_result, "warnings"):
         risk_levels.append(_require_str(w, "risk_level"))
         recommended_actions.append(_require_str(w, "recommended_action"))
+        # LP-3：人话触发原因（reason_summary，无"诈骗/犯罪"字样，VM-9）。
+        for r in _iter_of(w, "reason_summary"):
+            if not isinstance(r, str):
+                raise LiveIngestError(
+                    f"warning.reason_summary 元素必须是 str，收到 {r!r}（fail-closed）"
+                )
+            reason_summary.append(r)
 
     command_types: list[str] = []
     for c in _iter_of(frame_result, "commands"):
         command_types.append(_require_str(c, "command_type"))
+
+    # P1-A：结构化检测子集（事实投影，非原始 Detection 仓库）。鸭子类型读
+    # class_name/bbox/confidence；坐标/置信度 round 到 3 位、数量裁剪，防膨胀。
+    detections: list[dict] = []
+    for d in _iter_of(frame_result, "detections"):
+        detections.append(
+            {
+                "class": _require_str(d, "class_name"),
+                "bbox": [_detection_bbox(d, i) for i in range(4)],
+                "confidence": _detection_confidence(d),
+            }
+        )
+    if len(detections) > _MAX_DETECTIONS:
+        detections = detections[:_MAX_DETECTIONS]
+
+    # P0-1：产品解释事实投影（trigger_events + perception_score，来自 warnings）。
+    # 诚实投影：只取已存在字段，不扩展语义（VM-9）。
+    trigger_events_list: list[dict] = []
+    perception_scores_list: list[float] = []
+    warning_ids_list: list[str] = []
+    device_id_val: str | None = None
+    elder_id_val: str | None = None
+    for w in _iter_of(frame_result, "warnings"):
+        # trigger_events：每个 warning 的触发规则列表（event_type + score）
+        for te in _iter_of(w, "trigger_events"):
+            if isinstance(te, dict):
+                trigger_events_list.append({
+                    "event_type": te.get("event_type", ""),
+                    "score": round(float(te.get("score", 0)), 3) if isinstance(te.get("score"), (int, float)) else 0.0,
+                })
+        # perception_score：风险命中强度（浮点）
+        ps = _pick(w, "perception_score", default=None)
+        if isinstance(ps, (int, float)) and not isinstance(ps, bool):
+            perception_scores_list.append(round(float(ps), 3))
+        # warning_id：风险信号实体标识（用于跨帧保活 + signal identity）。
+        # 转 str 避免后续 JSON 序列化失败（UUID 对象不能 json.dumps）。
+        wid = _pick(w, "warning_id", default=None)
+        if isinstance(wid, (str, __import__("uuid").UUID)) and wid:
+            warning_ids_list.append(str(wid))
+        # device_id / elder_id：身份上下文（仅首条 warning 取，全帧同源稳定）
+        if device_id_val is None:
+            did = _pick(w, "device_id", default=None)
+            if isinstance(did, str) and did:
+                device_id_val = did
+        if elder_id_val is None:
+            eid = _pick(w, "elder_id", default=None)
+            if isinstance(eid, str) and eid:
+                elder_id_val = eid
+
+    # P0-1：RiskSignal 投影（FrameResult.risk_signals → dict 列表）。
+    # 来自 Pipeline Stage C RealTimeRiskEvaluator，含 signal_id/subject/severity/features。
+    risk_signals_list: list[dict] = []
+    for rs in _iter_of(frame_result, "risk_signals"):
+        d: dict[str, Any] = {}
+        if isinstance(rs, dict):
+            d = rs
+        elif hasattr(rs, "to_dict"):
+            try:
+                d = rs.to_dict()
+            except Exception:  # noqa: BLE001  (fail-closed 投影：单个对象 to_dict 失败退回空 dict，不中断整帧)
+                d = {}
+        if d:
+            risk_signals_list.append(d)
+
+    # P0-1 修复：行为事件原始对象（dict 形态透传，VM-9 零推断）。
+    # 给前端 behavior-timeline 提供 visitor_id / event_type / score / location / repeat_count。
+    # 数据源：FrameResult.perception_events（每个都是 PerceptionEvent，鸭子读 to_dict()）。
+    perception_event_objects: list[dict] = []
+    for pe in _iter_of(frame_result, "perception_events"):
+        if isinstance(pe, dict):
+            perception_event_objects.append(pe)
+        elif hasattr(pe, "to_dict"):
+            try:
+                perception_event_objects.append(pe.to_dict())
+            except Exception:  # noqa: BLE001, S110  (fail-closed 投影：跳过损坏对象，不中断整帧)
+                pass
+    # WarningEvent 原始对象（含 warning_id / risk_level / reason_summary /
+    # recommended_action / trigger_events / perception_score / device_id / elder_id），
+    # 给 task-cards / risk_delta 提供 payload 投影。
+    warning_objects: list[dict] = []
+    for w in _iter_of(frame_result, "warnings"):
+        if isinstance(w, dict):
+            warning_objects.append(w)
+        elif hasattr(w, "to_dict"):
+            try:
+                warning_objects.append(w.to_dict())
+            except Exception:  # noqa: BLE001, S110  (fail-closed 投影：跳过损坏对象，不中断整帧)
+                pass
 
     return LiveFrame(
         frame_index=frame_index,
@@ -284,7 +468,17 @@ def frame_result_to_live_frame(frame_result: Any) -> LiveFrame:
         event_types=tuple(event_types),
         risk_levels=tuple(risk_levels),
         recommended_actions=tuple(recommended_actions),
+        reason_summary=tuple(reason_summary),
         command_types=tuple(command_types),
+        detections=tuple(detections),
+        trigger_events=tuple(trigger_events_list),
+        perception_scores=tuple(perception_scores_list),
+        warning_ids=tuple(warning_ids_list),
+        device_id=device_id_val,
+        elder_id=elder_id_val,
+        risk_signals=tuple(risk_signals_list),
+        perception_event_objects=tuple(perception_event_objects),
+        warning_objects=tuple(warning_objects),
     )
 
 
@@ -328,8 +522,46 @@ class ProjectionAccumulator:
         # 音频：累计摄入序号（确定性交错标签）+ 去重 kind 集合（不进 Counts schema）。
         self._audio_index = 0
         self._audio_kinds: set[str] = set()
+        # 音频证据持久化（不进 _recent_events 滚动窗口）：真实音频是稀疏语义证据，须跨整个
+        # 实时会话可见；否则长循环跑过 window_size 帧后早期音频被滚动裁掉 → audio_evidence
+        # 首屏不持久（Gate 4 真实缺陷 #2）。帧/处置细节走窗口，音频走持久列表，二者分别服务
+        # "细节"与"证据"，时间轴 AUDIO 节点 ↔ audio_evidence ↔ Case Time 音频 Lane 同源一致。
+        self._audio_events: list[LiveAudioFrame] = []  # 持久音频事件（dict{kind,audio,audio_index}）
+        # 去重键集合（event_id 优先，缺失回退组合键），护 VM-8 重放幂等：
+        # live 循环重启 frame_index 归零会重新喂入同一音频事件，去重避免重复累积污染证据。
+        self._audio_dedup_keys: set[str] = set()
         # P0-1 处置闭环：Resolution 事实累计序号（确定性 ref 标签）。
         self._resolution_index = 0
+        # P1-A：最近一帧检测子集（覆盖式"当前感知状态"，生命周期=最近一帧）。
+        self._last_detections: tuple[dict, ...] = ()
+        self._last_detection_frame: int = -1
+        # LP-3：最近一帧风险/决策状态（覆盖式"当前风险状态"，生命周期=最近一帧；
+        # 与累积 set _risk_levels/_recommended_actions/_command_types 区分——后者是历史去重，
+        # 前者是"此刻 AI 判断"，驱动实时 CURRENT STATE / Why / Next action）。
+        self._last_risk_levels: tuple[str, ...] = ()
+        self._last_recommended_actions: tuple[str, ...] = ()
+        self._last_reason_summary: tuple[str, ...] = ()
+        self._last_command_types: tuple[str, ...] = ()
+        self._last_risk_frame: int = -1
+        # PR-B（DESIGN-live-product-ui-restore §4.6 · Owner 锁死）：风险信号状态机。
+        # RAISED/CLEARED 由服务端明确判定（risk_levels 空→非空=raised，非空→空=cleared，
+        # 持续非空=active），前端只渲染，绝不自行解释"空=CLEARED"（空可能是风险解除/
+        # 窗口无风险/服务暂无事件/初始化等多种原因，前端无法区分）。
+        # 状态机确定性：纯摄入序列函数，无墙钟/随机数（VM-8 重放逐字段一致）。
+        self._risk_active: bool = False
+        self._last_risk_transition: str | None = None
+        # P0-1 修复：行为/警告增量广播缓存（持久化、不进滚动窗口）。
+        # 真实会话里的 perception_events（visitor 进出/停留/再现）和 warnings
+        # 都是稀疏事件，必须跨整个实时会话可投影；否则一旦滚动窗口裁掉早期事件，
+        # 前端 behavior-timeline / task-cards 永远没数据。
+        # 去重：每条 event_id（perception）/ warning_id（warning）→ 已记录则跳过（VM-8）。
+        # 序列号：用于增量 delta（指纹变化才推）。
+        self._perception_events_cache: list[dict] = []  # [{seq, frame_index, event_type, visitor_id, score, location, repeat_count, ...}]
+        self._perception_event_ids: set[str] = set()
+        self._perception_event_seq: int = 0
+        self._warnings_cache: list[dict] = []  # [{seq, warning_id, frame_index, risk_level, reason_summary, recommended_action, perception_score, trigger_events, device_id, elder_id}]
+        self._warning_ids_cache: set[str] = set()
+        self._warning_seq: int = 0
 
     @property
     def n_frames(self) -> int:
@@ -410,11 +642,388 @@ class ProjectionAccumulator:
             self._recent_events = self._recent_events[-self.window_size:]
         return self
 
+    # ------------------------------------------------------------------
+    # P0 增量投影（EvidenceProjection delta stream · Owner 2026-08-17 拍板）
+    # ------------------------------------------------------------------
+    # 只读派生：绝不 mutate 累积状态；浏览器只渲染、不推理、不判断风险、不建第二事实模型
+    # （VM-1 / VM-9 边界）。delta 只回答"自上次以来投影发生了什么变化"。
+    # DRY 债：节点字段公式与 _build_timeline / _build_audio_evidence_live /
+    # _build_case_time_tracks 对齐（由 delta 单测锁定结构，防漂移）。
+
+    def projection_fingerprint(self) -> dict:
+        """轻量指纹（只读）：供增量广播去重。
+
+        - ``timeline_refs``：滚动窗口 + 持久音频列表的 ref 集合（与时间轴同源）；
+        - ``audio_ids``：持久音频事件 event_id 集合（去重主键，VM-8）；
+        - ``perception_event_seqs``：累积序号集合（仅含新增部分用于 delta 判定）；
+        - ``warning_seqs``：累积序号集合（仅含新增部分用于 delta 判定）；
+        - ``counts``：全量累计（独立于滚动窗口裁剪）。
+        """
+        return {
+            "timeline_refs": frozenset(self._delta_timeline_refs()),
+            "audio_ids": frozenset(
+                e["audio"].get("event_id")
+                for e in self._audio_events
+                if e["audio"].get("event_id")
+            ),
+            "perception_event_seqs": frozenset(
+                pe["seq"] for pe in self._perception_events_cache
+            ),
+            "warning_seqs": frozenset(
+                w["seq"] for w in self._warnings_cache
+            ),
+            "counts": (
+                self._total_frames,
+                self._total_audio,
+                self._counts["warnings"],
+                self._counts["commands"],
+            ),
+        }
+
+    def _delta_timeline_refs(self) -> list[str]:
+        """当前时间轴 ref 序列（与 _build_timeline 同源同规则）。"""
+        refs: list[str] = []
+        for ev in self._recent_events:
+            kind = ev["kind"]
+            if kind == "frame":
+                refs.append(f"{_LIVE_REF_PREFIX}://frame/{ev['frame']['frame_index']}")
+            elif kind == "resolution":
+                refs.append(f"{_LIVE_REF_PREFIX}://resolution/{ev['resolution']['index']}")
+        for ev in self._audio_events:
+            refs.append(f"{_LIVE_REF_PREFIX}://audio/{ev['audio_index']}")
+        return refs
+
+    def _delta_timeline_nodes(self, new_refs: set[str]) -> list[dict]:
+        """按新增 ref 构造 timeline 节点 dict（字段与 _build_timeline 对齐，DRY 债）。"""
+        nodes: list[dict] = []
+        for ev in self._recent_events:
+            kind = ev["kind"]
+            if kind == "frame":
+                lf = ev["frame"]
+                fi = lf["frame_index"]
+                ref = f"{_LIVE_REF_PREFIX}://frame/{fi}"
+                if ref in new_refs:
+                    nw = len(lf["risk_levels"])
+                    nodes.append(
+                        {
+                            "timestamp": f"F{fi}",
+                            "stage": "perception",
+                            "type": "frame",
+                            "summary": f"frame {fi}: {lf['n_detections']} 检测, {nw} 警告",
+                            "verdict": "INFO",
+                            "modality": "VISION",
+                            "provenance_kind": "REAL_SENSOR",
+                            "ref": ref,
+                        }
+                    )
+            elif kind == "resolution":
+                rs = ev["resolution"]
+                ref = f"{_LIVE_REF_PREFIX}://resolution/{rs['index']}"
+                if ref in new_refs:
+                    nodes.append(
+                        {
+                            "timestamp": f"R{rs['index']}",
+                            "stage": "action",
+                            "type": "resolution",
+                            "summary": (
+                                f"处置完成：warning {rs['warning_id'][:8]} 由 "
+                                f"{rs['operator']}「{rs['action']}」（community_done）"
+                            ),
+                            "verdict": "INFO",
+                            "modality": "ACTION",
+                            "provenance_kind": "REAL_SENSOR",
+                            "ref": ref,
+                        }
+                    )
+        for ev in self._audio_events:
+            la = ev["audio"]
+            a_idx = ev["audio_index"]
+            ref = f"{_LIVE_REF_PREFIX}://audio/{a_idx}"
+            if ref in new_refs:
+                nodes.append(
+                    {
+                        "timestamp": f"A{a_idx}",
+                        "stage": "perception",
+                        "type": "audio",
+                        "summary": (
+                            f"audio {a_idx}: {la['kind']} "
+                            f"(score={la['score']:.2f}, conf={la['confidence']:.2f})"
+                        ),
+                        "verdict": "INFO",
+                        "modality": "AUDIO",
+                        "provenance_kind": "REAL_SENSOR",
+                        "ref": ref,
+                    }
+                )
+        return nodes
+
+    def _delta_audio_nodes(self, new_audio_ids: set[str]) -> list[dict]:
+        """按新增 event_id 构造 audio_evidence 节点 dict（字段与 _build_audio_evidence_live 对齐）。"""
+        nodes: list[dict] = []
+        for ev in self._audio_events:
+            la = ev["audio"]
+            event_id = la.get("event_id")
+            if event_id not in new_audio_ids:
+                continue
+            node: dict = {
+                "timestamp": la["timestamp"],
+                "kind": la["kind"],
+                "score": la["score"],
+                "confidence": la["confidence"],
+                "labels": list(la["labels"]),
+                "source_segment_ids": list(la["source_segment_ids"]),
+                "ref": f"{_LIVE_REF_PREFIX}://audio/{ev['audio_index']}",
+                "provenance_kind": "REAL_SENSOR",
+            }
+            if event_id is not None:
+                node["event_id"] = event_id
+            nodes.append(node)
+        return nodes
+
+    def _delta_case_time_marks(self, new_audio_ids: set[str]) -> list[dict]:
+        """按新增 event_id 构造 Case Time 音频 mark dict（字段与 _build_case_time_tracks 对齐）。"""
+        marks: list[dict] = []
+        new_nodes = self._delta_audio_nodes(new_audio_ids)
+        if not new_nodes:
+            return marks
+        # T0 = 全量最早音频时间（与 _build_case_time_tracks 同 T0，保证相对时间一致）。
+        all_times = [float(a["timestamp"]) for a in self._build_audio_evidence_live()]
+        t0 = min(all_times) if all_times else 0.0
+        for a in sorted(new_nodes, key=lambda x: float(x["timestamp"])):
+            rel = float(a["timestamp"]) - t0
+            kind = a["kind"]
+            label = _AUDIO_KIND_ZH.get(kind, kind)
+            marks.append(
+                {
+                    "time": round(rel, 3),
+                    "kind": "audio",
+                    "ref": a["ref"],
+                    "label": label,
+                }
+            )
+        return marks
+
+    def extract_evidence_delta(self, prev: dict | None) -> dict:
+        """只读增量：对比 ``prev`` 指纹 → evidence_delta。
+
+        ``prev=None``（尚无基线）→ 增量 = **全量**（自零开始；浏览器以快照 ref 幂等去重，
+        已渲染项被跳过，绝不重复渲染——VM-8）。返回
+        ``{"type","timeline","audio","case_time","counts","perception_events","warnings"}``。
+
+        P0-1：新增 ``commands`` 字段（完整 command_payload，Action Evidence 任务卡消费）。
+        仅首连（prev=None）时携带，增量模式下为空列表（避免冗余传输）。
+
+        P0-1 修复：新增 ``perception_events`` / ``warnings`` 增量列表（行为时间线 +
+        任务卡数据通路）。持久缓存 → seq 递增 → 指纹对比得到新增子集。
+        """
+        cur = self.projection_fingerprint()
+        prev_refs = set((prev or {}).get("timeline_refs", ()))
+        prev_audio = set((prev or {}).get("audio_ids", ()))
+        prev_pe_seqs = set((prev or {}).get("perception_event_seqs", ()))
+        prev_w_seqs = set((prev or {}).get("warning_seqs", ()))
+        new_refs = set(cur["timeline_refs"]) - prev_refs
+        new_audio_ids = set(cur["audio_ids"]) - prev_audio
+        new_pe_seqs = set(cur["perception_event_seqs"]) - prev_pe_seqs
+        new_w_seqs = set(cur["warning_seqs"]) - prev_w_seqs
+        is_first_connect = prev is None
+        return {
+            "type": "evidence_delta",
+            "timeline": self._delta_timeline_nodes(new_refs),
+            "audio": self._delta_audio_nodes(new_audio_ids),
+            "case_time": self._delta_case_time_marks(new_audio_ids),
+            # P0-1 修复：行为事件增量（供 behavior-timeline 消费）。
+            "perception_events": [
+                pe for pe in self._perception_events_cache
+                if pe["seq"] in new_pe_seqs
+            ],
+            # P0-1 修复：Warning 增量（供 risk_delta / task-cards 消费）。
+            "warnings": [
+                w for w in self._warnings_cache
+                if w["seq"] in new_w_seqs
+            ],
+            "counts": {
+                "n_frames": self._total_frames,
+                "n_audio": self._total_audio,
+                "perception_events": self._counts["perception_events"],
+                "warnings": self._counts["warnings"],
+                "commands": self._counts["commands"],
+            },
+            # P0-1：首连携带完整 command_payload（Action Evidence 任务卡消费，VM-9 只渲染）。
+            "commands": [
+                {"command_type": ct, "status": "SENT"}
+                for ct in self._last_command_types
+            ] if is_first_connect else [],
+        }
+
+    # ------------------------------------------------------------------
+    # P1-A 实时感知状态流（Live Perception Delta · Owner 2026-08-17 拍板）
+    # ------------------------------------------------------------------
+    # 事实的实时投影（非原始 detector 仓库）：只保留产品渲染所需的结构化字段
+    # （class/bbox/confidence），覆盖式"当前感知状态"（生命周期=最近一帧），
+    # 检测指纹未变 → 不推（避免 8fps 全量刷原始框）。浏览器只渲染、零推理。
+
+    def perception_fingerprint(self) -> tuple:
+        """当前检测指纹（class+bbox+confidence 元组，用于变化判定去重）。"""
+        return tuple(
+            (d["class"], tuple(d["bbox"]), d["confidence"]) for d in self._last_detections
+        )
+
+    def extract_perception_delta(self, prev_fp) -> dict:
+        """只读：对比 ``prev_fp`` 检测指纹 → perception_delta。
+
+        ``prev_fp=None``（首连）或指纹变化 → 携带当前检测子集；未变 → ``detections=()``
+        （无变化不推）。返回 ``{"type","frame_index","detections"}``。
+        """
+        cur = self.perception_fingerprint()
+        changed = (prev_fp is None) or (prev_fp != cur)
+        return {
+            "type": "perception_delta",
+            "frame_index": self._last_detection_frame,
+            "detections": [dict(d) for d in self._last_detections] if changed else [],
+        }
+
+    # ------------------------------------------------------------------
+    # LP-3 实时风险与决策（Risk Delta · 覆盖式"当前 AI 判断"，非累积历史）
+    # ------------------------------------------------------------------
+    # Perception → Risk → Decision → Action 的实时投影：只保留最近一帧的
+    # risk_levels / recommended_actions / command_types，浏览器据此渲染
+    # CURRENT STATE / Why / Next action。指纹未变 → 不推（避免无意义刷屏）。
+
+    def risk_fingerprint(self) -> tuple:
+        """当前风险状态指纹（risk_levels/reason_summary/recommended_actions/command_types + P0-1 扩展字段）。"""
+        # P0-1 修复：把 warnings_cache 的 seq 集合纳入指纹，使新增 warning 触发 risk_delta 推送。
+        return (
+            self._last_risk_levels,
+            self._last_reason_summary,
+            self._last_recommended_actions,
+            self._last_command_types,
+            self._last_trigger_events,
+            self._last_perception_scores,
+            self._last_warning_ids,
+            self._last_risk_signals,
+            frozenset(w["seq"] for w in self._warnings_cache),
+        )
+
+    def extract_risk_delta(self, prev_fp) -> dict:
+        """只读：对比 ``prev_fp`` 风险指纹 → risk_delta（覆盖式"当前风险状态"）。
+
+        ``prev_fp=None``（首连）或指纹变化 → 携带当前风险状态；未变 → 空列表
+        （无变化不推）。返回 ``{"type","frame_index","risk_levels","reason_summary",
+        "recommended_actions","command_types","risk_transition","risk_signals",
+        "trigger_events","perception_scores","warning_ids","device_id","elder_id",
+        "active_warnings"}``。
+
+        ``risk_transition``（PR-B · Owner 锁死）：服务端状态机对**本次变化**的判定
+        （``raised`` / ``cleared`` / ``active``）；指纹未变 → ``None``（不推信号）。
+        前端只按本字段渲染 RAISED/CLEARED，绝不自行解释 risk_levels 空/非空。
+
+        P0-1：内嵌 ``risk_signals``（Owner Q1 · 方案 B）—— 一个 risk_delta = 一个
+        风险状态切片，浏览器单消息消费，无需多流时间关联。
+
+        P0-1 修复（P0-2 audit bug）：增加 ``active_warnings`` 字段——把 _warnings_cache
+        中的活跃 warning 完整对象（warning_id / risk_level / reason_summary /
+        trigger_events / perception_score / device_id / elder_id）作为数据源。
+        原因：Pipeline 单帧 emit warning 之后，下一帧 risk_levels 会变空，但前端
+        仍需看到这条 warning 的完整事实（VM-9 零推断），否则风险卡"已通知/已处置"渲染不出来。
+        """
+        cur = self.risk_fingerprint()
+        changed = (prev_fp is None) or (prev_fp != cur)
+        # P0-1 修复：从缓存取活跃 warning 列表（完整对象，事实投影）。
+        active_warnings = [w for w in self._warnings_cache]
+        return {
+            "type": "risk_delta",
+            "frame_index": self._last_risk_frame,
+            "risk_levels": list(self._last_risk_levels) if changed else [],
+            "reason_summary": list(self._last_reason_summary) if changed else [],
+            "recommended_actions": list(self._last_recommended_actions) if changed else [],
+            "command_types": list(self._last_command_types) if changed else [],
+            "risk_transition": self._last_risk_transition if changed else None,
+            # P0-1：产品解释事实（owner 锁死：仅投影已有 Runtime 字段，不扩展语义）
+            "trigger_events": list(self._last_trigger_events) if changed else [],
+            "perception_scores": list(self._last_perception_scores) if changed else [],
+            "warning_ids": list(self._last_warning_ids) if changed else [],
+            "risk_signals": list(self._last_risk_signals) if changed else [],
+            "device_id": self._last_device_id if changed else None,
+            "elder_id": self._last_elder_id if changed else None,
+            # P0-1 修复（P0-2 audit bug）：活跃 warning 完整对象（task-cards 数据源）。
+            "active_warnings": active_warnings if changed else [],
+        }
+
     def _accumulate(self, live: LiveFrame) -> None:
         self._recent_events.append({"kind": "frame", "frame": live})
         if len(self._recent_events) > self.window_size:
             # 确定性裁剪：仅保留末尾 window_size 事件（滚动窗口逐帧/逐音频细节）。
             self._recent_events = self._recent_events[-self.window_size:]
+        # P1-A：最近一帧检测子集（覆盖式，非累积——"当前感知状态"语义 + 明确生命周期）。
+        self._last_detections = live.get("detections", ())
+        self._last_detection_frame = live["frame_index"]
+        # LP-3：覆盖式当前风险/决策状态（最近一帧的 warning/command 分类，非累积）。
+        self._last_risk_levels = tuple(live.get("risk_levels", ()))
+        self._last_recommended_actions = tuple(live.get("recommended_actions", ()))
+        self._last_reason_summary = tuple(live.get("reason_summary", ()))
+        self._last_command_types = tuple(live.get("command_types", ()))
+        # P0-1：产品解释事实 + 风险信号实体（跨帧保活 + 叙事）
+        self._last_trigger_events = tuple(live.get("trigger_events", ()))
+        self._last_perception_scores = tuple(live.get("perception_scores", ()))
+        self._last_warning_ids = tuple(live.get("warning_ids", ()))
+        self._last_device_id = live.get("device_id")
+        self._last_elder_id = live.get("elder_id")
+        self._last_risk_signals = tuple(live.get("risk_signals", ()))
+        self._last_risk_frame = live["frame_index"]
+        # P0-1 修复：行为事件持久化（不进滚动窗口）。去重：event_id（PerceptionEvent.event_id）优先，
+        # 缺失回退 (frame_index, event_type, visitor_id) 组合键（VM-8 重放幂等）。
+        for pe in live.get("perception_event_objects", ()):
+            pe_id = pe.get("event_id") or f"{pe.get('frame_index')}|{pe.get('event_type')}|{pe.get('visitor_id')}"
+            if pe_id in self._perception_event_ids:
+                continue
+            self._perception_event_ids.add(pe_id)
+            self._perception_event_seq += 1
+            self._perception_events_cache.append({
+                "seq": self._perception_event_seq,
+                "frame_index": pe.get("frame_index", live["frame_index"]),
+                "event_id": pe_id,
+                "event_type": pe.get("event_type", ""),
+                # 转 str 避免 JSON 序列化失败（UUID / 对象）。
+                "visitor_id": str(pe.get("visitor_id", "") or ""),
+                "visitor_instance_id": str(pe.get("visitor_instance_id", "") or ""),
+                "score": pe.get("score"),
+                "location": pe.get("location", ""),
+                "repeat_count": pe.get("repeat_count"),
+                "meta": pe.get("meta", {}),
+            })
+        # P0-1 修复：WarningEvent 持久化（不进滚动窗口）。去重：warning_id 为主键。
+        for w in live.get("warning_objects", ()):
+            wid = str(w.get("warning_id", ""))
+            if not wid or wid in self._warning_ids_cache:
+                continue
+            self._warning_ids_cache.add(wid)
+            self._warning_seq += 1
+            self._warnings_cache.append({
+                "seq": self._warning_seq,
+                "warning_id": wid,
+                "frame_index": w.get("frame_index", live["frame_index"]),
+                "risk_level": w.get("risk_level", ""),
+                "recommended_action": w.get("recommended_action", ""),
+                "reason_summary": list(w.get("reason_summary", []) or []),
+                "trigger_events": list(w.get("trigger_events", []) or []),
+                "perception_score": w.get("perception_score"),
+                "device_id": w.get("device_id"),
+                "elder_id": w.get("elder_id"),
+            })
+        # PR-B：risk_transition 状态机（服务端权威判定，前端只渲染——红线 §7.8）。
+        # P0-1 修复说明：判定仍用 _last_risk_levels（保持单帧边界一致性），
+        # 但 payload 加入 active_warnings 完整对象（P0-2 fix），使前端能拿到 warning 事实。
+        cur_risky = bool(self._last_risk_levels)
+        if cur_risky and not self._risk_active:
+            self._last_risk_transition = "raised"
+        elif not cur_risky and self._risk_active:
+            self._last_risk_transition = "cleared"
+        elif cur_risky:
+            self._last_risk_transition = "active"
+        else:
+            # 持续无风险（含首连初始化）→ 无 transition（不推信号，§4.6 契约表）。
+            self._last_risk_transition = None
+        self._risk_active = cur_risky
         self._total_frames += 1
         self._counts["perception_events"] += len(live["event_types"])
         self._counts["warnings"] += len(live["risk_levels"])
@@ -428,12 +1037,15 @@ class ProjectionAccumulator:
         self._audio_index += 1
         self._total_audio += 1
         self._audio_kinds.add(live_audio["kind"])
-        self._recent_events.append(
-            {"kind": "audio", "audio": live_audio, "audio_index": self._audio_index}
-        )
-        if len(self._recent_events) > self.window_size:
-            # 确定性裁剪：与帧同一滚动窗口（时间轴交错呈现，AC-9）。
-            self._recent_events = self._recent_events[-self.window_size:]
+        # 持久化（不进滚动窗口）：真实音频是稀疏语义证据，须跨整个实时会话可见。
+        # 去重保护 VM-8 重放幂等：live 循环重启 frame_index 归零会重新喂入同一音频事件，
+        # 以 event_id 为主键（缺失回退组合键 _audio_dedup_key）去重，避免重复累积污染证据。
+        key = live_audio.get("event_id") or _audio_dedup_key(live_audio)
+        if key not in self._audio_dedup_keys:
+            self._audio_dedup_keys.add(key)
+            self._audio_events.append(
+                {"kind": "audio", "audio": live_audio, "audio_index": self._audio_index}
+            )
 
     # —— 投影构件（镜像 loader 形态，但 provenance=REAL_SENSOR、ref 走 live://） ——
 
@@ -470,7 +1082,9 @@ class ProjectionAccumulator:
                 ref=f"{_LIVE_REF_PREFIX}://session/{sid}",
             )
         )
-        # 按摄入顺序交错呈现视觉/音频/处置结果（AC-9：统一时间轴，不三套独立时间轴）。
+        # 按摄入顺序呈现视觉/处置结果（AC-9：统一时间轴，不三套独立时间轴）。
+        # 注：音频节点不再经 _recent_events 滚动窗口——已迁至持久列表 _audio_events，
+        # 与时间轴 AUDIO 节点 ↔ audio_evidence ↔ Case Time 音频 Lane 同源一致（VM-13 / Gate 4 缺陷 #2）。
         for ev in self._recent_events:
             kind = ev["kind"]
             if kind == "frame":
@@ -489,25 +1103,7 @@ class ProjectionAccumulator:
                         ref=f"{_LIVE_REF_PREFIX}://frame/{fi}",
                     )
                 )
-            elif kind == "audio":
-                la = ev["audio"]
-                a_idx = ev["audio_index"]
-                nodes.append(
-                    TimelineNode(
-                        timestamp=f"A{a_idx}",
-                        stage="perception",
-                        type="audio",
-                        summary=(
-                            f"audio {a_idx}: {la['kind']} "
-                            f"(score={la['score']:.2f}, conf={la['confidence']:.2f})"
-                        ),
-                        verdict="INFO",
-                        modality="AUDIO",
-                        provenance_kind="REAL_SENSOR",
-                        ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
-                    )
-                )
-            else:  # resolution（P0-1 处置闭环事实）
+            elif kind == "resolution":  # P0-1 处置闭环事实
                 rs = ev["resolution"]
                 nodes.append(
                     TimelineNode(
@@ -524,6 +1120,30 @@ class ProjectionAccumulator:
                         ref=f"{_LIVE_REF_PREFIX}://resolution/{rs['index']}",
                     )
                 )
+        # 音频证据节点（持久，跨会话可见）：与时间轴 AUDIO 节点 ↔ audio_evidence 同源一致。
+        # P0-11.x-3：注入 case_time（相对最早音频 T0 的秒），供 audio_sync.js 点击 → seek/play。
+        all_audio_times = [float(ev["audio"]["timestamp"]) for ev in self._audio_events]
+        audio_t0 = min(all_audio_times) if all_audio_times else 0.0
+        for ev in self._audio_events:
+            la = ev["audio"]
+            a_idx = ev["audio_index"]
+            audio_case_time = round(float(la["timestamp"]) - audio_t0, 3)
+            nodes.append(
+                TimelineNode(
+                    timestamp=f"A{a_idx}",
+                    stage="perception",
+                    type="audio",
+                    summary=(
+                        f"audio {a_idx}: {la['kind']} "
+                        f"(score={la['score']:.2f}, conf={la['confidence']:.2f})"
+                    ),
+                    verdict="INFO",
+                    modality="AUDIO",
+                    provenance_kind="REAL_SENSOR",
+                    ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
+                    case_time=audio_case_time,
+                )
+            )
         return tuple(nodes)
 
     def _build_decision_evidence(
@@ -617,6 +1237,71 @@ class ProjectionAccumulator:
             scenario_id=sid, nodes=tuple(nodes), edges=tuple(edges)
         )
 
+    def _build_audio_evidence_live(self) -> tuple[AudioEvidenceNode, ...]:
+        """ADR-0036 VM-13 Phase B（Owner 2026-08-16 决策）：把摄入的音频感知投影为
+        ``audio_evidence``（provenance=REAL_SENSOR），与 Artifact（Phase C loader）共用同一
+        ``AudioEvidenceNode`` schema，区别仅 ``provenance_kind``。
+
+        铁律（VM-13 6 MUST / AC-12）：
+        - fail-closed：``audio_result_to_live_audio`` 已拒绝 forbidden 字段（verdict/transcript/
+          raw_audio/…），此处不再校验，但只透传上游既有字段，绝不新生成 UUID/墙钟/判定；
+        - 无 ASR/LLM：不产 text/transcript/verdict/risk 解释；
+        - 保留 provenance：每条 ``provenance_kind="REAL_SENSOR"``，``ref="live://audio/{idx}"``；
+        - 幂等（VM-8）：同一有序流重放 N 次 → 同一节点列表（滚动窗口裁剪确定性，与帧一致）；
+        - 未摄入音频（``_audio_events`` 空）→ 恒 ``()``，绝不编造。
+        仅投影持久列表（``_audio_events``）的音频项——跨整个实时会话不随帧窗口滚动裁掉
+        （Gate 4 真实缺陷 #2 修复），与时间轴 AUDIO 节点 ↔ Case Time 音频 Lane 同源一致（VM-13）。
+        """
+        nodes: list[AudioEvidenceNode] = []
+        for ev in self._audio_events:
+            la = ev["audio"]
+            a_idx = ev["audio_index"]
+            node: AudioEvidenceNode = AudioEvidenceNode(
+                timestamp=la["timestamp"],
+                kind=la["kind"],
+                score=la["score"],
+                confidence=la["confidence"],
+                labels=la["labels"],
+                source_segment_ids=la["source_segment_ids"],
+                ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
+                provenance_kind="REAL_SENSOR",
+            )
+            event_id = la.get("event_id")
+            if event_id is not None:
+                node["event_id"] = event_id
+            nodes.append(node)
+        return tuple(nodes)
+
+    def _build_case_time_tracks(self) -> tuple[CaseTimeTrack, ...]:
+        """Live Case Time 主轴（Step 6 全链路同步 · VM-13 Phase B）：仅音频 Lane。
+
+        实时会话无 memory episodes（Live 不产记忆落库），故只铺音频 Lane。与 loader
+        共用 ``CaseTimeTrack`` schema，T0 = 最早音频时间戳，相对时间确定性排序（VM-8 幂等）。
+        无摄入音频 → 恒 ``()``（AC-12 / VM-13 6 MUST，绝不编造）。仅投影持久列表（``_audio_events``）音频项，
+        与 ``_build_audio_evidence_live`` 同源同窗口（时间轴 AUDIO 节点 ↔ Case Time 音频标记一致）。
+        """
+        audio = self._build_audio_evidence_live()
+        if not audio:
+            return ()
+        times = [float(a["timestamp"]) for a in audio]
+        t0 = min(times)
+        tracks: list[CaseTimeTrack] = []
+        # 按时间戳确定排序（同源同窗口 → 同序，重放幂等）。
+        for a in sorted(audio, key=lambda x: float(x["timestamp"])):
+            ts = float(a["timestamp"])
+            rel = ts - t0
+            kind = a["kind"]
+            label = _AUDIO_KIND_ZH.get(kind, kind)
+            tracks.append(
+                CaseTimeTrack(
+                    time=round(rel, 3),
+                    kind="audio",
+                    ref=a["ref"],
+                    label=label,
+                )
+            )
+        return tuple(tracks)
+
     def to_evidence_projection(self) -> EvidenceProjection:
         """累积状态 → ``EvidenceProjection``（确定性，fail-closed，AC-4b 幂等）。
 
@@ -624,9 +1309,10 @@ class ProjectionAccumulator:
         ``gate_degraded=False`` / ``fingerprints=None`` / ``trace_outcome_kinds=()`` /
         ``suppress_reasons=()``（刻意分歧：Live 是进行中的实时流、case 未终结，负向能力卡
         "为什么没有报警"仅对※已终结的 Canonical case※有意义，故 Live 恒不显示该卡）/
-        ``episode_action_command_types=()`` / ``episodes=0`` /
-        ``cross_modal_links=0`` / ``audio_evidence=()``（AC-12：真实音频证据在 Phase C 才由
-        loader 投影；Phase B 仅时间轴增量合并 AUDIO modality 节点，绝不编造音频证据）。
+        ``episode_action_command_types=()`` / ``episodes=0`` / ``cross_modal_links=0``。
+        ``audio_evidence``（VM-13 Phase B · Owner 2026-08-16）：由 ``_build_audio_evidence_live``
+        投影摄入的 REAL_SENSOR 音频感知（与 Artifact 共用 AudioEvidenceNode 契约，区别仅
+        provenance_kind）；未摄入音频 → 恒 ``()``，绝不编造（AC-12 / 6 MUST fail-closed）。
         """
         sid = self.scenario_id
         counts = self._build_counts()
@@ -640,6 +1326,10 @@ class ProjectionAccumulator:
             event_types, risk_levels, recommended_actions, command_types
         )
         graph = self._build_graph(event_types, risk_levels, recommended_actions)
+        audio_evidence = self._build_audio_evidence_live()
+        # Step 6（Case Time 全链路同步）：音频 Lane 经 CaseTimeTrack 并入统一主轴（仅音频，
+        # 实时会话无 memory episodes），与 artifact 路径（loader 双 Lane）同源 schema（VM-1）。
+        case_time_tracks = self._build_case_time_tracks()
 
         refs: list[str] = (
             [n["ref"] for n in timeline]
@@ -666,11 +1356,20 @@ class ProjectionAccumulator:
             # 已终结 Canonical case 有意义；此处恒 () 使渲染层不出现负向能力卡（诚实优先）。
             suppress_reasons=(),
             episode_action_command_types=(),
+            # P1（干预回执 + 闭环可达性）：Live 进行中、case 未终结，无已派发指令回执
+            # （真实派发回执由 Canonical loader 从 artifacts.command_types 派生）；此处恒 ()，
+            # 使渲染层呈现实诚空卡，绝不编造派发/送达/时延（AC-12）。
+            intervention_dispatch=(),
             timeline=timeline,
             decision_evidence=decision_evidence,
-            # AC-12：Phase B 音频证据恒 ``()``（真实音频在 Phase C 由 loader 投影），
-            # 本路径仅时间轴增量合并 AUDIO modality 节点，绝不编造 audio_evidence。
-            audio_evidence=(),
+            # VM-13 Phase B（Owner 2026-08-16）：Live 真实摄入音频 → REAL_SENSOR 派生
+            # audio_evidence（与 Artifact 共用 AudioEvidenceNode 契约）；未摄入恒 ``()``，
+            # 绝不编造（AC-12 / 6 MUST fail-closed）。
+            audio_evidence=audio_evidence,
+            # Step 6：Live Case Time 音频 Lane（相对最早音频 T0；无音频恒 ()）。
+            case_time_tracks=case_time_tracks,
+            # Live 不产 memory episodes（实时会话无记忆落库）→ 显式 absent（AC-8 禁伪造）。
+            memory_episodes=(),
             gate=(),
             gate_passed=False,
             gate_degraded=False,

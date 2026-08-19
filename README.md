@@ -12,7 +12,7 @@
 > `docs/05_git_workflow.md` 仅就 Git 提交规范以 `AGENTS.md` 为准，不覆盖阶段状态 SSOT。
 > CI 门禁 `scripts/phase_consistency_check.py` 自动锁定此一致性。
 
-- ✅ P0-3~P0-10：检测 → 跟踪 → 事件 → 特征 → 规则 → 决策 → 行动 → 装配 全链路完成（289 测试全绿）
+- ✅ P0-3~P0-10：检测 → 跟踪 → 事件 → 特征 → 规则 → 决策 → 行动 → 装配 全链路完成（2295 测试全绿，含 v2 模块）
 - ✅ P0-10.5 架构冻结治理（ADR-0014 三级冻结 + 契约测试 + 收敛清理），架构漂移清零
 - ✅ P0-10.5.3 Developer API Surface 文档层（DX）已建立（见下方「团队第一入口」）
 - ✅ P0-10.5.4 仓库卫生清理完成；**Release Candidate tag `v0.1.0-mvp-rc` 已打（2026-07-20）**
@@ -34,7 +34,7 @@
 > **严格区分**：设计完成 ≠ 集成完成 ≠ 默认启用。
 
 - **设计完成**：ADR-0018/0019/0020（方向）+ ADR-0021/0022/0023（具体设计）+ `docs/DESIGN-realtime-riskstream-engineering-plan.md`（工程方案）已就位。
-- **工程迁移 Stage A 进行中**：`BehaviorState` / `RiskSignal` / `RecentBehaviorStore` 类型 + 契约测试已在工作区落地，**未接入 pipeline**（`pipeline.py` diff 为空）。
+- **工程迁移 Stage A 进行中**：`BehaviorState` / `RiskSignal` / `RecentBehaviorStore` 类型 + 契约测试已合入 main，**未接入 pipeline**（`pipeline.py` diff 为空）。
 - **当前运行路径**：仍为 MVP 历史事件流（`VisitorEvent` 离场生成 → `RuleEngine` → `WarningEvent`），`realtime_risk.enabled=false` 默认关闭。
 - 后续 Stage B/C/D（工程方案 §9）才逐步接入实时状态 / 信号 / 决策；详见 `docs/08_roadmap.md` §8.4 产品 Phase 1。
 
@@ -60,7 +60,7 @@
   - **Integration Closure · Slice D**（#95）：4 份文档（`MEMORY_ARCHITECTURE.md` / `MEMORY_OPERATION_GUIDE.md` / `MEMORY_TEST_REPORT.md` / `DESIGN-observation-contract.md`）+ ADR-0024 §10.1 标注。
 - **包导出**：`home_perception.memory` 现导出 `DefaultShortTermPolicy` / `DefaultEpisodeBuilder` / `MemoryStore` / `SnapshotStore` / `ColdStartCoordinator` 等（含 `episode_builder` 包级导出，Stage F 已接线）。
 - **下一步**：Stage G/H Semantic 聚合器（依赖 Phase 4 ReID，v1 不实现）。
-- 详见 `docs/ADR/0024-memory-architecture.md` 与 `docs/DESIGN-memory-pipeline.md`。
+- 详见 `docs/ADR/0024-memory-architecture.md` 与 `docs/design/memory/DESIGN-memory-pipeline.md`。
 
 ## 架构总览（团队入口）
 

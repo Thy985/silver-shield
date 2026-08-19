@@ -19,7 +19,7 @@ PR #50（稳定 HIGH 闭环）与 PR #51（三视图）的验证此前只停在*
 --------
 必须在装有完整 AI 运行时（torch / ultralytics / opencv）的 Python 下跑，
 即 system Python 3.14；managed venv 只放工具链，缺 torch 会自动 SKIP。
-真实视频 data/demo/CCTV_Surveillance_Final.mp4 与场景 yaml 需在本地（gitignore）。
+真实视频 dataset/benign/media/CCTV_Surveillance_Final.mp4 与场景 yaml 需在本地（gitignore）。
 
 用法
 ----
@@ -69,7 +69,7 @@ def main() -> int:
 
     base_yaml = (ROOT / args.scenario) if not Path(args.scenario).is_absolute() else Path(args.scenario)
     if not base_yaml.is_file():
-        print(f"❌ 场景文件不存在：{base_yaml}（CCTV 真实视频场景为本地 untracked，请确保 data/demo/CCTV_Surveillance_Final.mp4 在）")
+        print(f"❌ 场景文件不存在：{base_yaml}（CCTV 真实视频场景为本地 untracked，请确保 dataset/benign/media/CCTV_Surveillance_Final.mp4 在）")
         return 2
 
     from fastapi.testclient import TestClient

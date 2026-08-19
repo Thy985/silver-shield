@@ -31,6 +31,7 @@ from home_perception.visualizer.schema.evidence import (
     DecisionEvidence,
     EvidenceProjection,
     FingerprintPair,
+    InterventionDispatch,
     MemoryEpisodeNode,
     ProjectionMeta,
     ScenarioEvidence,
@@ -417,7 +418,7 @@ def _build_audio_evidence(
     """
     raw = artifacts.get("audio_evidence")
     if raw is None:
-        return ()  # 无音频符号：Phase A/B 与未声明音频场景恒空（AC-12）
+        return ()  # 无音频符号：未声明音频的 artifact 场景恒空（AC-12；Live 路径见 live_adapter）
     if not isinstance(raw, list):
         raise EvidenceProjectionError(
             f"{owner}.artifacts.audio_evidence 结构非法（fail-closed）"
@@ -440,6 +441,13 @@ def _build_audio_evidence(
         if related is not None and not isinstance(related, str):
             raise EvidenceProjectionError(
                 f"{owner}.audio_evidence[{i}].audio_related_visual_ref 非 str（fail-closed）"
+            )
+        # 可选事件 ID（透传上游 AudioPerceptionEvent.event_id，仅溯源/幂等核对，非展示判定）。
+        # canonical 中间层用 audio_event_id 承载（与 audio_score 等同级前缀键）；缺失即不投影。
+        event_id = entry.get("audio_event_id")
+        if event_id is not None and not isinstance(event_id, str):
+            raise EvidenceProjectionError(
+                f"{owner}.audio_evidence[{i}].audio_event_id 非 str（fail-closed）"
             )
         # 逐个字段强校验（fail-closed：缺字段 / 类型错误即拒绝，不兜底填占位）
         if not isinstance(timestamp, (int, float)):
@@ -480,6 +488,22 @@ def _build_audio_evidence(
         )
         if related is not None:
             node["related_visual_ref"] = related
+        if event_id is not None:
+            node["event_id"] = event_id
+        # P0-1 声学状态字段（可选，canonical 有则透传；缺失即不展示，AC-12）
+        for ckey, akey in (
+            ("acoustic_state_change", "audio_acoustic_state_change"),
+            ("voice_stress_score", "audio_voice_stress_score"),
+            ("f0_delta", "audio_f0_delta"),
+            ("speech_rate_delta", "audio_speech_rate_delta"),
+            ("energy_delta", "audio_energy_delta"),
+        ):
+            val = entry.get(akey)
+            if val is not None:
+                if isinstance(val, (int, float)) and ckey != "acoustic_state_change":
+                    node[ckey] = float(val)
+                elif ckey == "acoustic_state_change" and isinstance(val, str):
+                    node[ckey] = val
         nodes.append(node)
     return tuple(nodes)
 
@@ -705,6 +729,50 @@ def _build_fingerprints(scenario_id: str, fp_data: dict, owner: str) -> Fingerpr
     return FingerprintPair(expectation_fingerprint=expectation, loop_fingerprint=loop)
 
 
+# P1（干预回执 + 闭环可达性）：command_types → 派发回执映射（VM-1 纯派生，零编造）。
+# 语义对齐 golden 闭环契约：SEND_FAMILY_MESSAGE → 家属 / family_handled；
+# CREATE_COMMUNITY_TASK → 社区 / community_done；LOG_ONLY → 仅系统记录（无外部接收方）。
+# 注意：本映射是 loader 展示派生层（visualizer 死胡同叶子），不得 import 生产 action 包
+# （VM-3 / D3 AST 契约）；运行时若新增第 4 类 command_type，未命中映射 → 目标角色退化为
+# 「未知接收方」、无期望闭环，仍以原始枚举呈现（fail-closed，不静默丢弃）。
+_INTERVENTION_TARGET_ROLE: dict[str, str] = {
+    "SEND_FAMILY_MESSAGE": "家属",
+    "CREATE_COMMUNITY_TASK": "社区",
+    "LOG_ONLY": "系统（仅记录）",
+}
+_INTERVENTION_CLOSURE: dict[str, str] = {
+    "SEND_FAMILY_MESSAGE": "family_handled",
+    "CREATE_COMMUNITY_TASK": "community_done",
+    # LOG_ONLY：无外部接收方，无期望闭环状态（空串，不伪造）。
+}
+
+
+def _build_intervention_dispatch(
+    command_types: tuple[str, ...],
+) -> tuple[InterventionDispatch, ...]:
+    """从真实 command_types 派生干预派发回执（VM-1 纯派生，AC-12 不编造）。
+
+    去重保序（按首次出现顺序）；未知类型保留原始枚举（fail-closed，不丢弃）。
+    空输入 → ``()``（不渲染回执卡，渲染层据空态呈现诚实空卡）。
+    """
+    if not command_types:
+        return ()
+    seen: set[str] = set()
+    rows: list[InterventionDispatch] = []
+    for ct in command_types:
+        if ct in seen:
+            continue
+        seen.add(ct)
+        rows.append(
+            InterventionDispatch(
+                command_type=ct,
+                target_role=_INTERVENTION_TARGET_ROLE.get(ct, "未知接收方"),
+                closure_expectation=_INTERVENTION_CLOSURE.get(ct, ""),
+            )
+        )
+    return tuple(rows)
+
+
 def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) -> ScenarioEvidence:
     owner = f"scenario[{scenario_id}]"
     canonical = _load_json(_require_path(directory, f"{scenario_id}{CANONICAL_SUFFIX}", owner), owner)
@@ -792,6 +860,11 @@ def _project_scenario(directory: Path, scenario_id: str, summary_entry: dict) ->
         risk_levels=_str_tuple(artifacts, "risk_levels", owner),
         recommended_actions=_str_tuple(artifacts, "recommended_actions", owner),
         command_types=_str_tuple(artifacts, "command_types", owner),
+        # P1（干预回执 + 闭环可达性）：从真实 command_types 派生派发回执（VM-1 纯派生，
+        # 不新增事实；VM-9 诚实边界：不含送达/时延/SLA——全仓库无该遥测）。
+        intervention_dispatch=_build_intervention_dispatch(
+            _str_tuple(artifacts, "command_types", owner)
+        ),
         trace_outcome_kinds=_str_tuple(artifacts, "trace_outcome_kinds", owner),
         # P0-4：负向能力声明（canonical 顶层投影；旧 artifact 无此键 → 空元组，向后兼容）。
         # 与 product_question 同构，来自场景 meta 声明的诚实负向能力事实（非运行时抑制）。

@@ -297,13 +297,20 @@ def _render_timeline(scenario: ScenarioEvidence) -> str:
         audio_kind_attr = (
             f' data-kind="{_esc(node["type"])}"' if modality == "AUDIO" else ""
         )
+        # Phase 2：golden pre-event 节点（type 起步 golden_）加 .tl-item-golden class，
+        # 视觉上与 runtime 节点区分（半透明 + ⓘ 图标）。
+        # 不动 verdict / provenance_kind / modality（语义保真），仅 DOM 装饰。
+        is_golden = str(node.get("type", "")).startswith("golden_")
+        golden_class = " tl-item-golden" if is_golden else ""
+        golden_marker = '<span class="tl-golden-icon" title="manifest 派生预期事件（非 runtime 实测）">ⓘ</span>' if is_golden else ""
         items.append(
             f"""
-            <li class="tl-item" data-step="{_esc(node['timestamp'])}" data-idx="{idx}" data-ref="{_esc(node['ref'])}"{audio_kind_attr}>
+            <li class="tl-item{golden_class}" data-step="{_esc(node['timestamp'])}" data-idx="{idx}" data-ref="{_esc(node['ref'])}"{audio_kind_attr}>
               <span class="tl-dot" style="background:{color}"></span>
               <div class="tl-body">
                 <div class="tl-head">
                   <span class="tl-step">{_esc(node['timestamp'])}</span>
+                  {golden_marker}
                   <span class="tl-modality" style="color:{color}" title="{modality_label}">{marker} {modality_label}</span>
                   <span class="tl-stage" style="color:{color}">{_esc(_STAGE_ZH.get(node['stage'], node['stage']))}</span>
                   <span class="tl-kind">{_esc(kind)}</span>

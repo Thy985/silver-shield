@@ -329,4 +329,4 @@ R3 已验证 2h 稳定性，继续跑 8h（R4）收益下降：
 
 - [ADR-0021 实时风险状态流具体设计](../ADR/0021-realtime-riskstream-concrete-design.md)
 - [工程方案 §9 Stage E Soak Test](../DESIGN-realtime-riskstream-engineering-plan.md)
-- [P0 集成验证报告](../test-report/P0-integration-validation.md)
+- [P0 集成验证报告](P0-integration-validation.md)

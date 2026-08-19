@@ -1,0 +1,149 @@
+{
+  "scenario_id": "sw_adr0034_high_risk",
+  "ok": true,
+  "mode": "detections",
+  "n_frames": 660,
+  "product_question": "系统发现风险后能够完成通知与处置闭环",
+  "suppress_reasons": [],
+  "scenario_fingerprint": "f008521997127361dc084c22d4a88951f5ab2567db6c1f920e428d74f855e4e6",
+  "expectation_fingerprint": "d83091a8d079a580bdcc925336e1dbf1adce9e583c0d4a739dc467315354df1e",
+  "loop_fingerprint": "869d37bd4d36fab2fc109d34e20a81aa74b5896c12c740c4afa50fddc4e8a10d",
+  "failure_codes": [],
+  "stages": [
+    {
+      "name": "perception",
+      "passed": true,
+      "failure_code": null,
+      "severity": "blocking"
+    },
+    {
+      "name": "decision",
+      "passed": true,
+      "failure_code": null,
+      "severity": "blocking"
+    },
+    {
+      "name": "notification",
+      "passed": true,
+      "failure_code": null,
+      "severity": "blocking"
+    },
+    {
+      "name": "memory",
+      "passed": true,
+      "failure_code": null,
+      "severity": "blocking"
+    },
+    {
+      "name": "cross_modal",
+      "passed": true,
+      "failure_code": null,
+      "severity": "blocking"
+    },
+    {
+      "name": "observability",
+      "passed": true,
+      "failure_code": null,
+      "severity": "blocking"
+    }
+  ],
+  "artifacts": {
+    "counts": {
+      "perception_events": 4,
+      "warnings": 1,
+      "commands": 1,
+      "sink_commands": 1,
+      "decision_traces": 1,
+      "episodes": 3,
+      "cross_modal_links": 0
+    },
+    "event_types": [
+      "abnormal_dwell",
+      "high_risk_approach",
+      "repeat_visit",
+      "visit_normal"
+    ],
+    "risk_levels": [
+      "HIGH"
+    ],
+    "recommended_actions": [
+      "ESCALATE_COMMUNITY"
+    ],
+    "command_types": [
+      "CREATE_COMMUNITY_TASK"
+    ],
+    "trace_outcome_kinds": [
+      "WARN"
+    ],
+    "suppress_reasons": [],
+    "episode_action_command_types": [
+      "CREATE_COMMUNITY_TASK"
+    ],
+    "audio_evidence": [],
+    "cross_modal_links": [],
+    "memory_episodes": [
+      {
+        "memory_record_id": "ep-0",
+        "memory_timestamp": "2026-07-19T22:59:32+00:00",
+        "memory_risk_level": "",
+        "memory_recommended_action": "",
+        "memory_summary": "06:59-06:59 访问（停留 0 分钟），未触发风险。",
+        "memory_reason_summary": [],
+        "memory_command_types": [],
+        "memory_prior": false
+      },
+      {
+        "memory_record_id": "ep-1",
+        "memory_timestamp": "2026-07-19T22:59:40.500000+00:00",
+        "memory_risk_level": "",
+        "memory_recommended_action": "",
+        "memory_summary": "06:59-06:59 访问（停留 0 分钟），未触发风险。",
+        "memory_reason_summary": [],
+        "memory_command_types": [],
+        "memory_prior": false
+      },
+      {
+        "memory_record_id": "ep-2",
+        "memory_timestamp": "2026-07-19T22:59:50.500000+00:00",
+        "memory_risk_level": "HIGH",
+        "memory_recommended_action": "ESCALATE_COMMUNITY",
+        "memory_summary": "06:59-07:00 访问（停留 0 分钟），风险等级 HIGH（异常停留 / 重复访问 / 多风险规则同时命中 / 异常时段访问），升级社区。",
+        "memory_reason_summary": [
+          "异常停留",
+          "重复访问",
+          "多风险规则同时命中",
+          "异常时段访问"
+        ],
+        "memory_command_types": [
+          "CREATE_COMMUNITY_TASK"
+        ],
+        "memory_prior": false
+      }
+    ]
+  },
+  "perception_score": {
+    "scenario_id": "sw_adr0034_high_risk",
+    "expected_label": "alert",
+    "actual_label": "alert",
+    "outcome": "TP",
+    "validation_ok": true,
+    "validation_details": "observed_event_types=['abnormal_dwell', 'high_risk_approach', 'repeat_visit', 'visit_normal']; expected_event_types=['high_risk_approach']; missing_event_types=[]; observed_risk_levels=['HIGH']; min_risk_level='HIGH' -> ok=True",
+    "observed_event_types": [
+      "abnormal_dwell",
+      "high_risk_approach",
+      "repeat_visit",
+      "visit_normal"
+    ],
+    "expected_event_types": [
+      "high_risk_approach"
+    ],
+    "missing_event_types": [],
+    "observed_risk_levels": [
+      "HIGH"
+    ],
+    "event_recall": 1.0,
+    "risk_shortfall": 0.0,
+    "benchmark_expected_alarm": true,
+    "benchmark_severity": "HIGH"
+  }
+}

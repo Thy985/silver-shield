@@ -58,7 +58,31 @@ def resolve_scenario(args: argparse.Namespace) -> tuple[Path, Path | None]:
 
     返回 (场景路径, 临时文件或 None)：当使用了 ``--video`` 覆盖时，第二项指向
     写入 ``data/demo/.run_demo_scenario.yaml`` 的临时文件，由调用方在退出时清理。
+
+    Golden case 入口（ADR-0036 补遗 Phase 1）：
+    - ``--scenario golden_stranger_visit`` 等 golden_* 走 ``golden_adapter`` 纯映射，
+      不再需要预渲染 yaml。
+    - 返回的路径是临时 yaml（写入 data/demo/.run_demo_golden_*.yaml），与 --video
+      路径同处理：启动后自动清理。
     """
+    # Golden case 入口（纯映射生成临时 yaml）
+    if args.scenario and args.scenario.startswith("golden_"):
+        from silver_demo.golden_adapter import load_golden_scenario
+        case = args.scenario[len("golden_"):]
+        sc = load_golden_scenario(case)
+        out_dir = ROOT / "data" / "demo"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f".run_demo_golden_{case}.yaml"
+        out_path.write_text(
+            yaml.safe_dump(sc.model_dump(), allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        # Phase 2 标记：写一个 sidecar marker file，gateway 端检测到则注入 golden pre-event。
+        # 不污染 yaml schema（不增加 is_golden 字段，round-trip 仍干净）。
+        marker_path = out_dir / f".run_demo_golden_{case}.golden"
+        marker_path.write_text(case, encoding="utf-8")
+        return out_path, out_path
+
     if args.scenario:
         s = args.scenario
         if s.endswith((".yaml", ".yml")):
@@ -73,6 +97,7 @@ def resolve_scenario(args: argparse.Namespace) -> tuple[Path, Path | None]:
             f"❌ 场景文件不存在：{base}\n"
             f"   可用场景（config/demo/scenarios/ 下）：night_visit / real_doorway\n"
             f"   或用 --scenario <name|.yaml> 指定，或用 --video <path> 直接接入本地视频。\n"
+            f"   Golden case 入口：--scenario golden_stranger_visit | golden_repeated_visit | golden_telephone_risk | golden_evidence_insufficient\n"
         )
         sys.exit(1)
 
@@ -184,6 +209,31 @@ def _register_synthetic_source() -> None:
     install_into(register_frame_source, replace=True)
 
 
+def _build_live_audio_events(hp_settings: object, scenario: object) -> list[dict]:
+    """组装层构建真实音频事件（依赖倒置接缝，网关不 import audio）。
+
+    ADR-0036 VM-13 Phase B（Owner 2026-08-16）：把 ``AudioPipeline`` 产出的真实
+    ``AudioPerceptionEvent`` 以 ``to_dict()`` 列表注入网关，由 Live Adapter 投影为
+    ``audio_evidence``（provenance=REAL_SENSOR）。
+
+    仅在 ``hp_settings.audio.enabled`` 且 ``scenario.audio_path`` 设置时运行；否则返回 ``[]``
+    （本场景无音频，诚实空）。失败隔离：任何异常 → 返回 ``[]``，绝不阻断 demo 启动/循环。
+    """
+    audio_cfg = getattr(hp_settings, "audio", None)
+    if audio_cfg is None or not getattr(audio_cfg, "enabled", False):
+        return []
+    audio_path = getattr(scenario, "audio_path", None)
+    if not audio_path:
+        return []
+    from home_perception.audio.pipeline import AudioPipeline
+    from home_perception.audio.source import FileAudioSource
+
+    src = FileAudioSource(audio_path)
+    pipeline = AudioPipeline.from_audio_config(audio_cfg, src)
+    events = pipeline.run(src)
+    return [e.to_dict() for e in events]
+
+
 def _run_live(args: argparse.Namespace) -> None:
     """Legacy Live 模式：既有实时 Dashboard + WS + YOLO（/live 次级入口）。"""
     scenario_path, temp_path = resolve_scenario(args)
@@ -199,11 +249,27 @@ def _run_live(args: argparse.Namespace) -> None:
         os.environ["DEMO_PORT"] = str(args.port)
     os.environ["DEMO_LIVE"] = "1"  # 暴露 /live + WS + /demo/*
 
+    # Gate 4（telephone_risk live audio vertical slice）：场景声明 audio_path 时，
+    # 自动套用音频开启的 HP 配置覆盖（config/live_audio.yaml），不动 config/default.yaml
+    # （其 audio 须保持关闭以通过契约测试 test_settings_load_includes_audio_tier1_disabled）。
+    # 走官方 DEMO_HP_CONFIG 覆盖入口（silver_demo/config.py），不改核心逻辑。
+    # scenario_path 已由 resolve_scenario/preflight_media 校验存在且可读，无需再静默吞异常。
+    if not os.environ.get("DEMO_HP_CONFIG") and scenario_path.is_file():
+        with scenario_path.open("r", encoding="utf-8") as _f:
+            _sc = yaml.safe_load(_f) or {}
+        if _sc.get("audio_path"):
+            _live_hp = ROOT / "config" / "live_audio.yaml"
+            if _live_hp.is_file():
+                os.environ["DEMO_HP_CONFIG"] = str(_live_hp)
+
     print_banner(scenario_path)
 
     import silver_demo.gateway as gw  # 懒加载：预检通过后才 import（会拉 torch）
 
     _register_synthetic_source()
+    # Live 音频接入（VM-13 Phase B · Owner 2026-08-16）：把音频构建器挂到网关 DI 钩子，
+    # 由 create_app 在装配时调用并注入真实 AudioPerceptionEvent（网关自己不 import audio，守冻结边界）。
+    gw.live_audio_builder = _build_live_audio_events
     gw.main()
 
 

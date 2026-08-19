@@ -43,6 +43,10 @@ if TYPE_CHECKING:  # 仅类型标注
 
 # P0-1 行动闭环面板：Live WS 客户端资产文件名（render_case_viewer 内联注入）。
 _LIVE_ACTIONS_FILENAME = "live_actions.js"
+# P0 evidence_delta 增量投影客户端（Owner 2026-08-17 拍板）：浏览器只渲染、不推理。
+_LIVE_STREAM_FILENAME = "live_stream.js"
+# P1-B 叙事分幕客户端（Artifact Story Replay）：浏览器只读服务端派生分幕，不推理。
+_STORY_REPLAY_FILENAME = "story_replay.js"
 
 # Case Video 叙事结构（D-CaseVideo · VM-12）：产品主视频，非 Analysis Video。
 _CASE_VIDEO_NARRATIVE = (
@@ -55,10 +59,23 @@ _CASE_VIDEO_NARRATIVE = (
 )
 
 # AC-7 provenance 文案映射（一等视觉，绝默认隐藏）。
+# 2026-08-18 Owner 决策（DESIGN-golden-case-live-product §七 Q1）：Live 角标不再标榜
+# "REAL SENSOR"——Golden Case 是受控录制演示素材，非 7×24 真实设备，必须诚实标注，
+# 避免误导评委。SIMULATED/FIXTURE 文案不变。
 _PROVENANCE_TEXT = {
     "SIMULATED": "程序化场景 · 可复现",
-    "REAL_SENSOR": "真实传感器 · 实时数据",
+    "REAL_SENSOR": "受控演示输入 · 演示素材",
     "FIXTURE": "固定测试素材 · 非实时",
+}
+# AC-7 案例角标固定文案。Live = 受控演示输入（诚实标注）；Artifact = GOLDEN CASE · SIMULATED。
+_PROVENANCE_BADGE = {
+    "REAL_SENSOR": "● LIVE · 受控演示输入",
+    "SIMULATED": "● GOLDEN CASE · SIMULATED",
+    "FIXTURE": "● FIXTURE · 固定测试素材",
+}
+# AC-7 副标题（小灰字，进一步诚实说明 Live 输入的受控性质）。
+_PROVENANCE_SUBTITLE = {
+    "REAL_SENSOR": "非 7×24 真实设备 · 演示素材",
 }
 _PROVENANCE_CLASS = {
     "SIMULATED": "prov-simulated",
@@ -159,20 +176,112 @@ def _render_ci_badge(descriptor: CasePresentationDescriptor) -> str:
     )
 
 
+_PROVENANCE_SOURCE_LABEL: dict[str, str] = {
+    "REAL_SENSOR": "Live 设备流（受控演示输入）",
+    "SIMULATED": "Golden Case 录制（仿真闭环）",
+    "FIXTURE": "固定测试素材",
+}
+
+
+def _render_provenance_details(scenario: ScenarioEvidence) -> str:
+    """P0-11.x-4：provenance banner 可展开说明（4 行证据链来源审计）。
+
+    评委点击「证据链来源」展开后看到 4 行：
+    1. 视频源 — 从 timeline provenance_kind 派生
+    2. 音频源 — 从 audio_evidence provenance_kind 派生；无音频 → 显式标注
+    3. 感知事件 — 检查 timeline 中 REAL_SENSOR 节点数（runtime 真实产出）
+    4. 决策证据 — 检查 decision_evidence 条数（runtime 真实产出）
+
+    ACTIVE 语义（Owner 2026-08-18 拍板）：Perception/Decision 不从 provenance 类型
+    推导执行状态，而是检查当前 session 是否已产生真实事件 / 证据。
+    """
+    timeline = scenario["timeline"]
+    kinds = {n["provenance_kind"] for n in timeline}
+    if len(kinds) == 1:
+        video_src = _PROVENANCE_SOURCE_LABEL.get(next(iter(kinds)), "未知")
+    else:
+        video_src = "混合来源：" + " · ".join(
+            _PROVENANCE_SOURCE_LABEL.get(k, k) for k in sorted(kinds)
+        )
+
+    audio_ev = scenario.get("audio_evidence") or ()
+    if audio_ev:
+        audio_kinds = {n["provenance_kind"] for n in audio_ev}
+        if len(audio_kinds) == 1:
+            audio_src = _PROVENANCE_SOURCE_LABEL.get(next(iter(audio_kinds)), "未知")
+        else:
+            audio_src = "混合来源：" + " · ".join(
+                _PROVENANCE_SOURCE_LABEL.get(k, k) for k in sorted(audio_kinds)
+            )
+    else:
+        audio_src = "无音频证据"
+
+    real_sensor_nodes = [n for n in timeline if n["provenance_kind"] == "REAL_SENSOR"]
+    if real_sensor_nodes:
+        perception_status = f"ACTIVE · Runtime 已产出 {len(real_sensor_nodes)} 条感知事件"
+        perception_cls = "prov-detail-active"
+    else:
+        perception_status = "IDLE · 未产出运行时感知事件"
+        perception_cls = "prov-detail-idle"
+
+    decision_ev = scenario.get("decision_evidence") or ()
+    if decision_ev:
+        decision_status = f"ACTIVE · Runtime 已产出 {len(decision_ev)} 步决策推理"
+        decision_cls = "prov-detail-active"
+    else:
+        decision_status = "IDLE · 未产出决策证据"
+        decision_cls = "prov-detail-idle"
+
+    return f"""
+      <details class='prov-details'>
+        <summary>证据链来源</summary>
+        <div class='prov-detail-rows'>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>视频源</span>
+            <span class='prov-detail-value'>{_R._esc(video_src)}</span>
+          </div>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>音频源</span>
+            <span class='prov-detail-value'>{_R._esc(audio_src)}</span>
+          </div>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>感知事件</span>
+            <span class='prov-detail-value {perception_cls}'>{_R._esc(perception_status)}</span>
+          </div>
+          <div class='prov-detail-row'>
+            <span class='prov-detail-label'>决策证据</span>
+            <span class='prov-detail-value {decision_cls}'>{_R._esc(decision_status)}</span>
+          </div>
+        </div>
+      </details>"""
+
+
 def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
-    """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。"""
+    """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。
+
+    2026-08-18 Owner 决策（DESIGN-golden-case-live-product §七 Q1）：Live 角标改为
+    「● LIVE · 受控演示输入」+ 副标题「非 7×24 真实设备 · 演示素材」，诚实标注 Golden
+    Case 是受控录制素材而非真实设备流（VM-13 6 MUST #4 + 模块边界诚实纪律）。
+
+    P0-11.x-4：banner 下方追加 ``<details>`` 可展开说明（4 行证据链来源审计），
+    评委可验证"音频证据从哪里来、Runtime 是否真在跑"。
+    """
     kinds = {n["provenance_kind"] for n in scenario["timeline"]}
     if len(kinds) == 1:
         k = next(iter(kinds))
-        text = _PROVENANCE_TEXT.get(k, k)
+        sub = _PROVENANCE_SUBTITLE.get(k, "")
         badge = (
-            f"<span class='prov-badge {_PROVENANCE_CLASS.get(k, '')}'>{_R._esc(k)}</span>"
-            f" {_R._esc(text)}"
+            f"<span class='prov-badge {_PROVENANCE_CLASS.get(k, '')}'>"
+            f"{_R._esc(_PROVENANCE_BADGE.get(k, k))}</span>"
+            + (f"<span class='prov-subtitle'>{_R._esc(sub)}</span>" if sub else "")
         )
     else:
-        text = " · ".join(_PROVENANCE_TEXT.get(k, k) for k in sorted(kinds))
-        badge = f"<span class='prov-badge'>MIXED</span> {_R._esc(text)}"
-    return f"<div class='prov-banner'>provenance: {badge}</div>"
+        badge = (
+            "<span class='prov-badge'>MIXED</span> "
+            + " · ".join(_R._esc(_PROVENANCE_BADGE.get(k, k)) for k in sorted(kinds))
+        )
+    details = _render_provenance_details(scenario)
+    return f"<div class='prov-banner'>provenance: {badge}{details}</div>"
 
 
 def _render_current_risk(scenario: ScenarioEvidence) -> str:
@@ -192,18 +301,66 @@ def _render_current_risk(scenario: ScenarioEvidence) -> str:
 
 
 def _render_action(scenario: ScenarioEvidence) -> str:
-    """系统行动卡片（派生展示：来自 command_types / recommended_actions，VM-1）。"""
-    cmd_str = (
-        "、".join(_R._translate_value(c) for c in scenario["command_types"]) or "—"
-    )
-    rec_str = (
-        "、".join(_R._translate_value(c) for c in scenario["recommended_actions"]) or "—"
-    )
+    """干预派发回执卡（P1 · VM-1 派生自 scenario.intervention_dispatch；VM-9 守诚实边界）。
+
+    展示：① 逐指令「真实派发类型 → 目标人类接收方 → 期望闭环状态」；② 闭环可达性陈述
+    （干预触达**可定义的人类接收方**——家属 / 社区，可闭合到具体责任人）；③ 诚实注记——
+    运行态未产出送达遥测，本回执**不声称 60s 内送达**、不含任何时延 / SLA 测量
+    （AC-12 绝不编造送达或时延）。空派发 → 返回诚实空卡，不编造回执。
+    """
+    dispatch = scenario.get("intervention_dispatch") or ()
+    if not dispatch:
+        return (
+            "<div class='card action-card'>"
+            "<div class='card-title'>干预派发回执</div>"
+            "<div class='muted'>本场景未派发任何干预指令（仅感知与记录）。</div>"
+            "</div>"
+        )
+
+    rows: list[str] = []
+    for d in dispatch:
+        ct = _R._esc(d["command_type"])
+        role = _R._esc(d["target_role"])
+        closure = d.get("closure_expectation") or ""
+        if closure:
+            closure_html = (
+                f"<span class='receipt-closure'>待确认闭环：{_R._esc(closure)}</span>"
+            )
+        else:
+            closure_html = (
+                "<span class='receipt-closure muted'>无外部接收方（仅系统记录）</span>"
+            )
+        rows.append(
+            f"<li class='receipt-row'>"
+            f"<span class='receipt-cmd'>{ct}</span>"
+            f"<span class='receipt-arrow'>→</span>"
+            f"<span class='receipt-role'>{role}</span>"
+            f"{closure_html}</li>"
+        )
+
+    closure_rows = [d for d in dispatch if d.get("closure_expectation")]
+    closure_list_html = ""
+    if closure_rows:
+        items = "".join(
+            f"<li>{_R._esc(d['target_role'])}"
+            f"（{_R._esc(d['command_type'])} → 期望闭环 "
+            f"<code>{_R._esc(d['closure_expectation'])}</code>）</li>"
+            for d in closure_rows
+        )
+        closure_list_html = (
+            "<div class='receipt-closure-list'>本案例期望的闭环确认："
+            f"<ul>{items}</ul></div>"
+        )
+
     return f"""
       <div class='card action-card'>
-        <div class='card-title'>系统行动</div>
-        <div>实际命令：{_R._esc(cmd_str)}</div>
-        <div class='muted'>建议动作：{_R._esc(rec_str)}</div>
+        <div class='card-title'>干预派发回执</div>
+        <ul class='receipt-list'>
+          {''.join(rows)}
+        </ul>
+        {closure_list_html}
+        <div class='receipt-reach'>闭环可达性：上述指令派发至<span class='receipt-reach-target'>可定义的人类接收方</span>（家属 / 社区），干预闭环可闭合到具体责任人。</div>
+        <div class='receipt-note muted'>诚实边界：运行态未产出送达遥测（送达时间 / 接收确认 / 时延）。本回执仅表征「已派发 + 目标接收方 + 待确认闭环」，<strong>不声称 60s 内送达</strong>，亦不含任何时延 / SLA 测量。</div>
       </div>"""
 
 
@@ -244,14 +401,18 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
         is_audio = kind == "audio"
         cls = "mark-audio" if is_audio else "mark-memory"
         marker = "🔊" if is_audio else "🧠"
-        label_js = _R._esc_js(str(t["label"]))
+        # 缺陷 #3 修复（Gate 4E-2 交互验收实证）：data-label 必须用 HTML 属性层转义
+        # （_esc / html.escape），不能用 JS 层 _esc_js（json.dumps 产出带引号字符串，
+        # 嵌入 " 定界的 HTML 属性会被提前终结 → onclick 截断 → 点击抛 SyntaxError）。
+        # onclick 不内联 label（data-driven）：运行时从元素 data-label 读取，零引号冲突。
+        label_attr = _R._esc(str(t["label"]))
         mark = (
             f'<span class="case-time-mark {cls}" style="left:{pct:.1f}%" '
             f'data-time="{time:.3f}" data-kind="{_R._esc(kind)}" '
-            f'data-label="{label_js}" '
+            f'data-label="{label_attr}" '
             f'onclick="window.__caseTime(\'{sid_html}\',\'{_R._esc(kind)}\','
-            f'\'{label_js}\',{time:.3f})" '
-            f'title="{time:.1f}s · {kind} · {_R._esc(str(t["label"]))}">{marker}</span>'
+            f'this.getAttribute(\'data-label\'),{time:.3f})" '
+            f'title="{time:.1f}s · {kind} · {label_attr}">{marker}</span>'
         )
         (audio_marks if is_audio else memory_marks).append(mark)
     # 双 Lane 标签：仅在该类事件存在时显示（避免空行标签噪音）。
@@ -280,30 +441,17 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
     </div>"""
 
 
-def _render_case_video(
+def _render_case_video_inner(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
     media_manifest: dict | None,
     media_base_url: str,
-) -> str:
-    """Case Video 主轴（D-CaseVideo · VM-12）+ Media Timeline（Case Time，VM-10/AC-14）。
+) -> tuple[str, str]:
+    """Case Video 内部内容 + manifest 数据岛（Artifact 面板与 Live 产品骨架区域①共用）。
 
-    Slice A.1 改造（对齐用户决策）：
-    - 媒体字节不进 View Model（VM-10/AC-11）：经 Media Source Adapter 解析的
-      ``media_manifest`` 只持 ref/template/count，画布用 ``<canvas>`` 实时绘制帧，
-      **绝不** base64 内联 660 帧；
-    - ``<video>`` 仅当源为 ``ArtifactVideoSource`` 且含 ``video_url``（原生控件播放；
-      P1 整改：加 ``autoplay muted playsinline``，10 秒内即可看到画面）；
-    - 绑定文案（源类型 + ref）**降级为脚注**（方案 3），不再占主轴 C 位；
-    - P11 整改：脚注的 ``source_kind`` / ``ref`` 从**已解析的 media_manifest** 读取
-      （manifest 与 prepare_case_media 登记的 ``ArtifactVideoSource`` 一致），而非
-      ``descriptor.media_binding`` 默认值（SyntheticFrameSource + 占位 ref，可能与
-      实际媒体矛盾）；无 manifest 时才显示"无媒体绑定"；
-    - 注入 ``media-manifest-{sid}`` 数据岛（manifest 的 frame_template 已叠加
-      ``media_base_url``），供前端 MediaPlayer 消费。
-
-    ``descriptor`` 参数保留：VM-11 纯展示编排的签名契约（测试直接调用本函数），
-    脚注事实以 manifest 为准（P11）。
+    返回 ``(inner_html, manifest_island)``：inner_html 为 ``.case-video`` 容器内的全部
+    内容（媒体区 + Live AI 状态卡 + Live 感知容器 + Media Timeline + Case Time + 绑定
+    脚注）；manifest_island 为 ``media-manifest-{sid}`` 数据岛（LiveFrameStream 为空串）。
     """
     sid = scenario["scenario_id"]
     sid_html = _R._esc(sid)
@@ -330,9 +478,59 @@ def _render_case_video(
         f'width="640" height="360"></canvas>'
     )
 
-    # 媒体区：ArtifactVideoSource 用原生 <video>；其余（SyntheticFrameSource / 无媒体）
-    # 用 canvas 播放器（MediaPlayer 主时钟驱动）。绝不占位空框。
-    if (
+    # 媒体区：LiveFrameStream 用 <img src="/mjpeg/{sid}"> MJPEG 流（浏览器原生解码，
+    # 无 Base64 开销，CPU/延迟显著降低）；ArtifactVideoSource 用原生 <video>；
+    # 其余（SyntheticFrameSource / 无媒体）用 canvas 播放器。绝不占位空框。
+    # live_ai_state：仅 Live 帧流模式的"实时 AI 状态"卡（LP-2/3），其余模式空串。
+    live_ai_state = ""
+    live_demo_stat = ""
+    if media_manifest and media_manifest.get("source_kind") == "LiveFrameStream":
+        # LP-1：Live 真实同步帧流——<img src="/mjpeg/{sid}"> MJPEG 流（浏览器原生解码，
+        # 替代 P1-C1 的 <video> 回放 & Base64 over WS，单一事实源 VM-9）；
+        # LIVE 红点 + 帧 overlay（帧号/Case Time/检测数）由 live_stream.js 驱动更新。
+        media_area = (
+            f'<div class="case-video-live">'
+            f'<div class="video-ph" id="video-ph-{sid_html}">等待第一帧…</div>'
+            f'<img class="case-video-img" id="video-img-{sid_html}" '
+            f'src="/mjpeg/{sid_html}" alt="live frame">'
+            f'<span class="live-badge" id="live-badge-{sid_html}">'
+            f'<span class="ldot"></span> LIVE</span>'
+            f'<div class="live-ov muted" id="live-ov-{sid_html}">'
+            f'<span>帧 <b id="ov-frame-{sid_html}">–</b></span>'
+            f'<span class="live-ov-sep">·</span>'
+            f'<span>Case Time <b id="ov-time-{sid_html}">00:00</b></span>'
+            f'<span class="live-ov-sep">·</span>'
+            f'<span>检测 <b id="ov-det-{sid_html}">0</b></span>'
+            f'<span class="live-ov-sep">·</span>'
+            f'<span>访客事件 <b id="ov-ve-{sid_html}">0</b></span>'
+            f'</div></div>'
+        )
+        # PR-B：Live 感知摘要卡（"AI 看到了"），由 live_stream.js 经 perception_delta（视觉）
+        # + evidence_delta（音频）实时填充（VM-9 只渲染）。LP-2/3 的 CURRENT STATE / 为什么 /
+        # 下一步已迁移到区域③ 风险解释卡片（DESIGN-live-product-ui-restore §4.5）。
+        live_ai_state = (
+            f'<div class="live-ai-state" id="live-ai-state-{sid_html}">'
+            f'<div class="ai-row">'
+            f'<span class="ai-k">AI 看到了</span>'
+            f'<span class="ai-v" id="ai-see-{sid_html}">等待检测…</span>'
+            f'</div>'
+            f'<div class="ai-row">'
+            f'<span class="ai-k">AI 判断中</span>'
+            f'<span class="ai-v" id="ai-think-{sid_html}">—</span>'
+            f'</div></div>'
+        )
+        # P2：Demo 状态面板（证明这是实时系统，非静态页面）。视觉权重低于主叙事区（muted 样式）。
+        # 消费 gateway /health + frame_index 计时，由 live_stream.js 每秒刷新。
+        live_demo_stat = (
+            f'<div class="demo-stat" id="demo-stat-{sid_html}" style="display:none">'
+            f'<div class="ds-row"><span class="ds-k">源</span><span class="ds-v" id="ds-src-{sid_html}">—</span></div>'
+            f'<div class="ds-row"><span class="ds-k">帧</span><span class="ds-v" id="ds-frame-{sid_html}">0</span></div>'
+            f'<div class="ds-row"><span class="ds-k">循环</span><span class="ds-v" id="ds-loop-{sid_html}">0</span></div>'
+            f'<div class="ds-row"><span class="ds-k">延迟</span><span class="ds-v" id="ds-latency-{sid_html}">—</span></div>'
+            f'<div class="ds-row"><span class="ds-k">Session</span><span class="ds-v" id="ds-session-{sid_html}">00:00</span></div>'
+            f'</div>'
+        )
+    elif (
         media_manifest
         and media_manifest.get("source_kind") == "ArtifactVideoSource"
         and media_manifest.get("video_url")
@@ -391,7 +589,19 @@ def _render_case_video(
             f'ref={ref}（字节由 Media Source Adapter 经 ref 解析，不进 View Model）</p>'
         )
 
-    media_timeline = f"""
+    # T1.7: 电话短时长场景去掉 Media Timeline 播放控制 + 时间区间显示
+    # telephone_risk 等短视频：仅显示实时 Case Time，不显示 ▶ / 进度条 / "0.0s / --"
+    sid = scenario["scenario_id"]
+    is_telephone_case = "telephone" in sid.lower()
+
+    if is_telephone_case:
+        media_timeline = f"""
+        <div class="media-timeline media-timeline-minimal" id="media-timeline-{sid_html}">
+          <span class="case-time-label" id="case-time-label-{sid_html}">Case Time 0.0s</span>
+          <span class="muted">叙事节奏自然看完，无倒计时</span>
+        </div>"""
+    else:
+        media_timeline = f"""
         <div class="media-timeline" id="media-timeline-{sid_html}">
           <button class="rp-btn media-play" id="media-play-{sid_html}" title="播放/暂停">▶</button>
           <span class="rp-progress-wrap"><span class="media-progress" id="media-progress-{sid_html}"></span></span>
@@ -402,7 +612,8 @@ def _render_case_video(
     case_time = _render_case_time_tracks(scenario)
 
     manifest_island = ""
-    if media_manifest:
+    if media_manifest and media_manifest.get("source_kind") != "LiveFrameStream":
+        # LP-1：LiveFrameStream 无 manifest 数据岛（帧由 WS 每帧推 base64，非文件帧模板）。
         # 相对 media base 的帧模板 → 叠加 media_base_url 形成最终可解析 URL。
         tpl = media_manifest["frame_template"]
         if media_base_url:
@@ -414,10 +625,42 @@ def _render_case_video(
             f'{_R._sanitize_for_js(json.dumps(inj, ensure_ascii=False))}</script>'
         )
 
+    # P1-A：Live 实时感知状态容器（仅 live 模式注入；由 live_stream.js 经 WS perception_delta
+    # 填充。浏览器只渲染服务端投影的结构化检测子集，零推理——VM-1/VM-9）。
+    live_perception = ""
+    if descriptor.get("live_ws_path"):
+        live_perception = (
+            f'<div class="live-perception" id="live-perception-{sid_html}" '
+            f'data-scenario="{sid_html}"></div>'
+        )
+
+    inner_html = (
+        f"{media_area}{live_ai_state}{live_perception}"
+        f"{live_demo_stat}"
+        f"{media_timeline}{case_time}{binding_footnote}"
+    )
+    return inner_html, manifest_island
+
+
+def _render_case_video(
+    scenario: ScenarioEvidence,
+    descriptor: CasePresentationDescriptor,
+    media_manifest: dict | None,
+    media_base_url: str,
+) -> str:
+    """Case Video 主轴（D-CaseVideo · VM-12）+ Media Timeline（Case Time，VM-10/AC-14）。
+
+    面板壳（``fs-panel`` + 叙事脚注）；内部内容经 ``_render_case_video_inner`` 构建，
+    与 Live 产品骨架区域①共用同一构建器（单一事实源，防漂移）。
+    """
+    sid_html = _R._esc(scenario["scenario_id"])
+    inner_html, manifest_island = _render_case_video_inner(
+        scenario, descriptor, media_manifest, media_base_url
+    )
     return f"""
     <section class="fs-panel" id="fs-case-video-{sid_html}">
       <h3 class="view-anchor">Case Video（主轴）</h3>
-      <div class="case-video">{media_area}{media_timeline}{case_time}{binding_footnote}</div>
+      <div class="case-video">{inner_html}</div>
       {manifest_island}
       <p class="muted">Case Video 叙事结构：{' → '.join(_CASE_VIDEO_NARRATIVE)}（VM-12 · 产品主视频，关联叙事而非分析回放）</p>
     </section>"""
@@ -429,18 +672,19 @@ def _render_case_video(
 
 
 def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
-    """声学状态变化叙事卡（P1 Acoustic State · telephone_risk · VM-1/VM-9 合规）。
+    """声学状态变化叙事卡（P0-1 Acoustic State · telephone_risk · VM-1/VM-9 合规）。
 
-    只投影既有 ``audio_evidence`` 字段（kind/labels/related_visual_ref）+ ``recommended_actions``，
-    **绝不推导** STRESS / 诈骗 / 当事人心理（VM-9 无 ASR/LLM）。
+    数据来源（全部来自既有 audio_evidence 投影字段，VM-1 纯派生）：
+    - kind（含 ``audio_telephone_persistent`` 触发本卡）、labels、related_visual_ref；
+    - P0-1 新增声学状态字段（golden telephone_risk 声明式声学状态机透传，NotRequired）：
+      ``acoustic_state_change``（状态机）、``voice_stress_score``、``f0_delta`` /
+      ``speech_rate_delta`` / ``energy_delta``。字段缺失即不展示（AC-12 绝不编造）。
 
-    触发：``audio_evidence`` 含 telephone 类（``audio_telephone_persistent``）才渲染——
-    本卡即 telephone_risk 声学状态卡；非电话场景不注入（避免无关叙事，VM-11 不新增事实）。
-    无音频证据（``audio_evidence`` 空）→ 返回空串（AC-12 绝不编造）。
+    绝不推导 STRESS / 诈骗 / 当事人心理（VM-9 无 ASR/LLM）：``voice_stress_score`` 仅作为
+    可观测声学指标呈现，状态机标签（NORMAL→…→STRESS）是**声学状态**枚举，非心理/语义判定。
 
-    跨模态诚实呈现：若音频节点携带 ``related_visual_ref``（真实跨模态关联，loader 由
-    CrossModalLink 派生）→ 陈述「视觉通话交互 + 音频声学偏离 相互支持（CROSS_MODAL:
-    SUPPORTS）」；缺则只陈述声学状态变化事实，绝不编造跨模态关系。
+    触发：``audio_evidence`` 含 telephone 类（``audio_telephone_persistent``）才渲染；
+    非电话场景不注入（VM-11 不新增无关事实）。无音频证据 → 返回空串（AC-12）。
     """
     audio = scenario.get("audio_evidence") or ()
     if not audio:
@@ -448,27 +692,95 @@ def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
     kinds = {str(a.get("kind", "")) for a in audio}
     if "audio_telephone_persistent" not in kinds:
         return ""  # 非电话场景：音频感知卡已陈述事实，不注入额外声学状态叙事
-    has_deviation = any(
-        k in ("audio_voice_raised", "audio_speech_rapid") for k in kinds
+
+    # --- 真实声学状态信号（P0-1：从既有投影字段纯派生，缺失即不展示）---
+    state_changes = [
+        a["acoustic_state_change"] for a in audio if a.get("acoustic_state_change")
+    ]
+    voice_stress = [
+        a["voice_stress_score"]
+        for a in audio
+        if isinstance(a.get("voice_stress_score"), (int, float))
+    ]
+    delta_items: list[tuple[str, float]] = []
+    for a in audio:
+        for label, key in (
+            ("F0", "f0_delta"),
+            ("语速", "speech_rate_delta"),
+            ("能量", "energy_delta"),
+        ):
+            v = a.get(key)
+            if isinstance(v, (int, float)):
+                delta_items.append((label, float(v)))
+
+    # 声学状态是否真发生变化（状态机含多相跃迁）→ 驱动「变化」叙事；旧式 kind 偏离兜底。
+    def _is_change(s: str) -> bool:
+        return "->" in s or "\u2192" in s
+
+    changed = any(_is_change(s) for s in state_changes)
+    kind_dev = any(k in ("audio_voice_raised", "audio_speech_rapid") for k in kinds)
+    has_deviation = bool(state_changes) or bool(voice_stress) or bool(delta_items) or kind_dev
+    stable = (
+        bool(state_changes)
+        and not changed
+        and not kind_dev
+        and not voice_stress
+        and not delta_items
     )
+
     # 真实跨模态关联：任一音频节点携带 related_visual_ref → 视觉 + 音频相互支持。
     cross_modal = any(a.get("related_visual_ref") for a in audio)
     # 决策取向（来自推荐动作，不新增事实）：升级/社区任务 → 提高关注；否则持续观察。
     recs = scenario.get("recommended_actions") or ()
     cmds = scenario.get("command_types") or ()
-    if any(r in ("ESCALATE_COMMUNITY",) for r in recs) or any(
-        c in ("CREATE_COMMUNITY_TASK",) for c in cmds
+    if any(r == "ESCALATE_COMMUNITY" for r in recs) or any(
+        c == "CREATE_COMMUNITY_TASK" for c in cmds
     ):
         decision = "提高关注 / 升级社区协同处置"
     else:
         decision = "持续观察"
-    if has_deviation:
-        lead = (
+
+    # 导语：优先陈述真实声学状态机；其次旧式偏离；稳定态单列；最次无偏离。
+    state_html = (
+        _R._esc(" \u2192 ".join(s.replace("->", "\u2192") for s in state_changes))
+        if state_changes
+        else ""
+    )
+    if stable:
+        lead_html = _R._esc(
+            "通话进行中，系统持续听到电话声音；声学状态稳定（未检测到状态跃迁）。"
+            "这是声学状态的事实记录。"
+        )
+    elif changed or state_changes:
+        lead_html = (
+            _R._esc("通话进行中，系统持续听到电话声音；声学状态随通话推进发生变化（")
+            + state_html
+            + _R._esc("）。这是声学状态变化的事实记录。")
+        )
+    elif has_deviation:
+        lead_html = _R._esc(
             "通话进行中，系统持续听到电话声音，并检测到声学偏离"
             "（音高 / 能量等可观测信号变化）。这是声学状态变化的事实记录。"
         )
     else:
-        lead = "通话进行中，系统持续听到电话声音。这是声学状态变化的事实记录。"
+        lead_html = _R._esc(
+            "通话进行中，系统持续听到电话声音。这是声学状态变化的事实记录。"
+        )
+
+    # 量化指标行（仅当真实声学字段存在时呈现，杜绝硬编码「音高/能量等」）。
+    metrics_html = ""
+    if voice_stress or delta_items:
+        parts: list[str] = []
+        if voice_stress:
+            parts.append(f"voice_stress_score = {float(voice_stress[0]):.2f}")
+        for label, val in delta_items:
+            parts.append(f"{label} \u0394={val:.2f}")
+        metrics_html = (
+            '<p class="acoustic-state-note">可观测声学指标（仅描述信号，不做语义判定）：'
+            + _R._esc("；".join(parts))
+            + "。</p>"
+        )
+
     cross_html = ""
     if cross_modal:
         cross_html = (
@@ -482,10 +794,75 @@ def _render_acoustic_state_card(scenario: ScenarioEvidence) -> str:
     return f"""
     <div class="acoustic-state">
       <div class="acoustic-state-head">声学状态变化（非诈骗判定）</div>
-      <p class="acoustic-state-lead">{_R._esc(lead)}</p>
+      <p class="acoustic-state-lead">{lead_html}</p>
+      {metrics_html}
       {cross_html}
       <p class="acoustic-state-note muted">{_R._esc(disclaimer)}</p>
     </div>"""
+
+
+# ---------------------------------------------------------------------------
+# T1.4 声学状态变化专属面板（消费 golden_audio_state timeline 节点）
+# ---------------------------------------------------------------------------
+
+
+def _render_acoustic_state_panel(scenario: ScenarioEvidence) -> str:
+    """声学状态变化专属面板（T1.4 · Golden Case telephone_risk 核心叙事）。
+
+    数据来源：``scenario.timeline`` 中 ``type == "golden_audio_state"`` 的节点
+    （由 M1 `golden_evidence_projection` 从 manifest `audio.voice_stressed.acoustic_progression`
+    派生，provenance_kind=SIMULATED）。
+
+    仅当存在 golden_audio_state 节点时渲染；否则返回空串（AC-12 绝不编造）。
+    面板包含 4 个阶段（NORMAL → ATTENTION → AROUSAL → STRESS）的时间轴，
+    每阶段显示：时间、状态标签、F0 值（若 manifest 提供）。
+    """
+    timeline = scenario.get("timeline") or ()
+    state_nodes = [
+        n for n in timeline
+        if isinstance(n, dict) and n.get("type") == "golden_audio_state"
+    ]
+    if not state_nodes:
+        return ""  # AC-12：无声学状态节点不渲染
+
+    # 按 timestamp 排序
+    def _parse_ts(node: dict) -> float:
+        try:
+            return float(node.get("timestamp", 0))
+        except (ValueError, TypeError):
+            return 0.0
+
+    state_nodes.sort(key=_parse_ts)
+
+    phases_html = []
+    for node in state_nodes:
+        # summary 格式："声学状态 NORMAL" / "声学状态 ATTENTION" 等
+        summary = str(node.get("summary", ""))
+        phase = ""
+        for p in ("NORMAL", "ATTENTION", "AROUSAL", "STRESS"):
+            if p in summary.upper():
+                phase = p
+                break
+        ts = node.get("timestamp", "")
+        ref = node.get("ref", "")
+        phases_html.append(f"""
+        <li class="acoustic-phase phase-{phase.lower()}">
+          <span class="phase-time">{_R._esc(str(ts))}s</span>
+          <span class="phase-label">{_R._esc(phase)}</span>
+          <span class="phase-desc">{_R._esc(summary)}</span>
+        </li>""")
+
+    return f"""
+    <section class="acoustic-state-panel" id="acoustic-state-panel-{_R._esc(scenario['scenario_id'])}">
+      <h3 class="acoustic-state-title">🔊 声学状态变化</h3>
+      <ol class="acoustic-timeline">
+        {''.join(phases_html)}
+      </ol>
+      <p class="acoustic-state-note muted">
+        数据来源：Golden Case manifest 声明式声学状态机（provenance=SIMULATED）；
+        系统不调用 ASR / LLM，不推导当事人心理或诈骗判定（VM-9）。
+      </p>
+    </section>"""
 
 
 # ---------------------------------------------------------------------------
@@ -633,12 +1010,23 @@ def _render_audio_perception_full(
             </div>"""
         )
     acoustic_state = _render_acoustic_state_card(scenario)
+    # P0-11.x-3：注入 audio manifest 数据岛（供 audio_sync.js 点击 timeline / case-time-mark
+    # → 查 track.start_time → clamp → seek/play）。无 manifest → 不注入（audio_sync.js 降级
+    # 为从头播放，不崩）。数据岛只含 tracks（start_time / kind），不含媒体字节（VM-10/AC-11）。
+    manifest_island = ""
+    if audio_manifest and audio_manifest.get("tracks"):
+        manifest_island = (
+            f'<script type="application/json" id="audio-manifest-{_R._esc(scenario["scenario_id"])}">'
+            f'{_R._sanitize_for_js(json.dumps({"tracks": list(audio_manifest["tracks"])}, ensure_ascii=False))}'
+            f'</script>'
+        )
     return f"""
     <section class="fs-panel" id="fs-audio-{_R._esc(scenario['scenario_id'])}">
       <h3 class="view-anchor">系统听到了什么（音频感知）</h3>
       {acoustic_state}
       <div class="audio-perception">{''.join(cards)}</div>
       <p class="muted">音频为感知层证据（kind/score/confidence），非语义判定；样本声音为合成素材，仅供示意。</p>
+      {manifest_island}
     </section>"""
 
 
@@ -693,6 +1081,110 @@ def _render_memory_timeline(scenario: ScenarioEvidence) -> str:
 
 
 # ---------------------------------------------------------------------------
+# T1.6 / M3: Live 模式专用 Memory Context — Historical / Current 双层结构
+# ---------------------------------------------------------------------------
+
+
+def _render_live_memory_context(scenario: ScenarioEvidence) -> str:
+    """Live 模式⑥区域：Historical Memory + Current Episode 双层渲染。
+
+    产品叙事核心：\"当前事件单独看不危险，但 AI 记得历史 → 风险升级\"。
+
+    数据来源：``scenario.memory_episodes``（M1 注入的 3 条：ep_001/ep_002/ep_003）。
+    - Historical：prior=True 的 episodes（ep_001, ep_002）
+    - Current：prior=False 或最后一条（ep_003，当前正在进行的幕）
+
+    无 memory_episodes → 返回诚实占位（AC-12），但始终包裹在 memory-context section 中以保持 DOM 结构一致。
+    """
+    mem = list(scenario.get("memory_episodes") or ())
+    sid_html = _R._esc(scenario["scenario_id"])
+
+    if not mem:
+        # 无历史内存：返回带占位内容的 memory-context section（保持 DOM ID 稳定）
+        return f"""
+    <section class="memory-context" id="memory-context-{sid_html}">
+      <div class="memory-layer current">
+        <h4 class="memory-layer-title">CURRENT EPISODE</h4>
+        <div class="memory-episodes">
+          <div class="tl-empty">本次通话暂无历史相关事件</div>
+        </div>
+      </div>
+    </section>"""
+
+    # 分离：按 prior 字段区分 Historical / Current
+    historical = [ep for ep in mem if ep.get("prior")]
+    current = [ep for ep in mem if not ep.get("prior")]
+    # 兜底：若所有都是 prior（极少见），最后一条视为 Current
+    if not current and historical:
+        current = [historical.pop()]
+
+    def _render_ep_card(ep: dict, layer: str) -> str:
+        ep_id = _R._esc(ep.get("record_id", ep.get("ref", "").split("/")[-1]))
+        time_label = _R._esc(ep.get("timestamp", "—"))
+        summary = _R._esc(ep.get("summary", ""))
+        risk = _R._translate_value(ep.get("risk_level", "")) or "—"
+        action = _R._translate_value(ep.get("recommended_action", "")) or "—"
+        risk_class = f"risk-{risk.lower()}" if risk != "—" else ""
+
+        if layer == "historical":
+            time_prefix = "📅"
+        else:
+            time_prefix = "🔴"
+
+        return f"""
+        <div class="mem-ep-card {layer}">
+          <div class="mem-ep-head">
+            <span class="mem-ep-time-prefix">{time_prefix}</span>
+            <span class="mem-ep-time">{time_label}</span>
+            <span class="mem-ep-id">{ep_id}</span>
+          </div>
+          <div class="mem-ep-body">{summary}</div>
+          <div class="mem-ep-meta">
+            <span class="mem-ep-risk {risk_class}">风险 {risk}</span>
+            <span class="mem-ep-action">建议 {action}</span>
+          </div>
+        </div>"""
+
+    historical_html = ''.join(_render_ep_card(ep, "historical") for ep in historical)
+    current_html = ''.join(_render_ep_card(ep, "current") for ep in current)
+
+    # 证据链标注：AI 引用了哪些历史 episodes
+    evidence_link = ""
+    if historical:
+        refs = ", ".join(ep.get("record_id", ep.get("ref", "").split("/")[-1]) for ep in historical)
+        evidence_link = f"""
+        <div class="memory-evidence-link">
+          <span class="evidence-label">AI used historical episodes:</span>
+          <span class="evidence-refs">{_R._esc(refs)}</span>
+        </div>"""
+
+    return f"""
+    <section class="memory-context" id="memory-context-{_R._esc(scenario['scenario_id'])}">
+      <!-- Historical Memory Layer -->
+      <div class="memory-layer historical">
+        <h4 class="memory-layer-title">HISTORICAL MEMORY</h4>
+        <div class="memory-episodes">{historical_html}</div>
+      </div>
+
+      <!-- Visual Connector -->
+      <div class="memory-connector" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="24" height="24">
+          <path d="M12 2v20M8 16l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="connector-label">引用记忆</span>
+      </div>
+
+      <!-- Current Episode Layer -->
+      <div class="memory-layer current">
+        <h4 class="memory-layer-title">CURRENT EPISODE</h4>
+        <div class="memory-episodes">{current_html}</div>
+      </div>
+
+      {evidence_link}
+    </section>"""
+
+
+# ---------------------------------------------------------------------------
 # P0-1 行动闭环面板（人类处置闭环 · Live 专属交互）
 # ---------------------------------------------------------------------------
 
@@ -700,6 +1192,28 @@ def _render_memory_timeline(scenario: ScenarioEvidence) -> str:
 def _live_actions_inline() -> str:
     """内联 P0-1 Live WS 客户端（缺失时降级为空串——面板静态可读、无交互，不崩）。"""
     p = _R._ASSETS_DIR / _LIVE_ACTIONS_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def _live_stream_inline() -> str:
+    """内联 P0 evidence_delta 增量投影客户端（缺失时降级为空串——页面保持快照模式，不崩）。
+
+    仅 Live 模式注入（descriptor 带 live_ws_path）；Artifact/旗舰模式不注入（无实时流语义）。
+    """
+    p = _R._ASSETS_DIR / _LIVE_STREAM_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def _story_replay_inline() -> str:
+    """内联 P1-B 叙事分幕客户端（缺失时降级为空串——章节导航静态可读、无聚焦，不崩）。
+
+    仅 Artifact 模式注入（descriptor 无 live_ws_path）；Live 模式不注入（实时流无完整故事）。
+    """
+    p = _R._ASSETS_DIR / _STORY_REPLAY_FILENAME
     if not p.exists():
         return ""
     return p.read_text(encoding="utf-8")
@@ -723,30 +1237,361 @@ def _render_action_closure(
     ws_path = _R._esc(str(descriptor.get("live_ws_path", "/ws")))
     return f"""
     <section class="fs-panel" id="fs-action-closure-{sid_html}">
-      <h3 class="view-anchor">行动闭环（家属 / 社区协同处置）</h3>
-      <div class="closure-panel" id="closure-{sid_html}" data-ws-path="{ws_path}" data-scenario="{sid_html}">
-        <div class="closure-warning">暂无待处置警告</div>
-        <div class="closure-grid">
-          <div class="closure-role">
-            <div class="closure-role-title">家属端</div>
-            <div class="closure-status" id="closure-family-status-{sid_html}">—</div>
-            <div class="closure-actions">
-              <button class="rp-btn closure-btn" data-operator="family" data-action="acknowledge" id="closure-family-ack-{sid_html}">我知道了</button>
-              <button class="rp-btn closure-btn" data-operator="family" data-action="notify_community" id="closure-family-notify-{sid_html}">通知社区</button>
+       <h3 class="view-anchor">行动闭环（家属 / 社区协同处置）</h3>
+       <div class="closure-panel" id="closure-{sid_html}" data-ws-path="{ws_path}" data-scenario="{sid_html}">
+         <div class="closure-warning">暂无待处置警告</div>
+         <!-- PR-C：轻量状态摘要（产品语义优先于工程计数，DESIGN §4.7） -->
+         <div class="closure-summary" id="closure-summary-{sid_html}">
+           <span class="cs-row"><span class="cs-role">家属</span> <span class="cs-status" id="cs-family-{sid_html}">—</span></span>
+           <span class="cs-row"><span class="cs-role">社区</span> <span class="cs-status" id="cs-community-{sid_html}">—</span></span>
+         </div>
+          <!-- P1-2: 三端任务卡联动（对齐原 Demo b593a01） -->
+          <div class="tasks" id="task-cards-{sid_html}">
+            <div class="task family" id="task-family-{sid_html}">
+              <div class="task-h"><span class="task-dot f"></span>家属端任务<span class="task-status" id="task-family-status-{sid_html}">—</span></div>
+              <div class="task-body" id="task-family-body-{sid_html}">暂无命令下发</div>
+              <div class="task-sub" id="task-family-sub-{sid_html}"></div>
+            </div>
+            <div class="task community" id="task-community-{sid_html}">
+              <div class="task-h"><span class="task-dot c"></span>社区端任务<span class="task-status" id="task-community-status-{sid_html}">—</span></div>
+              <div class="task-body" id="task-community-body-{sid_html}">暂无工单</div>
+              <div class="task-sub" id="task-community-sub-{sid_html}"></div>
+            </div>
+            <div class="task log" id="task-log-{sid_html}">
+              <div class="task-h"><span class="task-dot l"></span>风险日志<span class="task-status" id="task-log-status-{sid_html}">—</span></div>
+              <div class="task-body" id="task-log-body-{sid_html}">仅记录，无需人工处置</div>
+              <div class="task-sub" id="task-log-sub-{sid_html}"></div>
             </div>
           </div>
-          <div class="closure-role">
-            <div class="closure-role-title">社区端</div>
-            <div class="closure-status" id="closure-community-status-{sid_html}">—</div>
-            <div class="closure-actions">
-              <button class="rp-btn closure-btn" data-operator="community" data-action="accept" id="closure-community-accept-{sid_html}">接受任务</button>
-              <button class="rp-btn closure-btn" data-operator="community" data-action="complete" id="closure-community-complete-{sid_html}">完成处置</button>
-            </div>
+         <div class="closure-grid">
+           <div class="closure-role">
+             <div class="closure-role-title">家属端</div>
+             <div class="closure-status" id="closure-family-status-{sid_html}">—</div>
+             <div class="closure-actions">
+               <button class="rp-btn closure-btn" data-operator="family" data-action="acknowledge" id="closure-family-ack-{sid_html}">我知道了</button>
+               <button class="rp-btn closure-btn" data-operator="family" data-action="notify_community" id="closure-family-notify-{sid_html}">通知社区</button>
+             </div>
+           </div>
+           <div class="closure-role">
+             <div class="closure-role-title">社区端</div>
+             <div class="closure-status" id="closure-community-status-{sid_html}">—</div>
+             <div class="closure-actions">
+               <button class="rp-btn closure-btn" data-operator="community" data-action="accept" id="closure-community-accept-{sid_html}">接受任务</button>
+               <button class="rp-btn closure-btn" data-operator="community" data-action="complete" id="closure-community-complete-{sid_html}">完成处置</button>
+             </div>
+           </div>
+         </div>
+       </div>
+       <p class="muted">按钮与状态为实时工作流态（UI/Workflow，不进 EvidenceProjection）；「完成处置」后产生的 Resolution 事实由后端投影为 Evidence Timeline 的 ACTION 节点（只读证据）。</p>
+     </section>"""
+
+
+# ---------------------------------------------------------------------------
+# Live 产品骨架（DESIGN-live-product-ui-restore · Owner 2026-08-17 批准）
+# 初版 Demo 产品信息架构（阶段叙事 tabs + 6 区域 12 列 Grid）× EvidenceProjection 事实流
+# ---------------------------------------------------------------------------
+
+# PR-A：阶段叙事 tabs 切换客户端（Live 专属；可直切，不强制顺序）。
+_LIVE_TABS_FILENAME = "live_tabs.js"
+
+
+def _live_tabs_inline() -> str:
+    """内联阶段叙事 tabs 客户端（缺失时降级为空串——三视图堆叠可见，不崩）。"""
+    p = _R._ASSETS_DIR / _LIVE_TABS_FILENAME
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def _render_live_role_view(scenario: ScenarioEvidence, role: str) -> str:
+    """Tab ②/③ 角色聚焦视图（家属确认 / 社区处置）— T1.5 降维版。
+
+    设计原则：
+    - **只展示该角色关心的 1-3 个字段**，不暴露 device_id / warning_id / trigger_events 等工程字段
+    - 文案用"人话"（用户视角），而非系统内部事件名
+    - 与主视图 ④ 行动闭环共享同一 WS 状态机（切 Tab 不重连），状态由 live_actions.js 同步
+    """
+    sid_html = _R._esc(scenario["scenario_id"])
+    risk_level = scenario.get("risk_levels") or ()
+    current_risk = risk_level[-1] if risk_level else "—"
+    risk_zh = {"HIGH": "高", "MEDIUM": "中", "LOW": "低"}.get(current_risk, current_risk)
+
+    # 最新的感知摘要（用于"系统检测到什么"）
+    perception_events = scenario.get("event_types") or ()
+    perception_summary = "、".join(_R._translate_value(e) for e in perception_events[-3:]) if perception_events else "无异常感知"
+
+    if role == "family":
+        idx, title = "②", "家属确认"
+        # 家属关心：系统检测到了什么、风险等级、需要做什么
+        summary = f"AI 检测到：{perception_summary}"
+        risk_text = f"当前风险：{risk_zh}"
+        buttons = (
+            f'<button class="rp-btn closure-btn primary" data-operator="family" '
+            f'data-action="acknowledge" id="tabview-family-ack-{sid_html}">我知道了</button>'
+            f'<button class="rp-btn closure-btn secondary" data-operator="family" '
+            f'data-action="notify_community" id="tabview-family-notify-{sid_html}">通知社区</button>'
+        )
+        hint = "确认后系统会记录您的知情状态；如需社区协助请点击「通知社区」。"
+    else:
+        idx, title = "③", "社区处置"
+        # 社区关心：工单地点、风险摘要、处置状态
+        location = scenario.get("scenario_fingerprint", "未知地点")
+        summary = f"工单地点：{location}"
+        risk_text = f"风险摘要：{perception_summary}（{risk_zh}风险）"
+        buttons = (
+            f'<button class="rp-btn closure-btn primary" data-operator="community" '
+            f'data-action="accept" id="tabview-community-accept-{sid_html}">接受任务</button>'
+            f'<button class="rp-btn closure-btn secondary" data-operator="community" '
+            f'data-action="complete" id="tabview-community-complete-{sid_html}">完成处置</button>'
+        )
+        hint = "接受任务后开始处置；处置完成请点击「完成处置」关闭工单。"
+
+    return f"""
+  <div class="live-view" id="view-{role}-{sid_html}" hidden>
+    <section class="region lv-roleview">
+      <h2>{idx} {title}</h2>
+      <div class="body">
+        <div class="closure-tabview" data-role="{role}" data-scenario="{sid_html}">
+          <div class="role-card">
+            <div class="role-summary">{_R._esc(summary)}</div>
+            <div class="role-risk">{_R._esc(risk_text)}</div>
+            <div class="role-actions">{buttons}</div>
           </div>
         </div>
+        <p class="muted">{_R._esc(hint)}</p>
       </div>
-      <p class="muted">按钮与状态为实时工作流态（UI/Workflow，不进 EvidenceProjection）；「完成处置」后产生的 Resolution 事实由后端投影为 Evidence Timeline 的 ACTION 节点（只读证据）。</p>
+    </section>
+  </div>"""
+
+
+def _render_live_shell(
+    scenario: ScenarioEvidence,
+    descriptor: CasePresentationDescriptor,
+    panels: tuple[str, ...],
+    media_manifest: dict | None,
+    media_base_url: str,
+    audio_manifest: dict | None,
+    audio_base_url: str,
+) -> tuple[str, str]:
+    """Live 产品骨架（PR-A）：阶段叙事 tabs + 6 区域 12 列 Grid + Live 帧流容器。
+
+    纪律（DESIGN-live-product-ui-restore §3/§7）：
+    - **UI 蓝图 = 初版 Demo，事实架构 = 现状**：本函数只做**展示编排**（VM-11），
+      全部内容仍消费既有构建器（``_render_case_video_inner`` / ``_R._render_timeline``
+      / ``_render_action_closure`` / 详细证据折叠区），**零新事实**；
+    - 数据源唯一：``EvidenceProjection`` + delta 流（frame_tick / evidence_delta /
+      perception_delta / risk_delta / state_update），无第二套 view model；
+    - tab ②/③ 角色视图与 ④ 行动闭环共享 WS 状态机（切 Tab 不重连）；
+    - ③ 风险解释卡片区域在 PR-A 为占位（``_render_current_risk`` 投影卡），PR-B 恢复
+      初版 ✓ 人话卡格式；③.5 实时风险信号 / ⑥ Memory Context 为诚实占位（PR-B/C 补全）。
+    """
+    sid = scenario["scenario_id"]
+    sid_html = _R._esc(sid)
+    # 图 IIFE（详细证据折叠区：主 Evidence Graph + Cross Modal 子图）
+    # Live 模式：图容器在 <details> 折叠区内，JS 不应加入全局 graph_script（页面加载即执行，
+    # 会在隐藏容器上初始化 ECharts 导致 0 size / dataIndex 报错）。
+    # 改为：在 details 模板内直接内联图 HTML + JS，由浏览器在 details 展开时自然解析执行。
+    g_html, g_js = _R._render_evidence_graph(scenario)
+    cm_html, cm_js = _R._render_graph(scenario)
+    # 将图 JS 内联进 details 区域（用 IIFE 立即执行，容器此时已在 DOM 中）
+    g_js_inline = f"<script>\n{g_js}\n</script>" if g_js else ""
+    cm_js_inline = f"<script>\n{cm_js}\n</script>" if cm_js else ""
+
+    # 区域①：Live 帧流容器（与 Artifact Case Video 共用内部构建器，单一事实源）。
+    video_inner, manifest_island = _render_case_video_inner(
+        scenario, descriptor, media_manifest, media_base_url
+    )
+    # 区域②：实时音频摘要（无音频证据 → 空串，AC-12）+ 统一 Evidence Timeline。
+    audio_panel = _render_audio_perception(scenario, audio_manifest, audio_base_url)
+    # P0-1 修复（视频静止/timeline 一次性刷出 bug）：Live 模式不预渲染 runtime timeline 节点，
+    # 让 JS 端 evidence_delta 增量涌现。Artifact 模式保留完整时间轴渲染。
+    # Phase 2：golden pre-event 节点（provenance_kind=SIMULATED + type 起步 golden_）不依赖 runtime 流，
+    # 即使在 Live 模式也预渲染（否则 manifest 派生的预期事件看不到）。
+    # P2-1 修复（用户反馈"打开就 210+ 节点塞满"）：即使是 Live + golden，**只**预渲染 golden_ 节点，
+    # **不**预渲染 runtime frame 节点（这些由 evidence_delta 增量推送）。
+    is_live = scenario.get("mode") == "live"
+    has_golden_pre = any(
+        isinstance(n, dict) and n.get("type", "").startswith("golden_")
+        for n in (scenario.get("timeline") or ())
+    )
+    if is_live:
+        # Live：只预渲染 golden 节点（runtime 节点由 JS 增量涌现）
+        if has_golden_pre:
+            # 构造只含 golden 节点的 scenario 副本，调用 _R._render_timeline
+            golden_only_scenario = dict(scenario)
+            golden_only_scenario["timeline"] = tuple(
+                n for n in (scenario.get("timeline") or ())
+                if isinstance(n, dict) and n.get("type", "").startswith("golden_")
+            )
+            timeline_html = _R._render_timeline(golden_only_scenario)
+        else:
+            timeline_html = f"<ul class='timeline' id='timeline-list-{sid_html}'></ul>"
+    else:
+        # Artifact：完整渲染
+        timeline_html = _R._render_timeline(scenario)
+
+    # T1.4: 声学状态变化专属面板（消费 golden_audio_state timeline 节点）
+    acoustic_state_panel = _render_acoustic_state_panel(scenario)
+
+    # 区域④：行动闭环面板（live descriptor 含 action_closure；缺省 → 诚实占位）。
+    if "action_closure" in panels:
+        closure_body = _render_action_closure(scenario, descriptor)
+    else:
+        closure_body = (
+            '<div class="tl-empty">行动闭环未启用（descriptor 未声明 action_closure 面板）</div>'
+        )
+
+    # T1.6/M3: Live Memory Context — Historical / Current 双层渲染（⑥区域）
+    live_memory_context = _render_live_memory_context(scenario)
+
+    # 详细证据（二级视图，折叠）：为什么 / 系统行动 / 音频明细 / Graph / Fingerprint / Gate。
+    # Live 模式：图 JS 内联在 details 内，随 details 展开时由浏览器解析执行，
+    # 避免页面加载时在隐藏容器上初始化 ECharts（0 size / dataIndex 报错）。
+    details = f"""
+      <section class="fs-panel" id="fs-details-{sid_html}">
+        <details>
+          <summary>详细证据（为什么 / 系统行动 / 音频 / Graph / Fingerprint / Gate）</summary>
+          <p class="muted">场景标识：<code>{sid_html}</code> · mode={_R._esc(scenario['mode'])} · frames={scenario['n_frames']}</p>
+          <h3 class="view-anchor">为什么值得关注</h3>
+          {_R._render_decision(scenario)}
+          <h3 class="view-anchor">系统行动</h3>
+          {_render_action(scenario)}
+          {_R._render_audio_evidence(scenario)}
+          <h3 class="view-anchor">Evidence Graph（因果链）</h3>
+          {g_html}
+          {g_js_inline}
+          <h3 class="view-anchor">Cross Modal Graph（supports 子图）</h3>
+          {cm_html}
+          {cm_js_inline}
+          <h3 class="view-anchor">Fingerprint / Gate</h3>
+          {_R._render_gate(scenario)}
+        </details>
+      </section>"""
+
+    html_block = f"""
+    <section class="scenario live-scenario" data-scenario="{sid_html}">
+      {_render_provenance_banner(scenario)}
+      <nav class="tabs" id="role-tabs-{sid_html}" data-live-tabs data-scenario="{sid_html}">
+        <button type="button" class="tab active" data-view="discover">① 风险发现</button>
+        <button type="button" class="tab" data-view="family">② 家属确认</button>
+        <button type="button" class="tab" data-view="community">③ 社区处置</button>
+      </nav>
+      <div class="live-view" id="view-discover-{sid_html}">
+        <div class="live-grid">
+          <!-- ① 实时画面：全宽；内部 sensor-pair 双列（VIDEO ↔ AUDIO SENSOR 并列同层） -->
+          <section class="region lv-now">
+            <h2>① 实时画面 <span class="tag">Home 端实时画面 · 双传感器同层</span></h2>
+            <div class="body">
+              <div class="sensor-pair">
+                <div class="sensor-card sensor-video" id="video-sensor-{sid_html}">
+                  <div class="sensor-card-head">
+                    <h3 class="sensor-card-title">
+                      <span class="video-status-dot" aria-hidden="true"></span>
+                      <span>📹 VIDEO SENSOR</span>
+                      <span class="sensor-card-status video-live">LIVE</span>
+                    </h3>
+                  </div>
+                  <div class="case-video">{video_inner}</div>
+                </div>
+                {_render_audio_sensor_status(scenario)}
+              </div>
+              {manifest_island}
+            </div>
+          </section>
+
+          <!-- ② AI 正在理解：行为时间线 + 声学状态 -->
+          <section class="region lv-perception">
+            <h2>② AI 正在理解 <span class="tag">感知 → 声学状态</span></h2>
+            <div class="body">
+              <!-- P0-3: 行为里程碑（从 perception_events 推导，跨帧累积） -->
+              <div class="behavior-timeline" id="behavior-timeline-{sid_html}"></div>
+              {acoustic_state_panel}
+              {audio_panel}{timeline_html}
+            </div>
+          </section>
+
+          <!-- ③ 为什么值得关注：风险解释卡片 -->
+          <section class="region lv-why">
+            <h2>③ 为什么值得关注 <span class="tag">人话原因 · 建议动作</span></h2>
+            <div class="body">
+              <div class="lrk-card" id="lrk-card-{sid_html}" style="display:none">
+                <div class="lrk-head">
+                  <span class="lrk-level" id="lrk-level-{sid_html}">—</span>
+                  <span class="lrk-wid muted" id="lrk-wid-{sid_html}"></span>
+                  <span class="lrk-frame muted" id="lrk-frame-{sid_html}"></span>
+                </div>
+                <div class="lrk-section">
+                  <div class="lrk-label">人话原因</div>
+                  <ul class="lrk-reasons" id="lrk-reasons-{sid_html}"></ul>
+                </div>
+                <div class="lrk-section" id="lrk-triggers-{sid_html}" style="display:none">
+                  <div class="lrk-label">触发规则</div>
+                  <div class="lrk-trig-chips" id="lrk-trig-{sid_html}"></div>
+                </div>
+                <div class="lrk-section" id="lrk-bar-wrap-{sid_html}" style="display:none">
+                  <div class="lrk-label">规则命中强度</div>
+                  <div class="lrk-meter"><div class="lrk-bar" id="lrk-bar-{sid_html}"></div><span class="lrk-score" id="lrk-score-{sid_html}"></span></div>
+                </div>
+                <div class="lrk-rec" id="lrk-rec-{sid_html}"></div>
+                <div class="lrk-meta" id="lrk-meta-{sid_html}"></div>
+              </div>
+              <div class="tl-empty observing" id="lrk-empty-{sid_html}">🔴 实时观察中 · 当前 0 人在场，风险尚未触发</div>
+            </div>
+          </section>
+
+          <!-- ⑤ AI 做了什么：行动闭环 + 实时风险信号 -->
+          <section class="region lv-action">
+            <h2>⑤ AI 做了什么 <span class="tag">家属 / 社区协同处置</span></h2>
+            <div class="body">
+              <div class="action-signals">
+                <div id="live-signals-{sid_html}"></div>
+                <div class="tl-empty" id="live-signals-empty-{sid_html}">当前无进行中风险信号</div>
+              </div>
+              {closure_body}
+            </div>
+          </section>
+
+          <!-- ⑥ 历史上下文：Memory Context -->
+          <section class="region lv-history">
+            <h2>⑥ 历史上下文 <span class="tag">认知层 · 只读</span></h2>
+            <div class="body">
+              {live_memory_context}
+            </div>
+          </section>
+        </div>
+        {details}
+      </div>
+      <!-- PR-C：⑤ 系统原理（折叠 / 次级模块 · DESIGN §4.8）—— 不抢主叙事，默认折叠 -->
+      <details class="lv-sysarch" id="lv-sysarch-{sid_html}">
+        <summary>⑤ 系统原理（How it works）</summary>
+        <div class="sysarch-body">
+          <p class="muted">底层架构三框：Home 端感知内核 → Demo Gateway 投影层 → Case Viewer 展示层。实时帧流 / delta 流经 ProjectionAccumulator 汇聚为 EvidenceProjection，浏览器只渲染、零推理（VM-9）。</p>
+          <svg class="sysarch-svg" viewBox="0 0 960 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="系统原理图：Home 感知内核 → Demo Gateway → Case Viewer">
+            <rect x="10" y="30" width="280" height="100" rx="8" fill="#f0f7ff" stroke="#4a90d9" stroke-width="1.5"/>
+            <text x="150" y="55" text-anchor="middle" font-size="13" font-weight="700" fill="#1c4f7c">Home 端感知内核</text>
+            <text x="150" y="75" text-anchor="middle" font-size="11" fill="#3b4a5a">home_perception</text>
+            <text x="150" y="95" text-anchor="middle" font-size="10" fill="#6b7a8a">PerceptionPipeline</text>
+            <text x="150" y="110" text-anchor="middle" font-size="10" fill="#6b7a8a">→ FrameResult → WarningEvent/ActionCommand</text>
+            <polygon points="300,80 320,80 320,72 330,80 320,88 320,80 300,80" fill="#4a90d9"/>
+            <polygon points="300,80 320,80 320,72 330,80 320,88 320,80 300,80" transform="translate(340,0)" fill="#4a90d9"/>
+            <rect x="660" y="30" width="290" height="100" rx="8" fill="#f0f7ff" stroke="#4a90d9" stroke-width="1.5"/>
+            <text x="805" y="55" text-anchor="middle" font-size="13" font-weight="700" fill="#1c4f7c">展示层 · Case Viewer</text>
+            <text x="805" y="75" text-anchor="middle" font-size="11" fill="#3b4a5a">银色盾 Web UI</text>
+            <text x="805" y="95" text-anchor="middle" font-size="10" fill="#6b7a8a">Live Viewer（帧流 + delta 流）</text>
+            <text x="805" y="110" text-anchor="middle" font-size="10" fill="#6b7a8a">浏览器只渲染、零推理（VM-9）</text>
+            <rect x="340" y="30" width="310" height="100" rx="8" fill="#fff7e6" stroke="#e0922f" stroke-width="1.5"/>
+            <text x="495" y="55" text-anchor="middle" font-size="13" font-weight="700" fill="#7a4a00">Demo Gateway · silver_demo</text>
+            <text x="495" y="75" text-anchor="middle" font-size="11" fill="#3b4a5a">ws.py / gateway.py</text>
+            <text x="495" y="95" text-anchor="middle" font-size="10" fill="#6b7a8a">帧循环 → ProjectionAccumulator</text>
+            <text x="495" y="110" text-anchor="middle" font-size="10" fill="#6b7a8a">→ EvidenceProjection → delta 流广播</text>
+          </svg>
+        </div>
+      </details>
+      {_render_live_role_view(scenario, "family")}
+      {_render_live_role_view(scenario, "community")}
     </section>"""
+    # Live 模式：图 JS 已内联进 details，不加入全局 graph_script，返回空 js_block
+    return html_block, ""
 
 
 # ---------------------------------------------------------------------------
@@ -890,6 +1735,40 @@ def _render_narrative_band(scenario: ScenarioEvidence) -> str:
     </div>"""
 
 
+def _render_story_nav(scenario: ScenarioEvidence) -> str:
+    """P1-B 叙事分幕导航（Artifact-only Story Replay）。
+
+    从 EvidenceProjection 派生分幕（``build_story_chapters``，事实驱动、省略空幕），渲染
+    章节按钮 + 当前幕叙述文案。按钮自带 ``data-start/end/refs/copy``（服务端派生），
+    前端 ``story_replay.js`` 只读这些属性做点击聚焦（``__Replay.seek`` + 高亮 focus refs），
+    **绝不自己生成"这一幕代表风险升级"**（VM-1 / VM-9）。无叙事（空幕）→ 空串。
+    """
+    from home_perception.visualizer.viewer.story_chapters import build_story_chapters
+
+    chapters = build_story_chapters(scenario)
+    if not chapters:
+        return ""
+    sid = scenario["scenario_id"]
+    sid_html = _R._esc(sid)
+    buttons: list[str] = []
+    for ch in chapters:
+        refs = "|".join(_R._esc(str(r)) for r in ch.get("focus_refs", ()))
+        buttons.append(
+            f'<button type="button" class="story-chapter" '
+            f'data-start="{ch["start_idx"]}" data-end="{ch["end_idx"]}" '
+            f'data-refs="{refs}" data-copy="{_R._esc(ch["display_copy"])}">'
+            f'{_R._esc(ch["label"])}</button>'
+        )
+    first_copy = _R._esc(chapters[0]["display_copy"])
+    return f"""
+    <div class="story-nav">
+      <div class="story-chapters" id="story-chapters-{sid_html}" data-scenario="{sid_html}">
+        {''.join(buttons)}
+      </div>
+      <div class="story-copy muted" id="story-copy-{sid_html}">{first_copy}</div>
+    </div>"""
+
+
 def _render_scenario_case(
     scenario: ScenarioEvidence,
     descriptor: CasePresentationDescriptor,
@@ -898,8 +1777,23 @@ def _render_scenario_case(
     media_base_url: str,
     audio_manifest: dict | None = None,
     audio_base_url: str = "",
+    live_shell: bool = False,
 ) -> tuple[str, str]:
-    """单场景 HTML + 该场景的 graph/media JS（一次遍历产出两块，评审 R3-#3 对称）。"""
+    """单场景 HTML + 该场景的 graph/media JS（一次遍历产出两块，评审 R3-#3 对称）。
+
+    ``live_shell=True``（Live 产品骨架，DESIGN-live-product-ui-restore PR-A）→ 阶段叙事
+    tabs + 6 区域 Grid；``False``（默认）→ ADR-0036 竖向瀑布流（Artifact / 旗舰路径不变）。
+    """
+    if live_shell:
+        return _render_live_shell(
+            scenario,
+            descriptor,
+            panels,
+            media_manifest,
+            media_base_url,
+            audio_manifest,
+            audio_base_url,
+        )
     sid = scenario["scenario_id"]
     sid_html = _R._esc(sid)
     status = "PASS" if scenario["ok"] else "FAIL"
@@ -912,21 +1806,25 @@ def _render_scenario_case(
     # duration 优先取真实媒体 manifest.duration_sec（P5：真实视频按自身时长驱动 Evidence 映射，
     # 避免 descriptor 默认 60s 与 3.75s 真实视频错位）；无媒体时回退 descriptor 纯 UI 进度。
     # fps 留 0 → MediaPlayer 回退到 manifest.fps（有媒体时）。
-    if media_manifest and media_manifest.get("duration_sec"):
-        duration = float(media_manifest["duration_sec"])
+    # LP-1：LiveFrameStream 帧流模式**不**生成 MediaPlayer（画面由 WS 帧流驱动，无 canvas/文件帧）。
+    if media_manifest and media_manifest.get("source_kind") == "LiveFrameStream":
+        media_init = ""
     else:
-        duration = descriptor["time_mapping"]["media_duration_s"]
-    media_init = (
-        "(function(){"
-        'var cv=document.getElementById("case-video-canvas-' + sid_html + '");'
-        'var mm=document.getElementById("media-manifest-' + sid_html + '");'
-        "var manifest=(mm&&mm.textContent)?JSON.parse(mm.textContent):null;"
-        "window.__MediaPlayer.init("
-        + _R._esc_js(sid)
-        + ",cv,manifest,"
-        + '{"duration":' + str(duration) + ',"fps":0});'
-        "})();"
-    )
+        if media_manifest and media_manifest.get("duration_sec"):
+            duration = float(media_manifest["duration_sec"])
+        else:
+            duration = descriptor["time_mapping"]["media_duration_s"]
+        media_init = (
+            "(function(){"
+            'var cv=document.getElementById("case-video-canvas-' + sid_html + '");'
+            'var mm=document.getElementById("media-manifest-' + sid_html + '");'
+            "var manifest=(mm&&mm.textContent)?JSON.parse(mm.textContent):null;"
+            "window.__MediaPlayer.init("
+            + _R._esc_js(sid)
+            + ",cv,manifest,"
+            + '{"duration":' + str(duration) + ',"fps":0});'
+            "})();"
+        )
 
     # 首屏面板（按编排顺序，AC-16）
     panel_html: list[str] = []
@@ -997,6 +1895,7 @@ def _render_scenario_case(
       </h2>
       {_render_case_header(scenario)}
       {_render_narrative_band(scenario)}
+      {_render_story_nav(scenario)}
       {_render_suppression_reason(scenario)}
       {_render_provenance_banner(scenario)}
       {''.join(panel_html)}
@@ -1075,6 +1974,7 @@ def render_case_viewer(
     media_base_url: str = "",
     audio_base_dir: str | Path | None = None,
     audio_base_url: str = "",
+    live_frame_stream: bool = False,
 ) -> str:
     """EvidenceProjection → 自包含 Case Viewer HTML（确定性，fail-closed）。
 
@@ -1090,6 +1990,11 @@ def render_case_viewer(
             Adapter 只读解析每场景可播放音频样本 manifest（音频 E2E）；``None`` → 无绑定
             音频样本（首屏音频面板只显示证据事实，不渲染播放控件，严格分离不编造）。
         audio_base_url: 从 HTML 到 ``audio_base_dir`` 的相对 URL 前缀；默认 ``""``。
+        live_frame_stream: LP-1 · Live 真实同步帧流。``True`` 时每个场景媒体区渲染
+            ``<img>`` 帧流骨架（Runtime Frame N → JPEG → WS 推真实帧，浏览器只显示），
+            Frame N ↔ Detection N 天然同步（单一事实源，VM-9）；不走 media_base_dir
+            只读解析（Live 不读 artifact 媒体文件）。``False``（默认）→ 走 media_base_dir
+            只读解析（Artifact / 旗舰路径）。
 
     Raises:
         ValueError: projection 结构非法（缺场景 / 场景数超上限）。
@@ -1108,7 +2013,12 @@ def render_case_viewer(
     # Slice A.1：经 Media Source Adapter 只读解析每场景媒体 manifest（绝不生成帧）。
     mb = descriptor["media_binding"]
     media_manifests: dict[str, dict | None] = {}
-    if media_base_dir is not None:
+    if live_frame_stream:
+        # LP-1：Live 真实同步帧流——媒体区渲染 <img> 帧流骨架（不解析 artifact 媒体文件），
+        # 真实帧由 WS 每帧推（frame_tick.frame_base64），浏览器只显示（VM-9）。
+        for s in scenarios:
+            media_manifests[s["scenario_id"]] = {"source_kind": "LiveFrameStream"}
+    elif media_base_dir is not None:
         for s in scenarios:
             media_manifests[s["scenario_id"]] = resolve_media_source(
                 media_base_dir, s["scenario_id"], mb["source_kind"]
@@ -1134,6 +2044,7 @@ def render_case_viewer(
             media_base_url,
             audio_manifests.get(s["scenario_id"]),
             audio_base_url,
+            live_shell=live_frame_stream,
         )
         scenario_blocks.append(html_block)
         if js_block:
@@ -1157,6 +2068,12 @@ def render_case_viewer(
     media_js = _R._media_inline()
     # P0-1：行动闭环面板存在（Live 模式）时注入 Live WS 客户端；Artifact 模式无此面板 → 不注入。
     live_actions_js = _live_actions_inline() if "action_closure" in panels else ""
+    # P0 evidence_delta 增量投影：仅 Live 模式（descriptor 带 live_ws_path）注入；
+    # Artifact/旗舰模式无实时流语义 → 不注入（快照模式零成本）。
+    live_stream_js = _live_stream_inline() if descriptor.get("live_ws_path") else ""
+    # P1-B 叙事分幕客户端：仅 Artifact 模式（无 live_ws_path）注入；Live 不注入
+    # （实时流无完整故事，两个时间语义不混）。无分幕场景 bind 时 no-op 零成本。
+    story_replay_js = _story_replay_inline() if not descriptor.get("live_ws_path") else ""
     # P0-3：任一场景有真实音频证据时注入 AudioSync（音频轨 ↔ 证据时间线联动）；
     # 无音频场景 → 不注入（零成本降级）。audio_perception 面板在默认面板列表恒存在，
     # 但无 audio_evidence 时面板渲染为空串——以证据为准，避免空页面带无用引擎。
@@ -1164,6 +2081,34 @@ def render_case_viewer(
         sc.get("audio_evidence") for sc in scenarios
     )
     audio_sync_js = _R._audio_sync_inline() if has_audio_evidence else ""
+
+    # LP-4：产品标题区分 Live / Artifact——Live 是"守护中"的产品，不是"案例回放"。
+    if live_frame_stream:
+        page_title = "银龄盾 · 居家智能守护中"
+        page_subtitle = "AI 正在实时理解居家状态：谁在门口 → 发生了什么 → AI 怎么判断 → 系统怎么响应"
+        # PR-A：Live 产品 header（初版 topbar 蓝图）——标题 + Demo 数据真实性声明（角标，
+        # 点开说明）+ WS 连接 pill（live_stream.js 实时维护 未连接/已连接）。
+        page_header = f"""
+  <header class="topbar">
+    <div class="topbar-main">
+      <h1>{page_title}</h1>
+      <p class="subtitle">{page_subtitle}</p>
+    </div>
+    <span class="spacer"></span>
+    <details class="auth-badge">
+      <summary>Demo 数据真实性声明</summary>
+      <p>本页面为受控演示输入（确定性场景 / 视频源）驱动的实时运行，非 7×24 真实设备直连；
+      风险等级为规则命中强度，非诈骗概率判定。</p>
+    </details>
+    <span class="pill offline" id="ws-pill"><span class="dot"></span><span id="ws-text">未连接</span></span>
+  </header>"""
+    else:
+        page_title = "银龄盾 · 安全案例回放"
+        page_subtitle = "一次运行，看懂一起安全案例：发生了什么 → 为什么值得关注 → 系统做了什么"
+        page_header = f"<h1>{page_title}</h1>\n  <p class=\"subtitle\">{page_subtitle}</p>"
+
+    # PR-A：阶段叙事 tabs 客户端（仅 Live 骨架注入；Artifact 无 tabs，零成本）。
+    live_tabs_js = _live_tabs_inline() if live_frame_stream else ""
 
     return f"""<!DOCTYPE html>
 <html lang="zh">
@@ -1199,8 +2144,20 @@ def render_case_viewer(
   /* Provenance（AC-7 一等视觉） */
   .prov-banner {{ background:#eef6ff; border:1px solid #cfe3fb; border-left:4px solid #4a90d9;
                   border-radius:6px; padding:8px 14px; margin:12px 0; font-size:13px; }}
-  .prov-badge {{ display:inline-block; padding:1px 8px; border-radius:8px; font-size:11px;
+  .prov-badge {{ display:inline-flex; align-items:center; gap:8px; padding:1px 8px; border-radius:8px; font-size:11px;
                  color:#fff; font-weight:600; }}
+  .prov-subtitle {{ font-size:11px; color:#888; margin-left:8px; }}
+  .prov-details {{ margin-top:6px; }}
+  .prov-details > summary {{ cursor:pointer; font-size:11px; color:#4a90d9;
+                             user-select:none; list-style:none; }}
+  .prov-details > summary::before {{ content:'▸ '; }}
+  .prov-details[open] > summary::before {{ content:'▾ '; }}
+  .prov-detail-rows {{ margin-top:6px; display:flex; flex-direction:column; gap:3px; }}
+  .prov-detail-row {{ display:flex; gap:8px; font-size:11px; line-height:1.6; }}
+  .prov-detail-label {{ color:#888; min-width:64px; flex-shrink:0; }}
+  .prov-detail-value {{ color:#3b4a5a; }}
+  .prov-detail-active {{ color:#2e9e6b; font-weight:600; }}
+  .prov-detail-idle {{ color:#aaa; }}
   .prov-simulated {{ background:#7b5cd6; }}
   .prov-real-sensor {{ background:#2e9e6b; }}
   .prov-fixture {{ background:#8a8a8a; }}
@@ -1210,6 +2167,24 @@ def render_case_viewer(
   .risk-level {{ font-size:16px; font-weight:700; color:#d64541; }}
   .risk-card {{ border-left:4px solid #d64541; }}
   .action-card {{ border-left:4px solid #2e9e6b; }}
+  /* P1 干预派发回执卡 */
+  .receipt-list {{ list-style:none; margin:8px 0; padding:0; }}
+  .receipt-row {{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;
+                 padding:6px 0; border-top:1px solid #e3eefb; }}
+  .receipt-row:first-child {{ border-top:none; }}
+  .receipt-cmd {{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+                 background:#dcebfb; color:#1c4f7c; border-radius:6px; padding:1px 8px;
+                 white-space:nowrap; }}
+  .receipt-arrow {{ color:#8a94a6; }}
+  .receipt-role {{ font-weight:600; color:#2b3a4a; }}
+  .receipt-closure {{ font-size:13px; color:#15583b; margin-left:4px; }}
+  .receipt-closure-list {{ margin:8px 0; font-size:13px; color:#2b3a4a; }}
+  .receipt-closure-list ul {{ margin:4px 0 0; padding-left:18px; }}
+  .receipt-closure-list code {{ font-size:12px; background:#eef6ff; color:#1c4f7c;
+                               border-radius:4px; padding:0 4px; }}
+  .receipt-reach {{ margin-top:8px; font-size:13px; color:#1c4f7c; }}
+  .receipt-reach-target {{ font-weight:700; }}
+  .receipt-note {{ margin-top:6px; font-size:12px; line-height:1.5; }}
   /* 音频感知首屏面板（音频 E2E P0） */
   .audio-perception {{ display:flex; flex-direction:column; gap:10px; margin:8px 0; }}
   .audio-card {{ background:#fdf2f8; border:1px solid #f3c9de; border-left:4px solid #c2408a;
@@ -1268,6 +2243,37 @@ def render_case_viewer(
   .case-video-el {{ width:100%; border-radius:6px; display:block; background:#000; }}
   .case-video-canvas {{ width:100%; max-width:640px; aspect-ratio:16/9; border-radius:6px;
                         display:block; background:#000; margin:0 auto; }}
+  .case-video-live {{ position:relative; border-radius:6px; overflow:hidden; background:#000; }}
+  .case-video-img {{ width:100%; display:block; background:#000; }}
+  .live-badge {{ position:absolute; top:10px; right:10px; display:inline-flex; align-items:center;
+                 gap:6px; background:rgba(0,0,0,.55); color:#fff; font-size:12px; font-weight:600;
+                 padding:4px 10px; border-radius:999px; letter-spacing:.5px; }}
+  .ldot {{ width:8px; height:8px; border-radius:50%; background:#e5484d;
+          animation:live-pulse 1.2s infinite; }}
+  .live-ov {{ position:absolute; bottom:10px; left:10px; display:flex; gap:8px; align-items:center;
+              background:rgba(0,0,0,.55); color:#e6edf3; font-size:12px; padding:4px 10px; border-radius:6px; }}
+  .live-ov-sep {{ opacity:.5; }}
+  @keyframes live-pulse {{ 0% {{ opacity:1; }} 50% {{ opacity:.3; }} 100% {{ opacity:1; }} }}
+  /* LP-2/3 实时 AI 状态卡（CURRENT STATE + AI 看到了 + 为什么关注 + 下一步） */
+  .live-ai-state {{ margin-top:12px; background:#0e1726; border:1px solid #1e2a3a;
+                    border-radius:8px; padding:12px 14px; }}
+  .ai-row {{ display:flex; gap:12px; align-items:baseline; padding:5px 0;
+            border-bottom:1px solid #1e2a3a; }}
+  .ai-row:last-child {{ border-bottom:none; }}
+  .ai-k {{ flex:0 0 92px; color:#8a9bb0; font-size:12px; font-weight:600;
+          letter-spacing:.5px; text-transform:uppercase; }}
+  .ai-v {{ color:#e6edf3; font-size:14px; }}
+  .ai-current .ai-risk {{ font-size:15px; font-weight:700; color:#7dffb0; }}
+  .ai-risk.high {{ color:#ff6b6b; }}
+  .ai-risk.medium {{ color:#ffb84d; }}
+  /* LP-4 Toast 事件涌现（右下角飞入，新事件/风险变化的视觉反馈） */
+  #live-toasts {{ position:fixed; bottom:20px; right:20px; z-index:99;
+                 display:flex; flex-direction:column; gap:8px; }}
+  .live-toast {{ background:#1c2733; color:#fff; padding:10px 14px; border-radius:8px;
+                font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.25);
+                animation:toast-in .3s ease; }}
+  .live-toast.out {{ opacity:0; transform:translateY(8px); transition:all .4s; }}
+  @keyframes toast-in {{ from {{ opacity:0; transform:translateY(8px); }} to {{ opacity:1; transform:none; }} }}
   .media-timeline {{ display:flex; gap:8px; align-items:center; margin:10px 0 4px;
                      background:#f0f4f9; border:1px solid #e3e8ee; border-radius:8px;
                      padding:8px 12px; }}
@@ -1296,6 +2302,9 @@ def render_case_viewer(
   /* Timeline（复用 renderer） */
   .timeline {{ list-style:none; margin:0; padding:0 0 0 18px; border-left:2px solid #d8dee6; }}
   .tl-item {{ position:relative; margin:10px 0; }}
+  /* Phase 2：golden pre-event 节点（manifest 派生预期，非 runtime 实测）——视觉降饱和度 + ⓘ 标识 */
+  .tl-item-golden {{ opacity:0.78; background:#f8fafc; border-left:2px dashed #94a3b8; padding-left:6px; margin-left:-6px; }}
+  .tl-golden-icon {{ color:#64748b; font-size:11px; font-weight:700; cursor:help; }}
   .tl-dot {{ position:absolute; left:-25px; top:4px; width:12px; height:12px;
              border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #ccc; }}
   .tl-body {{ }}
@@ -1350,12 +2359,227 @@ def render_case_viewer(
   .glossary ul {{ margin:8px 0 0; padding-left:20px; font-size:13px; }}
   .glossary li {{ margin:3px 0; }}
   code {{ background:#eef2f7; border-radius:4px; padding:1px 5px; font-size:12px; }}
+  /* ===== Live 产品骨架（PR-A · 初版 Demo 产品 IA × EvidenceProjection 事实流） ===== */
+  /* header topbar：标题 + 真实性声明角标 + WS 连接 pill */
+  .topbar {{ display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+             background:#fff; border:1px solid #e3e8ee; border-radius:10px;
+             padding:12px 16px; margin-bottom:14px; }}
+  .topbar-main {{ min-width:0; }}
+  .spacer {{ flex:1 1 auto; }}
+  .pill {{ display:inline-flex; align-items:center; gap:6px; padding:4px 10px;
+           border-radius:999px; font-size:12px; font-weight:600;
+           border:1px solid #e3e8ee; background:#f8fafc; }}
+  .pill .dot {{ width:8px; height:8px; border-radius:50%; background:#6b7a8a; }}
+  .pill.online .dot {{ background:#2e9e6b; box-shadow:0 0 0 3px rgba(46,158,107,.18); }}
+  .pill.offline .dot {{ background:#d64541; }}
+  .auth-badge {{ font-size:11px; color:#92400e; background:#fef3c7; border:1px solid #fde68a;
+                 border-radius:999px; font-weight:600; }}
+  .auth-badge summary {{ cursor:pointer; padding:3px 9px; list-style:none; }}
+  .auth-badge[open] {{ border-radius:10px; }}
+  .auth-badge p {{ margin:6px 9px 8px; font-weight:400; font-size:12px; color:#7a5a00;
+                   max-width:420px; line-height:1.5; }}
+  /* 阶段叙事 tabs（默认停①，可直切，不强制顺序） */
+  .tabs {{ display:flex; gap:6px; margin:14px 0 0; padding:0 4px;
+           border-bottom:1px solid #e3e8ee; }}
+  .tab {{ background:transparent; border:1px solid #e3e8ee; border-bottom:none;
+          border-radius:8px 8px 0 0; padding:8px 16px; font-size:13px; font-weight:600;
+          color:#6b7a8a; cursor:pointer; transition:.15s; }}
+  .tab:hover {{ background:#fff; color:#1c2733; }}
+  .tab.active {{ background:#fff; color:#1c4f7c; border-color:#4a90d9;
+                 border-bottom:1px solid #fff; margin-bottom:-1px; }}
+  .live-view[hidden] {{ display:none; }}
+  /* 12 列 Grid + 5 认知区域（T1.6 重组：①→②→③→⑤→⑥） */
+  .live-grid {{ display:grid; grid-template-columns:repeat(12,1fr); gap:14px; margin-top:14px; }}
+  .region {{ background:#fff; border:1px solid #e3e8ee; border-radius:10px;
+             display:flex; flex-direction:column; min-width:0; }}
+  .region > h2 {{ margin:0; padding:10px 14px; font-size:14px; font-weight:700;
+                  border-bottom:1px solid #e3e8ee; display:flex; align-items:center; gap:8px; }}
+  .region > h2 .tag {{ font-size:11px; font-weight:600; color:#1c4f7c; background:#dcebfb;
+                       padding:2px 8px; border-radius:999px; }}
+  .region .body {{ padding:12px 14px; overflow:auto; }}
+  .lv-now {{ grid-column:span 12; }}
+  .lv-perception {{ grid-column:span 8; }}
+  .lv-why {{ grid-column:span 4; }}
+  .lv-action {{ grid-column:span 12; }}
+  .lv-history {{ grid-column:span 12; }}
+  .lv-roleview {{ grid-column:span 12; margin-top:14px; }}
+  /* P0-11.x · VIDEO ↔ AUDIO SENSOR 同层双列（用户拍板 2026-08-18） */
+  .sensor-pair {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:stretch; }}
+  @media (max-width:900px) {{ .sensor-pair {{ grid-template-columns:1fr; }} }}
+  .sensor-card {{ background:#f8fafc; border:1px solid #e3e8ee; border-radius:8px;
+                  padding:10px 12px; min-width:0; display:flex; flex-direction:column; gap:8px; }}
+  .sensor-card-head {{ margin:0; }}
+  .sensor-card-title {{ display:flex; align-items:center; gap:8px; margin:0;
+                        font-size:13px; font-weight:700; color:#1c2733; }}
+  .sensor-card-status {{ margin-left:auto; font-size:11px; font-weight:700;
+                          padding:2px 8px; border-radius:999px; }}
+  .sensor-card-status.audio-active {{ background:#dcfce7; color:#16a34a; }}
+  .sensor-card-status.audio-idle {{ background:#f1f5f9; color:#64748b; }}
+  .sensor-card-status.video-live {{ background:#fee2e2; color:#dc2626; }}
+  .sensor-card-meta {{ margin:0; display:grid; grid-template-columns:auto 1fr; gap:4px 10px;
+                        font-size:12px; }}
+  .sensor-card-meta dt {{ color:#64748b; font-weight:600; }}
+  .sensor-card-meta dd {{ margin:0; color:#1c2733; }}
+  .sensor-card-note {{ font-size:11px; line-height:1.4; margin:0; }}
+  .audio-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; }}
+  .audio-status-dot.audio-active {{ background:#16a34a;
+                                     box-shadow:0 0 0 3px rgba(22,163,74,0.18); }}
+  .audio-status-dot.audio-idle {{ background:#94a3b8; }}
+  .video-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%;
+                        background:#dc2626; box-shadow:0 0 0 3px rgba(220,38,38,0.18); }}
+  .audio-sensor-kinds {{ list-style:none; margin:0; padding:0; display:flex;
+                          flex-direction:column; gap:2px; }}
+  .audio-sensor-kinds li {{ display:flex; gap:8px; align-items:baseline; }}
+  .audio-sensor-kinds code {{ font-size:11px; background:#f3e8ff; color:#7e22ce;
+                               border-radius:4px; padding:1px 6px; }}
+  .audio-sensor-kind-id {{ font-size:10px; }}
+  .tl-empty {{ color:#6b7a8a; font-size:12px; text-align:center; padding:20px 0; }}
+  .tl-empty.observing {{ color:#d64541; font-weight:600;
+                         animation:obs-pulse 1.4s ease-in-out infinite; }}
+  @keyframes obs-pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.45; }} }}
+
+  /* ⑥ Memory Context — Historical / Current 双层（T1.6 / M3） */
+  .memory-context {{ display:flex; flex-direction:column; gap:8px; }}
+  .memory-layer {{ border:1px solid #e3e8ee; border-radius:8px; padding:10px 12px; }}
+  .memory-layer.historical {{ background:#f8fafc; }}
+  .memory-layer.current {{ background:#fff7ed; border-color:#fdba74; }}
+  .memory-layer-title {{ font-size:11px; font-weight:700; color:#64748b; margin:0 0 8px;
+                          text-transform:uppercase; letter-spacing:.5px; }}
+  .memory-layer.current .memory-layer-title {{ color:#ea580c; }}
+  .memory-episodes {{ display:flex; flex-direction:column; gap:6px; }}
+  .mem-ep-card {{ display:flex; flex-direction:column; gap:4px; padding:6px 8px;
+                  background:#fff; border:1px solid #eef2f7; border-radius:6px; }}
+  .mem-ep-card.historical {{ border-left:3px solid #94a3b8; }}
+  .mem-ep-card.current {{ border-left:3px solid #fdba74; }}
+  .mem-ep-head {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+  .mem-ep-time-prefix {{ font-size:12px; }}
+  .mem-ep-time {{ font-size:12px; color:#64748b; min-width:80px; font-variant-numeric:tabular-nums; }}
+  .mem-ep-id {{ font-size:11px; font-family:monospace; color:#475569; }}
+  .mem-ep-body {{ font-size:13px; color:#1e293b; }}
+  .mem-ep-meta {{ display:flex; gap:12px; font-size:11px; color:#64748b; }}
+  .mem-ep-risk {{ font-weight:600; }}
+  .mem-ep-risk.risk-high {{ color:#d64541; }}
+  .mem-ep-risk.risk-medium {{ color:#e0a030; }}
+  .mem-ep-risk.risk-low {{ color:#2e9e6b; }}
+  .mem-ep-action {{ color:#4a5568; }}
+  .memory-connector {{ display:flex; align-items:center; justify-content:center; gap:8px;
+                       color:#cbd5e1; font-size:11px; padding:4px 0; }}
+  .memory-connector svg {{ stroke:#94a3b8; }}
+  .connector-label {{ text-transform:uppercase; letter-spacing:.5px; }}
+  .memory-evidence-link {{ display:flex; align-items:center; gap:8px; padding-top:8px;
+                           border-top:1px dashed #e2e8f0; font-size:12px; color:#475569; }}
+  .evidence-label {{ font-weight:600; }}
+  .evidence-refs {{ font-family:monospace; font-size:11px; color:#64748b; }}
+
+  /* ③ 风险解释卡片（PR-B · ✓ 人话原因格式，risk_delta 驱动） */
+  .lrk-card {{ border:1px solid #e3e8ee; border-left:4px solid #d64541; border-radius:10px;
+               padding:10px 12px; background:#fcfdff; }}
+  .lrk-head {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+  .lrk-level {{ font-size:11px; font-weight:700; padding:1px 8px; border-radius:6px;
+                color:#fff; background:#d64541; }}
+  .lrk-level.medium {{ background:#e0a030; }}
+  .lrk-level.low {{ background:#2e9e6b; }}
+  .lrk-frame {{ margin-left:auto; font-variant-numeric:tabular-nums; }}
+  .lrk-section {{ margin-top:8px; }}
+  .lrk-label {{ font-size:11px; font-weight:700; color:#6b7a8a; margin-bottom:4px; }}
+  .lrk-reasons {{ margin:0; padding-left:4px; list-style:none; }}
+  .lrk-reasons li {{ margin:2px 0; font-size:13px; color:#1c2733; }}
+  .lrk-wid {{ font-size:10.5px; color:#6b7a8a; font-family:monospace; }}
+  .lrk-trig-chips {{ display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }}
+  .trig-chip {{ font-size:11px; padding:1px 7px; border-radius:999px;
+                background:#f0f4fb; border:1px solid #c5d8f0; color:#2b5a8a; }}
+  .lrk-meter {{ height:8px; background:#e3e8ee; border-radius:4px; overflow:hidden;
+                margin-top:4px; }}
+  .lrk-bar {{ height:100%; background:linear-gradient(90deg,#d64541,#e0a030);
+              transition:width .3s; border-radius:4px; }}
+  .lrk-score {{ font-size:11px; color:#6b7a8a; margin-top:2px;
+                font-variant-numeric:tabular-nums; }}
+  .lrk-meta {{ margin-top:8px; font-size:11px; color:#6b7a8a; display:flex; gap:12px; flex-wrap:wrap; }}
+  .lrk-meta span {{ display:inline-flex; align-items:center; gap:3px; }}
+  .lrk-rec {{ margin-top:10px; font-size:13px; color:#2b3a4a; }}
+  /* ③.5 实时风险信号（PR-B · risk_transition 服务端状态机驱动 RAISED/CLEARED） */
+  .rt-card {{ border:1px solid #e3e8ee; border-left:4px solid #d64541; border-radius:10px;
+              padding:10px 12px; background:#fff7f7; transition:opacity .4s; }}
+  .rt-card.cleared {{ border-left-color:#2e9e6b; background:#f2fbf6; opacity:.85; }}
+  .rt-head {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+  .rt-badge {{ font-size:10.5px; font-weight:800; padding:1px 8px; border-radius:6px;
+               color:#fff; background:#d64541; letter-spacing:.5px; }}
+  .rt-badge.live {{ animation:rt-pulse 1.3s ease-in-out infinite; }}
+  .rt-card.cleared .rt-badge {{ background:#2e9e6b; }}
+  @keyframes rt-pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.55; }} }}
+  .rt-id {{ font-size:11px; color:#6b7a8a; font-family:ui-monospace,Menlo,Consolas,monospace; }}
+  .rt-time {{ font-size:11px; color:#6b7a8a; margin-left:auto;
+              font-variant-numeric:tabular-nums; }}
+  .rt-sig {{ margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;
+             font-size:11px; color:#6b7a8a; align-items:center; }}
+  .rt-sid {{ font-family:monospace; background:#f0f4fb; border:1px solid #d0e3f7;
+             border-radius:4px; padding:1px 6px; }}
+  .rt-cat {{ background:#fff7e6; border:1px solid #fde68a; border-radius:4px;
+             padding:1px 6px; color:#92400e; }}
+  .rt-sev {{ background:#fef2f2; border:1px solid #fecaca; border-radius:4px;
+             padding:1px 6px; color:#991b1b; }}
+  .rt-subj {{ color:#4a5568; }}
+              font-variant-numeric:tabular-nums; }}
+  @media (max-width: 960px) {{
+    .lv-video, .lv-risk, .lv-timeline, .lv-signal, .lv-closure, .lv-memory {{ grid-column:span 12; }}
+  }}
+  /* PR-C：④ 行动轻量摘要（DESIGN §4.7） */
+  .closure-summary {{ display:flex; gap:16px; align-items:center; margin:8px 0 10px;
+                      padding:6px 10px; background:#f0f7ff; border:1px solid #d0e3f7;
+                      border-radius:6px; font-size:13px; }}
+  .cs-row {{ display:flex; align-items:center; gap:6px; }}
+  .cs-role {{ font-weight:600; color:#3b4a5a; }}
+  .cs-status {{ font-size:12px; padding:1px 8px; border-radius:999px;
+                background:#e3e8ee; color:#6b7a8a; }}
+  .cs-status.fulfilled {{ background:#d1fae5; color:#065f46; }}
+  .cs-status.pending {{ background:#fef3c7; color:#92400e; }}
+  /* P2：Demo 状态面板（运行时元数据，证明实时系统而非静态页面） */
+  .demo-stat {{ display:flex; gap:14px; align-items:center; padding:6px 12px;
+               background:#f8fafc; border:1px solid #e3e8ee; border-radius:6px;
+               font-size:12px; margin-top:8px; flex-wrap:wrap; }}
+  .ds-row {{ display:flex; align-items:center; gap:4px; }}
+  .ds-k {{ color:#6b7a8a; font-weight:600; }}
+  .ds-v {{ color:#1c2733; font-variant-numeric:tabular-nums; }}
+  /* P1-2: 三端任务卡（对齐原 Demo b593a01 · 家属/社区/日志 各卡片含 payload 预览 + 状态徽章） */
+  .tasks {{ display:flex; flex-direction:column; gap:8px; margin:8px 0; }}
+  .task {{ border:1px solid #e3e8ee; border-radius:9px; padding:8px 10px; background:#fff; }}
+  .task.family {{ border-left:3px solid #2563eb; }}
+  .task.community {{ border-left:3px solid #16a34a; }}
+  .task.log {{ border-left:3px solid #94a3b8; background:#fafafa; }}
+  .task-h {{ display:flex; align-items:center; gap:7px; font-size:12px; font-weight:700; }}
+  .task-dot {{ width:8px; height:8px; border-radius:50%; }}
+  .task-dot.f {{ background:#2563eb; }}
+  .task-dot.c {{ background:#16a34a; }}
+  .task-dot.l {{ background:#94a3b8; }}
+  .task-status {{ margin-left:auto; font-size:10.5px; font-weight:700; color:#475569;
+                  background:#f1f5f9; padding:1px 7px; border-radius:6px; }}
+  .task-body {{ font-size:12px; color:#1f2933; margin-top:5px; line-height:1.45; }}
+  .task-sub {{ font-size:11px; color:#6b7a8a; margin-top:3px; }}
+  /* P0-3: 行为里程碑样式 */
+  .behavior-timeline {{ margin-bottom:12px; padding:8px 10px; background:#f8fafc;
+                        border:1px solid #e3e8ee; border-radius:8px; }}
+  .behavior-timeline .tl-item {{ margin:3px 0; }}
+  .behavior-timeline .tl-type {{ font-weight:600; font-size:12px; }}
+  .behavior-timeline .tl-meta {{ font-size:11px; color:#6b7a8a; }}
+  /* Video placeholder */
+  .video-ph {{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+               color:#64748b; font-size:13px; pointer-events:none; }}
+  .case-video-live {{ position:relative; }}
+  /* PR-C：⑤ 系统原理折叠区（DESIGN §4.8 · 次级模块） */
+  .lv-sysarch {{ margin-top:14px; background:#fff; border:1px solid #e3e8ee;
+                 border-radius:10px; overflow:hidden; }}
+  .lv-sysarch summary {{ cursor:pointer; padding:10px 14px; font-size:13px;
+                         font-weight:600; color:#6b7a8a; list-style:none;
+                         display:flex; align-items:center; gap:8px; }}
+  .lv-sysarch summary::before {{ content:'▶'; font-size:10px; transition:transform .2s; }}
+  .lv-sysarch[open] summary::before {{ transform:rotate(90deg); }}
+  .sysarch-body {{ padding:10px 14px 14px; }}
+  .sysarch-svg {{ width:100%; max-width:960px; height:auto; display:block; margin:8px auto; }}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>银龄盾 · 安全案例回放</h1>
-  <p class="subtitle">一次运行，看懂一起安全案例：发生了什么 → 为什么值得关注 → 系统做了什么</p>
+  {page_header}
   {ci_badge}
   <p class="prov-note">{_R._esc(prov_note)}</p>
   {''.join(scenario_blocks)}
@@ -1384,7 +2608,16 @@ def render_case_viewer(
 {audio_sync_js}
 </script>
 <script>
+{live_stream_js}
+</script>
+<script>
 {live_actions_js}
+</script>
+<script>
+{live_tabs_js}
+</script>
+<script>
+{story_replay_js}
 </script>
 <script>
 {_R._guard_script_close(replay_inits)}

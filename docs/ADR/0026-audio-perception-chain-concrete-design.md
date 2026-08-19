@@ -5,7 +5,7 @@
 - **Owner**: SilverShield 技术负责人
 - **Related**: ADR-0019（多模态融合·方向）、ADR-0022（证据链·多模态接口）、ADR-0014（事件 Schema 冻结）、ADR-0001 / ADR-0002（模块边界 / 隐私铁律）
 - **Phase**: v2 · Phase 3（音频双通道）
-- **配套文档**：技术栈候选与选型理由见 `docs/audio_stack_survey.md`；音频测试素材生成基础设施（TTS Fixture，Testing 侧）见 `docs/audio_fixture_generation.md`；技术验证 Spike 实证（环境 / 命令 / 数据 / 结论）见 `docs/audio_spike_report.md`。
+- **配套文档**：技术栈候选与选型理由见 `docs/design/audio/audio_stack_survey.md`；音频测试素材生成基础设施（TTS Fixture，Testing 侧）见 `docs/design/audio/audio_fixture_generation.md`；技术验证 Spike 实证（环境 / 命令 / 数据 / 结论）见 `docs/design/audio/audio_spike_report.md`。
 
 ---
 
@@ -200,11 +200,11 @@ FileAudioSource ─▶ WebRTC VAD ─▶ ProsodyExtractor ─▶ AudioPerception
         │                                                                 │
         └────────────────── AudioAdapter ─▶ RiskSignal ─▶ Dashboard Evidence Card
 ```
-- **P0（必须，冻结验收门槛）**：`FileAudioSource`（测试 WAV：`tests/fixtures/audio/normal_speech.wav`、`rapid_speech.wav`、`raised_voice.wav`、`telephone_conversation.wav`、`crying_voice.wav`，命名围绕 `AudioPerceptionKind`，见 `docs/audio_fixture_generation.md`）—— **CI 可测、可复现、零硬件依赖**，是 3.0 验收的硬门槛。**fixture 由 TTS 生成基础设施产出（`docs/audio_fixture_generation.md`），不依赖人工录音、不依赖 CCTV 音轨。**
+- **P0（必须，冻结验收门槛）**：`FileAudioSource`（测试 WAV：`tests/fixtures/audio/normal_speech.wav`、`rapid_speech.wav`、`raised_voice.wav`、`telephone_conversation.wav`、`crying_voice.wav`，命名围绕 `AudioPerceptionKind`，见 `docs/design/audio/audio_fixture_generation.md`）—— **CI 可测、可复现、零硬件依赖**，是 3.0 验收的硬门槛。**fixture 由 TTS 生成基础设施产出（`docs/design/audio/audio_fixture_generation.md`），不依赖人工录音、不依赖 CCTV 音轨。**
 - **P1（增强，非验收门槛）**：`LocalMicSource`（本机 / 外接麦克风）—— 仅用于现场 Demo 展示真实采集；引入 Windows 音频设备权限 / 驱动 / 采样率 / 麦克风占用等非核心风险，故延后至 P1，不阻塞 3.0 验收。
 - **输入解耦**：音频来自 `FileAudioSource` 或 `LocalMicSource`，**不依赖 CCTV 是否含音轨**。
 - Tier0（WebRTC VAD + Prosody）常驻；`AudioPerceptionEvent → AudioAdapter → RiskSignal → Dashboard 证据卡` 端到端打通。
-- **实测佐证（技术 Spike · 2026-08-04）**：现有 `data/demo/*.mp4`（CCTV Demo）经 PyAV 探测**均不含音轨**（仅 h264 / mpeg4 视频轨），证实"复用 CCTV 音轨"路径在当前数据下不存在 → 音频链必须自带独立音源（详见 `docs/audio_spike_report.md` §Spike #1）。
+- **实测佐证（技术 Spike · 2026-08-04）**：现有 `data/demo/*.mp4`（CCTV Demo）经 PyAV 探测**均不含音轨**（仅 h264 / mpeg4 视频轨），证实"复用 CCTV 音轨"路径在当前数据下不存在 → 音频链必须自带独立音源（详见 `docs/design/audio/audio_spike_report.md` §Spike #1）。
 
 ### 3.0 暂不在范围内（Out of Scope）
 - YAMNet（Tier1，留作后续增强）
@@ -251,7 +251,7 @@ Demo 阶段最需证明的是"**第二模态进入闭环**"这一架构事实；
 - 契约模型变更加对应 schema 测试（类比 `tests/test_event.py`），防回归破坏 ADR-0014 冻结。
 
 ### 11.2 Fixture Test（固定样本测试）
-- 固定样本目录 `tests/fixtures/audio/`（canonical 命名，围绕 `AudioPerceptionKind`，由 TTS 生成基础设施产出，详见 `docs/audio_fixture_generation.md`）：
+- 固定样本目录 `tests/fixtures/audio/`（canonical 命名，围绕 `AudioPerceptionKind`，由 TTS 生成基础设施产出，详见 `docs/design/audio/audio_fixture_generation.md`）：
   - `normal_speech.wav`（正常言语，负向对照，不触发风险事件）
   - `rapid_speech.wav`（急促言语）→ `AUDIO_SPEECH_RAPID`
   - `raised_voice.wav`（高声 / 争吵）→ `AUDIO_VOICE_RAISED`
@@ -282,6 +282,6 @@ Demo 阶段最需证明的是"**第二模态进入闭环**"这一架构事实；
   - **P1** 新增 Phase 3.0 MVP Scope：仅 Tier0 + Adapter + Dashboard 证据卡，YAMNet/ASR/独立麦克风等留作后续（§9）。
   - **P2** 明确 `AudioAdapter` 归属 **integration layer**，不属 `analysis/` / `core/`（§5.1）。
   - **P1** 二轮评审修订（建议 1 / 2 / 7）：① 建议1 `AudioRiskKind` → `AudioPerceptionKind`（去除 "risk" 暗示已完成风险判断，契合 ADR-0001 仅产 perception；枚举值 `AUDIO_*` 保留）；② 建议2 冻结边界——`AudioRule` 只产 `AudioPerceptionEvent`、绝不直接产 `RiskSignal`，翻译必经 `AudioAdapter`（§2 / §5.1）；③ 建议7 新增 §11 测试策略（Contract / Fixture / Failure Isolation / 变异校验，对齐 AGENTS.md §6.3 与 CI）。
-  - **Spike 驱动修订（冻结前关键修正 · 2026-08-04）**：技术验证 Spike 实测 `data/demo/*.mp4`（CCTV Demo）经 PyAV 探测**均无音轨**（仅 h264/mpeg4 视频轨），证实"复用现有 CCTV 音轨"假设不成立。据此：① §2 删除"从 EZVIZ RTSP 抽取音轨"，改为 `AudioSource` 与 `VideoSource` 双独立链路，Phase 3.0 用 `LocalMicSource`/`FileAudioSource`；② 新增 `AudioSource(ABC)` 可插拔层级（File/Local/USB/RTSP），Phase 3.0 = File+LocalMic，RTSP Audio 留 3.1；③ §9 Phase 3.0 由 `AudioFromVideoSource` 改为 `FileAudioSource`/`LocalMicSource`，Out-of-Scope 移除"独立实时麦克风接入"（已入 3.0）、保留"独立 RTSP 音轨分离"。调研文档 `docs/audio_stack_survey.md` 同步调整 PyAV 优先级（Phase 3.0 用 sounddevice/wave，PyAV 仅 3.1 RTSP）。
-  - **二轮 Spike 评审修订（2026-08-04）**：① §9 Phase 3.0 拆 **P0（`FileAudioSource` 必须·CI 可测可复现零硬件）/ P1（`LocalMicSource` 增强·现场 Demo，延后以避免 Windows 音频设备非核心风险）**；② §8 补 Spike #2 结论——音频不应每视频帧同步调用，须独立 `Audio Loop` 经 event bus 异步消费；③ 新增配套文档指针：`docs/audio_stack_survey.md`（选型）+ `docs/audio_spike_report.md`（Spike 实证）；④ 调研文档同步将 YAMNet 运行时表述由"YAMNet ONNX 已确定"收紧为"**ONNX Runtime 为 py3.13 Spike 验证路径，YAMNet ONNX 模型转换与许可证/权重来源已实现阶段确认（2026-08-06 验证：PINTO_model_zoo 097_YAMNet / Apache-2.0，权重 sha256 见 `docs/reports/ADR-0026-yamnet-real-weight-validation.md`）**"。
+  - **Spike 驱动修订（冻结前关键修正 · 2026-08-04）**：技术验证 Spike 实测 `data/demo/*.mp4`（CCTV Demo）经 PyAV 探测**均无音轨**（仅 h264/mpeg4 视频轨），证实"复用现有 CCTV 音轨"假设不成立。据此：① §2 删除"从 EZVIZ RTSP 抽取音轨"，改为 `AudioSource` 与 `VideoSource` 双独立链路，Phase 3.0 用 `LocalMicSource`/`FileAudioSource`；② 新增 `AudioSource(ABC)` 可插拔层级（File/Local/USB/RTSP），Phase 3.0 = File+LocalMic，RTSP Audio 留 3.1；③ §9 Phase 3.0 由 `AudioFromVideoSource` 改为 `FileAudioSource`/`LocalMicSource`，Out-of-Scope 移除"独立实时麦克风接入"（已入 3.0）、保留"独立 RTSP 音轨分离"。调研文档 `docs/design/audio/audio_stack_survey.md` 同步调整 PyAV 优先级（Phase 3.0 用 sounddevice/wave，PyAV 仅 3.1 RTSP）。
+  - **二轮 Spike 评审修订（2026-08-04）**：① §9 Phase 3.0 拆 **P0（`FileAudioSource` 必须·CI 可测可复现零硬件）/ P1（`LocalMicSource` 增强·现场 Demo，延后以避免 Windows 音频设备非核心风险）**；② §8 补 Spike #2 结论——音频不应每视频帧同步调用，须独立 `Audio Loop` 经 event bus 异步消费；③ 新增配套文档指针：`docs/design/audio/audio_stack_survey.md`（选型）+ `docs/design/audio/audio_spike_report.md`（Spike 实证）；④ 调研文档同步将 YAMNet 运行时表述由"YAMNet ONNX 已确定"收紧为"**ONNX Runtime 为 py3.13 Spike 验证路径，YAMNet ONNX 模型转换与许可证/权重来源已实现阶段确认（2026-08-06 验证：PINTO_model_zoo 097_YAMNet / Apache-2.0，权重 sha256 见 `docs/reports/ADR-0026-yamnet-real-weight-validation.md`）**"。
   - **2026-08-06 真实权重接入验证（validation）**：YAMNet 真实权重闭环验证通过，闭合本 ADR「权重来源 TBD」开放项。四要素确认——① 权重来源：PINTO_model_zoo `097_YAMNet`（Apache-2.0，`tflite2tensorflow` 转换），类映射取自 TF 官方 `yamnet_class_map.csv`（521 类）；② License：Apache-2.0；③ Checksum：canonical `yamnet.onnx` sha256 `6de606bc...`、runtime `yamnet_runtime.onnx` sha256 `3322b9fe...`（权重不入库，gitignored）；④ Runtime 兼容：onnxruntime 1.24.4 / scipy 1.18.0 / numpy 2.4.2（Py3.14）实测推理成功。验证中发现 PINTO 导出输入 `waveform` 为 rank-1（`[samples]`），原 stub 路径喂 rank-2 触发 `INVALID_ARGUMENT`；修复见 PR `fix/audio-tier1-onnx-rank`（rank 自适应 + 动态输入 `yamnet_runtime.onnx` + 新增 rank-1 单测）。完整报告：`docs/reports/ADR-0026-yamnet-real-weight-validation.md`。

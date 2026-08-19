@@ -1,0 +1,39 @@
+# Gate 4 Vertical Slice：telephone_risk live audio runtime integration
+#
+# 目的（Owner 2026-08-16）：证明“真实 runtime 音频链路确实能产生并展示真实声学事件”，
+# 而非继续扩案例。telephone_risk 作为第一条 live audio vertical slice，因为：
+#   - 视觉已有 phone_interaction（cell phone 检测）
+#   - 音频有明确 telephone_persistent / speech 事件（golden 混合音频 case_b_mix.wav）
+#   - 可直接体现 Cross-modal SUPPORTS
+#   - Viewer 已有 Acoustic State / audio perception 展示位置
+#
+# 运行方式（视频源为本地 mp4，gitignore 不入库；音频为 golden 仓库内素材）：
+#   python scripts/run_demo.py --live --scenario live_telephone_risk \
+#       --video dataset/benign/media/CCTV_Surveillance_Final.mp4
+#
+# 注：run_demo.py 在 --live 且场景含 audio_path 时，自动以
+#   DEMO_HP_CONFIG=config/live_audio.yaml 覆盖 HP 配置（config/default.yaml 自身保持 audio
+# 关闭，以通过契约测试），无需手动设环境变量；也可自行前置环境变量覆盖。
+#
+# 红线（本 PR 严守，不破）：不开 detector 阈值、不手工制造 event、不在 viewer 兜底。
+# 若真实 runtime 音频未检出标签，说明链路已通、但 detector 真实运行质量待后续处理——
+# 这是有价值的结果，而非失败。
+
+scenario_id: live_telephone_risk
+description: |
+  Gate 4 vertical slice：telephone_risk 真实音频 runtime 接入（REAL_SENSOR）。
+  视觉用本地 CCTV mp4（--video 注入），音频用 golden 混合素材 case_b_mix.wav，
+  经 AudioPipeline 产 AudioPerceptionEvent → Live Adapter → EvidenceProjection → 首屏。
+
+# source / source_type 由 --video 覆盖为 video_file + 本地 mp4；此处仅作占位（ScenarioConfig 必填 source）。
+# 直接本场景运行须带 --video，否则 preflight 会因缺 CAVIAR 帧而提示改用 --video。
+source: CCTV_Surveillance_Final
+source_type: caviar_jpg
+
+start_time: "2026-07-19T23:30:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true
+
+# Gate 4 核心：指向 golden telephone_risk 混合音频（仓库内素材，相对仓库根解析，CWD=repo root）。
+audio_path: data/golden/telephone_risk/audio_mix/case_b_mix.wav

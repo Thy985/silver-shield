@@ -61,3 +61,43 @@ def encode_frame_to_base64_jpeg(
         return base64.b64encode(buf.tobytes()).decode("ascii")
     except Exception:  # noqa: BLE001  # 编码失败不崩溃网关（AGENTS.md §2.5 可恢复）
         return None
+
+
+def encode_frame_to_jpeg_bytes(
+    frame: Any,
+    quality: int = 50,
+    max_width: int | None = None,
+) -> bytes | None:
+    """把 BGR np.ndarray 编码为 JPEG 字节流（用于 MJPEG streaming）。
+
+    Args:
+        frame: ``np.ndarray`` BGR。None 或编码失败返回 None。
+        quality: JPEG 质量 1-100。
+        max_width: 编码前将帧宽度缩放到此值（保持比例）。
+
+    Returns:
+        JPEG 字节流，或 None。
+
+    用途：MJPEG over HTTP (multipart/x-mixed-replace)，浏览器原生解码，
+    避免 Base64 开销与前端重复解码，显著降低 CPU/延迟。
+    """
+    if frame is None:
+        return None
+    try:
+        import cv2
+    except ImportError:
+        return None
+    try:
+        if max_width and isinstance(max_width, int) and max_width > 0:
+            _, w = frame.shape[:2]
+            if w > max_width:
+                scale = max_width / float(w)
+                frame = cv2.resize(
+                    frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+                )
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if not ok:
+            return None
+        return buf.tobytes()
+    except Exception:  # noqa: BLE001
+        return None

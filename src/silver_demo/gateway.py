@@ -31,8 +31,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,11 +56,27 @@ from home_perception.core.config import RealtimeRiskConfig, Settings
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 
 # === 本包内部 ===
+from .bridge import encode_frame_to_base64_jpeg
 from .config import DemoSettings
 from .scenarios import ScenarioConfig, load_scenario
 from .sources import Source
 from .state import DemoStateStore
 from .ws import ConnectionHub, handle_upstream
+
+# ===========================================================================
+# Live 音频接入（ADR-0036 VM-13 Phase B · Owner 2026-08-16 · 依赖倒置接缝）
+# ===========================================================================
+# ``silver_demo`` 冻结边界（test_freeze_boundary.py T0-1）禁止 gateway 直接 import
+# ``home_perception.audio``；音频管道（torch/YamNet）由**组装层**（scripts/run_demo.py，
+# 非 silver_demo 包内）构建后以「事件列表」注入本模块。本模块只消费注入的音频事件，
+# 绝不 import 音频生产类型（避免撞冻结白名单）。
+#
+# 组装层在调 ``main()`` 前把构建函数挂到本钩子：``gw.live_audio_builder = builder``。
+# 签名：``(hp_settings, scenario) -> list[dict]``（每条为 AudioPerceptionEvent.to_dict()）。
+# 返回空列表 = 本场景无音频（诚实空，audio_evidence 恒 ()）。
+# 失败隔离：构建/注入异常 → 记日志并跳过，绝不阻断实时循环（VM-5 / 探针铁律）。
+LiveAudioEventsBuilder = Callable[[Any, Any], "list[dict]"]
+live_audio_builder: LiveAudioEventsBuilder | None = None
 
 
 class DemoGateway:
@@ -93,6 +110,20 @@ class DemoGateway:
         # 单一事实源：每帧 FrameResult 经 Live Adapter 投影为 EvidenceProjection，
         # 不再有 aggregate_state 第二套事实模型；惰性创建，失败隔离——投影异常绝不改变生产行为。
         self._live_accumulator = None
+
+        # Live 音频接入（VM-13 Phase B · 依赖倒置接缝）：由组装层注入的真实音频事件列表
+        # （AudioPerceptionEvent.to_dict() 形态）；缺省空 = 本场景无音频，audio_evidence 恒 ()。
+        self._live_audio_events: list = []
+
+        # P0 evidence_delta 增量广播（Owner 2026-08-17 拍板）：浏览器 runtime clock 随
+        # frame_tick 推进，增量投影让 DOM/timeline/卡片"事件涌现"。只读派生 + 失败隔离，
+        # 绝不改变生产行为（VM-1/VM-9 边界：浏览器只渲染、不推理）。
+        self._prev_evidence_fp: dict | None = None
+        self._delta_seq = 0
+        # P1-A 实时感知状态流：检测指纹基线（变化才推，避免 8fps 全量刷原始框）。
+        self._prev_perception_fp = None
+        # LP-3 实时风险与决策流：风险指纹基线（变化才推）。
+        self._prev_risk_fp = None
 
         # 循环控制
         self._running = False
@@ -210,7 +241,12 @@ class DemoGateway:
             # 单一事实源：FrameResult → ProjectionAccumulator → EvidenceProjection。
             # 失败隔离：投影探针异常必须吞掉+记日志，绝不改变生产行为（VM-5 / 探针铁律）。
             try:
-                self._ensure_live_accumulator().ingest(result)
+                acc = self._ensure_live_accumulator()
+                acc.ingest(result)
+                # Live 音频接入（VM-13 Phase B · Owner 2026-08-16）：把注入的真实
+                # AudioPerceptionEvent 按帧位置流入 Live Adapter（provenance=REAL_SENSOR）。
+                # 确定性投递（frame_index==k → 第 k 条音频事件）→ 重放幂等（VM-8）。
+                self._feed_live_audio(acc)
             except Exception as exc:  # noqa: BLE001  # 投影失败不影响实时循环
                 structlog.get_logger(__name__).warning("live_projection_ingest_failed", exc_info=exc)
 
@@ -223,15 +259,92 @@ class DemoGateway:
             except Exception as exc:  # noqa: BLE001
                 structlog.get_logger(__name__).warning("workflow_store_upsert_failed", exc_info=exc)
 
-            # 心跳广播：每帧只推最小进度信号（frame_index / loop_count），
-            # 不做第二套事实模型（view / state / meta）——真实展示走 GET /live 渲染同一 EvidenceProjection。
+            # 帧广播（LP-1 真实同步帧流）：每帧推最小进度心跳（frame_index / case_time / loop_count）。
+            # 真实帧画面改由 MJPEG 端点 (/mjpeg/{scenario_id}) 流式传输，浏览器原生解码，
+            # 避免 Base64 over WS 的 CPU/带宽开销。Frame N 的 case_time 与同帧 perception_delta
+            # 天然同步（单一事实源 VM-9）。
+            # PR-C：frame_tick 携带 case_time（红线 §7.7：frame_index + case_time 双标识贯穿
+            # frame_tick / perception_delta / risk_delta，Case Time chip 由此驱动）。
+            try:
+                interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
+                ft_case_time = round(self._frame_index * interval, 3)
+            except Exception:  # noqa: BLE001  (fail-closed：case_time 计算失败退回 0.0)
+                ft_case_time = 0.0
             await self.hub.broadcast(
                 {
                     "type": "frame_tick",
                     "frame_index": self._frame_index,
                     "loop_count": self.loop_count,
+                    "case_time": ft_case_time,
+                    # frame_base64 已移除：视频流改用 MJPEG (/mjpeg/{scenario_id})
                 }
             )
+
+            # P0 evidence_delta 增量广播：对同一 EvidenceProjection 做只读 diff，把新增
+            # evidence（timeline 节点 / audio 证据 / Case Time 标记）推给浏览器增量渲染——
+            # 浏览器 runtime clock 随 frame_tick 推进，增量投影驱动"事件涌现"（Live Intelligence
+            # Viewer，Owner 2026-08-17 拍板）。无新增 → 不发（保持 frame_tick 最小心跳语义）。
+            # 失败隔离：增量投影异常吞掉+记日志，绝不改变实时循环（探针铁律）。
+            try:
+                acc = self._ensure_live_accumulator()
+                delta = acc.extract_evidence_delta(self._prev_evidence_fp)
+                self._prev_evidence_fp = acc.projection_fingerprint()
+                # P0-1 修复：新增 perception_events / warnings 触发条件（behavior-timeline / task-cards 数据通路）。
+                if (delta.get("timeline") or delta.get("audio") or delta.get("case_time")
+                        or delta.get("perception_events") or delta.get("warnings")):
+                    self._delta_seq += 1
+                    delta["seq"] = self._delta_seq
+                    await self.hub.broadcast(delta)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning("evidence_delta_failed", exc_info=exc)
+
+            # P1-A 实时感知状态流（perception_delta）：事实的实时投影（class/bbox/confidence），
+            # 检测指纹变化才推；浏览器只渲染、零推理（VM-9）。带 case_time（帧序×帧间隔）
+            # + server_ts（墙钟，仅延迟度量，不进 EvidenceProjection）。失败隔离。
+            try:
+                acc = self._ensure_live_accumulator()
+                pdelta = acc.extract_perception_delta(self._prev_perception_fp)
+                self._prev_perception_fp = acc.perception_fingerprint()
+                if pdelta.get("detections"):
+                    interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
+                    pdelta["case_time"] = round(self._frame_index * interval, 3)
+                    pdelta["server_ts"] = time.time()
+                    await self.hub.broadcast(pdelta)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning("perception_delta_failed", exc_info=exc)
+
+            # LP-3 实时风险与决策流（risk_delta）：Perception → Risk → Decision → Action
+            # 的实时投影（risk_levels/recommended_actions/command_types，覆盖式"当前 AI 判断"）。
+            # 风险指纹变化才推；浏览器据此渲染 CURRENT STATE / Why / Next action（VM-9）。
+            # PR-B：risk_transition（raised/cleared/active，服务端状态机判定）也是广播条件——
+            # cleared 时 risk_levels 为空列表，无 transition 条件会吞掉熄卡信号（Owner 锁死：
+            # 前端绝不自行解释"空=CLEARED"）。case_time 补同步标识（红线 §7.7：
+            # frame_index + case_time 双标识贯穿 frame_tick / perception_delta / risk_delta）。
+            # P0-1：risk_delta 内嵌 risk_signals + trigger_events + perception_scores +
+            # device_id/elder_id（Owner Q1 方案 B）—— 一个 risk_delta = 一个风险状态切片，
+            # 浏览器单消息消费，无需多流时间关联。
+            try:
+                acc = self._ensure_live_accumulator()
+                rdelta = acc.extract_risk_delta(self._prev_risk_fp)
+                self._prev_risk_fp = acc.risk_fingerprint()
+                if (
+                    rdelta.get("risk_transition")
+                    or rdelta.get("risk_levels")
+                    or rdelta.get("reason_summary")
+                    or rdelta.get("recommended_actions")
+                    or rdelta.get("command_types")
+                    or rdelta.get("trigger_events")
+                    or rdelta.get("perception_scores")
+                    or rdelta.get("warning_ids")
+                    or rdelta.get("risk_signals")
+                    or rdelta.get("device_id")
+                    or rdelta.get("elder_id")
+                ):
+                    interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
+                    rdelta["case_time"] = round(self._frame_index * interval, 3)
+                    await self.hub.broadcast(rdelta)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning("risk_delta_failed", exc_info=exc)
 
             self._frame_index += 1
             if interval > 0:
@@ -239,6 +352,46 @@ class DemoGateway:
             else:
                 # 让出事件循环，避免阻塞 WS 上行
                 await asyncio.sleep(0)
+
+    # ------------------------------------------------------------------
+    # Live 音频接入（VM-13 Phase B · 依赖倒置接缝）
+    # ------------------------------------------------------------------
+
+    def set_live_audio_events(self, events: list) -> None:
+        """注入真实音频感知事件列表（组装层经 AudioPipeline 产出，AudioPerceptionEvent.to_dict() 形态）。
+
+        冻结边界合规：本方法不 import / 构造任何 ``home_perception.audio`` 符号，只存储调用方传入的
+        字典列表；每条须含 ``timestamp`` / ``kind`` / ``score`` / ``confidence`` /
+        ``source_segment_ids`` / ``labels``（``event_id`` 可选），由 Live Adapter 的
+        ``ingest_audio`` 做 fail-closed 校验（命中 forbidden 字段 / 类型非法即拒绝）。
+        """
+        if not isinstance(events, (list, tuple)):
+            raise TypeError(f"live_audio_events 须为 list/tuple，收到 {type(events).__name__}")
+        self._live_audio_events = list(events)
+
+    def _feed_live_audio(self, acc: ProjectionAccumulator) -> None:
+        """按帧位置把注入的音频事件流入 Live Adapter（确定性、幂等）。
+
+        投递规则：``frame_index == k`` 时喂入第 k 条音频事件（k 从 0 起），超出列表长度后不再喂。
+        因 ``frame_index`` 单调递增（loop 重放不回绕），每条事件仅喂一次；同一有序流重放
+        N 次 → 同一 audio_evidence（VM-8 幂等）。失败隔离：单条音频摄入异常 → 记日志跳过，
+        绝不阻断实时帧循环（VM-5 / 探针铁律）。
+        """
+        events = self._live_audio_events
+        if not events:
+            return
+        idx = self._frame_index
+        if idx < 0 or idx >= len(events):
+            return
+        ev = events[idx]
+        # 支持 AudioPerceptionEvent 对象（to_dict）或直接 dict（组装层已转换）。
+        data = ev.to_dict() if hasattr(ev, "to_dict") else ev
+        try:
+            acc.ingest_audio(data)
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger(__name__).warning(
+                "live_audio_frame_ingest_failed", frame_index=idx, exc_info=exc
+            )
 
     def stop(self) -> None:
         """停止帧循环。"""
@@ -441,6 +594,16 @@ class DemoGateway:
         self.store = DemoStateStore()  # 新会话：清空历史闭环状态
         # Live Adapter 投影累积器重置（新会话 = 新证据投影；GET /live 重渲染即干净状态）
         self._live_accumulator = None
+        # P0 delta 基线同步重置（新会话 = 新投影，避免陈旧指纹造成首帧全量重发）
+        self._prev_evidence_fp = None
+        self._delta_seq = 0
+        # P1-A 感知指纹同步重置
+        self._prev_perception_fp = None
+        # LP-3 风险指纹同步重置
+        self._prev_risk_fp = None
+        # P0-1 修复：行为/警告缓存基线重置（新增的 perception_events / warnings 缓存）
+        self._prev_pe_seqs_fp = None
+        self._prev_w_seqs_fp = None
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())
@@ -577,6 +740,15 @@ def create_app(
 
     gateway = DemoGateway(demo_settings, hp_settings, scenario)
 
+    # Live 音频接入（VM-13 Phase B · Owner 2026-08-16 · 依赖倒置）：组装层（scripts/run_demo.py）
+    # 经 ``live_audio_builder`` 钩子注入真实 AudioPerceptionEvent 列表（已跑过 AudioPipeline）。
+    # 失败隔离：构建/注入异常 → 记日志 + 跳过，绝不阻断实时循环（VM-5 / 探针铁律）。
+    if live_audio_builder is not None:
+        try:
+            gateway.set_live_audio_events(live_audio_builder(hp_settings, scenario))
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger(__name__).warning("live_audio_injection_failed", exc_info=exc)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if not demo_settings.live_enabled:
@@ -632,6 +804,18 @@ def create_app(
             name="case_artifacts",
         )
 
+    # P0-11.x：Live 模式音频样本静态伺服（data/demo/live_audio → /live_audio）。
+    # resolve_audio_source 读 {base_dir}/{sid}/audio/manifest.json → 渲染 <audio controls>。
+    _live_audio_dir = Path(__file__).resolve().parent.parent.parent / "data" / "demo" / "live_audio"
+    if _live_audio_dir.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount(
+            "/live_audio",
+            StaticFiles(directory=_live_audio_dir, check_dir=True),
+            name="live_audio",
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def verified_case() -> HTMLResponse:
         """旗舰入口：Verified Case / 主展示。
@@ -662,11 +846,34 @@ def create_app(
             from home_perception.visualizer.viewer import render_case_viewer
             from home_perception.visualizer.viewer.live_adapter import build_live_presentation
 
+            from .golden_adapter import GOLDEN_CASES
+            from .golden_evidence_injector import inject_golden_evidence
+
             projection = gateway._ensure_live_accumulator().to_evidence_projection()
+            # Phase 2: golden case 注入 manifest 派生的 pre-event 节点。
+            # 检测方法：scenario.scenario_id 在 GOLDEN_CASES 集合内（run_demo.py 已经写入 golden_*
+            # yaml，scenario_id 是 case 名如 "repeated_visit"）。其他 demo scenario 走原路径。
+            # P0-11.x：live_telephone_risk → 映射到 golden case "telephone_risk" 注入证据。
+            scenario = gateway.scenario
+            _GOLDEN_MAP = {"live_telephone_risk": "telephone_risk"}
+            _golden_case = _GOLDEN_MAP.get(scenario.scenario_id, scenario.scenario_id)
+            if _golden_case in GOLDEN_CASES:
+                # P0-11.x：对 demo 映射场景，清空 runtime audio_evidence（energy backend 的
+                # audio_distress_cry）让 golden 注入器填入电话音频 kinds。
+                for _s in projection.get("scenarios", ()):
+                    _s["audio_evidence"] = ()
+                inject_golden_evidence(projection, _golden_case)
             proj, descriptor = build_live_presentation(
                 projection, live_ws_path=demo_settings.ws_path
             )
-            html = render_case_viewer(proj, descriptor)
+            # LP-1：Live 真实同步帧流（Runtime Frame N → JPEG → WS → <img>），
+            # 替代 P1-C1 的 <video> 回放（回放与 pipeline frame_index 两套时钟不同步）。
+            html = render_case_viewer(
+                proj, descriptor,
+                live_frame_stream=True,
+                audio_base_dir=_live_audio_dir,
+                audio_base_url="/live_audio/",
+            )
             return HTMLResponse(html)
         except Exception as exc:  # noqa: BLE001  # 渲染失败 fail-closed：返回 500 + 诊断，绝不静默产残缺页
             structlog.get_logger(__name__).warning("live_case_viewer_render_failed", exc_info=exc)
@@ -904,6 +1111,103 @@ def create_app(
             "frame_index": 0,
             "loop_count": 0,
         }
+
+    # ------------------------------------------------------------------
+    # MJPEG Streaming 端点（P0-11 视频流优化：替代 Base64 over WS）
+    # ------------------------------------------------------------------
+    @app.get("/mjpeg/{scenario_id}")
+    async def mjpeg_stream(scenario_id: str) -> "StreamingResponse":
+        """MJPEG 视频流 (multipart/x-mixed-replace)。
+
+        浏览器原生解码 MJPEG，无 Base64 开销，CPU/延迟显著降低。
+        仅 live_enabled 时可用；帧源来自 gateway.source（与帧循环共用同一 Source）。
+        """
+        if not demo_settings.live_enabled:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Live 入口未启用（DEMO_LIVE=1 才暴露 /mjpeg）"},
+            )
+        # 校验 scenario_id 匹配（防止任意 ID 访问）
+        if scenario_id != gateway.scenario.scenario_id:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"场景不匹配: {scenario_id} != {gateway.scenario.scenario_id}"},
+            )
+
+        from fastapi.responses import StreamingResponse
+
+        boundary = "frame"
+        quality = 50  # JPEG quality
+        max_width = 720  # 同 frame_tick 编码参数
+
+        async def frame_generator() -> AsyncIterator[bytes]:
+            """生成 MJPEG 帧流。独立于主帧循环，直接从 Source 读取并编码。"""
+            # 创建独立的帧迭代器（不影响主循环的 frame_index / clock）
+            # 注意：source 是共享的，但 MP4 Source 每次迭代会重新打开文件，
+            # CAVIAR Source 是列表迭代。这里创建新迭代器避免与主循环竞争。
+            import cv2
+
+            # 获取帧源配置
+            scenario = gateway.scenario
+            hp_settings = gateway.hp_settings
+
+            # 创建临时 Source 实例用于 MJPEG 流（不影响主循环）
+            temp_source = Source()
+            temp_source.load(scenario, hp_settings)
+
+            while True:  # loop 模式下无限循环
+                try:
+                    for _, frame in temp_source:
+                        if frame is None:
+                            continue
+                        # 编码 JPEG
+                        try:
+                            if max_width and max_width > 0:
+                                _, w = frame.shape[:2]
+                                if w > max_width:
+                                    scale = max_width / float(w)
+                                    frame = cv2.resize(
+                                        frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+                                    )
+                            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+                            if not ok:
+                                continue
+                            jpeg_bytes = buf.tobytes()
+                        except Exception:
+                            continue
+
+                        # MJPEG 边界格式
+                        yield (
+                            f"--{boundary}\r\n"
+                            f"Content-Type: image/jpeg\r\n"
+                            f"Content-Length: {len(jpeg_bytes)}\r\n\r\n"
+                        ).encode("ascii") + jpeg_bytes + b"\r\n"
+
+                        # 限速：按 scenario.fps_target 控制帧率
+                        if scenario.fps_target and scenario.fps_target > 0:
+                            await asyncio.sleep(1.0 / scenario.fps_target)
+                        else:
+                            await asyncio.sleep(0)  # 让出事件循环
+
+                    # 流结束（视频结束）
+                    if not scenario.loop:
+                        break
+                    # loop 模式：重新创建 Source 继续
+                    temp_source = Source()
+                    temp_source.load(scenario, hp_settings)
+                except Exception:
+                    # 生成器异常时静默结束
+                    break
+
+        return StreamingResponse(
+            frame_generator(),
+            media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
     # 把 gateway 挂到 app.state，便于测试 / 调试访问
     app.state.gateway = gateway

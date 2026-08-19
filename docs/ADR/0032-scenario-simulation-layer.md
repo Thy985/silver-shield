@@ -44,7 +44,7 @@ SilverShield 的 Home 感知模块需要**可复现、隐私安全、确定性**
 - `generator.py`：`Scenario` / `load_scenarios` / `generate_scenario` / `generate_all`——声明式 YAML → 确定性合成；
 - `effects.py`：确定性效果链（`apply_speech_rate` / `volume` / `noise` / `reverb` / `distance`），固定 seed；
 - `scenario_runner.py`：`PerceptionScenario` / `synthesize` / `run` / `validate_scenario` / `ValidationResult`——**合成 → 跑 → 对照期望断言**；
-- `scenario.yaml` + `scenarios/audio/*.yaml` + `scripts/gen_audio_fixtures.py` / `run_audio_scenarios.py` + `docs/audio_fixture_generation.md`。
+- `scenario.yaml` + `scenarios/audio/*.yaml` + `scripts/gen_audio_fixtures.py` / `run_audio_scenarios.py` + `docs/design/audio/audio_fixture_generation.md`。
 
 这证明"声明式场景 → 确定性合成 → 对照期望校验"在 SilverShield 里是**已被接受且工程可行的模式**。视觉侧的 ADR-0032 应当**对称复制**这一架构，而非另起炉灶。
 

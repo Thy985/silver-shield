@@ -1,7 +1,7 @@
 # delivery_courier_normal 场景（真实视频验证 · P0-11.3 产品展示层）
 #
 # 真实监控录像：外卖小哥正常送包裹（演示者提供的真实素材，
-# 置于 data/demo/Delivery_Courier_Final.mp4，gitignore 不入库）。
+# 置于 dataset/benign/media/Delivery_Courier_Final.mp4，gitignore 不入库）。
 #
 # 验证目标（正常剧本 / 对照基线）：
 # - VideoFileFrameSource 解码真实 MP4
@@ -18,12 +18,12 @@ description: |
   真实监控录像（外卖小哥正常送包裹）。白天正常单次来访剧本：验证「看到人 ≠ 报警」。
   系统应仅产生低/无风险事件，不升级为 HIGH，与 cctv_surveillance_suspicious
   形成「正常 vs 异常」对照，凸显行为组合分析价值。
-  视频文件置于 data/demo/Delivery_Courier_Final.mp4（gitignore，不入库；由演示者提供）。
+  视频文件置于 dataset/benign/media/Delivery_Courier_Final.mp4（gitignore，不入库；由演示者提供）。
 
 source: delivery_courier
 source_type: video_file
-media_path: data/demo/Delivery_Courier_Final.mp4
+media_path: dataset/benign/media/Delivery_Courier_Final.mp4
 start_time: "2026-07-19T14:00:00+00:00"   # 白天，OddHourRule 不触发
 frame_interval_s: 0.5
 fps_target: 8
-loop: false                              # 验证：整段跑一遍即可
+loop: true                               # Demo 演示：循环重放，保持 Dashboard 持续有内容

@@ -317,6 +317,54 @@ def test_viewer_ac17_no_media_canvas_no_placeholder(tmp_path):
     assert 'id="media-manifest-sw_t1"' not in html
 
 
+def test_viewer_lp1_live_frame_stream_renders_img(tmp_path):
+    """LP-1：render_case_viewer 接受 ``live_frame_stream=True``，渲染 ``<img>`` 帧流骨架
+    （LiveFrameStream + video-img + LIVE badge + 帧 overlay），替代 P1-C1 的 <video> 回放。
+    真实帧由 WS 每帧推 base64（frame_tick.frame_base64），浏览器只显示（VM-9）。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    html = render_case_viewer(proj, live_frame_stream=True)
+    # 渲染 <img> 帧流（video-img），不是 <video> 或 canvas
+    assert 'id="video-img-sw_t1"' in html
+    assert 'class="case-video-img"' in html
+    assert 'id="case-video-el-sw_t1"' not in html
+    assert 'id="case-video-canvas-sw_t1"' not in html
+    # LIVE badge + 帧 overlay（帧号/检测数）注入
+    assert 'id="live-badge-sw_t1"' in html
+    assert 'id="ov-frame-sw_t1"' in html
+    assert 'id="ov-det-sw_t1"' in html
+    # LiveFrameStream 无 manifest 数据岛（帧由 WS 推，非文件帧模板）
+    assert 'id="media-manifest-sw_t1"' not in html
+
+
+def test_viewer_lp1_live_frame_stream_overrides_media_base_dir(tmp_path):
+    """LP-1：``live_frame_stream=True`` 时**不**调 ``resolve_media_source``（不读
+    ``media_base_dir``），即使 media_base_dir 指向另一处，仍渲染 <img> 帧流。"""
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    html_with = render_case_viewer(proj, media_base_dir=d, live_frame_stream=True)
+    assert 'id="video-img-sw_t1"' in html_with
+    assert "SyntheticFrameSource" not in html_with  # 未走 resolve_media_source 路径
+
+
+def test_viewer_lp2_live_ai_state_card_renders(tmp_path):
+    """LP-2/PR-B：live_frame_stream 模式渲染 Live 感知摘要卡（"AI 看到了"），
+    由 live_stream.js 经 perception_delta（视觉）+ evidence_delta（音频）实时填充。
+
+    PR-B（DESIGN-live-product-ui-restore §4.5）：LP-2/3 的 CURRENT STATE / 为什么关注 /
+    下一步已迁移到区域③ 风险解释卡片（lrk-card，risk_delta 驱动），本卡只保留感知摘要。
+    """
+    d = make_artifacts(tmp_path / "a", scenario_ids=("sw_t1",))
+    proj = load_case_artifact(d)
+    html = render_case_viewer(proj, live_frame_stream=True)
+    assert 'id="live-ai-state-sw_t1"' in html
+    assert 'id="ai-see-sw_t1"' in html
+    # PR-B：CURRENT STATE/why/next 不再位于感知卡（迁移到区域③ lrk-card）。
+    assert 'id="ai-risk-sw_t1"' not in html
+    assert 'id="ai-why-sw_t1"' not in html
+    assert 'id="ai-next-sw_t1"' not in html
+
+
 def test_viewer_ac17_media_base_url_normalizes_separators(tmp_path):
     """AC-17 回归：CLI 把 artifact 相对 URL 归一为正斜杠，浏览器才能解析帧 URL。
 
@@ -851,13 +899,18 @@ def test_render_rejects_too_many_scenarios():
 
 
 def test_render_multi_provenance_mixed_banner():
-    """多 provenance_kind 场景 → MIXED 徽章 + 合并文案（评审 R2-#2 多 provenance）。"""
+    """多 provenance_kind 场景 → MIXED 徽章 + 合并 badge 文案（评审 R2-#2 多 provenance）。
+
+    Owner 2026-08-16 产品级约束：角标固定为「● GOLDEN CASE · SIMULATED」/
+    「● LIVE · REAL SENSOR」（见 render.py _PROVENANCE_BADGE），故 MIXED 分支
+    合并句式亦用 badge 文案，而非旧的 _PROVENANCE_TEXT 长句。
+    """
     html = _render_provenance_banner(
         {"timeline": ({"provenance_kind": "SIMULATED"}, {"provenance_kind": "REAL_SENSOR"})}
     )
     assert "MIXED" in html, "多 provenance 应呈现 MIXED 徽章"
-    assert "程序化场景" in html, "SIMULATED 文案缺失"
-    assert "真实传感器" in html, "REAL_SENSOR 文案缺失"
+    assert "GOLDEN CASE" in html, "SIMULATED badge 文案缺失"
+    assert "LIVE" in html, "REAL_SENSOR badge 文案缺失"
 
 
 def test_render_case_video_uses_video_element_for_artifact_video():

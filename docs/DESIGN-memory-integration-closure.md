@@ -1,7 +1,7 @@
 # Memory Integration Closure — 设计文档
 
 > **阶段定位**：银龄盾「System × Memory 外部闭环」阶段
-> **依赖**：ADR-0024（Memory 架构）、`docs/DESIGN-memory-pipeline.md`（Memory 内部设计）、`tests/runtime/test_memory_e2e_closed_loop.py`（已落地的 E2E 内部闭环验收）
+> **依赖**：ADR-0024（Memory 架构）、`docs/design/memory/DESIGN-memory-pipeline.md`（Memory 内部设计）、`tests/runtime/test_memory_e2e_closed_loop.py`（已落地的 E2E 内部闭环验收）
 > **状态**：✅ **已合入 main（设计稿 PR #92；Slice B #93 / Slice C #91 / Slice A #94 / Slice D #95 全部合并，Integration Closure 完成）**。Slice D 为纯文档冻结，不含代码改动。
 > **约定**：本文档中的 `file:line` 均指 `main` 当前代码，用于锚定"现状已满足 / 待补"的判断。
 > **v2 修订**：① 多模态接口泛化**移出本阶段**（只出未来契约文档，不改当前代码）；② 新增 **Product Closure（用户价值验收）** 作为第一优先；③ 真实数据改用最小 committed fixture，不引入 CAVIAR。
@@ -359,7 +359,7 @@ Agent Reasoning
 ## 8. 参考
 
 - `docs/ADR/0024-memory-architecture.md` — Memory 架构（Slice 1–6 + Stage F + Integration Closure）
-- `docs/DESIGN-memory-pipeline.md` — Memory 内部设计
+- `docs/design/memory/DESIGN-memory-pipeline.md` — Memory 内部设计
 - `tests/runtime/test_memory_e2e_closed_loop.py` — 已落地的 E2E 内部闭环（4 类 7 用例，torch-free）
 - `src/home_perception/runtime/pipeline.py` — Memory Hook 接线（L491–532, L564–568）
 - `src/home_perception/analysis/event_builder.py` — VisitorEvent 仅离场生成（L112–148）
