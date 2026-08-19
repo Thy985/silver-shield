@@ -1,0 +1,44 @@
+{
+  "scenario_id": "sw_adr0034_high_risk",
+  "passed": true,
+  "degraded": false,
+  "verdicts": [
+    {
+      "name": "perception",
+      "passed": true,
+      "severity": "blocking",
+      "failure_code": null
+    },
+    {
+      "name": "decision",
+      "passed": true,
+      "severity": "blocking",
+      "failure_code": null
+    },
+    {
+      "name": "notification",
+      "passed": true,
+      "severity": "blocking",
+      "failure_code": null
+    },
+    {
+      "name": "memory",
+      "passed": true,
+      "severity": "blocking",
+      "failure_code": null
+    },
+    {
+      "name": "cross_modal",
+      "passed": true,
+      "severity": "blocking",
+      "failure_code": null
+    },
+    {
+      "name": "observability",
+      "passed": true,
+      "severity": "blocking",
+      "failure_code": null
+    }
+  ],
+  "notices": []
+}

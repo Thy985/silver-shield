@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-08-18T22:43:12.622104+00:00",
+  "passed": true,
+  "degraded": false,
+  "scenarios": [
+    {
+      "scenario_id": "sw_adr0034_high_risk",
+      "passed": true,
+      "degraded": false,
+      "path": "D:\\Projects\\Active\\silver-shield\\src\\silver_demo\\demo\\canonical\\sw_adr0034_high_risk.gate.json"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-08-18T22:09:41.304281+00:00",
+  "scenarios_dir": "D:\\Temp\\ss_case_v4a3v42v",
+  "provenance": {
+    "code_version": "91e6322",
+    "python": "3.12.14",
+    "numpy": "2.5.2",
+    "opencv-python": "5.0.0.93",
+    "torch": "2.13.0"
+  },
+  "scenarios": [
+    {
+      "scenario_id": "sw_adr0034_high_risk",
+      "path": "D:\\Temp\\ss_case_v4a3v42v\\adr0034_high_risk.yaml",
+      "ok": true,
+      "failure_codes": [],
+      "canonical_report": "D:\\Projects\\Active\\silver-shield\\src\\silver_demo\\demo\\canonical\\sw_adr0034_high_risk.canonical.json",
+      "fingerprints": {
+        "expectation_fingerprint": "d83091a8d079a580bdcc925336e1dbf1adce9e583c0d4a739dc467315354df1e",
+        "loop_fingerprint": "869d37bd4d36fab2fc109d34e20a81aa74b5896c12c740c4afa50fddc4e8a10d"
+      },
+      "gate": {
+        "passed": true,
+        "degraded": false,
+        "path": "D:\\Projects\\Active\\silver-shield\\src\\silver_demo\\demo\\canonical\\sw_adr0034_high_risk.gate.json"
+      }
+    }
+  ]
+}
