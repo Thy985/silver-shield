@@ -875,12 +875,11 @@ def _render_audio_perception(
     audio_manifest: dict | None,
     audio_base_url: str,
 ) -> str:
-    """音频感知首屏面板分发器（Gate 3 产品拍板 2026-08-16 · P0-11.x 改造 2026-08-18）。
+    """音频感知首屏面板分发器（Gate 3 产品拍板 2026-08-16）。
 
-    P0-11.x 决策（用户硬约束）：解除 Live 截断 —— Live 与 Artifact 一律走
-    ``_render_audio_perception_full``（含可播放 ``<audio id="audio-{kind}" controls>``）。
-    Live 模式不再使用 `_render_live_audio_summary`（仅时间戳摘要无控件），以满足
-    11.x-1 验收：访客打开 /live 后能真正听到对应音频（评委可验证）。
+    - Live（``mode == "live"``，provenance=REAL_SENSOR）→ 渲染**实时摘要**
+      （"此刻传感器检测到什么"），完整 event / provenance / 原始技术细节留在 details 区；
+    - Artifact（SIMULATED）→ 渲染完整"系统听到了什么"卡片（既有 P0 行为，不变）。
 
     两者均遵守：``audio_evidence`` 空 → 返回空串（AC-12 绝不编造面板）；
     证据与媒体严格分离（可播放样本仅在 details 区由独立 Audio Source Adapter 绑定呈现）。
@@ -888,86 +887,9 @@ def _render_audio_perception(
     audio = scenario.get("audio_evidence") or ()
     if not audio:
         return ""  # AC-12：无音频证据不渲染首屏面板
+    if str(scenario.get("mode", "")) == "live":
+        return _render_live_audio_summary(scenario, audio_manifest, audio_base_url)
     return _render_audio_perception_full(scenario, audio_manifest, audio_base_url)
-
-
-def _render_audio_sensor_status(
-    scenario: ScenarioEvidence,
-) -> str:
-    """P0-11.x · 音频传感器状态卡（与视频并列同层，Live 必须可见）。
-
-    设计（用户硬约束 2026-08-18 拍板）：
-
-    - **ACTIVE 真实源**：仅当 ``scenario.audio_evidence`` 含
-      ``provenance_kind == "REAL_SENSOR"`` 节点时显示 ``ACTIVE``。这是 runtime
-      真实产出（loader 仅对 Live audio_evidence 注入 REAL_SENSOR；Artifact
-      模式 SIMULATED）—— 不是 manifest 声明、不是 fixture 存在、不是 frames counter
-      滚动。绝不做"manifest 有 track 就 ACTIVE"那种伪 ACTIVE。
-    - 缺 REAL_SENSOR evidence / Live 未启动 / audio_evidence 空 → 显示 ``IDLE``。
-    - 字段真实源：
-        * ``Source`` → provenance 翻译表（VM-7 一等视觉）。
-        * ``Perception events`` → REAL_SENSOR 节点计数（若无则总 audio_evidence）。
-        * ``Kinds detected`` → REAL_SENSOR 节点中 kinds 去重（无 → ``—``）。
-    - AC-12 / VM-9 守诚实边界：缺任何字段显示 ``—``，绝不编造。
-
-    不依赖 audio_manifest / audio_base_url / 任何文件系统 IO —— 完全投影于
-    EvidenceProjection（VM-1 / VM-3）。
-    """
-    audio = scenario.get("audio_evidence") or ()
-    real_sensor = [a for a in audio if a.get("provenance_kind") == "REAL_SENSOR"]
-    active = len(real_sensor) > 0
-    status_text = "ACTIVE" if active else "IDLE"
-    status_class = "audio-active" if active else "audio-idle"
-
-    # REAL_SENSOR 节点数（= runtime 真实处理的事件数）。无 REAL_SENSOR 时回退到
-    # 总 audio_evidence 数（保持卡上的"事件"读数对评委真实可见）。
-    n_events = len(real_sensor) if active else len(audio)
-
-    # kinds 去重保序（REAL_SENSOR only；无 → "—"）。
-    kinds: list[str] = []
-    for a in real_sensor:
-        k = str(a.get("kind", "") or "")
-        if k and k not in kinds:
-            kinds.append(k)
-    if kinds:
-        kinds_html = (
-            '<ul class="audio-sensor-kinds">'
-            + "".join(
-                f'<li><code>{_R._esc(_R._translate_audio_kind(k))}</code>'
-                f'<span class="muted audio-sensor-kind-id">{_R._esc(k)}</span></li>'
-                for k in kinds
-            )
-            + "</ul>"
-        )
-    else:
-        kinds_html = '<span class="muted">—</span>'
-
-    # provenance 文本：来自 loader 投影的 REAL_SENSOR 节点存在性 → 受控演示输入
-    # （与 _PROVENANCE_BADGE["REAL_SENSOR"] 单一来源保持一致，避免文案漂移）。
-    provenance_text = _PROVENANCE_TEXT.get("REAL_SENSOR", "受控演示输入")
-    provenance_class = _PROVENANCE_CLASS.get("REAL_SENSOR", "")
-
-    sid_html = _R._esc(scenario["scenario_id"])
-    return f"""
-    <div class="sensor-card sensor-audio {status_class}"
-         id="audio-sensor-{sid_html}" data-status="{status_text.lower()}">
-      <div class="sensor-card-head">
-        <h3 class="sensor-card-title">
-          <span class="audio-status-dot {status_class}" aria-hidden="true"></span>
-          <span>🔊 AUDIO SENSOR</span>
-          <span class="sensor-card-status {status_class}">{status_text}</span>
-        </h3>
-      </div>
-      <dl class="sensor-card-meta">
-        <dt>Source</dt><dd>{_R._esc(provenance_text)}</dd>
-        <dt>Perception events</dt><dd><b data-audio-events>{n_events}</b></dd>
-        <dt>Kinds detected</dt><dd>{kinds_html}</dd>
-      </dl>
-      <p class="sensor-card-note muted">
-        ACTIVE 标记仅当 runtime 真实产出 REAL_SENSOR evidence 时显示；
-        无 evidence / 未启动 → IDLE，不伪造（P0-11.x VM-7 fail-closed）。
-      </p>
-    </div>"""
 
 
 def _render_live_audio_summary(
@@ -1009,7 +931,7 @@ def _render_live_audio_summary(
         <div class="live-audio-meta muted">
           <span class="live-audio-span">时间跨度 {_R._esc(span)}</span>
           <span class="live-audio-count">· 事件 {len(audio)}</span>
-          <span class="audio-source">Source · 受控演示输入</span>
+          <span class="audio-source">Source · REAL SENSOR</span>
         </div>
       </div>
       <p class="muted">实时摘要；事件明细、provenance 与原始技术字段见下方「详细证据」。</p>
