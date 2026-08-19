@@ -94,3 +94,6 @@ test_output.txt
 debug_*.py
 verify_*.py
 _verify_fold.py
+
+# --- CodeGraph 索引 ---
+.codegraph/

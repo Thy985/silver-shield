@@ -8,6 +8,9 @@
 5. product_question → description 纯映射
 6. audio 缺失时不抛（诚实的无音频场景）
 7. 不存在的 case 抛 FileNotFoundError（fail-closed）
+
+注意：data/golden/ 是大体积生产素材，被 .gitignore 排除，
+CI 环境中不存在。以下测试在 golden data 不可用时自动跳过。
 """
 import os
 import sys
@@ -21,6 +24,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # 仓库根 = tests/ 的祖父（不是父）
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Golden data availability: data/golden/ is gitignored (large assets),
+# so tests must skip when the directory is absent (e.g. in CI).
+GOLDEN_DATA_DIR = REPO_ROOT / "data" / "golden"
+GOLDEN_DATA_AVAILABLE = GOLDEN_DATA_DIR.is_dir() and any(
+    (GOLDEN_DATA_DIR / case).is_dir() for case in ("stranger_visit", "repeated_visit", "telephone_risk", "evidence_insufficient")
+)
+
+skip_if_no_golden = pytest.mark.skipif(
+    not GOLDEN_DATA_AVAILABLE,
+    reason="data/golden/ not present (gitignored large assets; skip in CI)",
+)
+
 from silver_demo.golden_adapter import (
     GOLDEN_CASES,
     _resolve_golden_paths,
@@ -33,6 +48,7 @@ from silver_demo.golden_adapter import (
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_all_four_golden_cases_load():
     """4 case 都能 load_golden_scenario 成功（Phase 1 核心验收）。"""
     assert len(GOLDEN_CASES) == 4
@@ -56,6 +72,7 @@ def test_all_four_golden_cases_load():
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_start_time_from_case_start():
     """3 case 走顶层 case_start 路径（stranger_visit / repeated_visit / telephone_risk）。
 
@@ -76,6 +93,7 @@ def test_start_time_from_case_start():
         )
 
 
+@skip_if_no_golden
 def test_start_time_fallback_to_generated():
     """evidence_insufficient 缺 case_start，应回退到 generated 兜底（通用规则）。"""
     sc = load_golden_scenario("evidence_insufficient")
@@ -89,6 +107,7 @@ def test_start_time_fallback_to_generated():
     assert sc.start_time.utcoffset().total_seconds() == 0
 
 
+@skip_if_no_golden
 def test_start_time_yaml_roundtrip_preserves_tz():
     """Yaml round-trip 后 start_time 仍带 tz（这是 run_demo 写入临时 yaml 时的关键不变量）。"""
     for case in GOLDEN_CASES:
@@ -114,6 +133,7 @@ def test_start_time_yaml_roundtrip_preserves_tz():
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_video_path_priority_demo_over_final():
     """视频路径优先 {case}_demo.mp4（多幕预拼接）→ {case}_final.mp4 兜底。
 
@@ -133,6 +153,7 @@ def test_video_path_priority_demo_over_final():
     )
 
 
+@skip_if_no_golden
 def test_video_path_in_repo_relative():
     """media_path 相对仓库根（与现有 ScenarioConfig 字段约定一致）。"""
     for case in GOLDEN_CASES:
@@ -147,6 +168,7 @@ def test_video_path_in_repo_relative():
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_audio_path_present_for_telephone():
     """telephone_risk 应有 audio（4 case 中唯一声学相关）。"""
     sc = load_golden_scenario("telephone_risk")
@@ -154,6 +176,7 @@ def test_audio_path_present_for_telephone():
     assert "telephone_risk" in sc.audio_path
 
 
+@skip_if_no_golden
 def test_audio_path_or_none():
     """其他 3 case 音频可能缺失（不抛，诚实的无音频）。"""
     for case in ("stranger_visit", "repeated_visit", "evidence_insufficient"):
@@ -168,6 +191,7 @@ def test_audio_path_or_none():
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_description_from_product_question():
     """description 来自 manifest.product_question（纯映射，不硬编码）。"""
     expected_questions = {
@@ -188,6 +212,7 @@ def test_description_from_product_question():
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_runtime_params_are_fixed():
     """运行参数（loop/fps_target/frame_interval）固定为 0.5/8/True。"""
     for case in GOLDEN_CASES:
@@ -213,6 +238,7 @@ def test_unknown_case_raises():
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_does_not_parse_episodes():
     """repeated_visit 的 episodes[].memory_ref 不会被自动注入到 config（由 Phase 2 单独处理）。"""
     sc = load_golden_scenario("repeated_visit")
@@ -222,6 +248,7 @@ def test_does_not_parse_episodes():
     assert not hasattr(sc, "prior_episodes")
 
 
+@skip_if_no_golden
 def test_does_not_parse_acoustic_progression():
     """telephone_risk 的 acoustic_progression 不会被自动注入。"""
     sc = load_golden_scenario("telephone_risk")
@@ -229,6 +256,7 @@ def test_does_not_parse_acoustic_progression():
     assert not hasattr(sc, "audio_progression")
 
 
+@skip_if_no_golden
 def test_does_not_parse_variants():
     """telephone_risk 的 variants 不会被自动选择（adapter 默认 case_b 路径）。"""
     sc = load_golden_scenario("telephone_risk")
@@ -242,6 +270,7 @@ def test_does_not_parse_variants():
 # ===========================================================================
 
 
+@skip_if_no_golden
 def test_list_golden_cases_matches_hardcoded():
     """文件系统扫描应与 GOLDEN_CASES 一致（4 case）。"""
     actual = set(list_golden_cases())
