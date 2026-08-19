@@ -63,6 +63,12 @@ External Device / Video
 | 上报 | `output` | `Publisher`(ABC) / `schemas` | `PerceptionEvent` → 中心 MQTT |
 | 核心 | `core` | `config.Settings` / `event.EventType` / `event.EvidenceRef` | 配置 + 最小契约基底 |
 | 运行期 | `runtime` | `PerceptionPipeline` / `DemoClock` / `run_demo` | 装配 + 启动 + 优雅关闭 |
+| 音频感知 [v2] | `audio` | `AudioSource`(ABC) / `VadBackend`(ABC) / `AcousticTagger`(ABC) / `AudioPipeline` | 音频流 → `AudioSegmentEvent` → `AudioPerceptionEvent`（5 类声学感知） |
+| 记忆 [v2] | `memory` | `MemoryStore` / `MemoryPolicy`(ABC) / `EpisodeBuilder` / `CrossModalLinker` + `consumer/`（`Retrieval`/`Aggregation`/`ContextBuilder`/`ReasoningEngine` ABC） | `EpisodicRecord` + `WarningEvent` → 记忆存储 → `ReasoningInput` → `ReasoningResult`（反哺理解，不决策） |
+| 场景仿真 [v2] | `validation` | `Scenario` / `ScenarioCompiler` / `ScenarioRunner` / `ScenarioValidator` | 声明式 YAML → `Detection` + frames → 验证结果 |
+| 评估 [v2] | `evaluation` | `BenchmarkHarness` / `ScenarioScore` / `BenchmarkReport` / `BenchmarkScore` / `GateResult` | 场景 + pipeline → 混淆矩阵 + 回归报告 |
+| 集成验证 [v2] | `integration` | `IntegrationRunner` / `IntegrationValidator` / `IntegrationReport` / `IntegrationContext` | `Scenario` → Runtime 全链路 → 阶段探针 + 闭环断言 |
+| 可视化 [v2] | `visualizer` | `EvidenceProjection` / `EvidenceGraph` / `CaseVideoSpec` | artifact → 时间轴 / 因果链 / 关系图（展示层，不参与运行） |
 
 > 严格自上而下依赖：`core` 不反向依赖业务层；`ingestion` 不依赖 `detection`/`analysis`；`analysis` 仅依赖上层接口（ABC），不依赖 `evidence`/`output` 具体实现；`output` 是最外层，依赖契约 JSON，不反向依赖上游。
 
@@ -100,12 +106,12 @@ External Device / Video
 
 | Stage | 内容 | 状态 |
 | --- | --- | --- |
-| **Stage A** 类型与契约基础 | 只加类型 + 契约测试，不接入 pipeline | ✅ 工作区已落地（未 commit） |
+| **Stage A** 类型与契约基础 | 只加类型 + 契约测试，不接入 pipeline | ✅ 已合入 main（未接入 `process_frame`） |
 | **Stage B** BehaviorState 接入 | `BehaviorBuilder` 挂入 `process_frame`，可观察不产信号 | ⏳ 未开始 |
 | **Stage C** RiskSignal 链路接入 · Shadow | Evaluator + Adapter 产出 `RiskSignal`，只展示不接决策 | ⏳ 未开始 |
 | **Stage D** 灰度开启 · Decision | RAISED 信号经 adapter 汇入 `DecisionPolicy` 产 `WarningEvent` | ⏳ 未开始 |
 
-### Stage A 已落地内容（工作区，未 commit 到 main）
+### Stage A 已落地内容（已合入 main，未接入 pipeline）
 
 新增三组类型（torch-free，进 CI 每 PR 合约子集）：
 

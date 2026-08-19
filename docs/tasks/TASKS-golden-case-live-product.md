@@ -1,6 +1,6 @@
 # Golden Case 接 Live 产品化 — 任务清单
 
-> **配套文档**: `docs/DESIGN-golden-case-live-product.md`
+> **配套文档**: `docs/design/golden-case/DESIGN-golden-case-live-product.md`
 > **Owner**: AI Agent
 > **状态**: 待执行（v0.1）
 
@@ -539,7 +539,7 @@ def load(self) -> LoadedAudio:
 **用法**：
 ```bash
 python scripts/run_demo.py --live --scenario live_telephone_risk \
-    --video data/golden/telephone_risk/video/telephone_risk_raw.mp4
+    --video dataset/_canonical/video/telephone_risk_raw.mp4
 # 另一个终端：
 python scripts/verify_golden_audio_live.py --expected-kind audio_telephone_persistent
 ```

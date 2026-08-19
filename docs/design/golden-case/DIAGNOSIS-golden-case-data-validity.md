@@ -166,7 +166,7 @@
 ### 3.3 live_telephone_risk 当前能跑什么？
 
 **实测路径**（根据 manifest）：
-- video: `data/golden/telephone_risk/video/telephone_risk_raw.mp4`
+- video: `dataset/_canonical/video/telephone_risk_raw.mp4`
 - audio: `data/golden/telephone_risk/audio_mix/case_b_mix.wav`（IEEE_FLOAT 32-bit，**当前不支持**）
 - expected: LOW → RISK_SIGNAL（Case A → Case B）
 

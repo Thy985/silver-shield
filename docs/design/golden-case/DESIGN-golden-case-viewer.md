@@ -3,7 +3,7 @@
 - **状态**：规划（v2：Owner 11 点评审合入——声学语义修正 / 命题一句话 / 能力谱系 / 案例组合设计）
 - **日期**：2026-08-16（v1 → v2）
 - **决策者**：Owner
-- **相关**：docs/DESIGN-golden-scenario-set.md（数据准备 v2）/ docs/GOLDEN-CASES-USAGE.md（接入清单）/ docs/DESIGN-demo-v2-product-restore.md（P0 产品链）/ ADR-0036（统一 Case Viewer）
+- **相关**：docs/design/golden-case/DESIGN-golden-scenario-set.md（数据准备 v2）/ docs/design/golden-case/GOLDEN-CASES-USAGE.md（接入清单）/ docs/design/golden-case/DESIGN-demo-v2-product-restore.md（P0 产品链）/ ADR-0036（统一 Case Viewer）
 
 ---
 

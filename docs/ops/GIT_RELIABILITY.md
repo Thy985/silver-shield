@@ -46,7 +46,7 @@
 | 操作护栏 | `scripts/git-safety-guard.sh` | 拦截 gc/repack/clone/prune 等危险命令 |
 | 换行归一 | `.gitattributes`（`* text=auto eol=lf`） | 防 CRLF 污染 git 内部文件 |
 | 运行时垃圾隔离 | `.gitignore` 补 `.agent/state/`、`.git.broken/` | 防止 agent 运行时产物污染 status/提交 |
-| 本文件 | `docs/GIT_RELIABILITY.md` | 约束与流程留档 |
+| 本文件 | `docs/ops/GIT_RELIABILITY.md` | 约束与流程留档 |
 
 > 启用护栏（可选）：`git config alias.git '!/path/to/scripts/git-safety-guard.sh'`，
 > 或 shell 里 `alias git=./scripts/git-safety-guard.sh`。

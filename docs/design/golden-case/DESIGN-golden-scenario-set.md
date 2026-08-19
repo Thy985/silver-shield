@@ -3,7 +3,7 @@
 - **状态**：规划（Owner 9/10 评审 + 6 处收紧已合入 v2）
 - **日期**：2026-08-15（v1 → v2：prior_episodes 语义收紧 / 产品-工程命题分离 / case 改名 / media_alignment / Outcome 行为契约 / 覆盖矩阵 / CI 表述收敛）
 - **决策者**：Owner
-- **相关**：docs/DESIGN-demo-v2-product-restore.md（P0-1~P1 产品链）/ ADR-0034（闭环集成验证）/ ADR-0036（统一 Case Viewer）
+- **相关**：docs/design/golden-case/DESIGN-demo-v2-product-restore.md（P0-1~P1 产品链）/ ADR-0034（闭环集成验证）/ ADR-0036（统一 Case Viewer）
 
 ---
 
@@ -207,7 +207,7 @@ expected:
 
 **合计：您需新准备 4 条**（stranger_visit / repeated_visit / telephone_risk / ambiguous），复用 2 条（Delivery_Courier / CCTV_Surveillance）。
 
-> 注：`ambiguous` 的具体形态（边缘快速通过 / 部分遮挡 / 背光剪影三幕）见展示层设计文档 §3.3 的细化；contest 资产已由 Owner 生产并统一到 `data/golden/`（见 docs/GOLDEN-CASES-USAGE.md）。
+> 注：`ambiguous` 的具体形态（边缘快速通过 / 部分遮挡 / 背光剪影三幕）见展示层设计文档 §3.3 的细化；contest 资产已由 Owner 生产并统一到 `data/golden/`（见 docs/design/golden-case/GOLDEN-CASES-USAGE.md）。
 
 ### 8.3 命名与映射
 

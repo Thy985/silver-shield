@@ -5,7 +5,7 @@
 - **Owner**: SilverShield 技术负责人
 - **关联文档**：
   - 设计决策：`docs/ADR/0026-audio-perception-chain-concrete-design.md`（**为什么这么设计 / 边界 / 契约**）
-  - 技术栈选型：`docs/audio_stack_survey.md`（**候选技术 / 为什么选这个 / Spike 结论如何落地**）
+  - 技术栈选型：`docs/design/audio/audio_stack_survey.md`（**候选技术 / 为什么选这个 / Spike 结论如何落地**）
   - 本报告：**实验环境 / 命令 / 数据 / 结论**（Spike 是证据，独立于 ADR 演进）
 
 ---
@@ -204,7 +204,7 @@ CONCLUSION: AudioPerceptionEvent -> RiskSignal COMPATIBLE
 
 ## 5b. Spike #5 — 音频测试素材生成（TTS Fixture Generation）
 
-> 由 Owner 在 Spike #1~#4 之后补充：验证"测试音频从哪来"—— TTS 作为 Audio Fixture Generation Infrastructure（详见 `docs/audio_fixture_generation.md`）。
+> 由 Owner 在 Spike #1~#4 之后补充：验证"测试音频从哪来"—— TTS 作为 Audio Fixture Generation Infrastructure（详见 `docs/design/audio/audio_fixture_generation.md`）。
 
 ### 命令
 - 安装：`python -m pip install edge-tts`（免费、无需密钥、CI 友好）。
@@ -233,7 +233,7 @@ CONCLUSION: AudioPerceptionEvent -> RiskSignal COMPATIBLE
 2. **CPU 预算安全**：音频 VAD/分类相对视频管道可忽略，支持独立 `Audio Loop` 异步消费。
 3. **Python 版本是真实约束**：`tflite-runtime` 在 py3.13 无 wheel → 音频分类运行时要么选 ONNX，要么钉 py3.11/3.12。实现期须早决策。
 4. **原生依赖编译风险**：`webrtcvad` 本机缺 MSVC、无 wheel → Linux CI 有 manylinux wheel 不受影响；PyAV 自带 `libav*` 与 opencv 带的版本可能错配（呼应 PR#126~129 容器化验证纪律）。
-5. **验证闭环须独立建设（#5）**：既然 CCTV 无音轨、又不依赖人工录音，测试音频必须由 TTS 生成基础设施产出（`docs/audio_fixture_generation.md`），与运行闭环并存——这是音频工程闭环补齐的标志，与 Memory E-1 replay/CCTV 双验证同构。
+5. **验证闭环须独立建设（#5）**：既然 CCTV 无音轨、又不依赖人工录音，测试音频必须由 TTS 生成基础设施产出（`docs/design/audio/audio_fixture_generation.md`），与运行闭环并存——这是音频工程闭环补齐的标志，与 Memory E-1 replay/CCTV 双验证同构。
 5. **模型构件 ≠ 运行时能力**：Spike #3 验证了 ORT 能跑声学分类，但未拿到真实 YAMNet 权重 → 模型来源/许可证/权重是独立开放任务。
 
 ---
@@ -267,14 +267,14 @@ CONCLUSION: AudioPerceptionEvent -> RiskSignal COMPATIBLE
 ADR-0026 (docs/ADR/0026-...)
   │  定义「为什么这么设计 / 边界 / 契约」，短生命周期稳定
   │
-  ├── 指向 → docs/audio_stack_survey.md
+  ├── 指向 → docs/design/audio/audio_stack_survey.md
   │           技术栈候选 / 为什么选这个 / Spike 结论如何落地
   │
-  ├── 指向 → docs/audio_fixture_generation.md
+  ├── 指向 → docs/design/audio/audio_fixture_generation.md
   │           TTS 测试素材生成基础设施（Testing 侧，非感知链）
   │           TTS Provider ABC / fixture 分类 / 参数矩阵 / CI manifest
   │
-  └── 指向 → docs/audio_spike_report.md  (本报告)
+  └── 指向 → docs/design/audio/audio_spike_report.md  (本报告)
               实验环境 / 命令 / 数据 / 结论（证据，独立演进）
 
 Spike 是证据，不该全部塞进 ADR；

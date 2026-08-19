@@ -190,7 +190,7 @@ P0-10 是"工程层"问题（"怎么启动系统"），不是"逻辑层"问题�
 ### 新增文件
 
 - `tests/test_integration.py` —— 18 个系统级集成测试
-- `docs/test-report/P0-integration-validation.md` —— 本报告
+- `docs/reports/P0-integration-validation.md` —— 本报告
 
 ### 涉及模块（只读，未修改）
 

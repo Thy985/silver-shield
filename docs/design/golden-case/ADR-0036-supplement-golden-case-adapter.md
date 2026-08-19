@@ -285,7 +285,7 @@ M1-Evidence 阶段 2 涉及"先验信息投影"——这可能与 VM-1（唯一�
 | ID | 任务 | 文件 | 验收 |
 |----|------|------|------|
 | M1.8 | 4 case 真实跑 Live Runtime | 测试 | 收集真实事件 |
-| M1.9 | 填"六认知 × Case × 设计意图 / 实际运行"矩阵 | `docs/DIAGNOSIS-golden-case-data-validity.md` 附录 |
+| M1.9 | 填"六认知 × Case × 设计意图 / 实际运行"矩阵 | `docs/design/golden-case/DIAGNOSIS-golden-case-data-validity.md` 附录 |
 | M1.10 | 偏差分析 | 文档 | 每个偏差的根因 |
 
 **周期**：3 天

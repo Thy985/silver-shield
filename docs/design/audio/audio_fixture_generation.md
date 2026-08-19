@@ -2,7 +2,7 @@
 
 - **类型**：测试 / 验证基础设施设计文档（Proposed）
 - **归属**：Testing / Evaluation Infrastructure（**不属于** ADR-0026 的 Audio Perception Chain）
-- **配套**：`docs/ADR/0026-audio-perception-chain-concrete-design.md`（感知链设计）+ `docs/audio_stack_survey.md`（技术栈选型）+ `docs/audio_spike_report.md`（Spike 实证）
+- **配套**：`docs/ADR/0026-audio-perception-chain-concrete-design.md`（感知链设计）+ `docs/design/audio/audio_stack_survey.md`（技术栈选型）+ `docs/design/audio/audio_spike_report.md`（Spike 实证）
 - **状态**：Proposed（review-ready，待 Owner 冻结）
 
 ---
@@ -13,7 +13,7 @@ ADR-0026 解决了"**音频感知链能不能消费音频**"。但它隐含一�
 
 > Phase 3.0 Demo 的**测试音频从哪里来**？
 
-因为技术 Spike 已实证（见 `docs/audio_spike_report.md` §Spike #1）：现有 CCTV Demo 视频**无任何音轨**，"复用 CCTV 音轨"路径不存在。同时我们**不想依赖人工录音**（不可复现、无法进 CI、隐私风险）。
+因为技术 Spike 已实证（见 `docs/design/audio/audio_spike_report.md` §Spike #1）：现有 CCTV Demo 视频**无任何音轨**，"复用 CCTV 音轨"路径不存在。同时我们**不想依赖人工录音**（不可复现、无法进 CI、隐私风险）。
 
 结论：**TTS（文本转语音）应被明确设计为"音频测试素材生成基础设施"（Audio Fixture Generation Infrastructure）**，作为验证闭环的一部分。
 
@@ -283,7 +283,7 @@ def test_audio_fixture(wav_name, exp, build_audio_pipeline):
 
 - **不进 ADR-0026 主体**：ADR-0026 描述"Sensor → Perception → RiskSignal"；TTS 属于 Testing 侧，避免污染感知链边界。ADR-0026 §11.2 仅引用本文件的 fixture 命名与 `manifest.yaml` 约定。
 - **复用既有契约**：fixture 通过 `FileAudioSource` 进入管道，断言的是 `AudioPerceptionEvent.kind` / `score` / `labels`，与 ADR-0026 §4 事件模型完全一致。
-- **Spike 实证见 `docs/audio_spike_report.md` §Spike #5**：TTS 生成可控音频 fixture 可行性、CI 适配性、与真实录音的边界均已验证。
+- **Spike 实证见 `docs/design/audio/audio_spike_report.md` §Spike #5**：TTS 生成可控音频 fixture 可行性、CI 适配性、与真实录音的边界均已验证。
 - **复用 Memory E-1 方法论**：replay dataset（确定性）↔ TTS fixture（确定性）；CCTV case（真实）↔ 后续家庭录音（真实泛化）。
 
 ---

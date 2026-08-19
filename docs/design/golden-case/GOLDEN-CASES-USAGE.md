@@ -3,7 +3,7 @@
 - **状态**：执行中（G0-1 资产统一已完成，G0-3 代码实现进行中）
 - **日期**：2026-08-16
 - **决策者**：Owner
-- **相关**：docs/DESIGN-golden-scenario-set.md（数据准备文档 v2）/ docs/DESIGN-golden-case-viewer.md（展示层设计）/ docs/DESIGN-demo-v2-product-restore.md（P0 产品链）
+- **相关**：docs/design/golden-case/DESIGN-golden-scenario-set.md（数据准备文档 v2）/ docs/design/golden-case/DESIGN-golden-case-viewer.md（展示层设计）/ docs/design/golden-case/DESIGN-demo-v2-product-restore.md（P0 产品链）
 
 ---
 
@@ -111,7 +111,7 @@ data/golden/<case>/（源资产）
 - [x] G0-1 `contest/` → `data/golden/`（统一目录 + `.gitignore` 整体忽略）
 - [x] G0-1 `stranger_visit/manifest.yaml` 新增 + 4 个 manifest 补齐统一契约（schema/命题/alignment/expected）
 - [x] G0-1 接入清单 + 利用方案 + 计划（本文档）
-- [x] G0-1 展示层设计（docs/DESIGN-golden-case-viewer.md）
+- [x] G0-1 展示层设计（docs/design/golden-case/DESIGN-golden-case-viewer.md）
 - [x] **G0-3 历史记忆预置代码**（scenario prior_episodes → runner 预置 → DecisionEngine 检索 → policy memory_aware 升级 → trace.historical_record_ids；契约测试 9 条）
 
 ### 🔲 待办（按优先级）
