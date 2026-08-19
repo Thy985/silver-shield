@@ -9,7 +9,7 @@
 #
 # 运行方式（视频源为本地 mp4，gitignore 不入库；音频为 golden 仓库内素材）：
 #   python scripts/run_demo.py --live --scenario live_telephone_risk \
-#       --video data/demo/CCTV_Surveillance_Final.mp4
+#       --video dataset/benign/media/CCTV_Surveillance_Final.mp4
 #
 # 注：run_demo.py 在 --live 且场景含 audio_path 时，自动以
 #   DEMO_HP_CONFIG=config/live_audio.yaml 覆盖 HP 配置（config/default.yaml 自身保持 audio

@@ -1,0 +1,27 @@
+# Golden Case：stranger_visit — 陌生来访首次风险
+#
+# 目的：验证陌生人首次来访的感知 → 风险 → 行动完整链路
+#   - 视觉：person + door_open 事件
+#   - 音频：doorbell_ring → audio_anomaly_other
+#   - 预期：MONITOR → NOTIFY_FAMILY（陌生人进入触发通知家属）
+#   - 无历史记忆（首次事件）
+#
+# 运行方式：
+#   python scripts/run_demo.py --live --scenario golden_stranger_visit
+
+scenario_id: golden_stranger_visit
+description: |
+  Golden Case：stranger_visit 陌生来访首次风险
+  视觉用 golden 视频 stranger_visit_final.mp4，音频用 golden 混合素材 stranger_visit_mix.wav
+  演示陌生人按门铃、进入、徘徊的完整感知与风险升级链路。
+
+source: stranger_visit
+source_type: caviar_jpg
+
+start_time: "2026-08-10T14:30:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true
+
+# Golden Case 音频素材（仓库内，相对仓库根解析）
+audio_path: data/golden/stranger_visit/audio_mix/stranger_visit_mix.wav

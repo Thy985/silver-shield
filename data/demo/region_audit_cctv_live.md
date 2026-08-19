@@ -1,6 +1,6 @@
 # 各区域真实运行态审计（CCTV 真实视频，P0-11.4 当前分支）
 
-> 审计方法：网关 `http://127.0.0.1:8765` 实时运行，喂入真实 `data/demo/CCTV_Surveillance_Final.mp4`（484 帧，循环）。
+> 审计方法：网关 `http://127.0.0.1:8765` 实时运行，喂入真实 `dataset/benign/media/CCTV_Surveillance_Final.mp4`（484 帧，循环）。
 > 直接抓取 WebSocket 广播的真实 `frame` view-model（97 帧 + 500 帧分布 + 专项抓 active_warnings 稀疏度）+ 读 `gateway.py`/`FrameResult`/`bridge.py`/`index.html` 渲染代码。
 > 真实数据：500 帧中 280 帧有检测（max 2）、仅 6 帧有 visitor_event、仅 5 帧有 perception_event（98%+ 为空）；3 个告警均为 LOW / NOTIFY_FAMILY 推荐 / LOG_ONLY 实际执行 / CONFIRMED。
 

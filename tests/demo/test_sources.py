@@ -204,7 +204,7 @@ def test_load_real_doorway_scenario() -> None:
     scenario = load_scenario("config/demo/scenarios/real_doorway.yaml")
     assert scenario.scenario_id == "real_doorway"
     assert scenario.source_type == "video_file"
-    assert scenario.media_path == "data/demo/real_doorway.mp4"
+    assert scenario.media_path == "dataset/benign/media/real_doorway.mp4"
     assert scenario.source == "real_doorway"
     assert scenario.loop is True
 
