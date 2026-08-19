@@ -20,12 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from silver_demo.golden_adapter import _load_manifest
 from silver_demo.golden_evidence import (
     MANIFEST_TO_AUDIO_KIND,
     golden_evidence_projection,
     manifest_audio_to_live_audio_kinds,
 )
-from silver_demo.golden_adapter import _load_manifest
 
 # ===========================================================================
 # 1. 4 case 都能 derive

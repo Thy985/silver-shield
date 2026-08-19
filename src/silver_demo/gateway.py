@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 # 类型标注用（运行期不调构造器；仅用于 type hint 让代码可读）
 from home_perception.action.command import ActionCommand  # noqa: F401  # 类型标注
@@ -56,7 +56,6 @@ from home_perception.core.config import RealtimeRiskConfig, Settings
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 
 # === 本包内部 ===
-from .bridge import encode_frame_to_base64_jpeg
 from .config import DemoSettings
 from .scenarios import ScenarioConfig, load_scenario
 from .sources import Source
@@ -1116,7 +1115,7 @@ def create_app(
     # MJPEG Streaming 端点（P0-11 视频流优化：替代 Base64 over WS）
     # ------------------------------------------------------------------
     @app.get("/mjpeg/{scenario_id}")
-    async def mjpeg_stream(scenario_id: str) -> "StreamingResponse":
+    async def mjpeg_stream(scenario_id: str) -> StreamingResponse:
         """MJPEG 视频流 (multipart/x-mixed-replace)。
 
         浏览器原生解码 MJPEG，无 Base64 开销，CPU/延迟显著降低。
@@ -1134,7 +1133,6 @@ def create_app(
                 content={"error": f"场景不匹配: {scenario_id} != {gateway.scenario.scenario_id}"},
             )
 
-        from fastapi.responses import StreamingResponse
 
         boundary = "frame"
         quality = 50  # JPEG quality
@@ -1173,7 +1171,8 @@ def create_app(
                             if not ok:
                                 continue
                             jpeg_bytes = buf.tobytes()
-                        except Exception:
+                        except Exception as e:  # noqa: BLE001 (fault isolation: one frame fail shouldn't kill stream)
+                            structlog.get_logger().warning("MJPEG frame encode failed", error=str(e))
                             continue
 
                         # MJPEG 边界格式
@@ -1195,8 +1194,9 @@ def create_app(
                     # loop 模式：重新创建 Source 继续
                     temp_source = Source()
                     temp_source.load(scenario, hp_settings)
-                except Exception:
+                except Exception as e:  # noqa: BLE001 (fault isolation: source reload fail shouldn't crash generator)
                     # 生成器异常时静默结束
+                    structlog.get_logger().warning("MJPEG stream failed, ending", error=str(e))
                     break
 
         return StreamingResponse(
