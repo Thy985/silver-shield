@@ -79,7 +79,7 @@ def test_validate_frame_source_rejects_zero_frame_video():
         scenario_id="s",
         source="s",
         source_type="video_file",
-        media_path="data/demo/CCTV_Surveillance_Final.mp4",
+        media_path="dataset/benign/media/CCTV_Surveillance_Final.mp4",
         start_time=datetime.now(UTC),
     )
     with pytest.raises(RuntimeError):

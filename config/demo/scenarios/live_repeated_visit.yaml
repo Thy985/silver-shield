@@ -1,0 +1,36 @@
+# Golden Case：repeated_visit — 重复来访跨日记忆（核心 Showcase）
+#
+# 目的：验证"当前事件单独看不危险，但 AI 记得历史 → 风险升级"的核心产品命题
+#   - Live 只播放"今天"这一幕
+#   - Memory Context 展示 3 天前 + 昨天两次历史访问
+#   - 当前判结合历史 → 风险升级 NOTIFY_FAMILY
+#
+# 关键设计：
+#   - media_path = ep_003_final.mp4（仅今天这一幕）
+#   - audio_path = act3_mix.wav（今天这一幕的音频）
+#   - memory_episodes 由 M1 注入：ep_001(3天前) + ep_002(昨天) + ep_003(今天)
+#   - 前端 ⑥ 区域渲染 Historical / Current 双层结构
+#
+# 运行方式：
+#   python scripts/run_demo.py --live --scenario golden_repeated_visit
+
+scenario_id: golden_repeated_visit
+description: |
+  Golden Case：repeated_visit 重复来访跨日记忆（产品核心 Showcase）
+  Live 仅播放 ep_003_final.mp4（今天），Memory Context 展示 ep_001(3天前) + ep_002(昨天)。
+  核心叙事："今天再次出现单独看不危险，但 AI 记得过去两次 → 风险升级通知家属"。
+
+source: repeated_visit
+source_type: caviar_jpg
+
+start_time: "2026-08-13T18:20:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true
+
+# 仅使用今天这一幕（ep_003）
+# 完整三幕回放请用 Artifact: repeated_visit_demo.mp4
+media_path: data/golden/repeated_visit/output/ep_003_final.mp4
+
+# 今天这一幕的音频
+audio_path: data/golden/repeated_visit/audio_mix/act3_mix.wav

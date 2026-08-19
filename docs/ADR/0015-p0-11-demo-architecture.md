@@ -212,7 +212,7 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
   - **工程验证层（CAVIAR）**：`OneLeaveShopReenter1cor` / `OneStopEnter1cor` 等公开序列，确定性可复现，
     证明 `Tracking → Event → Feature → Rule` 链路正确。`night_visit` 剧本（`config/demo/scenarios/night_visit.yaml`）
     仍用 CAVIAR 做工程回归与阈值调优基线。
-  - **产品展示层（真实门口 MP4）**：演示者提供 `data/demo/real_doorway.mp4`（gitignore，不入库），
+  - **产品展示层（真实门口 MP4）**：演示者提供 `dataset/benign/media/real_doorway.mp4`（gitignore，不入库），
     证明「银龄盾场景价值」。`config/demo/scenarios/real_doorway.yaml` 用 `source_type: video_file` 接入，
     Dashboard / Pipeline / WarningEvent 零改动（P0-11.3 验证）。
   - **统一输出**：两轨都收敛到 `WarningEvent → HIGH_RISK_APPROACH`，评委看到的是
@@ -245,7 +245,7 @@ AI 风险中心（核心区）+ 行动闭环区（家属/社区面板）。
 
 > P0-11 **双轨输入**均属**受控演示输入**，用于演示系统闭环与架构消费契约，不代表真实部署环境的性能指标，亦不用于证明模型泛化能力：
 > - **CAVIAR 公开 fixture**（工程验证层）：确定性、可复现，用于回归 `Tracking → Event → Feature → Rule` 链路。
-> - **真实门口 MP4**（`data/demo/real_doorway.mp4`，演示者提供、gitignore 不入库）：属"真实场景素材"而非"真实部署"——
+> - **真实门口 MP4**（`dataset/benign/media/real_doorway.mp4`，演示者提供、gitignore 不入库）：属"真实场景素材"而非"真实部署"——
 >   它验证冻结架构允许外部真实输入无缝接入，但**仍非 7×24 实时摄像头 / 萤石设备直连**（那属 P0-12）。
 > Demo 的目标是被冻结的 AI 链路能够"被发现 → 被解释 → 被干预 → 被闭环"，而非验证检测模型在真实场景的准确率。
 

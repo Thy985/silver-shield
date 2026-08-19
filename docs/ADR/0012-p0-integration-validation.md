@@ -71,7 +71,7 @@ P0-9 Owner 三大必验证中两条是故障类（"失败保护" + "重复执行
 
 ### 决策 6：集成测试报告必须可审计
 
-放在 `docs/test-report/P0-integration-validation.md`，包含：
+放在 `docs/reports/P0-integration-validation.md`，包含：
 
 - 执行摘要（绿/红/异常数）
 - 6 个 Golden Scenarios 结果表
@@ -105,7 +105,7 @@ P0-9 Owner 三大必验证中两条是故障类（"失败保护" + "重复执行
 - 状态机双独立验证通过
 - 故障注入（失败 / 重复 / 数据缺失）全绿
 - 业务判定字段污染 = 0
-- 集成测试报告 `docs/test-report/P0-integration-validation.md` 已发布
+- 集成测试报告 `docs/reports/P0-integration-validation.md` 已发布
 
 ## 后续
 

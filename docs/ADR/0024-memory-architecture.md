@@ -11,7 +11,7 @@
   - ADR-0014（三级冻结治理，Memory 不入 L1/L2/L3 冻结）
   - `docs/TECH-DEBT.md` TD-0024（RecentBehaviorStore eviction）/ TD-0027（状态恢复）
 
-> **文档职责边界**：本 ADR 只回答 **"为什么需要 Memory、存什么、不存什么、三类记忆的边界、Memory Policy 的职责"**——即**决策与契约边界**。"改哪个文件、存储格式、查询接口、落盘时机"等**实现细节**归未来的工程落地方案（`docs/DESIGN-memory-pipeline.md`，本 ADR 不写）。冲突时按此分工归位。
+> **文档职责边界**：本 ADR 只回答 **"为什么需要 Memory、存什么、不存什么、三类记忆的边界、Memory Policy 的职责"**——即**决策与契约边界**。"改哪个文件、存储格式、查询接口、落盘时机"等**实现细节**归未来的工程落地方案（`docs/design/memory/DESIGN-memory-pipeline.md`，本 ADR 不写）。冲突时按此分工归位。
 
 ---
 
@@ -883,7 +883,7 @@ Memory 只读消费，为 Agent（Phase 5）提供输入，不直接驱动 Warni
 
 本 ADR 为 **Accepted**（2026-07-28），已在 `docs/ADR/README.md` 清单登记。
 
-工程落地方案：`docs/DESIGN-memory-pipeline.md`（按 Stage A–H 拆分）。
+工程落地方案：`docs/design/memory/DESIGN-memory-pipeline.md`（按 Stage A–H 拆分）。
 
 ### 10.1 实施进度（Slices 1–6 + Stage F + Integration Closure 已合入 main）
 

@@ -71,6 +71,15 @@
 | `MQTTPublisher(Protocol)` | `action/publisher.py` | `publish(topic, payload) -> bool`（不抛） |
 | `NotificationAdapter(Protocol)` | `action/notifier.py` | `notify_family / notify_community -> bool`（不抛） |
 | `Publisher(ABC)` | `output/publisher.py` | `publish(event: PerceptionEvent) -> None` |
+| **[v2] `AudioSource(ABC)`** | `audio/source.py` | 音频源；`load() -> LoadedAudio`（ADR-0026） |
+| **[v2] `VadBackend(ABC)`** | `audio/vad.py` | VAD 后端；`detect(frames) -> segments`（Tier0，零模型） |
+| **[v2] `AcousticTagger(ABC)`** | `audio/tagging.py` | 声学标签；`tag(segment) -> List[AudioTag]`（Tier1 YAMNet） |
+| **[v2] `MemoryPolicy(ABC)`** | `memory/policy.py` | 记忆策略；`build_episode(...) -> EpisodicRecord`（ADR-0024） |
+| **[v2] `Retrieval(ABC)`** | `memory/consumer/interfaces.py` | 记忆召回；`retrieve(input) -> List[EpisodicRecord]`（ADR-0025） |
+| **[v2] `Aggregation(ABC)`** | `memory/consumer/interfaces.py` | 记忆聚合；`aggregate(records) -> AggregationResult` |
+| **[v2] `ContextBuilder(ABC)`** | `memory/consumer/interfaces.py` | 上下文构建；`build(input, agg) -> ReasoningInput` |
+| **[v2] `MemoryConsumer(ABC)`** | `memory/consumer/interfaces.py` | 消费编排；`maybe_reason(event) -> Optional[ReasoningResult]` |
+| **[v2] `ReasoningEngine(ABC)`** | `memory/consumer/interfaces.py` | 推理引擎；`reason(input) -> ReasoningResult`（只读，不决策） |
 
 **冻结内容**：方法签名 + 抽象语义 + 异常约定（Protocol 返回 `bool` 而非 `raise`，重试 / 幂等由调用方负责）。
 
@@ -107,7 +116,7 @@
 4. **ABC 唯一权威** —— `FrameSource` 仅 `ingestion/frame_source.py`。
 5. **配置校验生效** —— `core/config.py` 拒绝负值 / NaN / 范围越界 / 非法枚举 / bool 误传。
 6. **`ruff check src tests` 无 error**。
-7. **集成测试全绿** —— `tests/test_*` + P0 Integration Validation（详见 `docs/test-report/P0-integration-validation.md`）。
+7. **集成测试全绿** —— `tests/test_*` + P0 Integration Validation（详见 `docs/reports/P0-integration-validation.md`）。
 
 ---
 

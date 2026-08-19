@@ -1,7 +1,7 @@
 # cctv_surveillance_suspicious 场景（真实视频验证 · P0-11.3 产品展示层）
 #
 # 真实监控录像：鬼鬼祟祟、反复出现在镜头里（演示者提供的真实素材，
-# 置于 data/demo/CCTV_Surveillance_Final.mp4，gitignore 不入库）。
+# 置于 dataset/benign/media/CCTV_Surveillance_Final.mp4，gitignore 不入库）。
 #
 # 验证目标（异常/高风险剧本）：
 # - VideoFileFrameSource 解码真实 MP4
@@ -17,11 +17,11 @@ description: |
   真实监控录像（鬼鬼祟祟反复出现）。夜间异常剧本：验证 VideoFileFrameSource
   解码真实 MP4 + 完整感知流水线在真实视频上的风险升级能力
   （重复来访 + 异常时段 + 异常停留 → HIGH_RISK_APPROACH）。
-  视频文件置于 data/demo/CCTV_Surveillance_Final.mp4（gitignore，不入库；由演示者提供）。
+  视频文件置于 dataset/benign/media/CCTV_Surveillance_Final.mp4（gitignore，不入库；由演示者提供）。
 
 source: cctv_surveillance
 source_type: video_file
-media_path: data/demo/CCTV_Surveillance_Final.mp4
+media_path: dataset/benign/media/CCTV_Surveillance_Final.mp4
 start_time: "2026-07-19T23:30:00+00:00"   # 夜间，OddHourRule 自然触发
 frame_interval_s: 0.5
 fps_target: 8

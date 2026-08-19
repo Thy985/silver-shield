@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-08-18T22:43:12.619109+00:00",
+  "generated_by": "ci",
+  "pipeline": "Trusted Case Factory (ADR-0036 P0-4.1)",
+  "renderer_version": "1.0.0",
+  "code_version": "91e6322",
+  "python": "3.12.14",
+  "numpy": "2.5.2",
+  "opencv-python": "5.0.0.93",
+  "torch": "2.13.0"
+}

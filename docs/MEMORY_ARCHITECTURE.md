@@ -210,7 +210,7 @@ Memory **绝不**腐化为隐形决策源（"这人以前危险所以报警"）�
 ## 7. 相关文档
 
 - `docs/ADR/0024-memory-architecture.md` — Memory 架构（Slice 1–6 + Stage F + Integration Closure 标注）
-- `docs/DESIGN-memory-pipeline.md` — Memory 内部设计
+- `docs/design/memory/DESIGN-memory-pipeline.md` — Memory 内部设计
 - `docs/DESIGN-memory-integration-closure.md` — 外部闭环设计（Slice B/C/A/D 规格）
 - `docs/MEMORY_OPERATION_GUIDE.md` — 运行 / 运维操作手册
 - `docs/MEMORY_TEST_REPORT.md` — 测试报告与验收样例

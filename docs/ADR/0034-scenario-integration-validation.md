@@ -3,7 +3,7 @@
 - **Status**: Accepted（2026-08-09 起草，同日 Owner 评审冻结设计）· **v1.0 实现冻结（2026-08-12，Owner 授权）**：Phase A/B/C 全部实现合入 `main`，DoD C1–C8 验收通过（详见 §8 修订记录）
 - **Date**: 2026-08-09
 - **Owner**: SilverShield 技术负责人
-- **Implementation Plan**: [`0034-implementation-plan.md`](0034-implementation-plan.md)（类型草案 / 注入伪码 / 分阶段 MUST 清单 / 测试编号明细；**非冻结件**，可随实现演进，不需 Owner 重审）
+- **Implementation Plan**: [`0034-implementation-plan.md`](../design/0034-implementation-plan.md)（类型草案 / 注入伪码 / 分阶段 MUST 清单 / 测试编号明细；**非冻结件**，可随实现演进，不需 Owner 重审）
 - **Related**:
   - ADR-0032（场景仿真层 · 上游输入源：`Scenario` / `ScenarioCompiler` / `ScenarioRunner` / `ScenarioValidator` / `generator.fingerprint`）
   - ADR-0033（Benchmark Harness · 同层"感知级"打分与门控；本 ADR 把验证面从"感知"扩展到"完整闭环"）
@@ -302,7 +302,7 @@ AudioScenario（声明式） ──Adapter──▶ list[AudioPerceptionEvent]
 ## 6. 实施切片（概要）
 
 > **分阶段铁律**（沿用 ADR-0033）：设计虽完整（D1–D8），**实施**严格分三阶段，每阶段独立 PR + Owner 评审 + 零行为变化。严禁 Phase A 一次做全。
-> **详细 MUST / MUST NOT 清单、测试编号明细见 [Implementation Plan](0034-implementation-plan.md) §4。**
+> **详细 MUST / MUST NOT 清单、测试编号明细见 [Implementation Plan](../design/0034-implementation-plan.md) §4。**
 
 | 阶段 | 目标 | 达成的决策 | 明令不做 |
 |---|---|---|---|

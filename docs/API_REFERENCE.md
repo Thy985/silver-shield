@@ -235,6 +235,7 @@ class FrameSource(ABC):
 
 - **`Settings`**：`src/home_perception/core/config.py`，`Settings.load("config/default.yaml")` 从 YAML 读取（支持 `${ENV_VAR:-default}` 展开，凭证走环境变量）。
 - **阈值 / 权重**：`RuleConfig`（YAML）→ `ThresholdConfig`（规则层内部），集中配置化（ADR-0009）。
+- **[v2] 子配置类**：`RuntimeConfig`（运行时模式）/ `RealtimeRiskConfig`（实时风险流，`enabled=false` 默认关闭）/ `MemoryConfig`（记忆系统，`episodic_shadow=false` 默认关闭）/ `AudioConfig`（音频感知，默认关闭）。均在 `Settings` 下，pydantic 校验。
 - **配置校验**：负值 / NaN / 范围越界 / 非法枚举 / bool 误传会被 pydantic 校验拒绝（ADR-0014 前置 #5，见 `tests/contract/test_config_contract.py`）。
 
 ---
@@ -323,6 +324,56 @@ External Device / Video
 - **命名消歧**：本模块的 `SourceModality` 与 ADR-0022 的 `EvidenceModality` 是**两个独立限界上下文**的枚举（值集不同、语义不同），实现时禁止互相 import 复用或合并。
 
 > **Stage B 接入预告**（未实现）：`BehaviorBuilder` + `RealTimeRiskEvaluator` + `signal_adapter.risk_signal_to_perception()` 将在 `process_frame` 增加旁路（`realtime_risk.enabled=false` 默认关闭），实时信号经 adapter 复用既有 `PerceptionEvent` + `DecisionPolicy.decide()` 汇入同一决策中心，**不改 RuleEngine / DecisionEngine / 5 类 EventType**（详见工程方案 §3.1 / §6）。
+
+---
+
+## 12a. v2 模块 API（后 MVP · 已合入 main）
+
+> 以下为 v2 增量模块的公共 API 表面。详见各 ADR 与 `docs/03_directory_layout.md`。所有 v2 模块默认关闭，不破坏 MVP 历史链路。
+
+### 音频感知 `audio/`（ADR-0026）
+
+- **`AudioSource(ABC)`** `audio/source.py`：`load() -> LoadedAudio`（可插拔音源：File/LocalMic/RTSP）
+- **`VadBackend(ABC)`** `audio/vad.py`：Tier0 VAD（EnergyVadBackend / WebRtcVadBackend，零模型）
+- **`AcousticTagger(ABC)`** `audio/tagging.py`：Tier1 声学标签（YamNetTagger，5 类 AudioPerceptionKind）
+- **`AudioPipeline`** `audio/pipeline.py`：音频感知流水线编排
+- **`AudioPerceptionEvent`** `audio/event.py`：声学感知事件（AUDIO_RAISED_VOICE / COMMUNICATION / CRYING / TELEPHONE / NORMAL）
+
+### 记忆系统 `memory/`（ADR-0024/0025）
+
+- **`MemoryStore(ABC)`** `memory/store.py`：`save_episode() / all_episodic() / get_links_for_episode()`
+- **`MemoryPolicy(ABC)`** `memory/policy.py`：`build_episode(...) -> EpisodicRecord`
+- **`MemoryQuery.compose_context()`** `memory/query.py`：Product Closure 唯一对外 API（V0 边界冻结）
+- **`CrossModalLinker`** `memory/cross_modal_link.py`：同源跨模态建边（ADR-0028）
+- **`CrossModalExplainer`** `memory/cross_modal_explainer.py`：只读检索 + 解释（ADR-0029，非判断）
+- **Consumer Layer** `memory/consumer/`：`Retrieval` → `Aggregation` → `ContextBuilder` → `ReasoningEngine`（ABC 全在 `interfaces.py`），`RuleBasedMemoryConsumer` 编排；产出 `ReasoningResult`（advisory，**不决策、不改 Risk Score**）
+
+### 场景仿真 `validation/`（ADR-0032）
+
+- **`Scenario`** `validation/scenario.py`：声明式场景 schema（pydantic，含 environment/actors/camera/expects）
+- **`ScenarioCompiler`** `validation/compiler.py`：YAML → Scenario 对象
+- **`ScenarioRunner`** / **`ScenarioValidator`** `validation/runner.py`：场景执行 + 校验
+
+### 评估 `evaluation/`（ADR-0033）
+
+- **`BenchmarkHarness`** `evaluation/harness.py`：场景 + pipeline → 回归
+- **`ScenarioScore`** `evaluation/metrics.py`：混淆矩阵（TP/FN/FP/TN + suppression_rate）
+- **`BenchmarkReport`** `evaluation/report.py`：回归报告
+- **`GateResult`** `evaluation/gate.py`：门禁结果（Phase 3 生产门控）
+
+### 集成验证 `integration/`（ADR-0034）
+
+- **`IntegrationRunner`** `integration/runner.py`：`run(scenario, context=None) -> IntegrationRunResult`（禁收已装配 pipeline）
+- **`IntegrationValidator`** `integration/validator.py`：逐阶段 AND + F1–F6 失败归类（fail-closed）
+- **`IntegrationReport`** `integration/report.py`：闭环报告 + 两枚分层指纹
+- **`IntegrationContext`** `integration/context.py`：探针唯一容器（`build()` 唯一创建点）
+
+### 可视化 `visualizer/`（ADR-0035/0036）
+
+- **`EvidenceProjection`** `visualizer/evidence.py`：展示层统一投影（TypedDict，禁 synthetic node）
+- **`EvidenceGraph`** `visualizer/graph.py`：证据图（节点 Scenario/Detection/Event/Decision/Action/Episode/Link）
+- **`CaseVideoSpec`** `visualizer/spec.py`：Case Video 规格（D-CaseVideo）
+- **展示层边界**：禁 import 生产/验证代码（AST 死胡同叶子，`visualizer/schema/` 自建类型例外）；唯一例外 D3 Evidence Story Compiler 经授权单向 import `validation`/`audio`（仅读取）
 
 ---
 

@@ -18,7 +18,7 @@
 ## 8.2 第一阶段（MVP）任务拆解 —— D 交付物
 
 > 优先级 P0（比赛必交）/ P1（强建议）/ P2（增强）。每项给出产出与验收。
-> **交付状态**：P0-1~P0-11 全部 ✅ 完成；MVP Release Candidate tag `v0.1.0-mvp-rc` 已打（2026-07-20），289 测试全绿。各子阶段状态见其标题标注。
+> **交付状态**：P0-1~P0-11 全部 ✅ 完成；MVP Release Candidate tag `v0.1.0-mvp-rc` 已打（2026-07-20），2295 测试全绿（含 v2 模块）。各子阶段状态见其标题标注。
 
 ### P0-1 工程脚手架（✅ 已完成）
 - 产出：目录树、`pyproject`、依赖、`config`、`docs`、契约代码、git 初始化。
@@ -212,7 +212,7 @@
 - 任务：在进入 P0-10 装配联调之前，把 P0-3~P0-9 模块串成完整链路做端到端验证，
   避免 P0-10 装配时混淆"逻辑问题"和"装配问题"。
 - 触发：Owner P0-9 review 后明确"建议顺序：先做一次完整测试，再开 P0-10 装配联调"。
-- 6 个 Golden Scenarios（系统级 e2e，详见 `docs/test-report/P0-integration-validation.md`）：
+- 6 个 Golden Scenarios（系统级 e2e，详见 `docs/reports/P0-integration-validation.md`）：
   1. **正常访客**（30s + 上午）→ 无 PerceptionEvent / 无 Warning / 无 Action（"看到人不报警"边界）
   2. **异常停留**（600s）→ `abnormal_dwell` → LOW / NOTIFY_FAMILY / SEND_FAMILY_MESSAGE
   3. **重复访问**（3 次 / 5 分钟间隔）→ `repeat_visit` → LOW / NOTIFY_FAMILY
@@ -227,7 +227,7 @@
 - CAVIAR 真实场景回归：OneStopEnter1cor / OneLeaveShopReenter1cor / Meet_WalkTogether1
   从 frame → ActionCommand 全链路跑通（无 exception + 无字段污染）
 - 验收：`pytest` **274 全绿**（256 + 18 新增集成测试）；`ruff` 全绿；详见
-  `docs/test-report/P0-integration-validation.md`；ADR-0012 决策固化
+  `docs/reports/P0-integration-validation.md`；ADR-0012 决策固化
 - **准入条件**：✅ 全部满足，可进入 P0-10 装配联调阶段
 
 ### P0-10 装配与联调（runtime/ 包 + DemoClock + Demo 端到端）【✅ 已完成 · 2026-07-20】
@@ -348,7 +348,7 @@
 - 场景双轨定位（Owner 调整 · 2026-07-21）：**CAVIAR 与真实 MP4 各司其职，不互相替换删除**。
   - **工程验证层（CAVIAR）**：`OneLeaveShopReenter1cor` / `OneStopEnter1cor` 等公开序列，确定性可复现，
     证明 `Tracking → Event → Feature → Rule` 链路正确（night_visit 剧本仍用 CAVIAR 做工程回归）。
-  - **产品展示层（真实门口 MP4）**：演示者提供 `data/demo/real_doorway.mp4`（gitignore，不入库），
+  - **产品展示层（真实门口 MP4）**：演示者提供 `dataset/benign/media/real_doorway.mp4`（gitignore，不入库），
     证明「银龄盾场景价值」。二者统一输出 `WarningEvent → HIGH_RISK_APPROACH`，评委看到的是
     「真实场景输入 → 工业级架构 → 风险闭环」，而非单纯 CAVIAR。
   - **为何真实数据提前（P0-11.3）**：验证冻结架构（ADR-0014 L2 FrameSource 契约）是否真的允许外部输入替换——
@@ -419,7 +419,7 @@ D. 音频（增强，非第一价值；按 Phase 3 薄实现）
 
 ### 8.5 Memory 架构（ADR-0024）实施进度
 
-> ADR-0024（Accepted 2026-07-28）定义三类记忆模型 + Memory Policy 转换边界；工程方案 `docs/DESIGN-memory-pipeline.md` 按 Stage A–H 拆分。
+> ADR-0024（Accepted 2026-07-28）定义三类记忆模型 + Memory Policy 转换边界；工程方案 `docs/design/memory/DESIGN-memory-pipeline.md` 按 Stage A–H 拆分。
 > **Slices 1–6 + Stage F 已合入 `main`**，单元测试全绿；**Stage F Pipeline Shadow Mode 已接线**（`runtime/pipeline.py` 接入 `InMemoryStore` + `DefaultEpisodeBuilder`，由 `memory.episodic_shadow` 控制，**默认关闭，v1 不产 Warning**）。**Integration Closure（System × Memory 外部闭环，B→C→A→D）已完成**：Memory 融入整体架构并能产出可审计用户价值（设计稿 `DESIGN-memory-integration-closure.md`）。
 
 | Slice | Stage | 交付 | PR | 状态 |

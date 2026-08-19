@@ -12,7 +12,7 @@ scenario_name: "S2_abnormal_dwell"
 description: "异常停留核心场景（CCTV 可疑停留循环，验证 RAISED→CLEARED 配对）"
 
 video:
-  source: "data/demo/CCTV_Surveillance_Final.mp4"
+  source: "dataset/benign/media/CCTV_Surveillance_Final.mp4"
   loop_count: 10  # 循环 10 次
 
 clock:
