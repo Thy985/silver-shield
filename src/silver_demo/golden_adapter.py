@@ -2,7 +2,7 @@
 
 ## 核心原则
 
-- **纯映射**：只读 ``data/golden/{case}/manifest.yaml``，把已有字段翻译到 ScenarioConfig-shape。
+- **纯映射**：只读 ``dataset/{case}/manifest.yaml``，把已有字段翻译到 ScenarioConfig-shape。
   - **不**复制 manifest 内容到新 yaml
   - **不**为某个 case 写特例分支
   - **不**填"看起来合理"的默认值
@@ -54,11 +54,11 @@ def _repo_root() -> Path:
 
 def _load_manifest(case: str) -> dict[str, Any]:
     """读取 manifest.yaml（fail-closed：缺失即抛）。"""
-    p = _repo_root() / "data" / "golden" / case / "manifest.yaml"
+    p = _repo_root() / "dataset" / case / "manifest.yaml"
     if not p.is_file():
         raise FileNotFoundError(
             f"Golden case manifest 不存在：{p}\n"
-            f"   可用 case（资产在 data/golden/）：{', '.join(GOLDEN_CASES)}"
+            f"   可用 case（资产在 dataset/）：{', '.join(GOLDEN_CASES)}"
         )
     return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
 
@@ -128,8 +128,8 @@ def _resolve_golden_paths(case: str) -> tuple[Path, Path | None]:
     - 音频：``audio_mix/{case}_mix.wav`` → case-specific 兜底
     """
     root = _repo_root()
-    media_dir = root / "data" / "golden" / case / "output"
-    audio_dir = root / "data" / "golden" / case / "audio_mix"
+    media_dir = root / "dataset" / case / "media"
+    audio_dir = root / "dataset" / "_canonical" / "audio_mix" / case
 
     # 视频：通用路径 + case-specific 兜底（与资源命名约定对齐，不写特例逻辑）
     media_candidates = [
@@ -209,7 +209,7 @@ class GoldenScenarioConfig(BaseModel):
 
 
 def load_golden_scenario(case: str) -> GoldenScenarioConfig:
-    """从 data/golden/{case}/manifest.yaml 加载 → 纯映射为 GoldenScenarioConfig。
+    """从 dataset/{case}/manifest.yaml 加载 → 纯映射为 GoldenScenarioConfig。
 
     Args:
         case: golden case 名（必须 ∈ GOLDEN_CASES 集合或实际目录存在）
@@ -260,7 +260,7 @@ def load_golden_scenario(case: str) -> GoldenScenarioConfig:
 def list_golden_cases() -> list[str]:
     """列出当前可用的 golden case（实际目录存在）。"""
     root = _repo_root()
-    base = root / "data" / "golden"
+    base = root / "dataset"
     if not base.is_dir():
         return []
     return sorted(
