@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         default=False,
         help=(
             "黄金案例集（Golden Scenario Set）生产模式：scenarios 默认指向 golden fixtures，"
-            "媒体从 data/golden 挂载（G0-4；golden 专属视频资产 + 跨日历史记忆考题）。"
+            "媒体从 dataset 挂载（G0-4；golden 专属视频资产 + 跨日历史记忆考题）。"
         ),
     )
     args = parser.parse_args(argv)
@@ -280,18 +280,18 @@ def main(argv: list[str] | None = None) -> int:
     # 故传 --missing-skip：视频缺失跳过（媒体为可选展示增强，缺失不影响可信 artifact 完整性）；
     # 本地有视频则挂上真实主轴画面。
     if args.media:
-        # G0-4：golden 模式从 data/golden 挂载专属视频资产（黄金案例集，gitignore 不入库）。
+        # G0-4：golden 模式从 dataset 挂载专属视频资产（黄金案例集，gitignore 不入库）。
         from scripts.prepare_case_media import _DEFAULT_GOLDEN_MEDIA_MAP
 
         pm_argv = ["--artifacts", str(canonical_dir), "--missing-skip"]
         if args.golden:
             pm_argv += [
-                "--media-root", str(_repo_root / "data" / "golden"),
+                "--media-root", str(_repo_root / "dataset"),
                 "--map", ",".join(f"{sid}={video}" for sid, video in _DEFAULT_GOLDEN_MEDIA_MAP.items()),
             ]
             logger.info(
                 "Trusted Case Factory · 步骤5.6 golden 媒体映射",
-                media_root="data/golden",
+                media_root="dataset",
                 map=dict(_DEFAULT_GOLDEN_MEDIA_MAP),
             )
         logger.info("Trusted Case Factory · 步骤5.6 准备真实案例媒体（主轴视频）", artifacts=str(canonical_dir))

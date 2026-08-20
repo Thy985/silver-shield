@@ -32,8 +32,7 @@ from .conftest import make_artifacts
 
 _GOLDEN_MANIFEST = (
     Path(__file__).resolve().parent.parent.parent
-    / "data"
-    / "golden"
+    / "dataset"
     / "repeated_visit"
     / "manifest.yaml"
 )

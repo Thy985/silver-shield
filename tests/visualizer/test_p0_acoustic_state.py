@@ -3,7 +3,7 @@
 P0-1 数据鸿沟修复后：声学状态机 / voice_stress_score / deltas 经 loader 投影进入
 ``audio_evidence``，渲染卡须真实呈现这些**可观测量值**，而非硬编码「音高 / 能量等」。
 
-P0-2 golden E2E：真实读取 ``data/golden/telephone_risk/manifest.yaml``（设计契约真源），
+P0-2 golden E2E：真实读取 ``dataset/telephone_risk/manifest.yaml``（设计契约真源），
 把其声明式声学状态机映射进 canonical ``audio_*`` 契约，经**真实 loader + 真实 renderer**
 全链路验证：状态机数值入卡、voice_stress_score 入卡、跨模态 SUPPORTS 行在生产管线形状下产出。
 
@@ -25,7 +25,7 @@ from .conftest import make_artifacts
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GOLDEN_MANIFEST = (
-    _REPO_ROOT / "data" / "golden" / "telephone_risk" / "manifest.yaml"
+    _REPO_ROOT / "dataset" / "telephone_risk" / "manifest.yaml"
 )
 
 

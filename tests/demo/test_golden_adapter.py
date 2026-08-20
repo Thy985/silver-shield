@@ -9,8 +9,8 @@
 6. audio 缺失时不抛（诚实的无音频场景）
 7. 不存在的 case 抛 FileNotFoundError（fail-closed）
 
-注意：data/golden/ 是大体积生产素材，被 .gitignore 排除，
-CI 环境中不存在。以下测试在 golden data 不可用时自动跳过。
+注意：dataset/ 是大体积生产素材，git 不跟踪大文件。
+CI 环境中可能存在也可能不存在。以下测试在 golden data 不可用时自动跳过。
 """
 import os
 import sys
@@ -24,16 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # 仓库根 = tests/ 的祖父（不是父）
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Golden data availability: data/golden/ is gitignored (large assets),
-# so tests must skip when the directory is absent (e.g. in CI).
-GOLDEN_DATA_DIR = REPO_ROOT / "data" / "golden"
+# Golden data availability: dataset/ has the golden cases (moved from data/golden/).
+GOLDEN_DATA_DIR = REPO_ROOT / "dataset"
 GOLDEN_DATA_AVAILABLE = GOLDEN_DATA_DIR.is_dir() and any(
     (GOLDEN_DATA_DIR / case).is_dir() for case in ("stranger_visit", "repeated_visit", "telephone_risk", "evidence_insufficient")
 )
 
 skip_if_no_golden = pytest.mark.skipif(
     not GOLDEN_DATA_AVAILABLE,
-    reason="data/golden/ not present (gitignored large assets; skip in CI)",
+    reason="dataset/ not present (skip when golden data missing)",
 )
 
 from silver_demo.golden_adapter import (
@@ -58,8 +57,8 @@ def test_all_four_golden_cases_load():
         assert sc.source == case
         assert sc.source_type == "video_file"
         assert sc.media_path is not None
-        # 路径必须以 data/golden/{case}/ 开头（用 os.sep 兼容 Windows/Linux）
-        expected_prefix = f"data{os.sep}golden{os.sep}{case}{os.sep}"
+        # 路径必须以 dataset/{case}/ 开头（用 os.sep 兼容 Windows/Linux）
+        expected_prefix = f"dataset{os.sep}{case}{os.sep}"
         assert sc.media_path.startswith(expected_prefix), (
             f"{case}: media_path {sc.media_path!r} should start with {expected_prefix!r}"
         )
@@ -183,7 +182,7 @@ def test_audio_path_or_none():
         sc = load_golden_scenario(case)
         # 音频可能存在或不存在，但不应抛
         if sc.audio_path:
-            assert "golden" in sc.audio_path
+            assert "dataset" in sc.audio_path
 
 
 # ===========================================================================

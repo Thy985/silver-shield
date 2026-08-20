@@ -3,7 +3,7 @@
 验证 golden 生产模式的静态契约：
 - ``--golden`` 参数存在且解析为 True（不触发前缀匹配陷阱）；
 - golden 默认场景目录存在且含 golden fixtures；
-- golden 媒体映射（data/golden 相对路径）结构合法，本地资产存在时指向真实视频；
+- golden 媒体映射（dataset 相对路径）结构合法，本地资产存在时指向真实视频；
 - prepare_case_media 的 golden 映射键与 golden fixtures 的 scenario_id 对齐。
 
 完整 CI 生产链（golden repeated_visit → canonical → Case Viewer）由端到端脚本验证
@@ -43,12 +43,12 @@ def test_golden_fixtures_dir_exists():
 
 
 def test_golden_media_map_structure():
-    """golden 媒体映射：值相对 data/golden、键对齐 golden fixtures scenario_id。"""
+    """golden 媒体映射：值相对 dataset、键对齐 golden fixtures scenario_id。"""
     from scripts.prepare_case_media import _DEFAULT_GOLDEN_MEDIA_MAP
 
     assert _DEFAULT_GOLDEN_MEDIA_MAP  # 非空
     for sid, rel in _DEFAULT_GOLDEN_MEDIA_MAP.items():
-        # 相对路径（media_root=data/golden 下），不含绝对路径/穿越。
+        # 相对路径（media_root=dataset 下），不含绝对路径/穿越。
         assert not Path(rel).is_absolute(), f"{sid} 映射必须是相对路径"
         assert ".." not in rel, f"{sid} 映射不得穿越"
         assert rel.endswith(".mp4"), f"{sid} 映射必须是 mp4"
@@ -62,13 +62,13 @@ def test_golden_media_map_structure():
 
 
 @pytest.mark.skipif(
-    not (_REPO_ROOT / "data/golden").is_dir(),
-    reason="data/golden 资产（gitignore）未检出",
+    not (_REPO_ROOT / "dataset").is_dir(),
+    reason="dataset/ 资产未检出",
 )
 def test_golden_media_map_targets_exist_locally():
-    """本地有 data/golden 资产时，映射指向真实视频文件。"""
+    """本地有 dataset 资产时，映射指向真实视频文件。"""
     from scripts.prepare_case_media import _DEFAULT_GOLDEN_MEDIA_MAP
 
     for sid, rel in _DEFAULT_GOLDEN_MEDIA_MAP.items():
-        target = _REPO_ROOT / "data/golden" / rel
-        assert target.is_file(), f"{sid} -> {rel} 不存在（data/golden 资产缺失）"
+        target = _REPO_ROOT / "dataset" / rel
+        assert target.is_file(), f"{sid} -> {rel} 不存在（dataset 资产缺失）"
