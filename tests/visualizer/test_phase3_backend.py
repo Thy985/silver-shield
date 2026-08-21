@@ -1,4 +1,4 @@
-"""Phase 3 · Live Adapter 后端能力补齐（person_present / rms_window / memory_timeline）。
+"""Phase 3 · Live Adapter 后端能力补齐（person_present / rms_window / memory_timeline / Waveform）。
 
 覆盖验收：
 - person_present 状态机：持续在场语义（count + duration_s）
@@ -6,6 +6,7 @@
 - memory_timeline 占位：🟡 Partial 阻塞于 Memory API，返回空列表
 - extract_perception_delta 含 person_present 字段
 - extract_evidence_delta 含 rms_window 字段
+- _render_waveform_surface：telephone_risk 输出 canvas，cctv 返回空串
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from home_perception.visualizer.viewer.live_adapter import ProjectionAccumulator
+from home_perception.visualizer.viewer.render import _render_waveform_surface
 
 
 def _make_frame(frame_index, *, n_detections=0, detections=()):
@@ -192,3 +194,38 @@ def test_memory_timeline_no_production_imports():
         for m in modules:
             for f in forbidden:
                 assert not m.startswith(f), f"禁止 import {f}，发现 {m}"
+
+
+# ------------------------------------------------------------------
+# Phase 3 Waveform: _render_waveform_surface
+# ------------------------------------------------------------------
+
+def test_waveform_surface_rendered_for_telephone_risk():
+    """telephone_risk 场景 → _render_waveform_surface 输出含 canvas 的 HTML。"""
+    scenario = {"scenario_id": "telephone_risk"}
+    html = _render_waveform_surface(scenario)
+    assert 'id="waveform-canvas-' in html
+    assert 'id="waveform-surface-' in html
+    assert "RMS 连续波形" in html
+    assert 'class="waveform-surface"' in html
+
+
+def test_waveform_surface_hidden_for_cctv():
+    """cctv_surveillance 场景 → _render_waveform_surface 返回空串（AC-12 无音频完全隐藏）。"""
+    scenario = {"scenario_id": "cctv_surveillance"}
+    html = _render_waveform_surface(scenario)
+    assert html == ""
+
+
+def test_waveform_surface_default_scenario():
+    """未知场景 → 默认无音频 → 返回空串。"""
+    scenario = {"scenario_id": "some_unknown"}
+    html = _render_waveform_surface(scenario)
+    assert html == ""
+
+
+def test_waveform_surface_scenario_id_in_canvas():
+    """canvas 携带 data-scenario 属性（供 JS 通过 sid 查找）。"""
+    scenario = {"scenario_id": "telephone_risk"}
+    html = _render_waveform_surface(scenario)
+    assert 'data-scenario="telephone_risk"' in html

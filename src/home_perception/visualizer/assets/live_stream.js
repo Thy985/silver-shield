@@ -181,6 +181,44 @@
       '<p class="acoustic-state-note muted">声学状态变化来自 runtime golden_audio_state（非诈骗判定）</p>';
   }
 
+  // Phase 3 Waveform：RMS 连续波形绘制（telephone_risk 专属，VM-9 零推理）
+  // 数据源：evidence_delta.rms_window（list[float]，最近 N 个 RMS 采样）
+  // Canvas 暗底 + 渐变紫色柱状图，bar 高度 = rms * 50%（最大值归一化到 canvas 高度）
+  function _drawWaveform(sid, rmsWindow) {
+    var canvas = global.document.getElementById('waveform-canvas-' + sid);
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    var w = canvas.width || canvas.clientWidth;
+    var h = canvas.height || canvas.clientHeight;
+    // 清屏（暗底 #1e293b）
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(0, 0, w, h);
+    if (!rmsWindow || rmsWindow.length === 0) {
+      ctx.fillStyle = '#475569';
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('等待音频采样…', w / 2, h / 2 + 4);
+      return;
+    }
+    var n = rmsWindow.length;
+    var barW = Math.max(1, Math.floor(w / n));
+    var gap = Math.max(1, Math.ceil(w / n) - barW);
+    // RMS 范围 [0,1]，映射到 [h*0.1, h]（底部留 10% padding）
+    var maxH = h * 0.9;
+    for (var i = 0; i < n; i++) {
+      var rms = Math.min(1, Math.max(0, parseFloat(rmsWindow[i]) || 0));
+      var barH = rms * maxH;
+      var x = i * (barW + gap);
+      // 渐变色：低 RMS 蓝色 → 高 RMS 紫色
+      var r = Math.round(139 + (168 - 139) * rms);
+      var g = Math.round(92 + (48 - 92) * rms);
+      var b = Math.round(198 + (207 - 198) * rms);
+      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+      ctx.fillRect(x, h - barH, barW, barH);
+    }
+  }
+
 
   // Phase 1 L5：Provenance 快捷入口降级处理（浏览器原生 href 已可展开 details）
   function _bindWhyBelieveLinks() {
@@ -802,6 +840,8 @@
     }
     // Phase 2 L2：声学状态实时更新（telephone_risk 专属）
     _updateAcousticState(msg);
+    // Phase 3 Waveform：RMS 连续波形绘制（telephone_risk 专属）
+    _drawWaveform(sid, msg.rms_window);
   }
 
   // LP-1：真实同步帧流（frame_tick 心跳：frame_index / case_time / loop_count）。

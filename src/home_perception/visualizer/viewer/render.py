@@ -339,6 +339,25 @@ def _render_audio_sensor_status(scenario: ScenarioEvidence) -> str:
       </div>"""
 
 
+def _render_waveform_surface(scenario: ScenarioEvidence) -> str:
+    """Phase 3 Waveform：RMS 连续波形 Canvas（telephone_risk 专属，cctv 等无音频场景返回空串）。
+
+    数据源：``evidence_delta.rms_window``（list[float]，最近 N 个 RMS 采样）。
+    前端由 live_stream.js ``_drawWaveform(sid, rms_window)`` 驱动绘制。
+    AC-12：无音频场景不输出 canvas 元素（完全隐藏，非禁用）。
+    """
+    sid_html = _R._esc(scenario.get("scenario_id", ""))
+    if not has_audio_surface(scenario.get("scenario_id", "")):
+        return ""
+    return f"""
+      <div class="waveform-surface" id="waveform-surface-{sid_html}">
+        <canvas id="waveform-canvas-{sid_html}" width="400" height="60"
+                data-scenario="{sid_html}"
+                aria-label="RMS 连续波形（最近 {20} 个音频采样）"></canvas>
+        <p class="sensor-card-note muted">RMS 连续波形 · 最近 20 采样</p>
+      </div>"""
+
+
 def _render_current_risk(scenario: ScenarioEvidence) -> str:
     """当前风险卡片（派生展示：来自 risk_levels / trace_outcome_kinds，VM-1）。"""
     risk_str = (
@@ -1556,6 +1575,8 @@ def _render_live_shell(
                 </div>
                 {_render_audio_sensor_status(scenario)}
               </div>
+              <!-- Phase 3 Waveform：RMS 连续波形（telephone_risk 专属，cctv 等无音频场景隐藏） -->
+              {_render_waveform_surface(scenario)}
               {manifest_island}
             </div>
           </section>
@@ -2496,7 +2517,14 @@ def render_case_viewer(
                         font-size:12px; }}
   .sensor-card-meta dt {{ color:#64748b; font-weight:600; }}
   .sensor-card-meta dd {{ margin:0; color:#1c2733; }}
-  .sensor-card-note {{ font-size:11px; line-height:1.4; margin:0; }}
+   .sensor-card-note {{ font-size:11px; line-height:1.4; margin:0; }}
+   /* Phase 3 Waveform：RMS 连续波形 Canvas */
+   .waveform-surface {{ grid-column:span 12; background:#f8fafc; border:1px solid #e3e8ee;
+                        border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }}
+   .waveform-surface canvas {{ width:100%; height:60px; display:block; border-radius:4px;
+                               background:#1e293b; }}
+   /* cctv_surveillance 等无音频场景：Waveform 完全隐藏（AC-12） */
+   .waveform-surface[hidden] {{ display:none; }}
   .audio-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; }}
   .audio-status-dot.audio-active {{ background:#16a34a;
                                      box-shadow:0 0 0 3px rgba(22,163,74,0.18); }}
