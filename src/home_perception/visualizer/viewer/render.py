@@ -2520,8 +2520,9 @@ def render_case_viewer(
   .region > h2 .tag {{ font-size:11px; font-weight:600; color:#1c4f7c; background:#dcebfb;
                        padding:2px 8px; border-radius:999px; }}
   .region .body {{ padding:12px 14px; overflow:auto; }}
-  .lv-now {{ grid-column:span 12; }}
-  .lv-perception {{ grid-column:span 8; }}
+   /* 文档架构：左侧 OBSERVE + 右侧 UNDERSTAND（横向布局） */
+   .lv-now {{ grid-column:span 4; }}
+   .lv-perception {{ grid-column:span 8; }}
   .lv-why {{ grid-column:span 4; }}
   .lv-action {{ grid-column:span 12; }}
   .lv-history {{ grid-column:span 12; }}
