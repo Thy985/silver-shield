@@ -3,6 +3,7 @@
 > **审计时间**: 2026-08-21  
 > **审计目标**: 逐项验证每个 Surface 是否有真实 Runtime Fact 支撑  
 > **核心问题**: Capability available ≠ Surface useful in current scenario ≠ Evidence continuous
+> **配套**: `LIVE-PERCEPTION-STREAM-SPEC.md`（主规格）、`LIVE-PERCEPTION-STREAM-SEMANTICS.md`（语义表）
 
 ---
 
@@ -28,7 +29,7 @@
 
 | # | 问题 | 答案 | 说明 |
 |---|------|------|------|
-| 1 | 能力存在吗？ | ✅ 是 | WebSocket + frame_tick + audio_segment_tick |
+| 1 | 能力存在吗？ | ✅ 是 | WebSocket + frame_tick + audio event 推断 |
 | 2 | 场景支持吗？ | ✅ Strong | 视频 + 音频双输入 |
 | 3 | 数据连续？ | ✅ Continuous | 帧级 + 段级持续流动 |
 | 4 | 变化明显？ | N/A | 存在性证据，非信号 |
@@ -38,231 +39,137 @@
 
 **实际 Runtime Evidence**:
 - `frame_index`: 0-449（15s @ 30fps 媒体帧）
-- `runtime_tick_count`: ~8 fps（配置帧率）
+- `runtime_tick_count`: ~8 fps（配置帧率，≠ frame_index）
 - `audio_segments`: 9 段（VAD 分割）
 - `websocket_heartbeat`: 持续
 
-**Continuity**: session 生命周期
-
-**Product Value**: Critical — 没有 L0，后面所有判断都是黑箱
-
-**UI Priority**: P0 — 首屏顶部固定显示
+**⚠️ Reality Check**:
+- 不能声称"延迟 120ms"（前端估算，非端到端测量）
+- 应标注"延迟 ~120ms*"
 
 ---
 
-### L1: Person Perception
+### ① OBSERVE: Video Input
 
 | # | 问题 | 答案 | 说明 |
 |---|------|------|------|
-| 1 | 能力存在吗？ | ✅ 是 | YOLO11n Person class_id=0 |
-| 2 | 场景支持吗？ | 🟡 Partial | 有人但非主要风险信号 |
-| 3 | 数据连续？ | ✅ Continuous | 8 fps 持续检测 |
-| 4 | 变化明显？ | 🟡 Medium | 人员在场是静态事实，非风险信号 |
-| 5 | UI 实时表现？ | ✅ 是 | bbox overlay + 计数 |
-| 6 | 可回溯？ | ✅ Full | event_id + timestamp + media_ref |
-| 7 | UI 优先级？ | **P1** | 辅助证据，非核心叙事 |
+| 1 | 能力存在吗？ | ✅ 是 | MJPEG 流（`/mjpeg/{sid}`） |
+| 2 | 场景支持吗？ | ✅ Strong | 完整视频输入 |
+| 3 | 数据连续？ | ✅ Continuous | ~8 fps 持续推流 |
+| 4 | 变化明显？ | ✅ Strong | 每帧有内容变化 |
+| 5 | UI 实时表现？ | ✅ 是 | `<img src="/mjpeg/{sid}">` |
+| 6 | 可回溯？ | ✅ Full | frame_index → case_time |
+| 7 | UI 优先级？ | **P0** | 核心视觉输入 |
 
 **实际 Runtime Evidence**:
-- `person_count`: 1（持续）
-- `detection_count`: ~449（全帧检出）
-- `avg_confidence`: 0.83
+- `frame_tick`: 每帧推送 base64 JPEG
+- `case_time`: 从 frame_index 推导
 
-**Continuity**: 跨帧 track_id 保持
-
-**Product Value**: Medium — 证明"有人在场"，但非风险判定依据
-
-**UI Priority**: P1 — 首屏摘要区显示"1 人在场"，详情进 Timeline
+**禁止**:
+- ❌ 显示 `frame_index`（应显示 `case_time`）
+- ❌ 显示检测数 overlay（`ov-det`）— 工程信息
 
 ---
 
-### L1: Audio Perception — Trust Layer
+### ① OBSERVE: Audio Input
 
 | # | 问题 | 答案 | 说明 |
 |---|------|------|------|
-| 1 | 能力存在吗？ | ✅ 是 | audio_available 布尔推断 |
+| 1 | 能力存在吗？ | 🟡 Partial | RMS segment 存在，非连续流 |
 | 2 | 场景支持吗？ | ✅ Strong | 完整音频链路 |
-| 3 | 数据连续？ | ✅ Continuous | 段级持续 |
-| 4 | 变化明显？ | N/A | 存在性证据 |
-| 5 | UI 实时表现？ | ✅ 是 | 🔊 动态脉冲（驱动于真实 buffer） |
-| 6 | 可回溯？ | ✅ Full | segment_id + timestamp |
-| 7 | UI 优先级？ | **P0** | 用户必须相信"系统在听" |
-
-**实际 Runtime Evidence**:
-- `audio_available`: true（推断自 audio 段非空）
-- `vad_ratio`: 0.85（高语音活动）
-- `buffer_level`: 持续填充（**未直接暴露**，前端推断）
-
-**Continuity**: session 生命周期
-
-**Product Value**: Critical — 音频场景的 L0 子层
-
-**UI Priority**: P0 — 与 L0 合并显示
-
----
-
-### L1: Audio Perception — Perception Layer（Waveform）
-
-| # | 问题 | 答案 | 说明 |
-|---|------|------|------|
-| 1 | 能力存在吗？ | 🟡 Partial | RMS segment 存在，非连续 stream |
-| 2 | 场景支持吗？ | ✅ Strong | 完整音频 |
 | 3 | 数据连续？ | ⚠️ Per-segment | 段级离散值 |
 | 4 | 变化明显？ | ✅ Strong | 0.20 → 0.05（4x 变化） |
 | 5 | UI 实时表现？ | ✅ 是 | Canvas 柱状图（每段一根柱） |
 | 6 | 可回溯？ | ✅ Full | 原始音频段可回放 |
-| 7 | UI 优先级？ | **P0.5** | 声音强度可视化，ROI 最高 |
+| 7 | UI 优先级？ | **P0** | 音频场景的核心差异点 |
 
 **实际 Runtime Evidence**:
 - `rms_segment_0`: 0.2027
 - `rms_segment_1`: 0.1942
 - 连续窗口化值：**不存在**（需后端扩展）
 
-**Continuity**: 段内连续，段间离散
-
 **⚠️ Reality Check**:
-- Wireframe 标注 "~100ms 连续" → **错误**
+- Wireframe 标注"~100ms 连续" → **错误**
 - 实际：segment-level RMS（~1-2s 粒度）
-- UI 应标注："RMS 分段值（非连续流）"
-
-**Product Value**: High — 让用户"看到"声音
-
-**UI Priority**: P0.5 — 音频面板核心元素
+- UI 必须标注："RMS 分段值（非连续流）"
 
 ---
 
-### L1: Audio Perception — Interpretation Layer
+### ② UNDERSTAND: CURRENT STATE
 
 | # | 问题 | 答案 | 说明 |
 |---|------|------|------|
-| 1 | 能力存在吗？ | ✅ 是 | AudioPerceptionKind 枚举 |
-| 2 | 场景支持吗？ | ✅ Strong | 核心风险信号 |
-| 3 | 数据连续？ | ⚠️ Per-event | 段级事件 |
-| 4 | 变化明显？ | ✅ Strong | AUDIO_TELEPHONE_PERSISTENT + AUDIO_DISTRESS_CRY |
-| 5 | UI 实时表现？ | ✅ 是 | 人话标签 |
-| 6 | 可回溯？ | ✅ Full | event_id + source_segment_ids |
-| 7 | UI 优先级？ | **P0** | 核心风险叙事 |
+| 1 | 能力存在吗？ | ✅ 是 | perception_delta + risk_delta |
+| 2 | 场景支持吗？ | ✅ Strong | 核心叙事 |
+| 3 | 数据连续？ | ✅ Continuous | 状态跨帧保持 |
+| 4 | 变化明显？ | ✅ Strong | 人员在场 + 风险状态 |
+| 5 | UI 实时表现？ | ✅ 是 | 原地刷新 |
+| 6 | 可回溯？ | ✅ Full | event_id + timestamp |
+| 7 | UI 优先级？ | **P0** | 用户最关心的"现在怎样" |
 
 **实际 Runtime Evidence**:
-- `events[0]`: AUDIO_TELEPHONE_PERSISTENT (score=0.92)
-- `events[1]`: AUDIO_DISTRESS_CRY (score=0.72)
-
-**Continuity**: 事件离散，但语义连续（状态机）
-
-**Product Value**: Critical — 这是多模态价值的核心证明
-
-**UI Priority**: P0 — 首屏风险叙事主干
+- `perception_delta.detections[]`: track_id + conf
+- `risk_delta.risk_level`: MONITOR/RAISED/CLEARED
+- `risk_delta.reason_summary`: ["未在白名单"]
 
 ---
 
-### L2: Acoustic State Transition
+### ② UNDERSTAND: RECENT CHANGES
 
 | # | 问题 | 答案 | 说明 |
 |---|------|------|------|
-| 1 | 能力存在吗？ | 🟡 Partial | golden_audio_state 存在，但非 runtime |
-| 2 | 场景支持吗？ | ✅ Strong | 核心叙事（Golden Case） |
-| 3 | 数据连续？ | ⚠️ Per-event | 状态跃迁事件 |
-| 4 | 变化明显？ | ✅ Strong | NORMAL → ATTENTION → AROUSAL → STRESS |
-| 5 | UI 实时表现？ | ✅ 是 | 状态机图 + 时间标记 |
-| 6 | 可回溯？ | ✅ Full | 每个状态有 timestamp + evidence |
-| 7 | UI 优先级？ | **P0** | 多模态场景的核心差异点 |
+| 1 | 能力存在吗？ | ✅ 是 | evidence_delta.perception_events + audio |
+| 2 | 场景支持吗？ | ✅ Strong | 核心叙事 |
+| 3 | 数据连续？ | ⚠️ Per-event | 事件驱动 |
+| 4 | 变化明显？ | ✅ Strong | 新事件立即入场 |
+| 5 | UI 实时表现？ | ✅ 是 | 动画入场 |
+| 6 | 可回溯？ | ✅ Full | media_ref → 原始证据 |
+| 7 | UI 优先级？ | **P0** | 状态变化的增量流 |
 
 **实际 Runtime Evidence**:
-- `state_progression`: [NORMAL(0-6s), ATTENTION(6-9s), AROUSAL(9-12.5s), STRESS(12.5-15s)]
-- `f0_delta`: 0.24
-- `speech_rate_delta`: 0.29
-
-**⚠️ Reality Check**:
-- Wireframe 标注"Runtime Acoustic State Machine" → **误导性**
-- 实际：golden_audio_state 来自 Golden Case manifest（SIMULATED）
-- UI 必须标注："声学状态（Golden Case 预定义）"
-
-**Continuity**: 状态机跨段保持
-
-**Product Value**: Critical — 证明"风险来自声学状态变化"
-
-**UI Priority**: P0 — 首屏风险叙事主干
+- `evidence_delta.perception_events[]`: PERSON_ENTERED / PERSON_REAPPEARED
+- `evidence_delta.audio[]`: AUDIO_DETECTED / AUDIO_LEVEL_CHANGED
+- `risk_delta.risk_transition`: raised/cleared
 
 ---
 
-### L2: Risk Transition
+### ② UNDERSTAND: HISTORY
+
+| # | 问题 | 答案 | 说明 |
+|---|------|------|------|
+| 1 | 能力存在吗？ | ✅ 是 | perceptionStream.history |
+| 2 | 场景支持吗？ | ✅ Strong | 可展开查看 |
+| 3 | 数据连续？ | ⚠️ Per-event | 历史条目 |
+| 4 | 变化明显？ | N/A | 折叠区 |
+| 5 | UI 实时表现？ | ✅ 是 | 点击展开 |
+| 6 | 可回溯？ | ✅ Full | 同 RECENT CHANGES |
+| 7 | UI 优先级？ | **P1** | 次要叙事 |
+
+---
+
+### RISK
 
 | # | 问题 | 答案 | 说明 |
 |---|------|------|------|
 | 1 | 能力存在吗？ | ✅ 是 | RealTimeRiskEvaluator |
-| 2 | 场景支持吗？ | ✅ Strong | RISK_SIGNAL → LOW |
-| 3 | 数据连续？ | ⚠️ Per-event | 风险信号事件 |
-| 4 | 变化明显？ | ✅ Strong | MONITOR → RAISED → LOW |
-| 5 | UI 实时表现？ | ✅ 是 | 状态变化动画 + 趋势箭头 |
+| 2 | 场景支持吗？ | ✅ Strong | 核心判断 |
+| 3 | 数据连续？ | ⚠️ Per-event | 风险跃迁 |
+| 4 | 变化明显？ | ✅ Strong | MONITOR → RAISED |
+| 5 | UI 实时表现？ | ✅ 是 | 状态徽章 + 原因 |
 | 6 | 可回溯？ | ✅ Full | signal_id + decision_trace |
-| 7 | UI 优先级？ | **P0** | 风险判断的核心展示 |
+| 7 | UI 优先级？ | **P0** | 用户最关心的判断 |
 
 **实际 Runtime Evidence**:
-- `risk_transitions`: [RAISED, CLEARED]
-- `warnings`: [LOW]
-- `decision_detail`: "Acoustic state change detected..."
-
-**Continuity**: stateful（风险状态跨事件保持）
-
-**Product Value**: Critical — 用户最关心的判断
-
-**UI Priority**: P0 — 首屏风险徽章
-
----
-
-### L3: Evidence Synthesis
-
-| # | 问题 | 答案 | 说明 |
-|---|------|------|------|
-| 1 | 能力存在吗？ | ✅ 是 | Vision + Audio 独立路径汇聚 |
-| 2 | 场景支持吗？ | 🟡 Partial | 主路径成立，cross_modal=0 |
-| 3 | 数据连续？ | ⚠️ Per-event | 证据汇聚事件 |
-| 4 | 变化明显？ | 🟡 Medium | 主路径强，增强路径缺失 |
-| 5 | UI 实时表现？ | ✅ 是 | 证据链可视化 |
-| 6 | 可回溯？ | ✅ Full | evidence_items + fusion_log |
-| 7 | UI 优先级？ | **P1** | 解释性证据，非核心叙事 |
-
-**实际 Runtime Evidence**:
-- `primary_path`: [person_in_area, telephone_interaction, acoustic_state_change]
-- `supporting_path`: []（phone_detection=0）
-- `cross_modal_links`: 0
+- `risk_delta.risk_transition`: raised/cleared
+- `risk_delta.reason_summary`: ["未在白名单"]
 
 **⚠️ Reality Check**:
-- cross_modal=0 是已知限制（ADR-0038）
-- UI 必须标注："主路径成立，无跨模态佐证"
-
-**Continuity**: 证据链跨事件保持
-
-**Product Value**: High — 解释"为什么有风险"
-
-**UI Priority**: P1 — 首屏摘要区显示证据链，详情进 Timeline
+- 禁止产品预写原因（如"声学状态变化 + 电话交互"）
+- 必须使用 `reason_summary[]`（来自 runtime）
 
 ---
 
-### L4: Action
-
-| # | 问题 | 答案 | 说明 |
-|---|------|------|------|
-| 1 | 能力存在吗？ | ✅ 是 | RuleBasedDecisionPolicy → Command |
-| 2 | 场景支持吗？ | ✅ Strong | LOG_ONLY + continue_observation |
-| 3 | 数据连续？ | ⚠️ Per-decision | 决策事件 |
-| 4 | 变化明显？ | ✅ Strong | 从"无行动"到"记录风险" |
-| 5 | UI 实时表现？ | ✅ 是 | 行动卡片 + 状态回执 |
-| 6 | 可回溯？ | ✅ Full | command_id + execution_log |
-| 7 | UI 优先级？ | **P1** | 处置闭环 |
-
-**实际 Runtime Evidence**:
-- `commands`: [LOG_ONLY, MONITOR]
-- `execution_status`: executed
-
-**Continuity**: action_state 跨决策保持
-
-**Product Value**: High — 证明系统有处置能力
-
-**UI Priority**: P1 — 首屏行动建议区
-
----
-
-### L5: Evidence & Provenance
+### VERIFY
 
 | # | 问题 | 答案 | 说明 |
 |---|------|------|------|
@@ -279,85 +186,44 @@
 - `source_segments`: [seg_001, seg_002]
 - `media_ref`: case_b_vision_audio.mp4
 
-**Continuity**: audit trail 跨 session 保持
-
-**Product Value**: Critical — 用户信任的根基
-
-**UI Priority**: P0 — 首屏证据入口 + Details 区完整展示
-
 ---
 
-## 三、cctv_surveillance_suspicious（夜间异常访问）
+## 三、cctv_surveillance（夜间异常访问）
 
-### L0: Runtime Presence
+### 与 telephone_risk 的关键差异
 
-同 telephone_risk L0 — ✅ P0
+| Surface | telephone_risk | cctv_surveillance |
+|---------|---------------|-------------------|
+| ① Audio Input | ✅ Strong | ❌ **完全隐藏** |
+| ② Audio Events | ✅ Strong | ❌ **禁止显示** |
+| ① Video Input | 🟡 Partial（辅助） | ✅ **P0（核心）** |
+| ② PERSON_REAPPEARED | 🟡 Partial | ✅ **P0（核心叙事）** |
 
-### L1: Person Perception
-
-| # | 问题 | 答案 | 说明 |
-|---|------|------|------|
-| 1-6 | 同 telephone | ✅ | 核心风险信号 |
-| 7 | UI 优先级？ | **P0** | 核心叙事 |
-
-**实际 Runtime Evidence**:
-- `person_count`: 1（持续）
-- `visitor_events`: 8
-- `detection_count`: 920
-
-**Product Value**: Critical — 这是核心风险信号
-
-**UI Priority**: P0 — 首屏核心
-
----
-
-### L1: Audio Perception
-
-| # | 问题 | 答案 | 说明 |
-|---|------|------|------|
-| 2 | 场景支持吗？ | ⚪ Not Available | 无音频轨 |
-| 7 | UI 优先级？ | **禁止** | 绝对禁止显示 |
-
-**处理**: 完全隐藏音频面板，不显示"无音频"
-
----
-
-### L2: Acoustic State
-
-| # | 问题 | 答案 | 说明 |
-|---|------|------|------|
-| 7 | UI 优先级？ | **禁止** | 无音频，禁止伪造 |
-
----
-
-### L2: Risk Transition
-
-同 telephone_risk L2 Risk — ✅ P0
+**处理规则**:
+- 音频面板**完全隐藏**，不显示"无音频"
+- 感知流中**过滤掉**所有 audio 类型条目
+- Person Perception 升级为 P0（核心风险信号）
 
 ---
 
 ## 四、repeated_visit（重复访问识别）
 
-### 核心差异：记忆上下文
+### 核心差异
 
 | Surface | telephone_risk | repeated_visit |
 |---------|---------------|----------------|
-| L5 Provenance | ✅ 完整 | ✅ **多 timepoint 对比** |
-| L3 Evidence | 🟡 Partial | 🟡 Partial（视觉 + 历史） |
-| Memory Context | ❌ 无 | ✅ **核心叙事** |
+| ② MEMORY_MATCHED | ❌ 无 | ✅ **核心叙事** |
+| ② PERSON_REAPPEARED | 🟡 Partial | ✅ **P0** |
+| VERIFY | 视频 + 音频证据 | **视频 + 历史访问记录** |
 
-**repeated_visit 独特价值**:
-- L5 具有跨 episode 证据对比能力
-- 证明"Memory 能力"的核心场景
+**Memory 能力审计**:
+- `Memory Episodes API`: 🟡 Partial（已实现，但未完全暴露）
+- `Memory Matching`: 🔴 Missing（Phase 2 阻塞项）
+- `Memory Pattern`: 🔴 Missing（需多次访问积累）
 
-**记忆上下文面板规格**:
-| 属性 | 值 |
-|------|-----|
-| 位置 | ① 主视觉区 右侧（大尺寸） |
-| 数据源 | Memory Episodes（历史访问记录） |
-| 显示 | "过去 → 昨天 → 今天"时间线 |
-| 叙事 | "系统识别出重复访问模式" |
-| Capability | ✅ Verified（ADR-0024/0025 Memory 架构） |
+**UI 处理**:
+- `MEMORY_MATCHED` 条目标注"🟡 Phase 2"
+- 不阻断主叙事（PERSON_REAPPEARED + RISK 仍是核心）
 
 ---
 
@@ -367,10 +233,11 @@
 
 | Surface | Wireframe 标注 | 实际 Reality | 修正建议 |
 |---------|---------------|--------------|---------|
-| L1 Audio Perception | "~100ms continuous RMS stream" | Segment-level RMS (~1-2s) | 标注"RMS 分段值（非连续流）" |
-| L2 Acoustic State | "Runtime Acoustic State Machine" | Golden Case pre-defined | 标注"声学状态（Golden Case 预定义）" |
-| L3 Evidence Synthesis | "Cross-modal fusion" | cross_modal=0 (known limit) | 标注"主路径成立，无跨模态佐证" |
-| Audio Buffer Level | "动态填充条" | **不存在** | **禁止显示** |
+| ① Audio Input | "~100ms continuous RMS stream" | Segment-level RMS (~1-2s) | 标注"RMS 分段值（非连续流）" |
+| ② Acoustic State | "Runtime State Machine" | **不存在** | **禁止展示**，改为 audio_event 序列 |
+| ② Cross-modal | "Cross-modal fusion" | cross_modal=0 (known limit) | 标注"主路径成立，无跨模态佐证" |
+| L0 Audio | "音频正常" | **硬件健康度未知** | 改为"最近检测到电话声" |
+| L0 Delay | "延迟 120ms" | **前端估算，非端到端** | 标注"延迟 ~120ms*" |
 
 ### 5.2 不能显示的 Capability
 
@@ -378,16 +245,17 @@
 |------------|------|
 | Phone Detection | Benchmark Recall=0%（ADR-0038） |
 | Audio Buffer Level | 未实现，禁止声称"音频正常" |
-| Acoustic State Machine (Runtime) | 仅 Golden Case 有预定义 |
+| Acoustic State Machine (Runtime) | Runtime 无状态机，仅 Golden Case 有预定义 |
 | Cross-Modal Fusion | 当前为 0，已知限制 |
+| "音频正常/中断"二元判断 | 应为三值状态（RECENT_EVENT/NO_RECENT_EVENT/UNAVAILABLE） |
 
 ### 5.3 必须标注 Simulated 的场景
 
 | 场景 | Surface | 标注要求 |
 |------|---------|---------|
-| telephone_risk | L2 Acoustic State | "🎭 Golden Case 预定义，非 Runtime" |
-| stranger_visit | L1 Audio | "SIMULATED 音频，不进入风险判断" |
-| repeated_visit | L1 Audio | "SIMULATED 音频，不进入风险判断" |
+| telephone_risk | ② Acoustic State (if shown) | "🎭 Golden Case 预定义，非 Runtime" |
+| stranger_visit | ① Audio Input | "SIMULATED 音频，不进入风险判断" |
+| repeated_visit | ① Audio Input | "SIMULATED 音频，不进入风险判断" |
 
 ---
 
@@ -408,7 +276,7 @@
 
 ---
 
-## 七、下一步行动
+## 七、下一步
 
 ### 7.1 Wireframe 设计原则
 
