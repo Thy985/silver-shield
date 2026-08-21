@@ -3,11 +3,14 @@
 设计来源（合同冻结）：
 - ``WIREFRAME-DESIGN.md`` v3.2 §807 Phase 2 场景适配
 - ``LIVE-PERCEPTION-STREAM-SPEC.md`` v1.2 §7 场景适配规范
+- ``LIVE-SCENARIO-CONTROLLER-SPEC.md`` v0.1 场景叙事路由规范
 
 模块职责：
 - **场景布局配置**：根据 scenario_id 派生当前场景应显示哪些 Surface（六层感知流）
 - **Surface 可见性**：音频类 surface 仅在 telephone_risk 场景可见（cctv_surveillance 必须隐藏）
 - **Memory 依赖**：repeated_visit 场景的 Memory 关联感知流标记为 Phase 3（🟡 阻塞）
+- **场景叙事路由**：根据 scenario_id 返回显式 Narrative Mode（AUDIO_FIRST / VISION_FIRST /
+  MEMORY_FIRST / NEUTRAL），决定前端 grid 权重与 Surface composition
 
 Surface 层级（从低到高）：
 - L0: Audio Health（所有场景）
@@ -18,10 +21,18 @@ Surface 层级（从低到高）：
 - L5: Provenance（所有场景）
 - L6: Memory Context（repeated_visit 🟡 Phase 3）
 
-铁律（VM-1 / VM-9）：
+Narrative Mode 映射：
+- telephone_risk → AUDIO_FIRST（音频是主叙事）
+- cctv_surveillance → VISION_FIRST（视觉是主叙事）
+- repeated_visit → MEMORY_FIRST（历史记忆是主叙事）
+- 未知场景 → NEUTRAL（fail-closed）
+
+铁律（VM-1 / VM-9 / AC-12）：
 - 本模块仅导出纯函数，不依赖 runtime
 - 场景 ID 必须来自 runtime，禁止硬编码产品文案
 - telephone_risk 场景禁止展示 "NORMAL → ATTENTION → AROUSAL → STRESS"（Golden Case 叙事，非 Runtime）
+- **Runtime Event 不改变 Narrative Mode**：mode 由 scenario_id 唯一决定
+- **browser 只消费**：前端读 data-narrative-mode，不自行计算
 """
 
 from __future__ import annotations
@@ -171,3 +182,47 @@ def _esc_attr(s: str) -> str:
 def _esc_label(s: str) -> str:
     """HTML 文本转义（简化版）。"""
     return _esc_attr(s)
+
+
+# ---------------------------------------------------------------------------
+# Scenario Narrative Mode（LIVE-SCENARIO-CONTROLLER-SPEC.md）
+# ---------------------------------------------------------------------------
+
+
+class ScenarioNarrativeMode(str, enum.Enum):
+    """场景叙事模式枚举。
+
+    铁律：
+    - 由 scenario_id 唯一决定，Runtime Event 不得改变
+    - 前端只消费 data-narrative-mode 属性，不自行计算
+    - 未知场景 fail-closed → NEUTRAL
+    """
+
+    AUDIO_FIRST = "audio_first"
+    VISION_FIRST = "vision_first"
+    MEMORY_FIRST = "memory_first"
+    NEUTRAL = "neutral"
+
+
+# scenario_id -> narrative_mode 映射表（只读，运行时不可变）
+_NARRATIVE_MODES: Final[dict[str, ScenarioNarrativeMode]] = {
+    "telephone_risk": ScenarioNarrativeMode.AUDIO_FIRST,
+    "cctv_surveillance": ScenarioNarrativeMode.VISION_FIRST,
+    "repeated_visit": ScenarioNarrativeMode.MEMORY_FIRST,
+}
+
+
+def get_scenario_narrative_mode(scenario_id: str) -> ScenarioNarrativeMode:
+    """根据场景 ID 返回 Narrative Mode。
+
+    Args:
+        scenario_id: 场景标识（如 ``"telephone_risk"`` / ``"cctv_surveillance"``）。
+
+    Returns:
+        该场景的 Narrative Mode；未知场景返回 NEUTRAL。
+
+    铁律：
+    - 返回值由 scenario_id 唯一决定，Runtime Event 不改变此值
+    - 前端通过 data-narrative-mode 属性消费，不自行计算
+    """
+    return _NARRATIVE_MODES.get(scenario_id, ScenarioNarrativeMode.NEUTRAL)

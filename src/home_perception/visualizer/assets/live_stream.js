@@ -281,6 +281,7 @@
   var seenCaseTime = new Set();
   var ws = null;
   var sid = '';
+  var _narrativeMode = 'neutral';
   // （_MARKERS / _COLORS / _CLASS_ZH / _AUDIO_KIND_ZH / _ACTION_ZH / _REASON_ZH 声明见上方）
   // P0-3: BEHAV 映射（event_type → 行为里程碑 icon/color/label）。
   // 对齐原 Demo b593a01 BEHAV 表，枚举→人话同义映射，不扩展语义。
@@ -1175,7 +1176,11 @@
     // 不输出 <code>）→ 取空 → 回回退。这两步 sid 初始化导致 _applyFrame 第一帧
     // getElementById 全部失败。改成直接读 data-scenario。
     var lp = global.document.querySelector('.live-perception');
-    if (lp) sid = lp.getAttribute('data-scenario') || '';
+    if (lp) {
+      sid = lp.getAttribute('data-scenario') || '';
+      // LIVE Scenario Controller：读 narrative_mode 属性（由 render.py 注入，前端只消费）
+      _narrativeMode = lp.getAttribute('data-narrative-mode') || 'neutral';
+    }
     // 兼容：如果页面有 <code>（非 live 模式），也读一下。
     if (!sid) {
       var code = global.document.querySelector('.scenario-title code');

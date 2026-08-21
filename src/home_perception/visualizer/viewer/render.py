@@ -39,6 +39,7 @@ from home_perception.visualizer.viewer.live_surface import (
 )
 from home_perception.visualizer.viewer.media_source import resolve_media_source
 from home_perception.visualizer.viewer.scenario_config import (
+    get_scenario_narrative_mode,
     has_audio_surface,
 )
 
@@ -703,9 +704,11 @@ def _render_case_video_inner(
     # 填充。浏览器只渲染服务端投影的结构化检测子集，零推理——VM-1/VM-9）。
     live_perception = ""
     if descriptor.get("live_ws_path"):
+        narrative_mode = get_scenario_narrative_mode(scenario.get("scenario_id", ""))
         live_perception = (
             f'<div class="live-perception" id="live-perception-{sid_html}" '
-            f'data-scenario="{sid_html}"></div>'
+            f'data-scenario="{sid_html}" '
+            f'data-narrative-mode="{narrative_mode.value}"></div>'
         )
 
     inner_html = (
@@ -2523,8 +2526,13 @@ def render_case_viewer(
                         border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }}
    .waveform-surface canvas {{ width:100%; height:60px; display:block; border-radius:4px;
                                background:#1e293b; }}
-   /* cctv_surveillance 等无音频场景：Waveform 完全隐藏（AC-12） */
-   .waveform-surface[hidden] {{ display:none; }}
+    /* cctv_surveillance 等无音频场景：Waveform 完全隐藏（AC-12） */
+    .waveform-surface[hidden] {{ display:none; }}
+   /* LIVE Scenario Controller：Narrative Mode 驱动的 grid 权重调整（LIVE-SCENARIO-CONTROLLER-SPEC.md） */
+   .live-scenario[data-narrative-mode="vision_first"] .lv-perception {{ grid-column:span 12; }}
+   .live-scenario[data-narrative-mode="vision_first"] .lv-why {{ grid-column:span 12; }}
+   .live-scenario[data-narrative-mode="vision_first"] .sensor-pair {{ grid-template-columns:1fr; }}
+   .live-scenario[data-narrative-mode="memory_first"] .lv-memory {{ grid-column:span 4; }}
   .audio-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; }}
   .audio-status-dot.audio-active {{ background:#16a34a;
                                      box-shadow:0 0 0 3px rgba(22,163,74,0.18); }}

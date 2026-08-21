@@ -229,3 +229,56 @@ def test_waveform_surface_scenario_id_in_canvas():
     scenario = {"scenario_id": "telephone_risk"}
     html = _render_waveform_surface(scenario)
     assert 'data-scenario="telephone_risk"' in html
+
+
+# ------------------------------------------------------------------
+# Phase 3.4 Narrative Mode: data-narrative-mode 属性渲染
+# ------------------------------------------------------------------
+
+
+def test_live_html_has_narrative_mode_for_telephone_risk():
+    """telephone_risk -> live-perception 含 data-narrative-mode='audio_first'。"""
+    from home_perception.visualizer.viewer import render_case_viewer
+    from home_perception.visualizer.viewer.live_adapter import (
+        ProjectionAccumulator,
+        build_live_presentation,
+    )
+
+    acc = ProjectionAccumulator("telephone_risk")
+    acc.ingest({"frame_index": 0, "n_detections": 1, "n_visitor_events": 0,
+                "perception_events": [], "warnings": [], "commands": []})
+    proj, desc = build_live_presentation(acc.to_evidence_projection(), live_ws_path="/ws")
+    html = render_case_viewer(proj, desc, live_frame_stream=True)
+    assert 'data-narrative-mode="audio_first"' in html
+
+
+def test_live_html_has_narrative_mode_for_cctv():
+    """cctv_surveillance -> live-perception 含 data-narrative-mode='vision_first'。"""
+    from home_perception.visualizer.viewer import render_case_viewer
+    from home_perception.visualizer.viewer.live_adapter import (
+        ProjectionAccumulator,
+        build_live_presentation,
+    )
+
+    acc = ProjectionAccumulator("cctv_surveillance")
+    acc.ingest({"frame_index": 0, "n_detections": 1, "n_visitor_events": 0,
+                "perception_events": [], "warnings": [], "commands": []})
+    proj, desc = build_live_presentation(acc.to_evidence_projection(), live_ws_path="/ws")
+    html = render_case_viewer(proj, desc, live_frame_stream=True)
+    assert 'data-narrative-mode="vision_first"' in html
+
+
+def test_live_html_has_narrative_mode_for_unknown():
+    """未知场景 -> live-perception 含 data-narrative-mode='neutral'。"""
+    from home_perception.visualizer.viewer import render_case_viewer
+    from home_perception.visualizer.viewer.live_adapter import (
+        ProjectionAccumulator,
+        build_live_presentation,
+    )
+
+    acc = ProjectionAccumulator("unknown_scenario_xxx")
+    acc.ingest({"frame_index": 0, "n_detections": 1, "n_visitor_events": 0,
+                "perception_events": [], "warnings": [], "commands": []})
+    proj, desc = build_live_presentation(acc.to_evidence_projection(), live_ws_path="/ws")
+    html = render_case_viewer(proj, desc, live_frame_stream=True)
+    assert 'data-narrative-mode="neutral"' in html
