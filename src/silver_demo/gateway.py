@@ -151,8 +151,13 @@ class DemoGateway:
         严格经 ``PerceptionPipeline.from_settings`` 装配（不自行构造 RuleEngine 等），
         然后调 ``pipeline.load_detector()`` 懒加载 YOLO（ADR-0015 §2.3）。
         """
+        # 防御：start_time 必须为 UTC（WarningEvent.created_at 强制 UTC 校验，
+        # 非 UTC 时区会导致决策层 ValueError）。统一在 DemoClock 构造前归一。
+        _start_utc = self.scenario.start_time
+        if _start_utc.tzinfo is not None and _start_utc.utcoffset().total_seconds() != 0:
+            _start_utc = _start_utc.astimezone(UTC)
         self.clock = DemoClock(
-            start=self.scenario.start_time,
+            start=_start_utc,
             interval_s=self.scenario.frame_interval_s,
         )
         # 场景级实时风险开关覆盖（ADR-0021 Phase 1：CCTV 夜间场景开启实时旁路 + 决策）
@@ -626,7 +631,10 @@ class DemoGateway:
         保证循环重放 / 切换场景后风险能重新触发（否则演示区 ②③④ 在多轮循环后变空白）。
         仅重建组件，detector 实例复用（model.track(persist=True) 要求同一实例保证 track_id 一致）。
         """
-        self.clock = DemoClock(start=scenario.start_time, interval_s=scenario.frame_interval_s)
+        _start_utc = scenario.start_time
+        if _start_utc.tzinfo is not None and _start_utc.utcoffset().total_seconds() != 0:
+            _start_utc = _start_utc.astimezone(UTC)
+        self.clock = DemoClock(start=_start_utc, interval_s=scenario.frame_interval_s)
         # 场景级实时风险开关覆盖（与 assemble 对齐）：必须在 from_settings 之前，
         # 因实时组件是否构造取决于 hp_settings.realtime_risk。内部先复位基线再覆盖，
         # 切到「无 realtime_risk override」的场景时不会残留上一个场景的 True（防泄漏）。
