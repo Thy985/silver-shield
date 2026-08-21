@@ -54,6 +54,74 @@
     audio_telephone_persistent: '持续电话声',
     audio_anomaly_other: '其他声学异常'
   };
+  // Phase 1 L0：Audio Health 三值状态机（见 LIVE-PERCEPTION-STREAM-SPEC §2.4）
+  // 铁律：非二元健康度；RECENT_EVENT 仅表"最近有事件"；NO_RECENT_EVENT 仅表"5s 内无事件"
+  // 仅前端推断（无后端 audio_input_tick / audio_last_seen 字段，🟡 Partial）
+  var _audioHealthState = null;             // 'RECENT_EVENT' / 'NO_RECENT_EVENT' / 'UNAVAILABLE'
+  var _lastAudioEventMs = null;             // 最近 audio event 时间戳（Unix ms）
+  var _audioStaleThresholdMs = 5000;        // 5s 无事件 → NO_RECENT_EVENT
+  var _audioStaleTimer = null;              // 周期检查定时器 handle
+
+  function computeAudioHealth(lastEventMs, nowMs, scenarioHasAudio) {
+    if (!scenarioHasAudio) return 'UNAVAILABLE';
+    if (lastEventMs === null || lastEventMs === undefined) return 'NO_RECENT_EVENT';
+    if (nowMs - lastEventMs > _audioStaleThresholdMs) return 'NO_RECENT_EVENT';
+    return 'RECENT_EVENT';
+  }
+
+  function _scenarioHasAudioTrack() {
+    var card = global.document.getElementById('audio-sensor-' + sid);
+    if (!card) return false;
+    var initial = card.getAttribute('data-audio-health');
+    return initial !== 'UNAVAILABLE';
+  }
+
+  function _updateAudioHealthDOM(newState) {
+    if (_audioHealthState === newState) return;
+    _audioHealthState = newState;
+    var card = global.document.getElementById('audio-sensor-' + sid);
+    if (!card) return;
+    card.setAttribute('data-audio-health', newState);
+    var labelMap = {
+      'RECENT_EVENT': '🔊 RECENT_EVENT',
+      'NO_RECENT_EVENT': '⏸ NO_RECENT_EVENT',
+      'UNAVAILABLE': '🔇 UNAVAILABLE'
+    };
+    var classMap = {
+      'RECENT_EVENT': 'audio-active',
+      'NO_RECENT_EVENT': 'audio-stale',
+      'UNAVAILABLE': 'audio-na'
+    };
+    var badge = card.querySelector('.sensor-card-status');
+    if (badge) {
+      badge.textContent = labelMap[newState];
+      badge.className = 'sensor-card-status ' + classMap[newState];
+    }
+  }
+
+  function _startAudioStaleTimer() {
+    if (_audioStaleTimer) return;
+    _audioStaleTimer = setInterval(function () {
+      if (!_scenarioHasAudioTrack()) return;
+      var newState = computeAudioHealth(_lastAudioEventMs, Date.now(), true);
+      _updateAudioHealthDOM(newState);
+    }, 1000);
+  }
+  // Phase 1 L5：Provenance 快捷入口降级处理（浏览器原生 href 已可展开 details）
+  function _bindWhyBelieveLinks() {
+    var links = global.document.querySelectorAll('.why-believe-link');
+    for (var i = 0; i < links.length; i++) {
+      links[i].addEventListener('click', function () {
+        var targetId = this.getAttribute('data-target');
+        if (!targetId) return;
+        var details = global.document.getElementById(targetId);
+        if (details && details.tagName === 'DETAILS' && !details.open) {
+          details.open = true;
+        }
+      });
+    }
+  }
+  // ============================================================
   // PR-B：建议动作 → 人话映射（DESIGN §4.5）。
   var _ACTION_ZH = {
     MONITOR: '继续观察',
@@ -636,6 +704,9 @@
       var kz = _AUDIO_KIND_ZH[a.kind] || a.kind;
       if (seeState.audio.indexOf(kz) < 0) seeState.audio.push(kz);
       _renderSee();
+      // Phase 1 L0：更新 Audio Health 三值状态（最近事件 → RECENT_EVENT）
+      _lastAudioEventMs = Date.now();
+      _updateAudioHealthDOM('RECENT_EVENT');
     });
     // Case Time 标记追加（幂等：kind@time 去重）
     (msg.case_time || []).forEach(function (m) {
@@ -964,6 +1035,10 @@
     // 首屏快照即基线：预填已渲染 refs，绝不重放重复（VM-8）。
     var items = global.document.querySelectorAll('.tl-item[data-ref]');
     for (var i = 0; i < items.length; i++) seenRefs.add(items[i].getAttribute('data-ref'));
+    // Phase 1 L0：启动 Audio Health 三值轮询定时器（无后端字段，前端推断 🟡 Partial）。
+    _startAudioStaleTimer();
+    // Phase 1 L5：绑定 Provenance 快捷入口（无 JS 也可展开，降级体验）。
+    _bindWhyBelieveLinks();
     var panel = global.document.querySelector('.closure-panel');
     var wsPath = (panel && panel.getAttribute('data-ws-path')) || '/ws';
     var reconnectTimer = null;

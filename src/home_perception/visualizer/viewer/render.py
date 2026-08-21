@@ -34,6 +34,9 @@ from home_perception.visualizer.viewer.case_presentation import (
     CasePresentationDescriptor,
     build_default_case_presentation,
 )
+from home_perception.visualizer.viewer.live_surface import (
+    render_why_believe_link,
+)
 from home_perception.visualizer.viewer.media_source import resolve_media_source
 
 if TYPE_CHECKING:  # 仅类型标注
@@ -288,21 +291,25 @@ def _render_audio_sensor_status(scenario: ScenarioEvidence) -> str:
     """AC-1c：音频传感器状态卡片（P0-11.x Live Audio Verifiability）。
 
     根据 ``audio_evidence`` 的 provenance 派生传感器状态：
-    - 无音频证据 → IDLE
-    - 含 REAL_SENSOR 证据 → ACTIVE
-    - 仅 SIMULATED/FIXTURE 证据 → IDLE（非实时，不触发 ACTIVE）
+    - 无音频证据 → UNAVAILABLE（场景无音频轨 / Phase 1 三值状态）
+    - 含 REAL_SENSOR 证据 → 初始 NO_RECENT_EVENT（runtime 事件由 JS 切换）
+    - 仅 SIMULATED/FIXTURE 证据 → UNAVAILABLE（非实时，不触发 ACTIVE）
 
     遵循 AC-12：无音频证据绝不编造 ACTIVE 状态。
+    Phase 1 L0（live_surface.compute_audio_health）：初始状态使用三值语义，
+    ``data-audio-health`` 属性供 live_stream.js 实时切换。
     """
+    sid_html = _R._esc(scenario["scenario_id"])
     audio_ev = scenario.get("audio_evidence") or ()
     if not audio_ev:
-        return """
-      <div class="sensor-card audio-sensor" data-status="idle">
+        # Phase 1：UNAVAILABLE（场景本身无音频轨，如 cctv_surveillance）
+        return f"""
+      <div class="sensor-card audio-sensor" data-status="unavailable" data-audio-health="UNAVAILABLE" id="audio-sensor-{sid_html}">
         <h3>
           <span>🔊 AUDIO SENSOR</span>
-          <span class="sensor-card-status audio-idle">IDLE</span>
+          <span class="sensor-card-status audio-na">UNAVAILABLE</span>
         </h3>
-        <p class="muted">Kinds detected: —</p>
+        <p class="muted">Kinds detected: — · 本场景无音频轨</p>
       </div>"""
 
     kinds = {str(a.get("kind", "")) for a in audio_ev}
@@ -312,16 +319,18 @@ def _render_audio_sensor_status(scenario: ScenarioEvidence) -> str:
     has_real = any(
         a.get("provenance_kind") == "REAL_SENSOR" for a in audio_ev
     )
-    status = "ACTIVE" if has_real else "IDLE"
-    status_class = "audio-active" if has_real else "audio-idle"
+    # Phase 1：初始三值；JS 接收 audio event 后会切到 RECENT_EVENT
+    initial_state = "NO_RECENT_EVENT" if has_real else "UNAVAILABLE"
+    status_class = "audio-active" if has_real else "audio-na"
+    status_label = "RECENT_EVENT" if has_real else "UNAVAILABLE"
 
     kinds_html = " · ".join(_R._esc(k) for k in kind_labels) if kind_labels else "—"
 
     return f"""
-      <div class="sensor-card audio-sensor" data-status="{'active' if has_real else 'idle'}">
+      <div class="sensor-card audio-sensor" data-status="{'active' if has_real else 'unavailable'}" data-audio-health="{initial_state}" id="audio-sensor-{sid_html}">
         <h3>
           <span>🔊 AUDIO SENSOR</span>
-          <span class="sensor-card-status {status_class}">{status}</span>
+          <span class="sensor-card-status {status_class}">{status_label}</span>
         </h3>
         <p class="muted">Kinds detected: {_R._esc(kinds_html)}</p>
       </div>"""
@@ -1594,6 +1603,11 @@ def _render_live_shell(
             </div>
           </section>
 
+          <!-- Phase 1 L5：Provenance 快捷入口（极低成本可达，非折叠区内） -->
+          <div class="region lv-trust-quicklink">
+            {render_why_believe_link(sid)}
+          </div>
+
           <!-- ⑥ 历史上下文：Memory Context -->
           <section class="region lv-history">
             <h2>⑥ 历史上下文 <span class="tag">认知层 · 只读</span></h2>
@@ -2458,7 +2472,17 @@ def render_case_viewer(
                           padding:2px 8px; border-radius:999px; }}
   .sensor-card-status.audio-active {{ background:#dcfce7; color:#16a34a; }}
   .sensor-card-status.audio-idle {{ background:#f1f5f9; color:#64748b; }}
+  /* Phase 1 L0：Audio Health 三值状态新增 UNAVAILABLE 样式 */
+  .sensor-card-status.audio-na {{ background:#e2e8f0; color:#475569; }}
   .sensor-card-status.video-live {{ background:#fee2e2; color:#dc2626; }}
+  /* Phase 1 L5：Provenance 快捷入口（一级可达，非折叠区内） */
+  .lv-trust-quicklink {{ grid-column:span 12; text-align:right; padding:8px 0;
+                          margin-top:4px; }}
+  .why-believe-link {{ display:inline-flex; align-items:center; gap:6px;
+                        font-size:12px; color:#4a90d9; text-decoration:none;
+                        padding:6px 12px; border:1px solid #cfe3fb;
+                        border-radius:6px; background:#f0f7ff; }}
+  .why-believe-link:hover {{ background:#dbeafe; border-color:#93c5fd; }}
   .sensor-card-meta {{ margin:0; display:grid; grid-template-columns:auto 1fr; gap:4px 10px;
                         font-size:12px; }}
   .sensor-card-meta dt {{ color:#64748b; font-weight:600; }}
