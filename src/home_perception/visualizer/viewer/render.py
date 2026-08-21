@@ -1584,16 +1584,49 @@ def _render_live_shell(
             </div>
           </section>
 
-          <!-- ② AI 正在理解：行为时间线 + 声学状态 -->
-          <section class="region lv-perception">
-            <h2>② AI 正在理解 <span class="tag">感知 → 声学状态</span></h2>
-            <div class="body">
-              <!-- P0-3: 行为里程碑（从 perception_events 推导，跨帧累积） -->
-              <div class="behavior-timeline" id="behavior-timeline-{sid_html}"></div>
-              {acoustic_state_panel}
-              {audio_panel}{timeline_html}
-            </div>
-          </section>
+          <!-- ② AI 正在理解：感知流（CURRENT STATE + RECENT CHANGES + HISTORY）+ 声学状态 -->
+           <section class="region lv-perception">
+             <h2>② AI 正在理解 <span class="tag">感知 → 声学状态</span></h2>
+             <div class="body">
+               <!-- LIVE-PERCEPTION-STREAM-SPEC：感知流主容器（CURRENT STATE + RECENT CHANGES + HISTORY） -->
+               <div id="perception-stream-{sid_html}" class="perception-stream" data-scenario="{sid_html}">
+                 <!-- CURRENT STATE：持续状态，原地刷新 -->
+                 <div class="ps-section">
+                   <div class="ps-now">现在</div>
+                   <div class="ps-divider"></div>
+                   <div class="ps-state" id="ps-state-{sid_html}">
+                     <div class="ps-state-item ps-state-person" id="ps-person-{sid_html}">
+                       <span class="ps-icon">👤</span>
+                       <span class="ps-label">等待人员检测…</span>
+                     </div>
+                     <div class="ps-state-item ps-state-audio" id="ps-audio-{sid_html}" style="display:none">
+                       <span class="ps-icon">🔊</span>
+                       <span class="ps-label">—</span>
+                     </div>
+                     <div class="ps-state-item ps-state-risk" id="ps-risk-{sid_html}" style="display:none">
+                       <span class="ps-icon">⚠</span>
+                       <span class="ps-label">—</span>
+                     </div>
+                   </div>
+                 </div>
+                 <!-- RECENT CHANGES：瞬时事件，去重后入场 -->
+                 <div class="ps-section">
+                   <div class="ps-divider"></div>
+                   <div class="ps-recent" id="ps-recent-{sid_html}">
+                     <div class="tl-empty" id="ps-recent-empty-{sid_html}">等待事件涌现…</div>
+                   </div>
+                 </div>
+                 <!-- HISTORY：折叠的历史条目 -->
+                 <details class="ps-history" id="ps-history-{sid_html}" style="display:none">
+                   <summary>历史感知（<span id="ps-history-count-{sid_html}">0</span> 条）</summary>
+                   <div class="ps-history-list" id="ps-history-list-{sid_html}"></div>
+                 </details>
+               </div>
+               <div class="behavior-timeline" id="behavior-timeline-{sid_html}"></div>
+               {acoustic_state_panel}
+               {audio_panel}{timeline_html}
+             </div>
+           </section>
 
           <!-- ③ 为什么值得关注：风险解释卡片 -->
           <section class="region lv-why">
@@ -2550,7 +2583,47 @@ def render_case_viewer(
                          animation:obs-pulse 1.4s ease-in-out infinite; }}
   @keyframes obs-pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.45; }} }}
 
-  /* ⑥ Memory Context — Historical / Current 双层（T1.6 / M3） */
+   /* ===== LIVE-PERCEPTION-STREAM-SPEC：右侧感知流样式 ===== */
+   .perception-stream {{ display:flex; flex-direction:column; gap:12px; }}
+   .ps-section {{ background:#f8fafc; border:1px solid #e3e8ee; border-radius:8px; padding:10px 12px; }}
+   .ps-now {{ font-size:11px; font-weight:700; color:#dc2626; text-transform:uppercase;
+              letter-spacing:.06em; margin-bottom:6px; }}
+   .ps-divider {{ height:1px; background:#e3e8ee; margin:6px 0; }}
+   .ps-state {{ display:flex; flex-direction:column; gap:6px; }}
+   .ps-state-item {{ display:flex; align-items:center; gap:8px; font-size:13px; color:#1c2733; }}
+   .ps-state-item .ps-icon {{ font-size:15px; min-width:20px; }}
+   .ps-state-item .ps-label {{ color:#3b4a5a; }}
+   .ps-state-person {{ border-left:3px solid #4a90d9; padding-left:8px; }}
+   .ps-state-audio {{ border-left:3px solid #9b59b6; padding-left:8px; }}
+   .ps-state-risk {{ border-left:3px solid #dc2626; padding-left:8px; }}
+   .ps-state-risk.active {{ color:#dc2626; font-weight:600; }}
+   /* RECENT CHANGES */
+   .ps-recent {{ display:flex; flex-direction:column; gap:6px; max-height:240px; overflow-y:auto; }}
+   .ps-entry {{ display:flex; align-items:flex-start; gap:8px; padding:8px;
+               background:#fff; border-radius:6px; border-left:3px solid #4a90d9;
+               animation:ps-enter .3s ease-out; font-size:13px; color:#1c2733; }}
+   .ps-entry[data-type="behavior"] {{ border-left-color:#4a90d9; }}
+   .ps-entry[data-type="audio"] {{ border-left-color:#9b59b6; }}
+   .ps-entry[data-type="risk-raised"] {{ border-left-color:#dc2626; background:#fff5f5; }}
+   .ps-entry[data-type="risk-cleared"] {{ border-left-color:#64748b; background:#f8fafc; }}
+   @keyframes ps-enter {{ from {{ opacity:0; transform:translateY(-6px); }}
+                         to {{ opacity:1; transform:translateY(0); }} }}
+   .ps-entry .ps-time {{ font-size:11px; color:#64748b; min-width:48px; flex-shrink:0;
+                        margin-top:1px; }}
+   .ps-entry .ps-icon {{ font-size:15px; min-width:20px; flex-shrink:0; }}
+   .ps-entry .ps-label {{ flex:1; color:#1c2733; }}
+   .ps-entry .ps-detail {{ font-size:11px; color:#64748b; margin-top:2px; }}
+   /* HISTORY */
+   .ps-history {{ margin-top:4px; }}
+   .ps-history summary {{ font-size:11px; color:#64748b; cursor:pointer; padding:4px 0;
+                          list-style:none; user-select:none; }}
+   .ps-history summary::before {{ content:'▸ '; }}
+   .ps-history[open] summary::before {{ content:'▾ '; }}
+   .ps-history-list {{ display:flex; flex-direction:column; gap:4px; margin-top:6px;
+                       max-height:160px; overflow-y:auto; }}
+   .ps-history-list .ps-entry {{ background:#f8fafc; }}
+
+   /* ⑥ Memory Context — Historical / Current 双层（T1.6 / M3） */
   .memory-context {{ display:flex; flex-direction:column; gap:8px; }}
   .memory-layer {{ border:1px solid #e3e8ee; border-radius:8px; padding:10px 12px; }}
   .memory-layer.historical {{ background:#f8fafc; }}

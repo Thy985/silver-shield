@@ -505,6 +505,24 @@
     // （snapshot 本身不含完整 delta，依赖后续帧 delta 触发渲染；此处仅恢复 state）
     _renderBehaviorTimeline();
     _renderRiskSignals();
+    // LP-3：快照中的行为事件 → 感知流（首连时补推，确保感知流有初始内容）。
+    var snapBehaviors = __LiveState.behaviorEvents || [];
+    if (snapBehaviors.length) {
+      snapBehaviors.forEach(function (ev) {
+        if (!ev || !ev.key) return;
+        var dedupKey = 'snap|' + ev.key;
+        if (_perceptionStream._seenRiskTransitions.has(dedupKey)) return;
+        _perceptionStream._seenRiskTransitions.add(dedupKey);
+        _perceptionStream.push({
+          timestamp: '--:--:--',
+          icon: ev.icon || '•',
+          label: ev.label || '',
+          detail: ev.who || ev.detail || '',
+          type: 'behavior'
+        });
+      });
+      _renderPerceptionStream();
+    }
   }
 
   // T1.3：时间轴节点「人话优先」——首字段为人话 summary，技术信息收进 meta 灰字（不新增事实，仅改渲染）。
@@ -586,6 +604,145 @@
       return html;
     }).join('');
   }
+
+  // LIVE-PERCEPTION-STREAM-SPEC：右侧感知流（CURRENT STATE + RECENT CHANGES + HISTORY）
+  var _perceptionStream = {
+    entries: [],        // 当前显示的条目（最多 10 条）
+    history: [],        // 折叠的历史条目
+    maxVisible: 10,
+    maxHistory: 50,
+    // 持续状态追踪
+    _lastPersons: 0,
+    _lastPersonMs: null,
+    _lastAudioKind: '',
+    _lastRiskLevel: '',
+    _lastRiskTrans: '',
+    _lastCaseTime: null,
+    // 去重标记
+    _seenPersonCount: -1,
+    _seenAudioEventIds: new Set(),
+    _seenRiskTransitions: new Set(),
+    push: function(entry) {
+      this.entries.unshift(entry);
+      if (this.entries.length > this.maxVisible) {
+        this.history.push(this.entries.pop());
+      }
+      if (this.history.length > this.maxHistory) this.history.shift();
+    },
+    clear: function() {
+      this.entries = [];
+      this.history = [];
+      this._lastPersons = 0;
+      this._lastPersonMs = null;
+      this._lastAudioKind = '';
+      this._lastRiskLevel = '';
+      this._lastRiskTrans = '';
+      this._lastCaseTime = null;
+      this._seenPersonCount = -1;
+      this._seenAudioEventIds = new Set();
+      this._seenRiskTransitions = new Set();
+    }
+  };
+
+  function _formatCaseTime(s) {
+    if (s == null) return '--:--:--';
+    var total = Math.floor(Number(s));
+    var h = Math.floor(total / 3600);
+    var m = Math.floor((total % 3600) / 60);
+    var sec = total % 60;
+    return (h > 0 ? h + ':' : '') +
+      String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+  }
+
+  function _renderPerceptionStream() {
+    var ps = global.document.getElementById('perception-stream-' + sid);
+    if (!ps) return;
+    var stateEl = global.document.getElementById('ps-state-' + sid);
+    var recentEl = global.document.getElementById('ps-recent-' + sid);
+    var historyEl = global.document.getElementById('ps-history-' + sid);
+    var historyListEl = global.document.getElementById('ps-history-list-' + sid);
+    var historyCountEl = global.document.getElementById('ps-history-count-' + sid);
+    var personEl = global.document.getElementById('ps-person-' + sid);
+    var audioEl = global.document.getElementById('ps-audio-' + sid);
+    var riskEl = global.document.getElementById('ps-risk-' + sid);
+    if (!stateEl || !recentEl) return;
+
+    // CURRENT STATE
+    var personDuration = '';
+    if (_perceptionStream._lastPersonMs != null) {
+      var dur = ((Date.now() - _perceptionStream._lastPersonMs) / 1000).toFixed(1);
+      personDuration = ' 持续在场 ' + dur + 's';
+    }
+    if (personEl) {
+      if (_perceptionStream._lastPersons > 0) {
+        personEl.style.display = '';
+        personEl.querySelector('.ps-label').textContent =
+          '👤 ' + _perceptionStream._lastPersons + ' 人' + personDuration;
+      } else {
+        personEl.style.display = 'none';
+      }
+    }
+    if (audioEl) {
+      if (_perceptionStream._lastAudioKind) {
+        audioEl.style.display = '';
+        audioEl.querySelector('.ps-label').textContent =
+          '🔊 最近检测到 ' + _perceptionStream._lastAudioKind;
+      } else {
+        audioEl.style.display = 'none';
+      }
+    }
+    if (riskEl) {
+      var riskLevel = _perceptionStream._lastRiskLevel;
+      if (riskLevel) {
+        riskEl.style.display = '';
+        var riskTrans = _perceptionStream._lastRiskTrans === 'raised' ? '观察 → 关注' :
+                         _perceptionStream._lastRiskTrans === 'cleared' ? '关注 → 解除' : '—';
+        riskEl.querySelector('.ps-label').textContent =
+          '⚠ 风险：' + riskLevel + ' · ' + riskTrans;
+        riskEl.classList.toggle('active', _perceptionStream._lastRiskTrans === 'raised');
+      } else {
+        riskEl.style.display = 'none';
+        riskEl.classList.remove('active');
+      }
+    }
+
+    // RECENT CHANGES
+    var entries = _perceptionStream.entries;
+    if (entries.length === 0) {
+      var emptyEl = global.document.getElementById('ps-recent-empty-' + sid);
+      if (emptyEl) emptyEl.style.display = '';
+      recentEl.innerHTML = '';
+    } else {
+      var emptyEl2 = global.document.getElementById('ps-recent-empty-' + sid);
+      if (emptyEl2) emptyEl2.style.display = 'none';
+      recentEl.innerHTML = entries.slice(0, 10).map(function(e) {
+        return '<div class="ps-entry" data-type="' + _esc(e.type) + '">' +
+          '<span class="ps-time">' + _esc(e.time || e.timestamp) + '</span>' +
+          '<span class="ps-icon">' + _esc(e.icon) + '</span>' +
+          '<span class="ps-label">' + _esc(e.label) + '</span>' +
+          (e.detail ? '<div class="ps-detail">' + _esc(e.detail) + '</div>' : '') +
+          '</div>';
+      }).join('');
+    }
+
+    // HISTORY
+    if (historyEl && historyListEl && historyCountEl) {
+      if (_perceptionStream.history.length > 0) {
+        historyEl.style.display = '';
+        historyCountEl.textContent = _perceptionStream.history.length;
+        historyListEl.innerHTML = _perceptionStream.history.slice(0, 10).reverse().map(function(e) {
+          return '<div class="ps-entry" data-type="' + _esc(e.type) + '">' +
+       '<span class="ps-time">' + _esc(e.time || e.timestamp) + '</span>' +
+            '<span class="ps-icon">' + _esc(e.icon) + '</span>' +
+            '<span class="ps-label">' + _esc(e.label) + '</span>' +
+            (e.detail ? '<div class="ps-detail">' + _esc(e.detail) + '</div>' : '') +
+            '</div>';
+        }).join('');
+      } else {
+        historyEl.style.display = 'none';
+      }
+    }
+  }
   // P0-1/P1-2: 通知 live_actions 三端命令已更新（通过自定义事件）
   function _renderCommandMap() {
     if (typeof global.document === 'undefined') return;
@@ -651,6 +808,27 @@
     if (od) od.textContent = (msg.detections || []).length;
     // PR-B：空态"当前 N 人在场"跟踪（③ 风险卡空态文案同源）。
     lastPersons = (msg.detections || []).length;
+    _perceptionStream._lastPersons = lastPersons;
+    _perceptionStream._lastCaseTime = msg.case_time != null ? Number(msg.case_time) : null;
+    if (lastPersons > 0 && _perceptionStream._lastPersonMs == null) {
+      _perceptionStream._lastPersonMs = Date.now();
+    } else if (lastPersons === 0) {
+      _perceptionStream._lastPersonMs = null;
+    }
+    // LP-3：首次出现 → 推感知流条目（去重：仅当 count 从 0 变正时触发）。
+    var prevPersonCount = _perceptionStream._seenPersonCount;
+    _perceptionStream._seenPersonCount = lastPersons;
+    if (lastPersons > 0 && prevPersonCount < 0) {
+      _perceptionStream.push({
+        timestamp: _perceptionStream._lastCaseTime != null
+          ? _formatCaseTime(_perceptionStream._lastCaseTime) : '--:--:--',
+        icon: '👤',
+        label: '首次出现',
+        detail: '检测到 ' + lastPersons + ' 人进入画面',
+        type: 'behavior'
+      });
+    }
+    _renderPerceptionStream();
     var empty = global.document.getElementById('lrk-empty-' + sid);
     if (empty && empty.style.display !== 'none') {
       empty.textContent = '🔴 实时观察中 · 当前 ' + lastPersons + ' 人在场，风险尚未触发';
@@ -804,6 +982,36 @@
     // P0-3: 行为里程碑累积（从 perception_events + warnings 推导）
     _ingestBehavior(msg.perception_events, msg.warnings || []);
     _renderBehaviorTimeline();
+    // LP-3：行为事件 → 感知流条目（去重：按 event_id + visitor_id 组合键）。
+    (msg.perception_events || []).forEach(function (pe) {
+      if (!pe || !pe.event_type) return;
+      var vid = pe.visitor_id || '';
+      var who = _friendlyVisitor(vid);
+      var bm = _BEHAV[pe.event_type];
+      if (!bm) return;
+      var dedupKey = 'pe|' + (pe.event_id || pe.frame_index) + '|' + pe.event_type + '|' + vid;
+      if (_perceptionStream._seenRiskTransitions.has(dedupKey)) return;
+      _perceptionStream._seenRiskTransitions.add(dedupKey);
+      var caseTime = pe.case_time != null
+        ? _formatCaseTime(Number(pe.case_time))
+        : (_perceptionStream._lastCaseTime != null ? _formatCaseTime(_perceptionStream._lastCaseTime) : '--:--:--');
+      var label = bm.label;
+      var detail = who;
+      if (pe.repeat_count != null && pe.repeat_count > 1) {
+        label = '再次出现';
+        detail = who + '（第' + pe.repeat_count + '次）';
+      } else if (pe.location) {
+        detail += (detail ? ' · ' : '') + '位置 ' + pe.location;
+      }
+      _perceptionStream.push({
+        timestamp: caseTime,
+        icon: bm.icon,
+        label: label,
+        detail: detail,
+        type: 'behavior'
+      });
+    });
+    _renderPerceptionStream();
     // 更新三端命令显示
     _renderCommandMap();
     // audio 证据行追加（幂等：event_id 去重）
@@ -821,6 +1029,22 @@
       // Phase 1 L0：更新 Audio Health 三值状态（最近事件 → RECENT_EVENT）
       _lastAudioEventMs = Date.now();
       _updateAudioHealthDOM('RECENT_EVENT');
+      // LP-3：音频事件 → 感知流条目（去重：按 event_id）。
+      if (!_perceptionStream._seenAudioEventIds.has(id)) {
+        _perceptionStream._seenAudioEventIds.add(id);
+        _perceptionStream._lastAudioKind = kz;
+        var at = a.case_time != null
+          ? _formatCaseTime(Number(a.case_time))
+          : '--:--:--';
+        _perceptionStream.push({
+          timestamp: at,
+          icon: '🔊',
+          label: '检测到' + kz,
+          detail: '',
+          type: 'audio'
+        });
+        _renderPerceptionStream();
+      }
     });
     // Case Time 标记追加（幂等：kind@time 去重）
     (msg.case_time || []).forEach(function (m) {
@@ -1031,6 +1255,31 @@
     _renderCommandMap();
     // LP-4 toast：仅在服务端判定 raised 跃迁时提示（无风险帧不刷屏）。
     if (msg.risk_transition === 'raised') _toast('风险升级：' + levels.join(' / '));
+    // LP-3：风险跃迁 → 感知流条目（去重：按 transition 类型）。
+    if (msg.risk_transition) {
+      var rtKey = 'risk|' + msg.risk_transition + '|' + (levels.join(',') || '');
+      if (!_perceptionStream._seenRiskTransitions.has(rtKey)) {
+        _perceptionStream._seenRiskTransitions.add(rtKey);
+        _perceptionStream._lastRiskLevel = levels.join(' / ') || '';
+        _perceptionStream._lastRiskTrans = msg.risk_transition;
+        var rtCaseTime = msg.case_time != null
+          ? _formatCaseTime(Number(msg.case_time))
+          : '--:--:--';
+        var rtLabel = msg.risk_transition === 'raised'
+          ? '风险状态：观察 → 关注'
+          : msg.risk_transition === 'cleared'
+            ? '风险状态：关注 → 解除'
+            : '风险状态更新';
+        _perceptionStream.push({
+          timestamp: rtCaseTime,
+          icon: msg.risk_transition === 'raised' ? '⚠' : '✓',
+          label: rtLabel,
+          detail: (msg.reason_summary || []).join(' · '),
+          type: 'risk'
+        });
+        _renderPerceptionStream();
+      }
+    }
   }
 
   // ③.5 实时风险信号（RAISED 亮卡 / CLEARED 熄卡 / active 更新内容）。
