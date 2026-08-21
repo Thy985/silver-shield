@@ -164,6 +164,7 @@ class LiveAudioFrame(TypedDict):
     source_segment_ids: tuple[str, ...]  # ← .source_segment_ids
     labels: tuple[str, ...]            # ← .labels / .scored_labels
     event_id: NotRequired[str]         # ← AudioPerceptionEvent.event_id（透传，可选，溯源/幂等）
+    rms: NotRequired[float]            # ← Phase 3.2: 音频能量 RMS 采样（供 Waveform 组件消费）
 
 
 def _require_float(obj: Any, key: str, *, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -235,6 +236,8 @@ def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
         source_segment_ids=source_segment_ids,
         labels=labels,
         **({"event_id": event_id} if event_id is not None else {}),
+        **({"rms": float(_pick(audio_result, "rms"))}
+           if isinstance(_pick(audio_result, "rms", default=None), (int, float)) else {}),
     )
 
 
@@ -562,6 +565,13 @@ class ProjectionAccumulator:
         self._warnings_cache: list[dict] = []  # [{seq, warning_id, frame_index, risk_level, reason_summary, recommended_action, perception_score, trigger_events, device_id, elder_id}]
         self._warning_ids_cache: set[str] = set()
         self._warning_seq: int = 0
+        # Phase 3.1: person_present 状态机（持续在场语义）
+        self._person_present_count = 0
+        self._person_present_start_ts: float = -1.0
+        self._last_person_present_state: tuple[int, float] = (0, 0.0)
+        # Phase 3.2: rms_window 连续波形（最近 N 个 RMS 采样，供 Waveform 组件消费）
+        self._rms_window_size = 20
+        self._rms_window: list[float] = []
 
     @property
     def n_frames(self) -> int:
@@ -853,6 +863,8 @@ class ProjectionAccumulator:
                 {"command_type": ct, "status": "SENT"}
                 for ct in self._last_command_types
             ] if is_first_connect else [],
+            # Phase 3.2: 连续波形数据（🟡 Partial，Waveform 组件未实现）
+            "rms_window": list(self._rms_window),
         }
 
     # ------------------------------------------------------------------
@@ -872,14 +884,26 @@ class ProjectionAccumulator:
         """只读：对比 ``prev_fp`` 检测指纹 → perception_delta。
 
         ``prev_fp=None``（首连）或指纹变化 → 携带当前检测子集；未变 → ``detections=()``
-        （无变化不推）。返回 ``{"type","frame_index","detections"}``。
+        （无变化不推）。返回 ``{"type","frame_index","detections","person_present"}``。
+
+        Phase 3.1: 新增 ``person_present`` 字段（持续在场语义，🟡 Partial 依赖 person 状态机）。
         """
         cur = self.perception_fingerprint()
         changed = (prev_fp is None) or (prev_fp != cur)
+        # Phase 3.1: 计算 person_present 状态
+        _duration_s = 0.0
+        if self._person_present_start_ts >= 0:
+            _duration_s = round((self._last_detection_frame / 8.0) - self._person_present_start_ts, 2)  # 假设 8fps
+        _person_state = (self._person_present_count, _duration_s)
         return {
             "type": "perception_delta",
             "frame_index": self._last_detection_frame,
             "detections": [dict(d) for d in self._last_detections] if changed else [],
+            # Phase 3.1: 持续在场语义（覆盖式"当前感知状态"）
+            "person_present": {
+                "count": self._person_present_count,
+                "duration_s": _duration_s,
+            },
         }
 
     # ------------------------------------------------------------------
@@ -947,6 +971,23 @@ class ProjectionAccumulator:
             "elder_id": self._last_elder_id if changed else None,
             # P0-1 修复（P0-2 audit bug）：活跃 warning 完整对象（task-cards 数据源）。
             "active_warnings": active_warnings if changed else [],
+        }
+
+    # Phase 3.3: memory_timeline 历史访问记录（🟡 Partial · 阻塞于 Memory API）
+    # Memory 模块（ADR-0024/0025）接入后，此方法应从 Memory 查询历史 episodes 并投影。
+    # 当前返回空列表占位，前端渲染空态文案（VM-1：零推理，不伪造数据）。
+    def extract_memory_timeline(self) -> dict:
+        """只读：返回历史访问记录时间线（memory_episodes 投影）。
+
+        返回 ``{"type": "memory_timeline", "episodes": [...]}``。
+        每个 episode：``{record_id, prior, timestamp, summary, risk_level,
+        recommended_action, reason_summary, decision_trace_refs}``。
+
+        🟡 Partial：Memory API 未接入，当前返回空列表；接入后替换为真实查询。
+        """
+        return {
+            "type": "memory_timeline",
+            "episodes": [],  # 🟡 Partial · 阻塞于 Memory API（ADR-0024/0025）
         }
 
     def _accumulate(self, live: LiveFrame) -> None:
@@ -1024,6 +1065,19 @@ class ProjectionAccumulator:
             # 持续无风险（含首连初始化）→ 无 transition（不推信号，§4.6 契约表）。
             self._last_risk_transition = None
         self._risk_active = cur_risky
+        # Phase 3.1: person_present 状态机（持续在场语义）
+        # 基于当前帧检测子集计算持续在场人数 + 持续时间
+        _person_detections = [d for d in (self._last_detections or []) if d.get("class") == "person"]
+        _person_count = len(_person_detections)
+        if _person_count > 0 and self._person_present_count == 0:
+            # 从无人到有人的跃迁 → 记录开始时间戳
+            self._person_present_start_ts = float(live.get("frame_index", 0)) / 8.0  # 假设 8fps
+        elif _person_count == 0 and self._person_present_count > 0:
+            # 从有人到无人的跃迁 → 重置
+            self._person_present_start_ts = -1.0
+        self._person_present_count = _person_count
+        # Phase 3.2: rms_window 连续波形（从音频特征累积）
+        # 注：RMS 值由 ingest_audio 方法单独追加，此处仅初始化占位
         self._total_frames += 1
         self._counts["perception_events"] += len(live["event_types"])
         self._counts["warnings"] += len(live["risk_levels"])
@@ -1037,6 +1091,12 @@ class ProjectionAccumulator:
         self._audio_index += 1
         self._total_audio += 1
         self._audio_kinds.add(live_audio["kind"])
+        # Phase 3.2: 追加 RMS 采样到滑动窗口（供 Waveform 组件消费）
+        rms = live_audio.get("rms")
+        if isinstance(rms, (int, float)):
+            self._rms_window.append(float(rms))
+            if len(self._rms_window) > self._rms_window_size:
+                self._rms_window = self._rms_window[-self._rms_window_size:]
         # 持久化（不进滚动窗口）：真实音频是稀疏语义证据，须跨整个实时会话可见。
         # 去重保护 VM-8 重放幂等：live 循环重启 frame_index 归零会重新喂入同一音频事件，
         # 以 event_id 为主键（缺失回退组合键 _audio_dedup_key）去重，避免重复累积污染证据。

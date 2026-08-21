@@ -1087,6 +1087,38 @@
     }
   }
 
+  // Phase 3.3: memory_timeline 消息处理（🟡 Partial · 阻塞于 Memory API）
+  // 历史访问记录时间线：每 episode 卡片（record_id / prior 标记 / timestamp /
+  // summary / risk_level / recommended_action / reason_summary），VM-9 只渲染，不推理。
+  function _applyMemoryTimeline(msg) {
+    var el = global.document.getElementById('live-memory-timeline-' + sid);
+    if (!el) return;
+    var episodes = msg.episodes || [];
+    if (!episodes.length) {
+      el.innerHTML = '<span class="muted">暂无历史访问记录（Memory API 待接入）</span>';
+      return;
+    }
+    var cards = episodes.map(function (ep) {
+      var tag = ep.prior ? '历史预置' : '本次会话';
+      var risk = ep.risk_level || '—';
+      var action = ep.recommended_action || '—';
+      var summary = _esc(ep.summary || '');
+      var reasons = ((ep.reason_summary || []).map(function (r) {
+        return _esc(_REASON_ZH[r] || r);
+      })).join('、') || '—';
+      return '<div class="mem-ep">' +
+        '<div class="mem-ep-head">' +
+          '<span class="mem-ep-id">' + _esc(ep.record_id || '') + '</span>' +
+          '<span class="mem-ep-tag">' + tag + '</span>' +
+          '<span class="mem-ep-time">' + _esc(ep.timestamp || '') + '</span>' +
+        '</div>' +
+        '<div class="mem-ep-body">' + summary + ' · 风险 ' + _esc(risk) + ' · 建议 ' + _esc(action) + '</div>' +
+        '<div class="mem-ep-reasons">依据：' + reasons + '</div>' +
+      '</div>';
+    }).join('');
+    el.innerHTML = cards;
+  }
+
   // PR-A：WS 连接状态 pill（header 实时反馈 未连接/已连接；元素缺失 → no-op）。
   function _setWsPill(online) {
     var pill = global.document.getElementById('ws-pill');
@@ -1142,6 +1174,8 @@
         else if (msg.type === 'perception_delta') _applyPerceptionDelta(msg);
         else if (msg.type === 'frame_tick') _applyFrame(msg);
         else if (msg.type === 'risk_delta') _applyRiskDelta(msg);
+        // Phase 3.3: memory_timeline 消息类型（🟡 Partial · 阻塞于 Memory API）
+        else if (msg.type === 'memory_timeline') _applyMemoryTimeline(msg);
       };
     }
     // P2-2: TTL 风险信号兜底计时器（每 5s 检查过期）
