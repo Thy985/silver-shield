@@ -57,6 +57,9 @@
   // Phase 1 L0：Audio Health 三值状态机（见 LIVE-PERCEPTION-STREAM-SPEC §2.4）
   // 铁律：非二元健康度；RECENT_EVENT 仅表"最近有事件"；NO_RECENT_EVENT 仅表"5s 内无事件"
   // 仅前端推断（无后端 audio_input_tick / audio_last_seen 字段，🟡 Partial）
+  // Phase 2 L2：声学状态实时更新（telephone_risk 专属，🟡 Partial 依赖后端 acoustic_state_delta）
+  var _acousticStateHistory = [];           // 声学状态变化历史（NORMAL → ... → STRESS）
+  var _acousticStatePanelEl = null;         // acoustic-state-panel DOM 元素引用
   var _audioHealthState = null;             // 'RECENT_EVENT' / 'NO_RECENT_EVENT' / 'UNAVAILABLE'
   var _lastAudioEventMs = null;             // 最近 audio event 时间戳（Unix ms）
   var _audioStaleThresholdMs = 5000;        // 5s 无事件 → NO_RECENT_EVENT
@@ -107,6 +110,78 @@
       _updateAudioHealthDOM(newState);
     }, 1000);
   }
+  // Phase 2 L2：声学状态实时更新（telephone_risk 专属）
+  function _updateAcousticState(msg) {
+    // 从 evidence_delta 提取声学状态变化（golden_audio_state / acoustic_state_change）
+    var stateNodes = msg.timeline || [];
+    var audioStates = msg.audio || [];
+    var stateChanges = [];
+
+    // 收集 timeline 中的 golden_audio_state 节点
+    stateNodes.forEach(function (n) {
+      if (n.type === 'golden_audio_state' && n.summary) {
+        stateChanges.push({
+          timestamp: n.timestamp,
+          summary: n.summary,
+          phase: n.phase || ''
+        });
+      }
+    });
+
+    // 收集 audio 中的声学状态变化（acoustic_state_change 字段）
+    audioStates.forEach(function (a) {
+      if (a.acoustic_state_change) {
+        stateChanges.push({
+          timestamp: a.timestamp || Date.now(),
+          summary: a.acoustic_state_change,
+          phase: ''
+        });
+      }
+    });
+
+    if (stateChanges.length === 0) return;
+
+    // 更新历史记录（去重）
+    stateChanges.forEach(function (sc) {
+      var key = sc.timestamp + '@' + sc.summary;
+      if (!_acousticStateHistory.some(function (h) { return h.key === key; })) {
+        _acousticStateHistory.push({ key: key, ...sc });
+      }
+    });
+
+    // 渲染到面板
+    _renderAcousticStatePanel();
+  }
+
+  function _renderAcousticStatePanel() {
+    var panel = global.document.getElementById('acoustic-state-panel-' + sid);
+    if (!panel) return;
+
+    if (_acousticStateHistory.length === 0) {
+      panel.innerHTML = '<p class="acoustic-state-note muted">声学状态：观察中...</p>';
+      return;
+    }
+
+    var phasesHtml = _acousticStateHistory.map(function (h) {
+      var phase = '';
+      ['NORMAL', 'ATTENTION', 'AROUSAL', 'STRESS'].forEach(function (p) {
+        if (h.summary.toUpperCase().indexOf(p) >= 0) phase = p;
+      });
+      var phaseClass = phase ? 'phase-' + phase.toLowerCase() : 'phase-unknown';
+      return '<li class="acoustic-phase ' + phaseClass + '">' +
+        '<span class="phase-time">' + h.timestamp + 's</span>' +
+        '<span class="phase-label">' + (phase || 'STATE') + '</span>' +
+        '<span class="phase-desc">' + h.summary + '</span>' +
+        '</li>';
+    }).join('');
+
+    panel.innerHTML =
+      '<h3 class="acoustic-state-title">🔊 声学状态变化</h3>' +
+      '<ol class="acoustic-timeline">' + phasesHtml + '</ol>' +
+      '<p class="acoustic-state-note muted">声学状态变化来自 runtime golden_audio_state（非诈骗判定）</p>';
+  }
+
+
   // Phase 1 L5：Provenance 快捷入口降级处理（浏览器原生 href 已可展开 details）
   function _bindWhyBelieveLinks() {
     var links = global.document.querySelectorAll('.why-believe-link');
@@ -725,6 +800,8 @@
     if (ve && msg.counts && msg.counts.perception_events != null) {
       ve.textContent = msg.counts.perception_events;
     }
+    // Phase 2 L2：声学状态实时更新（telephone_risk 专属）
+    _updateAcousticState(msg);
   }
 
   // LP-1：真实同步帧流（frame_tick 心跳：frame_index / case_time / loop_count）。

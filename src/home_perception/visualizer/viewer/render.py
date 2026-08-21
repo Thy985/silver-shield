@@ -38,6 +38,9 @@ from home_perception.visualizer.viewer.live_surface import (
     render_why_believe_link,
 )
 from home_perception.visualizer.viewer.media_source import resolve_media_source
+from home_perception.visualizer.viewer.scenario_config import (
+    has_audio_surface,
+)
 
 if TYPE_CHECKING:  # 仅类型标注
     from pathlib import Path
@@ -1483,7 +1486,13 @@ def _render_live_shell(
         timeline_html = _R._render_timeline(scenario)
 
     # T1.4: 声学状态变化专属面板（消费 golden_audio_state timeline 节点）
-    acoustic_state_panel = _render_acoustic_state_panel(scenario)
+    # Phase 2: 场景适配 — 仅 telephone_risk 等音频场景可见
+    _scenario_has_audio = has_audio_surface(scenario.get("scenario_id", ""))
+    acoustic_state_panel = (
+        _render_acoustic_state_panel(scenario)
+        if _scenario_has_audio
+        else '<div class="acoustic-state-panel acoustic-na" data-scenario-surface="L2_ACOUSTIC_STATE" hidden>声学状态面板（本场景无音频轨）</div>'
+    )
 
     # 区域④：行动闭环面板（live descriptor 含 action_closure；缺省 → 诚实占位）。
     if "action_closure" in panels:
