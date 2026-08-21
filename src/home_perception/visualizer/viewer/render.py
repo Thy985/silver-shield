@@ -571,13 +571,7 @@ def _render_case_video_inner(
             f'<span class="live-badge" id="live-badge-{sid_html}">'
             f'<span class="ldot"></span> LIVE</span>'
             f'<div class="live-ov muted" id="live-ov-{sid_html}">'
-            f'<span>帧 <b id="ov-frame-{sid_html}">–</b></span>'
-            f'<span class="live-ov-sep">·</span>'
             f'<span>Case Time <b id="ov-time-{sid_html}">00:00</b></span>'
-            f'<span class="live-ov-sep">·</span>'
-            f'<span>检测 <b id="ov-det-{sid_html}">0</b></span>'
-            f'<span class="live-ov-sep">·</span>'
-            f'<span>访客事件 <b id="ov-ve-{sid_html}">0</b></span>'
             f'</div></div>'
         )
         # PR-B：Live 感知摘要卡（"AI 看到了"），由 live_stream.js 经 perception_delta（视觉）

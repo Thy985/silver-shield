@@ -799,13 +799,9 @@
         '<span class="muted"> conf ' + Number(d.confidence).toFixed(2) + '</span>' +
         '<span class="muted"> · bbox [' + b + ']</span></li>';
     }).join('');
-    var head = 'F' + msg.frame_index +
-      (msg.case_time != null ? ' · ' + Number(msg.case_time).toFixed(1) + 's' : '');
+    var head = (msg.case_time != null ? Number(msg.case_time).toFixed(1) + 's' : '—');
     el.innerHTML = '<div class="lp-head">Visual perception <span class="muted">' + head + '</span></div>' +
       (rows ? '<ul>' + rows + '</ul>' : '<span class="muted">（当前无检测）</span>');
-    // 帧 overlay 检测数联动（LP-1：检测数与画面同帧同步）。
-    var od = global.document.getElementById('ov-det-' + sid);
-    if (od) od.textContent = (msg.detections || []).length;
     // PR-B：空态"当前 N 人在场"跟踪（③ 风险卡空态文案同源）。
     lastPersons = (msg.detections || []).length;
     _perceptionStream._lastPersons = lastPersons;
@@ -1172,9 +1168,8 @@
           (levels.indexOf('HIGH') >= 0 ? '' : levels.indexOf('MEDIUM') >= 0 ? ' medium' : ' low');
       }
       var frameEl = global.document.getElementById('lrk-frame-' + sid);
-      if (frameEl) {
-        frameEl.textContent = 'F' + msg.frame_index +
-          (msg.case_time != null ? ' · ' + Number(msg.case_time).toFixed(1) + 's' : '');
+      if (frameEl && msg.case_time != null) {
+        frameEl.textContent = Number(msg.case_time).toFixed(1) + 's';
       }
       var reasonsEl = global.document.getElementById('lrk-reasons-' + sid);
       if (reasonsEl) {
@@ -1294,13 +1289,13 @@
       var levels = (msg.risk_levels || []).join(' / ');
       var time = msg.case_time != null
         ? Number(msg.case_time).toFixed(1) + 's'
-        : 'F' + msg.frame_index;
+        : '—';
       // P0-1：信号实体（signal_id / subject / severity）
       var signals = msg.risk_signals || [];
       var sigHtml = '';
       if (signals.length) {
         var sig = signals[0];
-        var sid_val = sig.signal_id || 'sig-' + msg.frame_index;
+        var sid_val = sig.signal_id || 'sig-unknown';
         var subject = sig.subject_id || sig.visitor_instance_id || '访客';
         var sev = sig.severity_hint != null ? Number(sig.severity_hint).toFixed(2) : '';
         var category = sig.category || '';

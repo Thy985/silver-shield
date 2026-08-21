@@ -59,8 +59,7 @@ def test_live_shell_has_tabs_and_grid_regions():
     # ① Live 帧流容器（LP-1 既有契约不回退）
     assert 'id="video-img-live_shell_t"' in html
     assert 'id="live-badge-live_shell_t"' in html
-    assert 'id="ov-frame-live_shell_t"' in html
-    assert 'id="ov-det-live_shell_t"' in html
+    assert 'id="ov-time-live_shell_t"' in html  # Case Time overlay
     # ④ 行动闭环面板（P0-1 既有契约）
     assert 'id="fs-action-closure-live_shell_t"' in html
     assert 'data-ws-path="/ws"' in html
@@ -147,14 +146,13 @@ def test_live_shell_no_legacy_view_protocol():
 
 
 def test_live_shell_overlay_chips_pr_c():
-    """PR-C：① overlay chips 补全 Case Time + 访客事件（DESIGN §4.3）。"""
+    """PR-C：① overlay chips 补全 Case Time（DESIGN §4.3）。
+    
+    注：frame_index 和检测数 overlay 已移除（LIVE-PERCEPTION-STREAM-SPEC §3.1 禁止）。
+    """
     html = _live_html()
-    assert 'id="ov-frame-live_shell_t"' in html
-    assert 'id="ov-time-live_shell_t"' in html   # 新增 Case Time chip
-    assert 'id="ov-det-live_shell_t"' in html
-    assert 'id="ov-ve-live_shell_t"' in html     # 新增访客事件 chip
+    assert 'id="ov-time-live_shell_t"' in html   # Case Time chip
     assert "Case Time" in html
-    assert "访客事件" in html
 
 
 def test_live_shell_closure_summary_pr_c():
