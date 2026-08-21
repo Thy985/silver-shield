@@ -1,0 +1,88 @@
+{
+  "scenario_id": "sw_golden_telephone_risk",
+  "provenance_kind": "GOLDEN",
+  "scenarios": [
+    {
+      "scenario_id": "telephone_risk",
+      "product_question": "为什么多模态认为风险高？",
+      "ok": true,
+      "counts": {
+        "detections": 0,
+        "events": 2,
+        "audio_events": 1,
+        "warnings": 1,
+        "commands": 1,
+        "cross_modal_links": 1,
+        "memory_episodes": 0
+      },
+      "audio_evidence": [
+        {
+          "kind": "audio_telephone_persistent",
+          "score": 0.72,
+          "confidence": 0.85,
+          "labels": [
+            "telephone_interaction"
+          ],
+          "segments": [
+            [
+              "0.0",
+              "15.0"
+            ]
+          ],
+          "provenance_kind": "GOLDEN",
+          "timestamp": 0.0,
+          "related_visual_ref": "phone_interaction"
+        }
+      ],
+      "cross_modal_links": [
+        {
+          "type": "SUPPORTS",
+          "relation": "CO_OCCURS",
+          "vision_ref": "phone_interaction",
+          "audio_ref": "voice_stress_elevated"
+        }
+      ],
+      "stage_timeline": [
+        {
+          "stage": "context",
+          "kind": "context"
+        },
+        {
+          "stage": "detection",
+          "kind": "detection"
+        },
+        {
+          "stage": "reasoning",
+          "kind": "reasoning"
+        },
+        {
+          "stage": "cross_modal",
+          "kind": "cross_modal"
+        },
+        {
+          "stage": "intervention",
+          "kind": "intervention"
+        },
+        {
+          "stage": "outcome",
+          "kind": "outcome"
+        }
+      ]
+    }
+  ],
+  "artifacts": {
+    "counts": {
+      "perception_events": 2,
+      "warning_events": 1,
+      "action_commands": 1
+    },
+    "trace_outcome_kinds": [
+      "WARN",
+      "LOG_ONLY"
+    ],
+    "event_types": [
+      "abnormal_dwell",
+      "visit_pending_verify"
+    ]
+  }
+}
