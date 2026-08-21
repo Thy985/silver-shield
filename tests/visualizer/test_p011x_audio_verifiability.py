@@ -203,12 +203,15 @@ def test_r1_live_with_audio_has_audio_element_and_active():
 
 
 def test_r2_live_no_audio_no_empty_player():
-    """R2：Live 模式 + 无音频 → 不渲染空 <audio> 播放器。"""
+    """R2：Live 模式 + 无音频 → 不渲染空 <audio> 播放器。
+
+    Phase 1 L0：三值语义下，无音频场景 → UNAVAILABLE（取代旧 IDLE）。
+    """
     html = _live_html_no_audio()
     assert "<audio" not in html, "无音频 → 不渲染 <audio> 标签"
-    assert "AUDIO SENSOR" in html, "AUDIO SENSOR 卡仍渲染（IDLE 态）"
-    assert "IDLE" in html, "无音频 → IDLE"
-    assert "audio-idle" in html, "IDLE 状态 CSS class"
+    assert "AUDIO SENSOR" in html, "AUDIO SENSOR 卡仍渲染（UNAVAILABLE 态）"
+    assert "UNAVAILABLE" in html, "无音频 → UNAVAILABLE"
+    assert "audio-na" in html, "UNAVAILABLE 状态 CSS class"
 
 
 # ---------------------------------------------------------------------------
@@ -242,23 +245,30 @@ def test_r4_artifact_no_audio_no_empty_player(tmp_path):
 
 
 def test_r5_empty_audio_evidence_no_fake_active():
-    """R5：audio_evidence=[] → IDLE，绝不伪造 ACTIVE。"""
+    """R5：audio_evidence=[] → UNAVAILABLE，绝不伪造 ACTIVE。
+
+    Phase 1 L0（Contract Freeze）：三值语义取代二元 IDLE/ACTIVE；
+    无音频场景 → ``data-audio-health="UNAVAILABLE"`` + ``audio-na`` class。
+    """
     scenario = _scenario_with_audio(has_audio=False)
     html = _render_audio_sensor_status(scenario)
-    assert "IDLE" in html
-    assert 'data-status="idle"' in html
-    assert "audio-idle" in html
-    assert 'data-status="active"' not in html
+    assert "UNAVAILABLE" in html
+    assert 'data-audio-health="UNAVAILABLE"' in html
+    assert "audio-na" in html
+    assert 'data-audio-health="RECENT_EVENT"' not in html
     assert "audio-active" not in html
 
 
 def test_r5_simulated_audio_evidence_not_active():
-    """R5b：audio_evidence 仅含 SIMULATED → IDLE（ACTIVE 仅 REAL_SENSOR）。"""
+    """R5b：audio_evidence 仅含 SIMULATED → UNAVAILABLE（Phase 1 三值语义）。
+
+    Phase 1 L0：SIMULATED/FIXTURE 视为演示素材，非实时 → UNAVAILABLE（非 NO_RECENT_EVENT）。
+    """
     scenario = _scenario_with_audio(audio_provenance="SIMULATED")
     html = _render_audio_sensor_status(scenario)
-    assert "IDLE" in html
-    assert 'data-status="idle"' in html
-    assert 'data-status="active"' not in html
+    assert "UNAVAILABLE" in html
+    assert 'data-audio-health="UNAVAILABLE"' in html
+    assert 'data-audio-health="NO_RECENT_EVENT"' not in html
 
 
 # ---------------------------------------------------------------------------
@@ -371,12 +381,15 @@ def test_r8_provenance_details_no_audio_explicit():
 
 
 def test_r9_no_audio_sensor_idle():
-    """R9：无音频 → AUDIO SENSOR 卡 IDLE 态。"""
+    """R9：无音频 → AUDIO SENSOR 卡 UNAVAILABLE 态（Phase 1 三值语义）。
+
+    三值状态机：UNAVAILABLE 表示"场景硬件无音频轨"，与"音频中断"严格区分。
+    """
     scenario = _scenario_with_audio(has_audio=False)
     html = _render_audio_sensor_status(scenario)
-    assert "IDLE" in html
-    assert "audio-idle" in html
-    assert 'data-status="idle"' in html
+    assert "UNAVAILABLE" in html
+    assert "audio-na" in html
+    assert 'data-audio-health="UNAVAILABLE"' in html
 
 
 def test_r9_no_audio_kinds_dash():
@@ -392,11 +405,16 @@ def test_r9_no_audio_kinds_dash():
 
 
 def test_r10_real_sensor_evidence_sensor_active():
-    """R10a：REAL_SENSOR audio_evidence → AUDIO SENSOR ACTIVE。"""
+    """R10a：REAL_SENSOR audio_evidence → AUDIO SENSOR 初始 NO_RECENT_EVENT（Phase 1 三值语义）。
+
+    三值状态机：REAL_SENSOR 音频初始显示 ``NO_RECENT_EVENT``（最近无事件）；
+    JS 接收 audio event 后切到 ``RECENT_EVENT``（VM-1 派生 + live_stream.js 维护）。
+    """
     scenario = _scenario_with_audio(audio_provenance="REAL_SENSOR")
     html = _render_audio_sensor_status(scenario)
-    assert "ACTIVE" in html
+    assert "NO_RECENT_EVENT" in html
     assert "audio-active" in html
+    assert 'data-audio-health="NO_RECENT_EVENT"' in html
 
 
 def test_r10_real_sensor_evidence_provenance_active():
@@ -407,25 +425,31 @@ def test_r10_real_sensor_evidence_provenance_active():
 
 
 def test_r10_simulated_evidence_consistent_idle():
-    """R10c：SIMULATED audio_evidence → SENSOR IDLE + provenance 感知 IDLE（一致）。"""
+    """R10c：SIMULATED audio_evidence → SENSOR UNAVAILABLE + provenance 感知 IDLE（一致）。
+
+    Phase 1 L0：SIMULATED/FIXTURE 视为演示素材，非实时 → UNAVAILABLE。
+    """
     scenario = _scenario_with_audio(
         provenance="SIMULATED", audio_provenance="SIMULATED"
     )
     sensor_html = _render_audio_sensor_status(scenario)
     details_html = _render_provenance_details(scenario)
-    assert "IDLE" in sensor_html
-    assert 'data-status="idle"' in sensor_html
+    assert "UNAVAILABLE" in sensor_html
+    assert 'data-audio-health="UNAVAILABLE"' in sensor_html
     assert "IDLE" in details_html
-    assert 'data-status="active"' not in sensor_html
+    assert 'data-audio-health="NO_RECENT_EVENT"' not in sensor_html
     assert "prov-detail-idle" in details_html
 
 
 def test_r10_live_html_sensor_and_provenance_consistent():
-    """R10d：Live HTML 中 AUDIO SENSOR ACTIVE ↔ provenance details 感知事件 ACTIVE。"""
+    """R10d：Live HTML 中 AUDIO SENSOR 初始 NO_RECENT_EVENT ↔ provenance 感知 ACTIVE（一致）。
+
+    Phase 1 L0 三值：REAL_SENSOR 音频初始 NO_RECENT_EVENT；JS 接收 event 后切 RECENT_EVENT。
+    """
     html = _live_html_with_audio()
-    sensor_active = "audio-active" in html
+    sensor_no_recent = 'data-audio-health="NO_RECENT_EVENT"' in html
     provenance_active = "prov-detail-active" in html
-    assert sensor_active == provenance_active, (
-        f"SENSOR active={sensor_active} != provenance active={provenance_active}"
+    # 初始 NO_RECENT_EVENT + provenance ACTIVE → 传感器状态与 provenance 来自同一来源
+    assert sensor_no_recent and provenance_active, (
+        f"sensor_no_recent={sensor_no_recent}, provenance_active={provenance_active}"
     )
-    assert sensor_active, "Live + REAL_SENSOR audio → 两处都应 ACTIVE"
