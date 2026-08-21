@@ -15,7 +15,9 @@ from home_perception.visualizer.viewer.live_adapter import (
     build_live_presentation,
 )
 from home_perception.visualizer.viewer.scenario_config import (
+    ScenarioNarrativeMode,
     ScenarioSurface,
+    get_scenario_narrative_mode,
     get_scenario_surfaces,
     has_audio_surface,
 )
@@ -123,4 +125,45 @@ def test_scenario_surface_banner_rendered():
     assert "scenario-surface-banner" in html or (
         # 未集成时至少验证场景 ID 在 HTML 中
         'data-scenario="telephone_risk"' in html
+    )
+
+
+# ============================================================================
+# Narrative Mode（LIVE-SCENARIO-CONTROLLER-SPEC.md）
+# ============================================================================
+
+
+def test_narrative_mode_telephone_risk_is_audio_first():
+    """telephone_risk -> AUDIO_FIRST。"""
+    assert get_scenario_narrative_mode("telephone_risk") == ScenarioNarrativeMode.AUDIO_FIRST
+
+
+def test_narrative_mode_cctv_is_vision_first():
+    """cctv_surveillance -> VISION_FIRST。"""
+    assert get_scenario_narrative_mode("cctv_surveillance") == ScenarioNarrativeMode.VISION_FIRST
+
+
+def test_narrative_mode_repeated_visit_is_memory_first():
+    """repeated_visit -> MEMORY_FIRST。"""
+    assert get_scenario_narrative_mode("repeated_visit") == ScenarioNarrativeMode.MEMORY_FIRST
+
+
+def test_narrative_mode_unknown_is_neutral():
+    """未知场景 -> NEUTRAL（fail-closed）。"""
+    assert get_scenario_narrative_mode("unknown_xxx") == ScenarioNarrativeMode.NEUTRAL
+
+
+def test_narrative_mode_consistent_with_audio_surface():
+    """AUDIO_FIRST 场景必须同时有 audio surface（铁律：mode 与 surface 一致）。"""
+    assert (
+        get_scenario_narrative_mode("telephone_risk") == ScenarioNarrativeMode.AUDIO_FIRST
+        and has_audio_surface("telephone_risk") is True
+    )
+
+
+def test_narrative_mode_no_audio_surface_cctv():
+    """VISION_FIRST 场景不能有 audio surface（铁律：Runtime Event 不改变 mode）。"""
+    assert (
+        get_scenario_narrative_mode("cctv_surveillance") == ScenarioNarrativeMode.VISION_FIRST
+        and has_audio_surface("cctv_surveillance") is False
     )

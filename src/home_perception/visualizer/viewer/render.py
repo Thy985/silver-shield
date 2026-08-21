@@ -39,6 +39,7 @@ from home_perception.visualizer.viewer.live_surface import (
 )
 from home_perception.visualizer.viewer.media_source import resolve_media_source
 from home_perception.visualizer.viewer.scenario_config import (
+    get_scenario_narrative_mode,
     has_audio_surface,
 )
 
@@ -336,6 +337,25 @@ def _render_audio_sensor_status(scenario: ScenarioEvidence) -> str:
           <span class="sensor-card-status {status_class}">{status_label}</span>
         </h3>
         <p class="muted">Kinds detected: {_R._esc(kinds_html)}</p>
+      </div>"""
+
+
+def _render_waveform_surface(scenario: ScenarioEvidence) -> str:
+    """Phase 3 Waveform：RMS 连续波形 Canvas（telephone_risk 专属，cctv 等无音频场景返回空串）。
+
+    数据源：``evidence_delta.rms_window``（list[float]，最近 N 个 RMS 采样）。
+    前端由 live_stream.js ``_drawWaveform(sid, rms_window)`` 驱动绘制。
+    AC-12：无音频场景不输出 canvas 元素（完全隐藏，非禁用）。
+    """
+    sid_html = _R._esc(scenario.get("scenario_id", ""))
+    if not has_audio_surface(scenario.get("scenario_id", "")):
+        return ""
+    return f"""
+      <div class="waveform-surface" id="waveform-surface-{sid_html}">
+        <canvas id="waveform-canvas-{sid_html}" width="400" height="60"
+                data-scenario="{sid_html}"
+                aria-label="RMS 连续波形（最近 {20} 个音频采样）"></canvas>
+        <p class="sensor-card-note muted">RMS 连续波形 · 最近 20 采样</p>
       </div>"""
 
 
@@ -684,9 +704,11 @@ def _render_case_video_inner(
     # 填充。浏览器只渲染服务端投影的结构化检测子集，零推理——VM-1/VM-9）。
     live_perception = ""
     if descriptor.get("live_ws_path"):
+        narrative_mode = get_scenario_narrative_mode(scenario.get("scenario_id", ""))
         live_perception = (
             f'<div class="live-perception" id="live-perception-{sid_html}" '
-            f'data-scenario="{sid_html}"></div>'
+            f'data-scenario="{sid_html}" '
+            f'data-narrative-mode="{narrative_mode.value}"></div>'
         )
 
     inner_html = (
@@ -1556,6 +1578,8 @@ def _render_live_shell(
                 </div>
                 {_render_audio_sensor_status(scenario)}
               </div>
+              <!-- Phase 3 Waveform：RMS 连续波形（telephone_risk 专属，cctv 等无音频场景隐藏） -->
+              {_render_waveform_surface(scenario)}
               {manifest_island}
             </div>
           </section>
@@ -2496,7 +2520,19 @@ def render_case_viewer(
                         font-size:12px; }}
   .sensor-card-meta dt {{ color:#64748b; font-weight:600; }}
   .sensor-card-meta dd {{ margin:0; color:#1c2733; }}
-  .sensor-card-note {{ font-size:11px; line-height:1.4; margin:0; }}
+   .sensor-card-note {{ font-size:11px; line-height:1.4; margin:0; }}
+   /* Phase 3 Waveform：RMS 连续波形 Canvas */
+   .waveform-surface {{ grid-column:span 12; background:#f8fafc; border:1px solid #e3e8ee;
+                        border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }}
+   .waveform-surface canvas {{ width:100%; height:60px; display:block; border-radius:4px;
+                               background:#1e293b; }}
+    /* cctv_surveillance 等无音频场景：Waveform 完全隐藏（AC-12） */
+    .waveform-surface[hidden] {{ display:none; }}
+   /* LIVE Scenario Controller：Narrative Mode 驱动的 grid 权重调整（LIVE-SCENARIO-CONTROLLER-SPEC.md） */
+   .live-scenario[data-narrative-mode="vision_first"] .lv-perception {{ grid-column:span 12; }}
+   .live-scenario[data-narrative-mode="vision_first"] .lv-why {{ grid-column:span 12; }}
+   .live-scenario[data-narrative-mode="vision_first"] .sensor-pair {{ grid-template-columns:1fr; }}
+   .live-scenario[data-narrative-mode="memory_first"] .lv-memory {{ grid-column:span 4; }}
   .audio-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; }}
   .audio-status-dot.audio-active {{ background:#16a34a;
                                      box-shadow:0 0 0 3px rgba(22,163,74,0.18); }}

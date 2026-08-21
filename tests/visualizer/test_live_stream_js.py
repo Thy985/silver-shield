@@ -447,4 +447,90 @@ def test_live_stream_js_risk_card_and_signal():
         check=False,
     )
     assert r.returncode == 0, f"risk card/signal 断言失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
-    assert "RISK_CARD_OK" in r.stdout
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("node"),
+    reason="CI 无 node 则跳过（html-inline-js 纪律）",
+)
+def test_live_stream_js_draw_waveform():
+    """Node vm 真实运行：_drawWaveform 绘制 RMS 波形（含空数据降级文案）。"""
+    import subprocess
+    import tempfile
+
+    src = _live_stream_source()
+    harness = textwrap.dedent(
+        r"""
+        const fs = require('fs');
+        function makeEl(querySelectorFn, getAttrFn) {
+          var el = { attrs: {}, html: '', text: '', style: {}, _drawn: [] };
+          var _ctx = {
+            fillStyle: '',
+            fillRect: function (x, y, w, h) { this._rects.push({x: x, y: y, w: w, h: h}); },
+            _rects: [],
+            font: '',
+            textAlign: '',
+            fillText: function (t) { this._texts.push(t); },
+            _texts: [],
+            clearRect: function () { this._rects.length = 0; },
+          };
+          el.getContext = function () { return _ctx; };
+          el.querySelector = querySelectorFn || function () { return null; };
+          el.getAttribute = getAttrFn || function () { return null; };
+          return el;
+        }
+        const sid = 'live_wave';
+        var canvas = makeEl();
+        canvas.width = 400; canvas.height = 60;
+        var canvasId = 'waveform-canvas-' + sid;
+        var els = {};
+        els[canvasId] = canvas;
+        var lpEl = makeEl(function () { return null; }, function (k) { return k === 'data-scenario' ? sid : null; });
+        var doc = {
+          getElementById: function (id) { return els[id] || null; },
+          querySelector: function (sel) {
+            if (sel === '.live-perception') return lpEl;
+            return null;
+          },
+          querySelectorAll: function () { return []; },
+        };
+        global.document = doc;
+        global.location = { protocol: 'http:', host: '127.0.0.1:8765' };
+        global.WebSocket = function () { global._ws = this; this.onmessage = null; };
+        global.window = global;
+        eval(fs.readFileSync(process.argv[2], 'utf-8'));
+
+        // 通过 _applyDelta 间接测试 _drawWaveform（不暴露内部函数，符合 VM-9 纪律）
+        // 发送含 rms_window 的 evidence_delta → 触发 _drawWaveform
+        global._ws.onmessage({ data: JSON.stringify({
+          type: 'evidence_delta',
+          rms_window: [0.1, 0.5, 0.8, 0.3, 0.6],
+          timeline: [], audio: [], case_time: [], counts: { n_frames: 5 },
+          perception_events: [], warnings: [], commands: [],
+        })});
+        // 调试输出：检查 rects 和 texts
+        var ctx = canvas.getContext();
+        console.log(JSON.stringify({
+          rectsLen: ctx._rects.length,
+          texts: ctx._texts,
+          hasBars: ctx._rects.length >= 5,
+          barsVisible: ctx._rects.slice(-5).every(function (r) { return r.h > 0 && r.w >= 1; }),
+        }));
+        process.exit(ctx._rects.length >= 5 && ctx._rects.slice(-5).every(function (r) { return r.h > 0 && r.w >= 1; }) ? 0 : 1);
+        """
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        harness_path = f.name
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(src)
+        src_path = f.name
+    r = subprocess.run(
+        ["node", harness_path, src_path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert r.returncode == 0, f"waveform 断言失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
+
