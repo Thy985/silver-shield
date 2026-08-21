@@ -1,0 +1,173 @@
+"""Phase 2: 场景布局配置（WIREFRAME-DESIGN.md §807 / LIVE-PERCEPTION-STREAM-SPEC.md §7）。
+
+设计来源（合同冻结）：
+- ``WIREFRAME-DESIGN.md`` v3.2 §807 Phase 2 场景适配
+- ``LIVE-PERCEPTION-STREAM-SPEC.md`` v1.2 §7 场景适配规范
+
+模块职责：
+- **场景布局配置**：根据 scenario_id 派生当前场景应显示哪些 Surface（六层感知流）
+- **Surface 可见性**：音频类 surface 仅在 telephone_risk 场景可见（cctv_surveillance 必须隐藏）
+- **Memory 依赖**：repeated_visit 场景的 Memory 关联感知流标记为 Phase 3（🟡 阻塞）
+
+Surface 层级（从低到高）：
+- L0: Audio Health（所有场景）
+- L1: Audio Perception（telephone_risk 专属）
+- L2: Acoustic State（telephone_risk 专属）
+- L3: Perception Stream（所有场景）
+- L4: Risk Signals（所有场景）
+- L5: Provenance（所有场景）
+- L6: Memory Context（repeated_visit 🟡 Phase 3）
+
+铁律（VM-1 / VM-9）：
+- 本模块仅导出纯函数，不依赖 runtime
+- 场景 ID 必须来自 runtime，禁止硬编码产品文案
+- telephone_risk 场景禁止展示 "NORMAL → ATTENTION → AROUSAL → STRESS"（Golden Case 叙事，非 Runtime）
+"""
+
+from __future__ import annotations
+
+import enum
+from typing import Final
+
+
+class ScenarioSurface(str, enum.Enum):
+    """Phase 2: 场景适配 Surface 枚举（LIVE-PERCEPTION-STREAM-SPEC.md §7）。
+
+    铁律：
+    - 音频类 Surface 仅 telephone_risk 可见（cctv_surveillance 必须隐藏）
+    - Memory Context 依赖 Memory API（Phase 3）
+    - 禁止 Golden Case 叙事（NORMAL → ... → STRESS）伪装成 Runtime
+    """
+
+    # 基础（所有场景）
+    L0_AUDIO_HEALTH = "L0_AUDIO_HEALTH"
+    L3_PERCEPTION_STREAM = "L3_PERCEPTION_STREAM"
+    L4_RISK_SIGNALS = "L4_RISK_SIGNALS"
+    L5_PROVENANCE = "L5_PROVENANCE"
+
+    # telephone_risk 专属（P0.5 叙事层）
+    L1_AUDIO_PERCEPTION = "L1_AUDIO_PERCEPTION"
+    L2_ACOUSTIC_STATE = "L2_ACOUSTIC_STATE"
+
+    # repeated_visit 专属（🟡 Phase 3 阻塞）
+    L6_MEMORY_CONTEXT = "L6_MEMORY_CONTEXT"
+
+
+# 场景 ID → 可用 Surface 集合（只读，运行时不可变）
+_SCENARIO_SURFACES: dict[str, frozenset[ScenarioSurface]] = {
+    "telephone_risk": frozenset({
+        ScenarioSurface.L0_AUDIO_HEALTH,
+        ScenarioSurface.L1_AUDIO_PERCEPTION,
+        ScenarioSurface.L2_ACOUSTIC_STATE,
+        ScenarioSurface.L3_PERCEPTION_STREAM,
+        ScenarioSurface.L4_RISK_SIGNALS,
+        ScenarioSurface.L5_PROVENANCE,
+    }),
+    "cctv_surveillance": frozenset({
+        ScenarioSurface.L0_AUDIO_HEALTH,
+        ScenarioSurface.L3_PERCEPTION_STREAM,
+        ScenarioSurface.L4_RISK_SIGNALS,
+        ScenarioSurface.L5_PROVENANCE,
+    }),
+    # repeated_visit 需要 Memory API（Phase 3）
+    "repeated_visit": frozenset({
+        ScenarioSurface.L0_AUDIO_HEALTH,
+        ScenarioSurface.L3_PERCEPTION_STREAM,
+        ScenarioSurface.L4_RISK_SIGNALS,
+        ScenarioSurface.L5_PROVENANCE,
+        # ScenarioSurface.L6_MEMORY_CONTEXT,  # 🟡 Phase 3 阻塞
+    }),
+}
+
+# 未知场景默认 Surface（最小集）
+_DEFAULT_SURFACES: Final[frozenset[ScenarioSurface]] = frozenset({
+    ScenarioSurface.L0_AUDIO_HEALTH,
+    ScenarioSurface.L3_PERCEPTION_STREAM,
+    ScenarioSurface.L4_RISK_SIGNALS,
+    ScenarioSurface.L5_PROVENANCE,
+})
+
+
+def get_scenario_surfaces(scenario_id: str) -> frozenset[ScenarioSurface]:
+    """根据场景 ID 返回可用 Surface 集合。
+
+    Args:
+        scenario_id: 场景标识（如 ``"telephone_risk"`` / ``"cctv_surveillance"``）。
+
+    Returns:
+        该场景可用 Surface 的不可变集合；未知场景返回默认最小集。
+
+    Examples:
+        >>> sorted(get_scenario_surfaces("telephone_risk"), key=lambda x: x.value)
+        [ScenarioSurface.L0_AUDIO_HEALTH, ScenarioSurface.L1_AUDIO_PERCEPTION, ...]
+        >>> sorted(get_scenario_surfaces("cctv_surveillance"), key=lambda x: x.value)
+        [ScenarioSurface.L0_AUDIO_HEALTH, ScenarioSurface.L3_PERCEPTION_STREAM, ...]
+    """
+    return _SCENARIO_SURFACES.get(scenario_id, _DEFAULT_SURFACES)
+
+
+def has_audio_surface(scenario_id: str) -> bool:
+    """判断场景是否可见音频类 Surface（L1 / L2）。
+
+    Args:
+        scenario_id: 场景标识。
+
+    Returns:
+        True 如果场景包含 L1_AUDIO_PERCEPTION 或 L2_ACOUSTIC_STATE。
+    """
+    surfaces = get_scenario_surfaces(scenario_id)
+    return (
+        ScenarioSurface.L1_AUDIO_PERCEPTION in surfaces
+        or ScenarioSurface.L2_ACOUSTIC_STATE in surfaces
+    )
+
+
+def has_memory_surface(scenario_id: str) -> bool:
+    """判断场景是否可见 Memory Context Surface（L6）。
+
+    注意：当前 L6 标记为 Phase 3 阻塞（repeated_visit 暂未启用）。
+
+    Args:
+        scenario_id: 场景标识。
+
+    Returns:
+        True 如果场景包含 L6_MEMORY_CONTEXT。
+    """
+    surfaces = get_scenario_surfaces(scenario_id)
+    return ScenarioSurface.L6_MEMORY_CONTEXT in surfaces
+
+
+def render_scenario_surface_banner(scenario_id: str) -> str:
+    """渲染场景 Surface 配置说明（用于调试 / 审计入口）。
+
+    Args:
+        scenario_id: 场景标识。
+
+    Returns:
+        HTML 字符串，描述当前场景启用的 Surface 列表。
+    """
+    surfaces = get_scenario_surfaces(scenario_id)
+    labels = [s.value for s in sorted(surfaces, key=lambda x: x.value)]
+    labels_html = ", ".join(f"<code>{_esc_label(l)}</code>" for l in labels)
+    return (
+        f'<div class="scenario-surface-banner" '
+        f'data-scenario="{_esc_attr(scenario_id)}" data-surfaces="{len(labels)}">'
+        f"场景 <code>{_esc_attr(scenario_id)}</code> 启用 Surface: {labels_html}"
+        f"</div>"
+    )
+
+
+def _esc_attr(s: str) -> str:
+    """HTML 属性转义（简化版，等价于 render._R._esc）。"""
+    return (
+        s.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("'", "&#x27;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _esc_label(s: str) -> str:
+    """HTML 文本转义（简化版）。"""
+    return _esc_attr(s)
