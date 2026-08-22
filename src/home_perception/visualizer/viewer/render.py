@@ -1444,7 +1444,7 @@ def _render_live_shell(
     audio_manifest: dict | None,
     audio_base_url: str,
 ) -> tuple[str, str]:
-    """Live 产品骨架（PR-A）：阶段叙事 tabs + 6 区域 12 列 Grid + Live 帧流容器。
+    """Live 产品骨架（PR-A）：阶段叙事 tabs + 5 认知区域 12 列 Grid（+ Verify 快捷入口条）+ Live 帧流容器。
 
     纪律（DESIGN-live-product-ui-restore §3/§7）：
     - **UI 蓝图 = 初版 Demo，事实架构 = 现状**：本函数只做**展示编排**（VM-11），
@@ -1651,9 +1651,9 @@ def _render_live_shell(
             </div>
           </section>
 
-          <!-- ⑤ AI 做了什么：行动闭环 + 实时风险信号 -->
+          <!-- ④ AI 做了什么：行动闭环 + 实时风险信号 -->
           <section class="region lv-action">
-            <h2>⑤ AI 做了什么 <span class="tag">家属 / 社区协同处置</span></h2>
+            <h2>④ AI 做了什么 <span class="tag">家属 / 社区协同处置</span></h2>
             <div class="body">
               <div class="action-signals">
                 <div id="live-signals-{sid_html}"></div>
@@ -1668,9 +1668,9 @@ def _render_live_shell(
             {render_why_believe_link(sid)}
           </div>
 
-          <!-- ⑥ 历史上下文：Memory Context -->
+          <!-- ⑤ 历史上下文：Memory Context -->
           <section class="region lv-history">
-            <h2>⑥ 历史上下文 <span class="tag">认知层 · 只读</span></h2>
+            <h2>⑤ 历史上下文 <span class="tag">认知层 · 只读</span></h2>
             <div class="body">
               {live_memory_context}
             </div>
@@ -1678,9 +1678,9 @@ def _render_live_shell(
         </div>
         {details}
       </div>
-      <!-- PR-C：⑤ 系统原理（折叠 / 次级模块 · DESIGN §4.8）—— 不抢主叙事，默认折叠 -->
+      <!-- PR-C：⑥ 系统原理（折叠 / 次级模块 · DESIGN §4.8）—— 不抢主叙事，默认折叠 -->
       <details class="lv-sysarch" id="lv-sysarch-{sid_html}">
-        <summary>⑤ 系统原理（How it works）</summary>
+        <summary>⑥ 系统原理（How it works）</summary>
         <div class="sysarch-body">
           <p class="muted">底层架构三框：Home 端感知内核 → Demo Gateway 投影层 → Case Viewer 展示层。实时帧流 / delta 流经 ProjectionAccumulator 汇聚为 EvidenceProjection，浏览器只渲染、零推理（VM-9）。</p>
           <svg class="sysarch-svg" viewBox="0 0 960 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="系统原理图：Home 感知内核 → Demo Gateway → Case Viewer">
@@ -2505,7 +2505,7 @@ def render_case_viewer(
   .tab.active {{ background:#fff; color:#1c4f7c; border-color:#4a90d9;
                  border-bottom:1px solid #fff; margin-bottom:-1px; }}
   .live-view[hidden] {{ display:none; }}
-  /* 12 列 Grid + 5 认知区域（T1.6 重组：①→②→③→⑤→⑥） */
+  /* 12 列 Grid + 5 认知区域（编号连续化：①实时画面 → ②AI 正在理解 → ③为什么值得关注 → ④AI 做了什么 → ⑤历史上文） */
   .live-grid {{ display:grid; grid-template-columns:repeat(12,1fr); gap:14px; margin-top:14px; }}
   .region {{ background:#fff; border:1px solid #e3e8ee; border-radius:10px;
              display:flex; flex-direction:column; min-width:0; }}
@@ -2514,12 +2514,13 @@ def render_case_viewer(
   .region > h2 .tag {{ font-size:11px; font-weight:600; color:#1c4f7c; background:#dcebfb;
                        padding:2px 8px; border-radius:999px; }}
   .region .body {{ padding:12px 14px; overflow:auto; }}
-   /* 文档架构：左侧 OBSERVE + 右侧 UNDERSTAND（横向布局）
-      §5 布局方案：① 实时视频 (8列) ↔ ③ 风险解释 (4列)；② 时间线 (8列) ↔ ③.5 风险信号 (4列)；
-                    ④ 行动闭环 (8列) ↔ ⑥ Memory (4列) */
+   /* 文档架构：Row1 左 OBSERVE + 右 UNDERSTAND（横向布局），其余全宽纵向铺陈：
+      Row1: ① 实时画面 lv-now (8列) ↔ ② AI 正在理解 lv-perception (4列)；
+      Row2: ③ 为什么值得关注 lv-why (12列全宽)；④ AI 做了什么 lv-action (12列)；⑤ 历史上文 lv-history (12列)。
+      （③.5 实时风险信号 live-signals 位于 ④ 区域内，不单独占列） */
    .lv-now {{ grid-column:span 8; }}
    .lv-perception {{ grid-column:span 4; }}
-  .lv-why {{ grid-column:span 8; }}
+  .lv-why {{ grid-column:span 12; }}
   .lv-action {{ grid-column:span 12; }}
   .lv-history {{ grid-column:span 12; }}
   .lv-roleview {{ grid-column:span 12; margin-top:14px; }}
@@ -2559,11 +2560,14 @@ def render_case_viewer(
                                background:#1e293b; }}
     /* cctv_surveillance 等无音频场景：Waveform 完全隐藏（AC-12） */
     .waveform-surface[hidden] {{ display:none; }}
-   /* LIVE Scenario Controller：Narrative Mode 驱动的 grid 权重调整（LIVE-SCENARIO-CONTROLLER-SPEC.md） */
+    /* LIVE Scenario Controller：Narrative Mode 驱动的 grid 权重调整（LIVE-SCENARIO-CONTROLLER-SPEC.md）。
+       - audio_first（telephone_risk）：v1 权重与默认一致——音频 Surface 可见性由服务端
+         has_audio_surface() 渲染门控承担（L1/L2/waveform/audio-table 仅电话场景输出），此处显式声明防漂移；
+       - vision_first：感知流转全宽；
+       - memory_first：待 L6 Memory Surface 启用（Phase 3）后随真实 DOM 结构落地权重规则。 */
+   .live-scenario[data-narrative-mode="audio_first"] .lv-now {{ grid-column:span 8; }}
+   .live-scenario[data-narrative-mode="audio_first"] .lv-perception {{ grid-column:span 4; }}
    .live-scenario[data-narrative-mode="vision_first"] .lv-perception {{ grid-column:span 12; }}
-   .live-scenario[data-narrative-mode="vision_first"] .lv-why {{ grid-column:span 12; }}
-   .live-scenario[data-narrative-mode="vision_first"] .sensor-pair {{ grid-template-columns:1fr; }}
-   .live-scenario[data-narrative-mode="memory_first"] .lv-memory {{ grid-column:span 4; }}
   .audio-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; }}
   .audio-status-dot.audio-active {{ background:#16a34a;
                                      box-shadow:0 0 0 3px rgba(22,163,74,0.18); }}

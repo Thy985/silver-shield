@@ -178,7 +178,7 @@
     panel.innerHTML =
       '<h3 class="acoustic-state-title">🔊 声学状态变化</h3>' +
       '<ol class="acoustic-timeline">' + phasesHtml + '</ol>' +
-      '<p class="acoustic-state-note muted">声学状态变化来自 runtime golden_audio_state（非诈骗判定）</p>';
+      '<p class="acoustic-state-note muted">数据来源：Golden Case manifest 声明式声学状态机（provenance=SIMULATED）；系统不调用 ASR / LLM，不推导当事人心理或诈骗判定（VM-9）</p>';
   }
 
   // Phase 3 Waveform：RMS 连续波形绘制（telephone_risk 专属，VM-9 零推理）
@@ -255,7 +255,10 @@
     'acoustic_state_change': '声学状态变化',
     'voice_stress_elevated': '语音应激升高',
     'telephone_interaction': '电话交互进行中',
-    // 兼容旧 event_type 键（去重兜底）
+    // 兼容旧 event_type 键（去重兜底）。
+    // 注意：visit_normal → "异常时段访问"并非笔误——本系统 visit_normal 仅在
+    // is_odd_hour 叠加时产生并进入决策（decision_policy.routing_table 该行 reason
+    // 即"异常时段访问"），此映射忠实镜像服务端语义，勿改。
     repeated_visit_detected: '检测到重复访问',
     abnormal_dwell: '停留超过阈值',
     visit_normal: '异常时段访问',
@@ -282,18 +285,8 @@
   var ws = null;
   var sid = '';
   var _narrativeMode = 'neutral';
-  // （_MARKERS / _COLORS / _CLASS_ZH / _AUDIO_KIND_ZH / _ACTION_ZH / _REASON_ZH 声明见上方）
-  // P0-3: BEHAV 映射（event_type → 行为里程碑 icon/color/label）。
-  // 对齐原 Demo b593a01 BEHAV 表，枚举→人话同义映射，不扩展语义。
-  var _BEHAV = {
-    visit_normal:         { icon: '👤', label: '首次出现',   color: '#0891b2' },
-    visit_pending_verify:  { icon: '🔍', label: '待核实到访', color: '#0ea5e9' },
-    abnormal_dwell:       { icon: '⏱',  label: '停留超过阈值', color: '#d97706' },
-    repeat_visit:         { icon: '🔁', label: '再次出现',   color: '#7c3aed' },
-    high_risk_approach:   { icon: '⚠',  label: '高风险逼近', color: '#dc2626' },
-  };
-  // LP-2：实时感知聚合状态（视觉 + 音频），perception_delta 更新 vision、evidence_delta 更新 audio。
-  // （声明见 line 82-89，此处不重复避免 hoisting 漂移）
+  // （_MARKERS / _COLORS / _CLASS_ZH / _AUDIO_KIND_ZH / _ACTION_ZH / _REASON_ZH / _BEHAV /
+  //   seeState 声明见上方，勿在此重复声明——重复 var 声明会静默覆盖且掩盖漂移）
   var _sessionStart = null;
   var _sessionTimer = null;
 
@@ -935,6 +928,8 @@
   // - eventSeen（seenRefs/seenAudio/seenCaseTime）= 事件已处理（语义层），与 DOM 无关；
   //   事件不因某个 Surface 当前不存在而重新触发 Semantic Event；
   // - 各 Surface（.timeline / table.audio-table / case-time-track）独立降级渲染；
+  //   【单场景契约】querySelector 取页面首个匹配——Live Viewer 当前为单场景页
+  //   （.live-perception 同样取首个，见 _init），多场景同页前必须先 per-sid 化这些 selector。
   // - Surface 后现时由 _flushPendingSurfaces 从已保存 state 补渲染。
   // ============================================================
   var _pendingAudioRows = [];      // audio-table 缺失期间挂起的行 HTML

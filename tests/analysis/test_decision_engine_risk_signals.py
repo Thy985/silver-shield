@@ -131,7 +131,6 @@ class TestEndToEndWithRealPolicy:
     def test_real_policy_sees_signals_via_engine_path(self):
         """真实 RuleBasedDecisionPolicy 经 engine 全链路消费信号：
         Warning.meta["risk_signals"] 摘要可见（engine→policy 链路贯通的可观测证据）。"""
-        from home_perception.analysis.decision_policy import RuleBasedDecisionPolicy
 
         engine = DecisionEngine(elder_id="elder_001", now_provider=lambda: NOW)
         sig = make_signal()
@@ -144,7 +143,6 @@ class TestEndToEndWithRealPolicy:
 
     def test_cleared_signal_counted_not_reasoned(self):
         """CLEARED 仅计数不产生原因（policy D6 语义经 engine 路径保持一致）。"""
-        from home_perception.analysis.decision_policy import RuleBasedDecisionPolicy
 
         engine = DecisionEngine(elder_id="elder_001", now_provider=lambda: NOW)
         cleared = make_signal(transition="cleared")
