@@ -370,6 +370,78 @@ class RealtimeRiskConfig(BaseModel):
         return float(v)
 
 
+class AudioEvidenceConfig(BaseModel):
+    """音频证据强度分级配置（ADR-0042 · 冻结语义，不冻结参数）。
+
+    **参数悬空期安全默认（D2/D3）**：升级维度参数（N/T/M/门槛）为 None = 对应
+    判定维度不生效或对应档位结构性不可达——默认配置下一切事件最多 MONITOR
+    （观察记录无害），升级动作零可达；参数由真实 telephone_risk 验收数据回填后
+    逐档打开。
+
+    - ``enabled``：评估器装配总开关（默认 false，零运行时开销）。
+    - ``monitor_score_threshold`` / ``monitor_confidence_threshold``：单次可信信号
+      门槛（[0,1]）。None = 不设门槛（任何事件至少 MONITOR——观察无害）。
+    - ``raise_min_count``：RAISE 档 N（同 kind 窗口计数 ≥ N，持续性维度）。None = RAISE 不可达。
+    - ``raise_window_s``：同类持续性判定窗口 T（秒）。None = 窗口不剪枝（全会话累计）。
+    - ``notify_min_kinds``：NOTIFY 档 M（窗口内独立 kind 数 ≥ M，多样性维度）。None = NOTIFY 不可达。
+    - ``clear_timeout_s``：CLEARED 静默超时（状态机卫生参数，非升级阈值——CLEARED
+      只清理状态不产生误报风险，故给工程默认值而非悬空）。
+    - ``ceiling_monitor_only``：**D4 MONITOR ceiling 硬闸门（默认开启）**。YAMNet
+      class_map 修复 + 标签真实性验证通过前不得解除；解除后 fallback kind
+      （AUDIO_ANOMALY_OTHER）仍恒封顶 MONITOR（双保险）。
+    - ``escalate_enabled``：ESCALATE 档可达性开关（D6：还须经 ADR-0041
+      LinkedSignalPair 验证，双重门控）。默认 false——参数悬空期 ESCALATE 不可用。
+    """
+
+    enabled: bool = False
+    monitor_score_threshold: float | None = None
+    monitor_confidence_threshold: float | None = None
+    raise_min_count: int | None = None
+    raise_window_s: float | None = None
+    notify_min_kinds: int | None = None
+    clear_timeout_s: float = 60.0
+    ceiling_monitor_only: bool = True
+    escalate_enabled: bool = False
+
+    @field_validator("monitor_score_threshold", "monitor_confidence_threshold", mode="before")
+    @classmethod
+    def _unit_interval(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(f"门槛必须是 [0,1] 数值或 None，收到 {v!r}")  # noqa: TRY004
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"门槛必须在 [0,1]，收到 {v!r}")
+        return float(v)
+
+    @field_validator("raise_min_count", "notify_min_kinds", mode="before")
+    @classmethod
+    def _positive_count(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(f"计数参数必须是正整数或 None，收到 {v!r}")  # noqa: TRY004
+        if v < 1:
+            raise ValueError(f"计数参数必须 >= 1 或 None（None=该档不可达），收到 {v!r}")
+        return v
+
+    @field_validator("raise_window_s", mode="before")
+    @classmethod
+    def _positive_seconds(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            raise ValueError(f"时间窗必须是正数或 None，收到 {v!r}")
+        return float(v)
+
+    @field_validator("clear_timeout_s", mode="before")
+    @classmethod
+    def _positive_timeout(cls, v):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            raise ValueError(f"clear_timeout_s 必须是正数，收到 {v!r}")
+        return float(v)
+
+
 class MemoryConfig(BaseModel):
     """ADR-0024 Slice 3（Stage C + Stage E）Snapshot Recovery 配置。
 
@@ -533,6 +605,7 @@ class Settings(BaseModel):
     action: ActionConfig = ActionConfig()
     runtime: RuntimeConfig = RuntimeConfig()
     realtime_risk: RealtimeRiskConfig = RealtimeRiskConfig()
+    audio_evidence: AudioEvidenceConfig = AudioEvidenceConfig()
     memory: MemoryConfig = MemoryConfig()
     audio: AudioConfig = AudioConfig()
 
