@@ -347,7 +347,13 @@ class YamNetTagger(AcousticTagger):
 
 
 def load_class_names(class_map_path: str) -> list[str]:
-    """加载 YAMNet 521 类 AudioSet 类名映射文件（yaml/json 字符串列表）。
+    """加载 YAMNet 521 类 AudioSet 类名映射文件（csv/yaml/json）。
+
+    支持格式：
+    - **.csv**（AudioSet 官方分发格式，如 ``yamnet_class_map.csv``）：须含
+      ``display_name`` 列（可选 ``index`` 列，存在时校验 0..520 连续——保证
+      行序与模型输出索引严格对齐）；
+    - **.yaml / .json**：521 条字符串列表。
 
     **fail-fast 契约（ADR-0042 步骤 6 · class_N 透传缺陷修复入口）**：空路径 /
     非法后缀 / 路径遍历 / 文件缺失 / 内容格式错 / 长度 ≠ 521 一律显式 raise。
@@ -361,9 +367,9 @@ def load_class_names(class_map_path: str) -> list[str]:
     if not class_map_path or not str(class_map_path).strip():
         raise ValueError("class_map_path 不能为空（留空 = 用内嵌精选子集，请显式二选一）")
     p = Path(class_map_path)
-    if p.suffix.lower() not in (".yaml", ".yml", ".json"):
+    if p.suffix.lower() not in (".csv", ".yaml", ".yml", ".json"):
         raise ValueError(
-            f"class_map_path 必须是 .yaml/.yml/.json，收到 {class_map_path!r}"
+            f"class_map_path 必须是 .csv/.yaml/.yml/.json，收到 {class_map_path!r}"
         )
     if ".." in p.parts:
         raise ValueError(f"class_map_path 拒绝路径遍历，收到 {class_map_path!r}")
@@ -372,6 +378,8 @@ def load_class_names(class_map_path: str) -> list[str]:
             f"class_map 文件不存在：{class_map_path}；"
             "请提供 AudioSet 521 类名列表（顺序对齐模型输出）或留空用内嵌精选子集"
         )
+    if p.suffix.lower() == ".csv":
+        return _load_class_names_csv(p)
     raw = p.read_text(encoding="utf-8")
     if p.suffix.lower() == ".json":
         import json
@@ -392,6 +400,42 @@ def load_class_names(class_map_path: str) -> list[str]:
             "请核对权重导出配套的 class_map（如 yamnet_class_map.csv）转换产物"
         )
     return data
+
+
+def _load_class_names_csv(p: Path) -> list[str]:
+    """解析 AudioSet 官方 CSV（``index,mid,display_name``）→ display_name 列表。"""
+    import csv
+
+    with p.open(encoding="utf-8-sig", newline="") as f:  # utf-8-sig：容忍导出工具加 BOM
+        reader = csv.DictReader(f)
+        if not reader.fieldnames or "display_name" not in reader.fieldnames:
+            raise ValueError(
+                "class_map CSV 缺少 display_name 列（期望表头 index,mid,display_name），"
+                f"收到 {reader.fieldnames}"
+            )
+        rows = list(reader)
+    names = [(r.get("display_name") or "").strip() for r in rows]
+    if any(not n for n in names):
+        raise ValueError("class_map CSV 存在空 display_name（行序即模型输出索引，不得留空）")
+    idx_header = next(
+        (h for h in (reader.fieldnames or []) if h.strip().lower() == "index"), None
+    )
+    if idx_header is not None:
+        try:
+            indices = [int(r[idx_header]) for r in rows]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"class_map CSV index 列必须为整数序列：{exc}") from exc
+        if indices != list(range(len(indices))):
+            raise ValueError(
+                f"class_map CSV index 必须从 0 连续递增（保证与模型输出对齐），"
+                f"收到首尾 {indices[:2]}... 共 {len(indices)} 条"
+            )
+    if len(names) != 521:
+        raise ValueError(
+            f"class_map 必须包含 521 条类名（YAMNet 输出维度），收到 {len(names)}；"
+            "请核对随权重分发的 yamnet_class_map.csv 是否完整"
+        )
+    return names
 
 
 def build_tagger(
