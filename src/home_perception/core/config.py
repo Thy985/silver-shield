@@ -333,6 +333,11 @@ class RealtimeRiskConfig(BaseModel):
     enabled: bool = False
     eval_interval_frames: int = 1
     decision_enabled: bool = False
+    # ADR-0041 D2：signal 级时间对齐窗口（秒）。**默认 None = 悬空期安全默认**——
+    # 默认数值由真实 telephone_risk 验收数据的 Δt 分布决定（候选档位 same frame /
+    # ≤0.5s / ≤1.0s / ≤2.0s）后回填；悬空期间 NEAR_WINDOW 关联不可用，SAME_FRAME
+    # 不受影响（SignalTemporalLinker.classify fail-safe）。Owner 明确拒绝预设 2.0s。
+    signal_temporal_window_s: float | None = None
 
     @field_validator("eval_interval_frames", mode="before")
     @classmethod
@@ -346,6 +351,23 @@ class RealtimeRiskConfig(BaseModel):
         if v < 1:
             raise ValueError(f"eval_interval_frames 必须 >= 1，收到 {v!r}")
         return v
+
+    @field_validator("signal_temporal_window_s", mode="before")
+    @classmethod
+    def _positive_window(cls, v):
+        # None = 悬空期合法值；显式给值时必须为正数（0 会使 NEAR_WINDOW 判定
+        # 退化为 delta==0 才通过——与 SAME_FRAME 重叠且误导调参，直接拒绝）
+        if v is None:
+            return v
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(  # noqa: TRY004  # pydantic validator 惯例抛 ValueError（与 _positive_int 同）
+                f"signal_temporal_window_s 必须是正数或 None，收到 {v!r}"
+            )
+        if v <= 0:
+            raise ValueError(
+                f"signal_temporal_window_s 必须 > 0 或 None（None=悬空禁用），收到 {v!r}"
+            )
+        return float(v)
 
 
 class MemoryConfig(BaseModel):
