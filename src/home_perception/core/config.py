@@ -556,6 +556,21 @@ class Tier1AudioConfig(BaseModel):
             raise ValueError(f"threshold 必须在 [0, 1]，收到 {v!r}")
         return v
 
+    @field_validator("class_map_path", mode="before")
+    @classmethod
+    def _class_map_path_guard(cls, v):
+        """配置期守卫：后缀白名单 + 拒绝路径遍历（加载期 fail-fast 见 tagging.load_class_names）。"""
+        if v is None:
+            return ""
+        s = str(v).strip()
+        if not s:
+            return ""
+        if not s.lower().endswith((".yaml", ".yml", ".json")):
+            raise ValueError(f"class_map_path 必须是 .yaml/.yml/.json，收到 {s!r}")
+        if ".." in Path(s).parts:
+            raise ValueError(f"class_map_path 拒绝路径遍历，收到 {s!r}")
+        return s
+
     @field_validator("top_k")
     @classmethod
     def _top_k_positive(cls, v: int) -> int:
