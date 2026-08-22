@@ -346,6 +346,54 @@ class YamNetTagger(AcousticTagger):
         return np.stack(out) if out else np.empty((0, 521))
 
 
+def load_class_names(class_map_path: str) -> list[str]:
+    """加载 YAMNet 521 类 AudioSet 类名映射文件（yaml/json 字符串列表）。
+
+    **fail-fast 契约（ADR-0042 步骤 6 · class_N 透传缺陷修复入口）**：空路径 /
+    非法后缀 / 路径遍历 / 文件缺失 / 内容格式错 / 长度 ≠ 521 一律显式 raise。
+    静默退化（class_names=None → ``class_N`` 透传）正是原缺陷教训：下游无法把
+    ``class_N`` 归入语义映射，kind 分类全落 fallback，D4 MONITOR ceiling 因此
+    永不可解除。521 与 ``_run_frames`` 的输出维度硬编码保持一致。
+
+    Returns:
+        521 条 AudioSet 类名（顺序对齐模型输出索引）。
+    """
+    if not class_map_path or not str(class_map_path).strip():
+        raise ValueError("class_map_path 不能为空（留空 = 用内嵌精选子集，请显式二选一）")
+    p = Path(class_map_path)
+    if p.suffix.lower() not in (".yaml", ".yml", ".json"):
+        raise ValueError(
+            f"class_map_path 必须是 .yaml/.yml/.json，收到 {class_map_path!r}"
+        )
+    if ".." in p.parts:
+        raise ValueError(f"class_map_path 拒绝路径遍历，收到 {class_map_path!r}")
+    if not p.exists():
+        raise FileNotFoundError(
+            f"class_map 文件不存在：{class_map_path}；"
+            "请提供 AudioSet 521 类名列表（顺序对齐模型输出）或留空用内嵌精选子集"
+        )
+    raw = p.read_text(encoding="utf-8")
+    if p.suffix.lower() == ".json":
+        import json
+
+        data = json.loads(raw)
+    else:
+        import yaml  # lazy：仅 class_map 加载路径需要
+
+        data = yaml.safe_load(raw)
+    if not isinstance(data, list) or not all(isinstance(x, str) for x in data):
+        raise ValueError(
+            "class_map 文件内容必须是字符串列表（AudioSet 类名，顺序对齐模型输出索引），"
+            f"收到 {type(data).__name__}"
+        )
+    if len(data) != 521:
+        raise ValueError(
+            f"class_map 必须包含 521 条类名（YAMNet 输出维度），收到 {len(data)}；"
+            "请核对权重导出配套的 class_map（如 yamnet_class_map.csv）转换产物"
+        )
+    return data
+
+
 def build_tagger(
     cfg: object,
 ) -> AcousticTagger | None:
@@ -353,7 +401,9 @@ def build_tagger(
 
     分支：
     - ``enabled`` 为 False → 返回 ``None``（管道不跑 Tier1，labels 仅 Tier0）。
-    - ``enabled`` 且 ``model_path`` 非空 → ``YamNetTagger``（真实推理）。
+    - ``enabled`` 且 ``model_path`` 非空 → ``YamNetTagger``（真实推理）；
+      ``class_map_path`` 非空时经 :func:`load_class_names` 加载 521 类名传入
+      （恢复语义归并——否则 521 类退化为 ``class_N``，下游不可解释）。
     - ``enabled`` 但 ``model_path`` 为空（缺权重）→ ``EnergyStubAcousticTagger`` 回退
       （保证 config 开启即能用，不因缺权重崩；生产应配真实权重）。
 
@@ -364,9 +414,14 @@ def build_tagger(
         return None
     model_path = str(getattr(cfg, "model_path", "") or "")
     if model_path.strip():
+        # ADR-0042 步骤 6 修复：class_map_path 此前从未被消费（恒 class_N 透传）。
+        class_map_path = str(getattr(cfg, "class_map_path", "") or "")
+        class_names = (
+            load_class_names(class_map_path) if class_map_path.strip() else None
+        )
         return YamNetTagger(
             model_path=model_path,
-            class_names=getattr(cfg, "class_names", None),
+            class_names=class_names,
             threshold=float(getattr(cfg, "threshold", 0.1)),
             top_k=int(getattr(cfg, "top_k", 10)),
             target_sr=int(getattr(cfg, "target_sr", 16000)),
