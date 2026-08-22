@@ -35,7 +35,7 @@ from home_perception.analysis.rule_engine import RuleEngine, ThresholdConfig
 from home_perception.core.config import Settings
 from home_perception.detection.detector import Detection, DetectionResult
 from home_perception.detection.tracker import VisitorTracker
-from home_perception.runtime import FrameResult, PerceptionPipeline
+from home_perception.runtime import FrameResult, PerceptionPipeline, RuntimeFrameContext
 
 # ============================================================================
 # 测试辅助（模式复用自 tests/test_runtime.py，保持 Stage B 自包含）
@@ -154,9 +154,17 @@ def _build_pipeline(
     )
 
 
+def _ctx(p: PerceptionPipeline, i: int) -> RuntimeFrameContext:
+    """构造第 i 帧的进给 ctx（ADR-0039：case_time = frame_index × interval）。"""
+    interval = getattr(p, "_frame_interval_s", 0.0)
+    return RuntimeFrameContext(
+        video_frame=None, frame_index=i, case_time=round(i * interval, 3)
+    )
+
+
 def _run_frames(p: PerceptionPipeline, n: int) -> list[FrameResult]:
     """跑 n 帧 None，返回每帧 FrameResult。"""
-    return [p.process_frame(None, frame_index=i) for i in range(n)]
+    return [p.process_frame(_ctx(p, i)) for i in range(n)]
 
 
 def _history_fields(r: FrameResult) -> tuple:
@@ -236,7 +244,7 @@ class TestFlagOnBypassIsolation:
         clock = ManualClock()
         plan = [_person(1), _person(1)]  # 持续在场
         p = _build_pipeline(StubDetector(plan, clock), clock, realtime_enabled=True)
-        r0 = p.process_frame(None, frame_index=0)
+        r0 = p.process_frame(_ctx(p, 0))
         # 帧 0：track 首次出现，event_builder 分配 UUID，behavior_builder 应产出 state
         assert len(r0.behavior_states) >= 1
         s = r0.behavior_states[0]
@@ -249,8 +257,8 @@ class TestFlagOnBypassIsolation:
         clock = ManualClock()
         plan = [_person(1), _person(1), _person(1)]
         p = _build_pipeline(StubDetector(plan, clock), clock, realtime_enabled=True)
-        r0 = p.process_frame(None, frame_index=0)
-        r1 = p.process_frame(None, frame_index=1)
+        r0 = p.process_frame(_ctx(p, 0))
+        r1 = p.process_frame(_ctx(p, 1))
         # clock 每帧推进 1s，dwell 应递增
         assert r1.behavior_states[0].dwell_seconds > r0.behavior_states[0].dwell_seconds
 
@@ -432,9 +440,9 @@ class TestStageCShadowMode:
             realtime_enabled=True,
             thresholds=th,
         )
-        r0 = p.process_frame(None, frame_index=0)  # dwell≈0，不触发
-        r1 = p.process_frame(None, frame_index=1)  # dwell≈1s，不触发（<1.5）
-        r2 = p.process_frame(None, frame_index=2)  # dwell≈2s，触发 RAISED
+        r0 = p.process_frame(_ctx(p, 0))  # dwell≈0，不触发
+        r1 = p.process_frame(_ctx(p, 1))  # dwell≈1s，不触发（<1.5）
+        r2 = p.process_frame(_ctx(p, 2))  # dwell≈2s，触发 RAISED
 
         assert r0.risk_signals == []
         assert r1.risk_signals == []

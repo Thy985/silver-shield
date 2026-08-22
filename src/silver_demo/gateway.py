@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
 from home_perception.core.config import RealtimeRiskConfig, Settings
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
+from home_perception.runtime.runtime_context import RuntimeFrameContext
 
 # === 本包内部 ===
 from .config import DemoSettings
@@ -128,6 +129,7 @@ class DemoGateway:
         self._running = False
         self._task: asyncio.Task | None = None
         self._frame_index = 0
+        self._last_case_time = 0.0  # ADR-0039：当前帧 case_time（ctx 构造时更新）
         self.loop_count = 0  # 循环重放计数（P0-11.3.5 状态面板）
 
     @classmethod
@@ -239,7 +241,17 @@ class DemoGateway:
             # 消费冻结契约：process_frame（唯一出口，冻结对象只读消费）
             # 注意：frame_index 单调递增、loop 重放时**不回绕**（与冻结 read_caviar_frames 的 i % n 不同）。
             # 长 loop 下 frame_index 会超过 n_frames——展示进度请用 clock.now()（demo_time）或 self.n_frames。
-            result: FrameResult = self.pipeline.process_frame(frame, frame_index=self._frame_index)
+            # ADR-0039：RuntimeFrameContext 单容器进给；case_time 在此算好并存为
+            # self._last_case_time，供下方 frame_tick / perception_delta / risk_delta
+            # 三处消费（单一事实源，替代各自重复的 frame_index × interval 计算）。
+            interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
+            ctx = RuntimeFrameContext(
+                video_frame=frame,
+                frame_index=self._frame_index,
+                case_time=round(self._frame_index * interval, 3),
+            )
+            result: FrameResult = self.pipeline.process_frame(ctx)
+            self._last_case_time = ctx.case_time
 
             # Live Adapter 增量投影（ADR-0036 Phase 3：收敛 /live 到统一 Case Viewer）。
             # 单一事实源：FrameResult → ProjectionAccumulator → EvidenceProjection。
@@ -270,9 +282,8 @@ class DemoGateway:
             # PR-C：frame_tick 携带 case_time（红线 §7.7：frame_index + case_time 双标识贯穿
             # frame_tick / perception_delta / risk_delta，Case Time chip 由此驱动）。
             try:
-                interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
-                ft_case_time = round(self._frame_index * interval, 3)
-            except Exception:  # noqa: BLE001  (fail-closed：case_time 计算失败退回 0.0)
+                ft_case_time = self._last_case_time
+            except AttributeError:  # fail-closed：ctx 尚未构造（防御性，正常不触）
                 ft_case_time = 0.0
             await self.hub.broadcast(
                 {
@@ -310,8 +321,7 @@ class DemoGateway:
                 pdelta = acc.extract_perception_delta(self._prev_perception_fp)
                 self._prev_perception_fp = acc.perception_fingerprint()
                 if pdelta.get("detections"):
-                    interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
-                    pdelta["case_time"] = round(self._frame_index * interval, 3)
+                    pdelta["case_time"] = self._last_case_time
                     pdelta["server_ts"] = time.time()
                     await self.hub.broadcast(pdelta)
             except Exception as exc:  # noqa: BLE001
@@ -344,8 +354,7 @@ class DemoGateway:
                     or rdelta.get("device_id")
                     or rdelta.get("elder_id")
                 ):
-                    interval = getattr(self.scenario, "frame_interval_s", 0.0) or 0.0
-                    rdelta["case_time"] = round(self._frame_index * interval, 3)
+                    rdelta["case_time"] = self._last_case_time
                     await self.hub.broadcast(rdelta)
             except Exception as exc:  # noqa: BLE001
                 structlog.get_logger(__name__).warning("risk_delta_failed", exc_info=exc)

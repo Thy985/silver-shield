@@ -459,6 +459,8 @@ class IntegrationRunner:
         """
         import numpy as np
 
+        from home_perception.runtime.runtime_context import RuntimeFrameContext
+
         dummy = np.zeros((1, 1, 3), dtype=np.uint8)
         if synth.frames is not None:
             frames: list[Any] = list(synth.frames)
@@ -473,7 +475,15 @@ class IntegrationRunner:
         for i, frame in enumerate(frames):
             if interval > 0 and tickable:
                 clock.tick(interval)
-            results.append(pipeline.process_frame(frame, frame_index=i))
+            results.append(
+                pipeline.process_frame(
+                    RuntimeFrameContext(
+                        video_frame=frame,
+                        frame_index=i,
+                        case_time=round(i * interval, 3),
+                    )
+                )
+            )
 
         # ADR-0034 Phase B.2：帧循环结束后，若存在音频会话声明且已装配 AudioSessionRecorder，
         # 驱动一次音频会话（独立 Audio Loop，不随视频帧同步，ADR-0026 §8）。音频事件经决策链

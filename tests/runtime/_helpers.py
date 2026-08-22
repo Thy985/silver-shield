@@ -35,7 +35,7 @@ from home_perception.core.config import MemoryConfig
 from home_perception.detection.tracker import VisitorTracker
 from home_perception.memory import DefaultEpisodeBuilder, InMemoryStore
 from home_perception.memory.consumer import MemoryConsumer
-from home_perception.runtime import PerceptionPipeline
+from home_perception.runtime import PerceptionPipeline, RuntimeFrameContext
 
 
 class ManualClock:
@@ -165,5 +165,8 @@ def drive(pipeline: PerceptionPipeline, clock: ManualClock, items, step_s: float
     results = []
     for i, _ in enumerate(items):
         clock.advance(step_s)
-        results.append(pipeline.process_frame(None, frame_index=i))
+        ctx = RuntimeFrameContext(
+            video_frame=None, frame_index=i, case_time=round(i * step_s, 3)
+        )
+        results.append(pipeline.process_frame(ctx))
     return results
