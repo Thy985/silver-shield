@@ -21,6 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover - 仅供类型注解；运行期不导入�
 
 from ..common.logging import get_logger
 from .perception import PerceptionEvent
+from .risk_signal import SignalTransition
 from .warning import (
     RECOMMENDED_ACTIONS,
     RISK_LEVELS,
@@ -270,7 +271,30 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
             "routing_table_version": "v1",
         }
 
+        # ADR-0040 D6：risk_signals 一等输入的最小消费（防「加了字段没人消费」的
+        # 静默旁路）。边界（本 ADR 与 ADR-0042 的职责切分）：
+        # - 仅作为**已有视觉候选决策**的附加证据面进入可观测输出（meta 摘要 +
+        #   RAISED 人话原因）；不参与 level / action / perception_score 判定——
+        #   Evidence Strength → Action 的 modality-aware routing 归 ADR-0042；
+        # - CLEARED 是解除消息，不产生原因，仅计入 meta 计数；
+        # - 纯信号无视觉触发仍走上方早退分支返回 None（语义同现状）。
+        if input.risk_signals:
+            raised = [
+                s for s in input.risk_signals if s.transition is SignalTransition.RAISED
+            ]
+            for s in raised:
+                reason = f"实时风险信号: {s.category.value}({s.source.value})"
+                if reason not in reasons:
+                    reasons.append(reason)
+            meta["risk_signals"] = {
+                "count": len(input.risk_signals),
+                "raised": len(raised),
+                "sources": sorted({s.source.value for s in input.risk_signals}),
+                "signal_ids": [s.signal_id for s in input.risk_signals],
+            }
+
         # G0-3：历史感知升级（golden opt-in；默认 False 逐字不变）。
+        # （ADR-0040 D6：risk_signals 消费在其之前完成 —— 见下方最小消费块）
         final_level, final_action, reasons, meta = self._apply_memory_aware(
             input, final_level, final_action, reasons, meta
         )

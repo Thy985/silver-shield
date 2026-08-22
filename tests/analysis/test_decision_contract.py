@@ -150,8 +150,9 @@ class TestC7FlatFieldWhitelist:
         names = {f.name for f in fields(DecisionInput)}
         assert names == DECISION_INPUT_FIELD_WHITELIST
 
-    def test_whitelist_is_five_orthogonal_fields(self):
-        assert len(DECISION_INPUT_FIELD_WHITELIST) == 5
+    def test_whitelist_is_six_fields_hard_capped(self):
+        """ADR-0040 D2：临时扩展 5→6，**6 是硬顶**（不构成 5→6→7→8 演进先例）。"""
+        assert len(DECISION_INPUT_FIELD_WHITELIST) == 6
 
     def test_import_time_guard_actually_fires(self, monkeypatch):
         """反向变异验证：把白名单改掉后守卫**必须**抛错。
