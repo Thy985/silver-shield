@@ -53,7 +53,7 @@ def test_live_shell_has_tabs_and_grid_regions():
     assert 'id="view-discover-live_shell_t"' in html
     assert 'id="view-family-live_shell_t" hidden' in html
     assert 'id="view-community-live_shell_t" hidden' in html
-    # 5 认知区域 Grid（T1.6 重组：① lv-now / ② lv-perception / ③ lv-why / ⑤ lv-action / ⑥ lv-history）
+    # 5 认知区域 Grid（编号连续化：① lv-now / ② lv-perception / ③ lv-why / ④ lv-action / ⑤ lv-history）
     for cls in ("lv-now", "lv-perception", "lv-why", "lv-action", "lv-history"):
         assert f'region {cls}' in html, cls
     # ① Live 帧流容器（LP-1 既有契约不回退）
@@ -98,11 +98,11 @@ def test_live_shell_role_views_share_closure_state_machine():
 
 
 def test_live_shell_honest_placeholders():
-    """③.5 风险信号 / ⑥ Memory 诚实占位（AC-12 不编造 visitor profile / 风险信号）。"""
+    """③.5 风险信号 / ⑤ Memory 诚实占位（AC-12 不编造 visitor profile / 风险信号）。"""
     html = _live_html()
     assert 'id="live-signals-live_shell_t"' in html
     assert "当前无进行中风险信号" in html
-    assert "⑥ 历史上下文" in html
+    assert "⑤ 历史上下文" in html
     assert "本次通话暂无历史相关事件" in html  # 诚实标注未接入，不编造 profile
 
 
@@ -165,11 +165,11 @@ def test_live_shell_closure_summary_pr_c():
 
 
 def test_live_shell_sysarch_foldable_pr_c():
-    """PR-C：⑤ 系统原理折叠区（SVG 架构图 · 次级模块，默认折叠）。"""
+    """PR-C：⑥ 系统原理折叠区（SVG 架构图 · 次级模块，默认折叠）。"""
     html = _live_html()
     assert 'class="lv-sysarch"' in html
     assert 'id="lv-sysarch-live_shell_t"' in html
-    assert "⑤ 系统原理" in html
+    assert "⑥ 系统原理" in html
     assert "How it works" in html
     assert 'class="sysarch-svg"' in html
     # 三框：Home 端感知内核 / Demo Gateway / Case Viewer

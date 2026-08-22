@@ -1065,7 +1065,7 @@ class PerceptionPipeline:
                 payload = dict(data)
                 payload.setdefault("created_at", datetime.now(UTC).isoformat())
                 return AudioPerceptionEvent.from_dict(payload)
-            except Exception:  # noqa: BLE001  # 失败隔离：单条转换失败只日志不崩溃
+            except Exception:  # 失败隔离：单条转换失败只日志不崩溃
                 log.warning("pipeline.adapt_runtime_audio_failed", exc_info=True)
                 return None
         return None
