@@ -33,7 +33,7 @@ from home_perception.core.config import MemoryConfig, Settings
 from home_perception.detection.detector import Detection, DetectionResult
 from home_perception.detection.tracker import VisitorTracker
 from home_perception.memory import DefaultEpisodeBuilder, InMemoryStore
-from home_perception.runtime import FrameResult, PerceptionPipeline
+from home_perception.runtime import FrameResult, PerceptionPipeline, RuntimeFrameContext
 
 # ============================================================================
 # 测试辅助（模式复用自 test_pipeline_realtime_bypass.py，保持 Stage F 自包含）
@@ -141,8 +141,16 @@ def _build_pipeline(
 
 
 def _run_frames(p: PerceptionPipeline, n: int) -> list[FrameResult]:
-    """跑 n 帧 None，返回每帧 FrameResult。"""
-    return [p.process_frame(None, frame_index=i) for i in range(n)]
+    """跑 n 帧 None，返回每帧 FrameResult（ADR-0039：ctx 显式进给）。"""
+    interval = getattr(p, "_frame_interval_s", 0.0)
+    return [
+        p.process_frame(
+            RuntimeFrameContext(
+                video_frame=None, frame_index=i, case_time=round(i * interval, 3)
+            )
+        )
+        for i in range(n)
+    ]
 
 
 def _history_fields(r: FrameResult) -> tuple:

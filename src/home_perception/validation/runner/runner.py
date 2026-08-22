@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from ...analysis.warning import RISK_LEVELS
+from ...runtime.runtime_context import RuntimeFrameContext
 from ..synthetic_input import SyntheticInput
 
 if TYPE_CHECKING:  # ``Scenario`` 仅用于注解；运行期不导入 ``scenario`` 子包（断环）
@@ -104,7 +105,13 @@ class ScenarioRunner:
         for i, frame in enumerate(frames):
             if frame_interval_s > 0 and tickable:
                 clock.tick(frame_interval_s)  # type: ignore[attr-defined]
-            fr = pipeline.process_frame(frame, frame_index=i)
+            fr = pipeline.process_frame(
+                RuntimeFrameContext(
+                    video_frame=frame,
+                    frame_index=i,
+                    case_time=round(i * frame_interval_s, 3),
+                )
+            )
             perc_events.extend(fr.perception_events)
             warnings.extend(fr.warnings)
 

@@ -39,6 +39,7 @@ from home_perception.runtime import (
     PerceptionPipeline,
     PipelineMetrics,
     RunSummary,
+    RuntimeFrameContext,
     build_threshold_config,
     read_caviar_frames,
     run_demo,
@@ -277,8 +278,13 @@ class TestOrchestration:
         det = StubDetector(plan, clock=clock)
         p = _build_pipeline(det, now_provider=clock)
 
+        interval = getattr(p, "_frame_interval_s", 0.0)
         for i in range(len(plan)):
-            p.process_frame(None, frame_index=i)
+            p.process_frame(
+                RuntimeFrameContext(
+                    video_frame=None, frame_index=i, case_time=round(i * interval, 3)
+                )
+            )
 
         # 关键断言：track 离场 → 1 个 VisitorEvent
         assert p.metrics.visitor_events == 1, "有人→无人应生成 1 个 VisitorEvent"
@@ -319,7 +325,9 @@ class TestOrchestration:
 
         p = _build_pipeline(FailingDetector())
         # 检测器异常被捕获，计入 errors，不崩溃流水线
-        fr = p.process_frame(None, frame_index=0)
+        fr = p.process_frame(
+            RuntimeFrameContext(video_frame=None, frame_index=0, case_time=0.0)
+        )
         assert isinstance(fr, FrameResult)
         assert fr.n_detections == 0
         assert p.metrics.errors == 1

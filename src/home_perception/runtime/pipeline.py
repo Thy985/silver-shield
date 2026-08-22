@@ -30,6 +30,7 @@ ActionExecutor (P0-9)      → ActionCommand（MQTT / 通知 / 社区，MVP Mock
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -87,6 +88,7 @@ from .config import build_dispatcher_config, build_threshold_config
 from .memory_consumer_hook import MemoryConsumerHook
 from .memory_hook import MemoryHook
 from .observability import PipelineMetrics
+from .runtime_context import RuntimeFrameContext
 
 log = get_logger(__name__)
 
@@ -725,12 +727,34 @@ class PerceptionPipeline:
             markers=tuple(markers),
         )
 
-    def process_frame(self, frame: object, frame_index: int = 0) -> FrameResult:
-        """处理单帧：detector → tracker → builder → feature → rule → decision → action。
+    def process_frame_legacy(self, frame: object, frame_index: int = 0) -> FrameResult:
+        """Deprecated（ADR-0039 过渡期别名）：旧 ``process_frame(frame, frame_index)`` 签名。
+
+        保留一个版本周期后移除；新代码一律使用 ``process_frame(RuntimeFrameContext)``。
+        旧签名无时钟语义，``case_time`` 置 0.0。
+        """
+        warnings.warn(
+            "process_frame(frame, frame_index) 已 deprecated（ADR-0039）："
+            "请改用 process_frame(RuntimeFrameContext)；本别名一个版本周期后移除",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.process_frame(
+            RuntimeFrameContext(video_frame=frame, frame_index=frame_index, case_time=0.0)
+        )
+
+    def process_frame(self, ctx: RuntimeFrameContext) -> FrameResult:
+        """处理单帧（ADR-0039 Runtime Entry Contract）：ctx → detector → tracker →
+        builder → feature → rule → decision → action。
+
+        ``ctx`` 是唯一入参容器（与输出侧 ``FrameResult`` 对称）；``ctx.audio_events``
+        仅随 ctx 携带，runtime 消费接线归 ADR-0042，接线前不进任何 risk 链。
 
         任何阶段的异常（除 KeyboardInterrupt）都被捕获并计入 metrics.errors，
         不中断整条流水线（AGENTS.md §2.5：业务失败走事件/状态，不崩溃进程）。
         """
+        frame = ctx.video_frame
+        frame_index = ctx.frame_index
         self.metrics.frames_processed += 1
         self.metrics.detection_calls += 1
         try:
@@ -990,7 +1014,13 @@ class PerceptionPipeline:
             if self._frame_interval_s > 0 and isinstance(self._clock, TickableNowProvider):
                 self._clock.tick(self._frame_interval_s)
             try:
-                self.process_frame(frame, frame_index=i)
+                self.process_frame(
+                    RuntimeFrameContext(
+                        video_frame=frame,
+                        frame_index=i,
+                        case_time=round(i * self._frame_interval_s, 3),
+                    )
+                )
             except KeyboardInterrupt:
                 interrupted = True
                 log.info("pipeline.interrupted", frame_index=i, scenario=scenario)

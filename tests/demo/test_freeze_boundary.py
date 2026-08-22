@@ -36,6 +36,7 @@ SILVER_DEMO_SRC = Path(__file__).resolve().parents[2] / "src" / "silver_demo"
 ALLOWED_HP_IMPORTS = {
     "home_perception.core.config",  # Settings
     "home_perception.runtime.pipeline",  # PerceptionPipeline / DemoClock / FrameResult
+    "home_perception.runtime.runtime_context",  # ADR-0039：RuntimeFrameContext（process_frame 唯一入参容器）
     "home_perception.runtime.config",  # read_caviar_frames
     "home_perception.analysis.warning",  # WarningEvent（类型标注 / 只读 to_dict）
     "home_perception.action.command",  # ActionCommand（类型标注 / 只读 to_dict）

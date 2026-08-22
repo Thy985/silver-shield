@@ -14,8 +14,11 @@ from .config import (
 from .lifecycle import run_demo
 from .observability import PipelineMetrics
 from .pipeline import DemoClock, FrameResult, PerceptionPipeline, RunSummary
+from .runtime_context import RUNTIME_FRAME_CONTEXT_FIELDS, RuntimeFrameContext
 
 __all__ = [
+    # ADR-0039 Runtime Entry Contract（单容器进给）
+    "RUNTIME_FRAME_CONTEXT_FIELDS",
     "DemoClock",
     "FrameResult",
     # 装配器
@@ -23,6 +26,7 @@ __all__ = [
     # 指标
     "PipelineMetrics",
     "RunSummary",
+    "RuntimeFrameContext",
     "build_dispatcher_config",
     # 配置转换（仅导出对外的公共转换函数）
     "build_threshold_config",

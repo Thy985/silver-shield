@@ -36,7 +36,7 @@ from home_perception.memory.snapshot import (
     RuntimeSnapshot,
     SnapshotStore,
 )
-from home_perception.runtime import PerceptionPipeline
+from home_perception.runtime import PerceptionPipeline, RuntimeFrameContext
 
 
 class ManualClock:
@@ -158,7 +158,9 @@ def test_memory_disabled_no_snapshot_store():
     assert p._cold_start_coordinator is None
     # 跑帧不抛异常
     for _ in range(3):
-        p.process_frame(None, frame_index=0)
+        p.process_frame(
+            RuntimeFrameContext(video_frame=None, frame_index=0, case_time=0.0)
+        )
     p.close()
 
 
@@ -182,7 +184,9 @@ def test_periodic_snapshot_written_on_first_eval_frame(tmp_path: Path):
     cfg = _memory_config(snap_path)
     p = _build_pipeline(StubDetector([_person(1)], clock), clock, memory_config=cfg)
     assert not snap_path.exists()  # 启动期冷启动不写文件
-    p.process_frame(None, frame_index=0)  # 评估帧 → 周期快照
+    p.process_frame(
+        RuntimeFrameContext(video_frame=None, frame_index=0, case_time=0.0)
+    )  # 评估帧 → 周期快照
     assert snap_path.exists()
     loaded = SnapshotStore(snap_path).load()
     assert loaded is not None
@@ -196,7 +200,9 @@ def test_close_flushes_final_snapshot(tmp_path: Path):
     snap_path = tmp_path / "snapshot.json"
     cfg = _memory_config(snap_path)
     p = _build_pipeline(StubDetector([_person(1)], clock), clock, memory_config=cfg)
-    p.process_frame(None, frame_index=0)
+    p.process_frame(
+        RuntimeFrameContext(video_frame=None, frame_index=0, case_time=0.0)
+    )
     p.close()
     assert snap_path.exists()
     loaded = SnapshotStore(snap_path).load()
