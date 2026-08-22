@@ -249,6 +249,11 @@ class DemoGateway:
                 video_frame=frame,
                 frame_index=self._frame_index,
                 case_time=round(self._frame_index * interval, 3),
+                # ADR-0042 运行时接线：同一注入事件双路消费——Runtime 判定（本 ctx，
+                # 经 pipeline 内 RealTimeAudioRiskEvaluator）+ Live Adapter 证据投影
+                # （_feed_live_audio，下方）；投递规则一致（frame_index==k → 第 k 条），
+                # 重放幂等。pipeline 未装配 audio evaluator 时该通道天然零产出。
+                audio_events=self._runtime_audio_events(self._frame_index),
             )
             result: FrameResult = self.pipeline.process_frame(ctx)
             self._last_case_time = ctx.case_time
@@ -381,6 +386,23 @@ class DemoGateway:
         if not isinstance(events, (list, tuple)):
             raise TypeError(f"live_audio_events 须为 list/tuple，收到 {type(events).__name__}")
         self._live_audio_events = list(events)
+
+    def _runtime_audio_events(self, frame_index: int) -> tuple:
+        """按 frame_index==k → 第 k 条的确定性规则取本帧应进 Runtime 的音频事件。
+
+        与 ``_feed_live_audio`` 同一投递规则（重放幂等）：同一事件既进 Runtime 判定
+        （ADR-0042 RealTimeAudioRiskEvaluator）又进 Live Adapter 证据投影（ADR-0043
+        双轨），两路消费互不影响。dict 经 ``pipeline.adapt_runtime_audio`` 转换
+        （冻结边界：silver_demo 不 import home_perception.audio 符号）；转换失败 /
+        pipeline 未装配时返回空元组（失败隔离，不阻断帧循环）。
+        """
+        events = self._live_audio_events
+        if not events or frame_index < 0 or frame_index >= len(events):
+            return ()
+        if self.pipeline is None:
+            return ()
+        adapted = self.pipeline.adapt_runtime_audio(events[frame_index])
+        return (adapted,) if adapted is not None else ()
 
     def _feed_live_audio(self, acc: ProjectionAccumulator) -> None:
         """按帧位置把注入的音频事件流入 Live Adapter（确定性、幂等）。

@@ -49,9 +49,10 @@ from ..analysis.event import VisitorEvent
 from ..analysis.event_builder import VisitorEventBuilder
 from ..analysis.feature_extractor import FeatureExtractor
 from ..analysis.perception import PerceptionEvent
+from ..analysis.realtime_audio_risk_evaluator import RealTimeAudioRiskEvaluator
 from ..analysis.realtime_risk_evaluator import RealTimeRiskEvaluator
 from ..analysis.recent_behavior_store import RecentBehaviorStore
-from ..analysis.risk_signal import RiskSignal, SignalTransition
+from ..analysis.risk_signal import RiskSignal, SignalTransition, SourceModality
 from ..analysis.rule_engine import RuleEngine
 from ..analysis.signal_adapter import risk_signal_to_perception
 from ..analysis.warning import WarningEvent
@@ -286,6 +287,10 @@ class PerceptionPipeline:
         # 独立 Audio Loop 设计（ADR-0026 §8）：音频不随视频帧同步调用，由调用方在
         # 会话结束时经 ``process_audio_session`` 显式收割。装配条件见 from_settings。
         audio_recorder: AudioSessionRecorder | None = None,
+        # —— ADR-0042 运行时接线：实时音频证据评估器（可选；默认 None，零行为变化）——
+        # audio_evidence.enabled 门控装配（见 from_settings）；process_frame 消费
+        # ctx.audio_events 判级，RAISED/CLEARED 与视觉信号同通道进 FrameResult.risk_signals。
+        audio_evaluator: RealTimeAudioRiskEvaluator | None = None,
         # —— ADR-0024 Integration Closure Slice A：MemoryHook 实例（可选）——
         # from_settings 在构造 audio_recorder 前先建 hook 单例，两路（视觉/音频）
         # 共享同一实例（写同一 store、同一 metrics）；缺省时本方法自建（向后兼容）。
@@ -318,10 +323,10 @@ class PerceptionPipeline:
                 eval_interval_frames=eval_interval_frames,
                 note="RAISED/CLEARED 最坏延迟约 N×帧间隔",
             )
-        if decision_enabled and not realtime_enabled:
+        if decision_enabled and not realtime_enabled and audio_evaluator is None:
             log.warning(
-                "pipeline.decision_enabled_without_realtime",
-                note="decision_enabled=true 但 realtime_enabled=false，决策开关无意义",
+                "pipeline.decision_enabled_without_signal_source",
+                note="decision_enabled=true 但 realtime/audio 信号源均未装配，决策开关无意义",
             )
 
         # —— ADR-0024 Slice 3：Snapshot Recovery 接线（Stage C + Stage E）——
@@ -405,6 +410,8 @@ class PerceptionPipeline:
         # —— ADR-0027 运行时接线：音频会话收割器（可选，默认 None）——
         # 独立于视频帧循环：调用方在音频会话结束时显式调用 process_audio_session。
         self._audio_recorder = audio_recorder
+        # —— ADR-0042 运行时接线：实时音频证据评估器（默认 None = 关闭零开销）——
+        self._audio_evaluator = audio_evaluator
 
     # ------------------------------------------------------------------
     # ADR-0028 可观测性：跨模态关联边只读视图（审计 / Dashboard / E2E）
@@ -609,6 +616,16 @@ class PerceptionPipeline:
                     "pipeline.audio_requires_episodic_shadow",
                     note="audio.enabled=true 但 Memory 影子未激活（需 memory.enabled + episodic_shadow），音频闭环未装配",
                 )
+        # —— ADR-0042 运行时接线：实时音频证据评估器装配（默认关闭）——
+        # enabled=false 不构造（零运行时开销）；device_id 与 RuleEngine 同源
+        # （from_settings 同一参数，WarningEvent.device_id / RiskSignal.device_id 口径一致）；
+        # config 直接注入 AudioEvidenceConfig（ceiling MONITOR 默认开启 = 安全默认）。
+        audio_evaluator: RealTimeAudioRiskEvaluator | None = None
+        if settings.audio_evidence.enabled:
+            audio_evaluator = RealTimeAudioRiskEvaluator(
+                device_id=device_id,
+                config=settings.audio_evidence,
+            )
         return cls(
             detector=det,
             tracker=tracker,
@@ -636,6 +653,7 @@ class PerceptionPipeline:
             reasoning_enabled=reasoning_enabled,
             audio_recorder=audio_recorder,
             memory_hook=pipeline_memory_hook,
+            audio_evaluator=audio_evaluator,
         )
 
     # ------------------------------------------------------------------
@@ -748,7 +766,8 @@ class PerceptionPipeline:
         builder → feature → rule → decision → action。
 
         ``ctx`` 是唯一入参容器（与输出侧 ``FrameResult`` 对称）；``ctx.audio_events``
-        仅随 ctx 携带，runtime 消费接线归 ADR-0042，接线前不进任何 risk 链。
+        经 RealTimeAudioRiskEvaluator 判级（ADR-0042 接线，audio_evidence.enabled 门控），
+        RAISED/CLEARED 与视觉信号同通道进 FrameResult.risk_signals。
 
         任何阶段的异常（除 KeyboardInterrupt）都被捕获并计入 metrics.errors，
         不中断整条流水线（AGENTS.md §2.5：业务失败走事件/状态，不崩溃进程）。
@@ -857,19 +876,34 @@ class PerceptionPipeline:
                     # ctxs 为空时评估器走 missing_ids 路径补发 CLEARED（离场兜底）
                     risk_signals = self._realtime_evaluator.evaluate(ctxs, now)
 
-                    # —— Stage D：决策接入（feature flag 控制；默认关闭 = Shadow Mode）——
-                    # RAISED 信号经 signal_adapter 翻译为 PerceptionEvent 汇入同一
-                    # DecisionEngine 产 WarningEvent；CLEARED 不进决策（仅随 FrameResult
-                    # 供展示层熄灭风险卡）。工程方案 §3.1 步骤 4 + §6 单一决策中心。
-                    if self._decision_enabled and risk_signals:
-                        rt_percs, rt_warnings, rt_cmds = self._act_on_signals(risk_signals, now)
-                        perception_events.extend(rt_percs)
-                        warnings.extend(rt_warnings)
-                        commands.extend(rt_cmds)
-
                     # 周期快照（Stage C 持久化；冷启动恢复用）。仅当 memory 激活时。
                     if self._snapshot_store is not None:
                         self._maybe_save_snapshot(now)
+
+        # —— ADR-0042 运行时接线：实时音频证据旁路（audio_evidence.enabled 门控）——
+        # ctx.audio_events 逐事件 observe 判级 + tick 静默超时扫描，RAISED/CLEARED
+        # 并入同一 risk_signals 通道（与视觉信号对称进 FrameResult）。不受视觉跳帧
+        # （is_eval_frame）约束：observe 是轻量规则计算，事件到达即判级，状态机时序由
+        # case_time 保证（确定性可回放）。安全默认（ceiling MONITOR）下 outcome.signal
+        # 恒 None → 本块零产出，零行为变化。
+        if self._audio_evaluator is not None:
+            for audio_ev in ctx.audio_events:
+                outcome = self._audio_evaluator.observe(audio_ev, case_time=ctx.case_time)
+                if outcome.signal is not None:
+                    risk_signals.append(outcome.signal)
+            risk_signals.extend(self._audio_evaluator.tick(now_case_time=ctx.case_time))
+
+        # —— Stage D：决策接入（feature flag 控制；默认关闭 = Shadow Mode）——
+        # 自视觉评估帧块移出（ADR-0042 接线）：视觉信号仅产生于 is_eval_frame，音频信号
+        # 逐帧可达——统一在此消费，保证同帧视觉+音频信号汇入同一个 DecisionInput
+        # .risk_signals（policy 跨模态可见完整信号集）。纯视觉配置下 risk_signals 来源
+        # 不变，触发条件与历史逐字段等价（单一决策中心不变）。
+        if self._decision_enabled and risk_signals:
+            now = self._clock() if self._clock is not None else datetime.now(UTC)
+            rt_percs, rt_warnings, rt_cmds = self._act_on_signals(risk_signals, now)
+            perception_events.extend(rt_percs)
+            warnings.extend(rt_warnings)
+            commands.extend(rt_cmds)
 
         return FrameResult(
             frame_index=frame_index,
@@ -916,12 +950,15 @@ class PerceptionPipeline:
     ) -> tuple[list[PerceptionEvent], list[WarningEvent], list[Any]]:
         """Stage D：处理实时信号的下游链路（adapter → decision → action）。
 
-        与 ``_act_on_event`` 平行（不重构既有逐事件循环，0 行为变化）：
-        - ``RAISED`` 信号 → ``signal_adapter`` 翻译为 ``PerceptionEvent`` →
+        与 ``_act_on_event`` 平行（不重构既有逐事件循环；视觉路径行为不变）：
+        - 视觉 ``RAISED`` 信号 → ``signal_adapter`` 翻译为 ``PerceptionEvent`` →
           汇入同一 ``DecisionEngine.evaluate`` → 产 ``WarningEvent`` →
           ``executor.execute`` 产 ``ActionCommand``；
         - ``CLEARED`` 信号 → 不产出 ``PerceptionEvent``（``signal_adapter`` 返回 None），
-          仅随 ``FrameResult.risk_signals`` 供展示层熄灭风险卡（工程方案 §3.1 步骤 4）。
+          仅随 ``FrameResult.risk_signals`` 供展示层熄灭风险卡（工程方案 §3.1 步骤 4）；
+        - AUDIO ``RAISED`` 信号（ADR-0042 接线新增）→ **不翻译**（硬门控 3：防幻觉
+          兜底 visit_pending_verify），经 ``DecisionInput.risk_signals`` 原生透传
+          （ADR-0040 D3），policy 升级消费前零升级动作。
 
         单一决策中心（工程方案 §6 检查清单第 4 条）：本方法**不**新建决策器，
         复用 ``self.decision_engine``——同一 ``DecisionPolicy`` 解释历史与实时两路
@@ -933,11 +970,17 @@ class PerceptionPipeline:
 
         返回：(perception_events, warnings, commands)，调用方安全 extend。
         """
-        # 1) 翻译：RAISED → PerceptionEvent；CLEARED → None（跳过）
+        # 1) 翻译：视觉 RAISED → PerceptionEvent；CLEARED / AUDIO RAISED → 跳过。
+        # AUDIO 不翻译（硬门控 3）：_map_features_to_event 不识别 audio_kind，强行翻译
+        # 必落幻觉兜底 visit_pending_verify（声学感知伪装成视觉事件类型）；ADR-0040 D3
+        # 的设计意图即 RiskSignal 以原生形态进 DecisionInput.risk_signals（下方全量
+        # 透传），翻译通道仅保留视觉信号。
         rt_percs: list[PerceptionEvent] = []
         for sig in signals:
             if sig.transition is not SignalTransition.RAISED:
                 continue  # CLEARED 不进决策
+            if sig.source is SourceModality.AUDIO:
+                continue  # AUDIO 经 risk_signals 一等输入透传，不走视觉翻译
             perc = risk_signal_to_perception(
                 sig,
                 device_id=self.rule_engine.device_id,
@@ -945,16 +988,18 @@ class PerceptionPipeline:
             )
             if perc is not None:
                 rt_percs.append(perc)
-        if not rt_percs:
-            return [], [], []
 
         for p in rt_percs:
             self.metrics.record_perception(p.event_type)
 
-        # 2) 决策：复用同一 DecisionEngine（单一决策中心）
+        # 2) 决策：复用同一 DecisionEngine（单一决策中心）。全量 signals（含 CLEARED 与
+        # 未翻译的 AUDIO RAISED）作为 ADR-0040 一等输入透传 DecisionInput.risk_signals；
+        # trigger_events 仅含视觉 RAISED 翻译产物。rt_percs 为空（纯音频 / CLEARED-only
+        # 帧）也照常调用：policy 对空触发返回 None（零升级动作），但本周期信号集完整进入
+        # 决策输入（可审计，为 policy 升级消费 risk_signals 参与判定预留正确数据面）。
         warnings: list[WarningEvent] = []
         commands: list[Any] = []
-        w = self.decision_engine.evaluate(rt_percs)
+        w = self.decision_engine.evaluate(rt_percs, risk_signals=tuple(signals))
         if w is not None:
             self.metrics.record_warning(w.risk_level)
             warnings.append(w)
@@ -1000,6 +1045,30 @@ class PerceptionPipeline:
         return self._audio_recorder.record_session(
             events, audio_session_id=audio_session_id, source_path=source_path
         )
+
+    def adapt_runtime_audio(self, data: Any) -> AudioPerceptionEvent | None:
+        """把 to_dict() 形态的音频事件转换为 RuntimeFrameContext 可消费的实例。
+
+        Host 层接缝（冻结边界）：silver_demo 不得 import ``home_perception.audio``
+        符号（test_freeze_boundary import 白名单），故 dict → ``AudioPerceptionEvent``
+        的转换由本方法承接，转换结果注入 ``RuntimeFrameContext.audio_events`` 进
+        ADR-0042 实时音频旁路。已是实例则原样返回（组装层可能直接传对象）；
+        转换失败返回 None（调用方跳过该条，失败隔离，不阻断帧循环）。
+        """
+        if isinstance(data, AudioPerceptionEvent):
+            return data
+        if isinstance(data, dict):
+            try:
+                # Host 接缝契约（set_live_audio_events）不含 created_at（组装层 dict
+                # 只有 timestamp/kind/score/confidence/segments/labels）；from_dict 与
+                # to_dict 严格对称要求该键，故缺席时以转换时刻补齐（事件构造时刻语义）。
+                payload = dict(data)
+                payload.setdefault("created_at", datetime.now(UTC).isoformat())
+                return AudioPerceptionEvent.from_dict(payload)
+            except Exception:  # noqa: BLE001  # 失败隔离：单条转换失败只日志不崩溃
+                log.warning("pipeline.adapt_runtime_audio_failed", exc_info=True)
+                return None
+        return None
 
     def run(self, frames: list[object], scenario: str = "unknown") -> RunSummary:
         """处理一整个帧序列（单场景 / 单视频源），返回汇总。
