@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from .decision_policy import DecisionContext
 from .perception import PerceptionEvent
+from .risk_signal import RiskSignal
 from .warning import WarningEvent
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查，运行期不导入（见模块 docstring §1）
@@ -58,15 +59,17 @@ DECISION_INPUT_FORBIDDEN_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-# C7（一级聚合约束，防 God Object）：`DecisionInput` 只允许这 5 个语义正交的字段。
-# 未来若字段持续增长，须先抽象为具名 Bundle（PerceptionBundle / CognitionBundle /
-# StateBundle）再聚合，**不允许**演化成 20+ 扁平字段的 God Object（ADR-0030 C7）。
-# 任何新增字段都会让下方 `_assert_contract_shape()` 在**导入期**直接抛错，
+# C7（一级聚合约束，防 God Object）：`DecisionInput` 只允许这些语义正交的字段。
+# ADR-0040 D2：当前冻结上限从 5 个字段**临时扩展到 6 个，6 是硬顶**——这不是长期
+# 架构设计目标，不构成 5→6→7→8 的演进先例；此后任何新增字段必须触发 Bundle 化
+# 重构（ADR-0030 C7 原条款）。
+# 任何新增/删改字段都会让下方 `_assert_contract_shape()` 在**导入期**直接抛错，
 # 强制走 ADR / 评审流程。
 DECISION_INPUT_FIELD_WHITELIST: frozenset[str] = frozenset(
     {
         "trigger_events",
         "decision_context",
+        "risk_signals",
         "reasoning_input",
         "reasoning_result",
         "prior_warning",
@@ -168,6 +171,13 @@ class DecisionInput:
       明确「返回 None 的典型情况：空列表」，若此处强制非空会与该既有契约冲突并使
       ``DecisionEngine.evaluate([])`` 由「返回 None」变为「抛异常」（行为回归）。
     - ``decision_context``：策略执行上下文（``elder_id`` / ``now`` / ``extra``），沿用既有。
+    - ``risk_signals``（ADR-0040 D1）：本评估周期收到的 Runtime RiskSignal 输入
+      （含 audio；**空元组合法**，语义 =「本次决策无实时风险信号」，对齐 Memory
+      可缺席原则）。**语义边界（D3，防 C1 失效）**：``risk_signals`` 是**事实层瞬时
+      跃迁消息输入，≠ Decision Result**——决策产物（risk_level / recommended_action）
+      仍然只能出现在输出侧 ``WarningEvent``；``RiskSignal.features`` 只允许证据强度
+      描述键（audio_score / confidence 等），禁止决策语义键（由 ADR-0021 黑名单
+      结构性守卫持续保证，本契约重申且不豁免）。
     - ``reasoning_input``：完整记忆上下文（含 ``cross_modal_contexts`` / ``risk_pattern`` /
       ``conflicts`` / ``visitor_profile``）——Memory 进决策的解释来源；**可为 None**。
     - ``reasoning_result``：Reasoning Engine 的参考建议；推理跳过 / 失败时为 ``None``。
@@ -182,6 +192,8 @@ class DecisionInput:
     确定性（C3，有意的契约级规范化）：``trigger_events`` 在构造时按 ``timestamp`` 升序
     **规范化**（稳定排序，同 timestamp 保留传入相对次序），保证「同一组事件的不同排列
     → 同一 DecisionInput → 同一 WarningEvent」，供回放 / 审计一致。
+    ``risk_signals`` 同理按 ``(created_at, signal_id)`` 升序稳定排序（ADR-0040 D4；
+    signal_id 幂等主键保证同 created_at 时全序确定）。
 
     ⚠️ 这与旧 ``decide(perception_events, ctx)`` **保留调用方顺序** 不同：本规范化是
     ADR-0030 C3 要求的**契约级**行为，**不是** Slice B 的路由回归——`RuleBasedDecisionPolicy`
@@ -200,6 +212,7 @@ class DecisionInput:
 
     trigger_events: tuple[PerceptionEvent, ...]
     decision_context: DecisionContext
+    risk_signals: tuple[RiskSignal, ...] = ()
     reasoning_input: ReasoningInput | None = None
     reasoning_result: ReasoningResult | None = None
     prior_warning: WarningEvent | None = field(default=None)
@@ -225,6 +238,29 @@ class DecisionInput:
                 "DecisionInput.decision_context 必须是 DecisionContext，"
                 f"收到 {type(self.decision_context).__name__}"
             )
+        # ADR-0040 D1/D3：risk_signals 类型守卫（元素级校验由 RiskSignal.__post_init__
+        # 的枚举闭合 / 黑名单守卫负责，此处只做容器与类型边界）。
+        if not isinstance(self.risk_signals, tuple):
+            raise TypeError(
+                "DecisionInput.risk_signals 必须是 tuple（C2 不可变容器），"
+                f"收到 {type(self.risk_signals).__name__}（无信号请传空元组 ()）"
+            )
+        for i, sig in enumerate(self.risk_signals):
+            if not isinstance(sig, RiskSignal):
+                raise TypeError(
+                    f"DecisionInput.risk_signals[{i}] 必须是 RiskSignal，"
+                    f"收到 {type(sig).__name__}"
+                )
+            # ADR-0040 D3：features 只允许证据强度描述键——决策语义键（risk_level /
+            # recommended_action / verdict / decision 等）在**决策输入边界**结构性拦截
+            # （ADR-0021 黑名单拦犯罪认定字段；本守卫拦决策语义字段，二者互补不重叠）。
+            decision_keys = DECISION_INPUT_FORBIDDEN_FIELDS.intersection(sig.features.keys())
+            if decision_keys:
+                raise ValueError(
+                    f"DecisionInput.risk_signals[{i}].features 含决策语义键 "
+                    f"{sorted(decision_keys)}（ADR-0040 D3）：决策产物是 WarningEvent "
+                    "的输出属性，不得借 features 潜入决策输入（防 C1 失效）"
+                )
 
         # 可选字段类型守卫（仅当非空才惰性导入 memory 契约，避免热路径 import 开销；
         # Slice B 的「全 None」装配路径不触发 import）。
@@ -257,6 +293,12 @@ class DecisionInput:
             "trigger_events",
             tuple(sorted(self.trigger_events, key=lambda ev: ev.timestamp)),
         )
+        # ADR-0040 D4：risk_signals 按 (created_at, signal_id) 升序稳定排序
+        object.__setattr__(
+            self,
+            "risk_signals",
+            tuple(sorted(self.risk_signals, key=lambda s: (s.created_at, s.signal_id))),
+        )
 
     # ------------------------------------------------------------------
     # 序列化（C3：与 memory/consumer/contracts.py 同构 —— datetime→ISO、tuple→list）
@@ -266,6 +308,7 @@ class DecisionInput:
         return {
             "trigger_events": [_perception_to_dict(ev) for ev in self.trigger_events],
             "decision_context": _context_to_dict(self.decision_context),
+            "risk_signals": [sig.to_dict() for sig in self.risk_signals],
             "reasoning_input": self.reasoning_input.to_dict()
             if self.reasoning_input is not None
             else None,
@@ -290,6 +333,10 @@ class DecisionInput:
                 _perception_from_dict(ev) for ev in data.get("trigger_events", [])
             ),
             decision_context=_context_from_dict(data["decision_context"]),
+            # 向后兼容：ADR-0040 之前落库的 payload 缺 risk_signals 键 → 空元组
+            risk_signals=tuple(
+                RiskSignal.from_dict(raw) for raw in data.get("risk_signals", [])
+            ),
             # 向后兼容：Slice A 之前 / Memory 未接线时落库的 payload 缺这些键 → None
             reasoning_input=ReasoningInput.from_dict(raw_reasoning_input)
             if raw_reasoning_input is not None
