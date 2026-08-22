@@ -545,6 +545,16 @@ class ProjectionAccumulator:
         self._last_recommended_actions: tuple[str, ...] = ()
         self._last_reason_summary: tuple[str, ...] = ()
         self._last_command_types: tuple[str, ...] = ()
+        self._last_risk_signals: tuple[dict, ...] = ()
+        # ADR-0043 事件轨：RiskSignal 全生命周期持久累积（RAISED→CLEARED 可追溯，
+        # paired_signal_id 配对可渲染）。状态轨 _last_risk_signals 保持覆盖式不变
+        # （服务端权威 risk_transition 状态机数据源，PR-B 红线零改动）。
+        # 三件套模式（持久列表 + signal_id 幂等键 + 单调 seq），同
+        # _perception_events_cache / _warnings_cache / _audio_events 先例；
+        # 幂等键 = signal_id（D2 冻结：重放重喂同一信号不重复累积）。
+        self._risk_signal_events_cache: list[dict] = []
+        self._risk_signal_ids: set[str] = set()
+        self._risk_signal_seq: int = 0
         self._last_risk_frame: int = -1
         # PR-B（DESIGN-live-product-ui-restore §4.6 · Owner 锁死）：风险信号状态机。
         # RAISED/CLEARED 由服务端明确判定（risk_levels 空→非空=raised，非空→空=cleared，
@@ -587,6 +597,11 @@ class ProjectionAccumulator:
     def audio_kinds(self) -> tuple[str, ...]:
         """累计摄入的音频 kind 去重集合（确定性排序输出）。"""
         return tuple(sorted(self._audio_kinds))
+
+    @property
+    def risk_signal_history(self) -> tuple[dict, ...]:
+        """ADR-0043 事件轨只读视图（seq 升序 = 摄入序；RAISED→CLEARED 全生命周期可追溯）。"""
+        return tuple(self._risk_signal_events_cache)
 
     def ingest(self, frame_result: Any) -> ProjectionAccumulator:
         """摄入一帧（FrameResult 契约对象）→ 累积；返回 self 便于链式。
@@ -916,6 +931,7 @@ class ProjectionAccumulator:
     def risk_fingerprint(self) -> tuple:
         """当前风险状态指纹（risk_levels/reason_summary/recommended_actions/command_types + P0-1 扩展字段）。"""
         # P0-1 修复：把 warnings_cache 的 seq 集合纳入指纹，使新增 warning 触发 risk_delta 推送。
+        # ADR-0043：事件轨单调 seq 纳入指纹——新 RiskSignal 触发推送（D3 增量判定）。
         return (
             self._last_risk_levels,
             self._last_reason_summary,
@@ -926,6 +942,7 @@ class ProjectionAccumulator:
             self._last_warning_ids,
             self._last_risk_signals,
             frozenset(w["seq"] for w in self._warnings_cache),
+            self._risk_signal_seq,
         )
 
     def extract_risk_delta(self, prev_fp) -> dict:
@@ -935,7 +952,7 @@ class ProjectionAccumulator:
         （无变化不推）。返回 ``{"type","frame_index","risk_levels","reason_summary",
         "recommended_actions","command_types","risk_transition","risk_signals",
         "trigger_events","perception_scores","warning_ids","device_id","elder_id",
-        "active_warnings"}``。
+        "active_warnings","risk_signal_events"}``。
 
         ``risk_transition``（PR-B · Owner 锁死）：服务端状态机对**本次变化**的判定
         （``raised`` / ``cleared`` / ``active``）；指纹未变 → ``None``（不推信号）。
@@ -952,6 +969,13 @@ class ProjectionAccumulator:
         """
         cur = self.risk_fingerprint()
         changed = (prev_fp is None) or (prev_fp != cur)
+        # ADR-0043 事件轨增量（D3：指纹未变不推；新 seq 才推，避免全量刷屏）：
+        # prev_fp[-1] 即上次推送时的事件轨 seq 水位，仅携带水位之后的新增信号；
+        # 首连（prev_fp=None）从 0 起算 → 全量历史。
+        prev_seq = int(prev_fp[-1]) if prev_fp is not None else 0
+        new_signal_events = [
+            e for e in self._risk_signal_events_cache if e["seq"] > prev_seq
+        ]
         # P0-1 修复：从缓存取活跃 warning 列表（完整对象，事实投影）。
         active_warnings = [w for w in self._warnings_cache]
         return {
@@ -971,6 +995,9 @@ class ProjectionAccumulator:
             "elder_id": self._last_elder_id if changed else None,
             # P0-1 修复（P0-2 audit bug）：活跃 warning 完整对象（task-cards 数据源）。
             "active_warnings": active_warnings if changed else [],
+            # ADR-0043 事件轨：RiskSignal 全生命周期增量（风险时间线 / Narrative 消费；
+            # CURRENT STATE 卡继续消费状态轨 risk_signals——两轨分工 D1）。
+            "risk_signal_events": new_signal_events if changed else [],
         }
 
     # Phase 3.3: memory_timeline 历史访问记录（🟡 Partial · 阻塞于 Memory API）
@@ -1010,6 +1037,29 @@ class ProjectionAccumulator:
         self._last_device_id = live.get("device_id")
         self._last_elder_id = live.get("elder_id")
         self._last_risk_signals = tuple(live.get("risk_signals", ()))
+        # ADR-0043 事件轨累积：signal_id 幂等去重 + 单调 seq（三件套模式）。
+        # 缺 signal_id 的信号 fail-closed 跳过（无主键无法保证 D2 幂等契约），
+        # 不中断整帧（与 warnings/perceptions 投影的容错边界一致）。
+        for rs in live.get("risk_signals", ()):
+            sid = str(rs.get("signal_id", "") or "")
+            if not sid or sid in self._risk_signal_ids:
+                continue
+            self._risk_signal_ids.add(sid)
+            self._risk_signal_seq += 1
+            self._risk_signal_events_cache.append({
+                "seq": self._risk_signal_seq,
+                "frame_index": live["frame_index"],
+                "signal_id": sid,
+                "transition": rs.get("transition", ""),
+                "source": rs.get("source", ""),
+                "category": rs.get("category", ""),
+                "subject_type": rs.get("subject_type", ""),
+                "subject_id": rs.get("subject_id"),
+                "severity_hint": rs.get("severity_hint"),
+                "paired_signal_id": rs.get("paired_signal_id"),
+                "created_at": rs.get("created_at"),
+                "features": rs.get("features", {}),
+            })
         self._last_risk_frame = live["frame_index"]
         # P0-1 修复：行为事件持久化（不进滚动窗口）。去重：event_id（PerceptionEvent.event_id）优先，
         # 缺失回退 (frame_index, event_type, visitor_id) 组合键（VM-8 重放幂等）。
