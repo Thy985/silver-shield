@@ -571,13 +571,7 @@ def _render_case_video_inner(
             f'<span class="live-badge" id="live-badge-{sid_html}">'
             f'<span class="ldot"></span> LIVE</span>'
             f'<div class="live-ov muted" id="live-ov-{sid_html}">'
-            f'<span>帧 <b id="ov-frame-{sid_html}">–</b></span>'
-            f'<span class="live-ov-sep">·</span>'
             f'<span>Case Time <b id="ov-time-{sid_html}">00:00</b></span>'
-            f'<span class="live-ov-sep">·</span>'
-            f'<span>检测 <b id="ov-det-{sid_html}">0</b></span>'
-            f'<span class="live-ov-sep">·</span>'
-            f'<span>访客事件 <b id="ov-ve-{sid_html}">0</b></span>'
             f'</div></div>'
         )
         # PR-B：Live 感知摘要卡（"AI 看到了"），由 live_stream.js 经 perception_delta（视觉）
@@ -1561,7 +1555,7 @@ def _render_live_shell(
       </nav>
       <div class="live-view" id="view-discover-{sid_html}">
         <div class="live-grid">
-          <!-- ① 实时画面：全宽；内部 sensor-pair 双列（VIDEO ↔ AUDIO SENSOR 并列同层） -->
+          <!-- ① 实时画面：§5 规范 8 列；内部 sensor-pair 单列堆叠（VIDEO 在上 → AUDIO SENSOR 在下） -->
           <section class="region lv-now">
             <h2>① 实时画面 <span class="tag">Home 端实时画面 · 双传感器同层</span></h2>
             <div class="body">
@@ -2520,15 +2514,18 @@ def render_case_viewer(
   .region > h2 .tag {{ font-size:11px; font-weight:600; color:#1c4f7c; background:#dcebfb;
                        padding:2px 8px; border-radius:999px; }}
   .region .body {{ padding:12px 14px; overflow:auto; }}
-   /* 文档架构：左侧 OBSERVE + 右侧 UNDERSTAND（横向布局） */
-   .lv-now {{ grid-column:span 4; }}
-   .lv-perception {{ grid-column:span 8; }}
-  .lv-why {{ grid-column:span 4; }}
+   /* 文档架构：左侧 OBSERVE + 右侧 UNDERSTAND（横向布局）
+      §5 布局方案：① 实时视频 (8列) ↔ ③ 风险解释 (4列)；② 时间线 (8列) ↔ ③.5 风险信号 (4列)；
+                    ④ 行动闭环 (8列) ↔ ⑥ Memory (4列) */
+   .lv-now {{ grid-column:span 8; }}
+   .lv-perception {{ grid-column:span 4; }}
+  .lv-why {{ grid-column:span 8; }}
   .lv-action {{ grid-column:span 12; }}
   .lv-history {{ grid-column:span 12; }}
   .lv-roleview {{ grid-column:span 12; margin-top:14px; }}
-  /* P0-11.x · VIDEO ↔ AUDIO SENSOR 同层双列（用户拍板 2026-08-18） */
-  .sensor-pair {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:stretch; }}
+  /* P0-11.x · VIDEO + AUDIO SENSOR 同区上下堆叠（DESIGN-live-product-ui-restore §2 表：
+     视频和音频都在左侧 OBSERVE，① 实时视频为主体（占满列宽），AUDIO SENSOR 作为声学侧配下置堆叠） */
+  .sensor-pair {{ display:grid; grid-template-columns:1fr; gap:14px; align-items:stretch; }}
   @media (max-width:900px) {{ .sensor-pair {{ grid-template-columns:1fr; }} }}
   .sensor-card {{ background:#f8fafc; border:1px solid #e3e8ee; border-radius:8px;
                   padding:10px 12px; min-width:0; display:flex; flex-direction:column; gap:8px; }}

@@ -799,13 +799,9 @@
         '<span class="muted"> conf ' + Number(d.confidence).toFixed(2) + '</span>' +
         '<span class="muted"> · bbox [' + b + ']</span></li>';
     }).join('');
-    var head = 'F' + msg.frame_index +
-      (msg.case_time != null ? ' · ' + Number(msg.case_time).toFixed(1) + 's' : '');
+    var head = (msg.case_time != null ? Number(msg.case_time).toFixed(1) + 's' : '—');
     el.innerHTML = '<div class="lp-head">Visual perception <span class="muted">' + head + '</span></div>' +
       (rows ? '<ul>' + rows + '</ul>' : '<span class="muted">（当前无检测）</span>');
-    // 帧 overlay 检测数联动（LP-1：检测数与画面同帧同步）。
-    var od = global.document.getElementById('ov-det-' + sid);
-    if (od) od.textContent = (msg.detections || []).length;
     // PR-B：空态"当前 N 人在场"跟踪（③ 风险卡空态文案同源）。
     lastPersons = (msg.detections || []).length;
     _perceptionStream._lastPersons = lastPersons;
@@ -933,33 +929,105 @@
     ul.parentNode.insertBefore(btn, ul.nextSibling);
   }
 
+  // ============================================================
+  // Surface Independence（P0 修复）：语义事件处理 与 Surface 渲染解耦。
+  // 原则：Surface 缺失 ≠ Runtime Fact 丢失。
+  // - eventSeen（seenRefs/seenAudio/seenCaseTime）= 事件已处理（语义层），与 DOM 无关；
+  //   事件不因某个 Surface 当前不存在而重新触发 Semantic Event；
+  // - 各 Surface（.timeline / table.audio-table / case-time-track）独立降级渲染；
+  // - Surface 后现时由 _flushPendingSurfaces 从已保存 state 补渲染。
+  // ============================================================
+  var _pendingAudioRows = [];      // audio-table 缺失期间挂起的行 HTML
+  var _pendingCaseTimeMarks = [];  // case-time-track 缺失期间挂起的标记 {sid, m}
+
+  function _renderAudioRow(a) {
+    var html = _buildAudioRow(a);
+    var table = global.document.querySelector('table.audio-table');
+    if (table) {
+      table.insertAdjacentHTML('beforeend', html);
+    } else {
+      _pendingAudioRows.push(html);
+    }
+  }
+
+  // timeline Surface 后现 → 从节点缓存补插（折叠态由 _trimTimelineDom 裁剪到最新 N 个）
+  function _flushTimelineIntoDom(ul) {
+    if (!ul) return;
+    for (var ref in _timelineNodesByRef) {
+      if (ref.indexOf('golden://') === 0) continue;
+      if (ul.querySelector('li.tl-item[data-ref="' + ref + '"]')) continue;  // 已在 DOM
+      var node = _timelineNodesByRef[ref];
+      if (!node) continue;
+      var firstGolden = ul.querySelector('li.tl-item-golden');
+      if (firstGolden && firstGolden.parentNode) {
+        firstGolden.parentNode.insertBefore(node, firstGolden);
+      } else {
+        ul.appendChild(node);
+      }
+    }
+    _trimTimelineDom(ul);
+    _renderTimelineMoreButton(ul);
+  }
+
+  // 每条 delta 处理完毕后调用：尝试将此前因 Surface 缺失而挂起的渲染项补上。
+  // 只重放"渲染"，不重放语义事件——语义去重在入队前已完成（VM-8 幂等不破坏）。
+  function _flushPendingSurfaces() {
+    if (_pendingAudioRows.length) {
+      var table = global.document.querySelector('table.audio-table');
+      if (table) {
+        for (var i = 0; i < _pendingAudioRows.length; i++) {
+          table.insertAdjacentHTML('beforeend', _pendingAudioRows[i]);
+        }
+        _pendingAudioRows = [];
+      }
+    }
+    var ul = global.document.querySelector('.timeline');
+    if (ul) _flushTimelineIntoDom(ul);
+    if (_pendingCaseTimeMarks.length) {
+      var remaining = [];
+      for (var j = 0; j < _pendingCaseTimeMarks.length; j++) {
+        var item = _pendingCaseTimeMarks[j];
+        var track = global.document.getElementById('case-time-track-' + item.sid);
+        if (track) {
+          var max = parseFloat(track.getAttribute('data-max') || '0') || 0;
+          track.insertAdjacentHTML('beforeend', _buildCaseTimeMark(item.m, max));
+        } else {
+          remaining.push(item);
+        }
+      }
+      _pendingCaseTimeMarks = remaining;
+    }
+  }
+
   function _applyDelta(msg) {
-    // timeline 追加（幂等：ref 去重）
+    // timeline 追加（幂等：ref 去重；P0-B 修复：数据缓存与 DOM 插入解耦——
+    // 原实现 .timeline 缺失即 return，但 seenRefs 已标记 → 节点永久丢失。
+    // 现改为：先构建节点并缓存 _timelineNodesByRef（数据层，供展开重建/Surface 后现补插），
+    // DOM 插入独立降级）。
     (msg.timeline || []).forEach(function (n) {
       if (!n.ref || seenRefs.has(n.ref)) return;
       seenRefs.add(n.ref);
-      var ul = global.document.querySelector('.timeline');
-      if (!ul) return;
-      // P2-1：构造节点 + 缓存到 _timelineNodesByRef（用于展开/折叠时复用）
+      // 数据层：构建节点 + 缓存（不依赖任何 Surface 存在）
       var nodeHtml = _buildTimelineNode(n);
       // 用临时容器解析为 DOM 节点
       var tmp = global.document.createElement('div');
       tmp.innerHTML = nodeHtml;
       var node = tmp.firstChild;
-      if (node) {
-        _timelineNodesByRef[n.ref] = node;
-        // 折叠态：直接 append（_trimTimelineDom 会裁剪旧的）
-        // 展开态：插入到 golden 节点之前（避免覆盖）
-        if (_timelineExpanded) {
-          var firstGolden = ul.querySelector('li.tl-item-golden');
-          if (firstGolden && firstGolden.parentNode) {
-            firstGolden.parentNode.insertBefore(node, firstGolden);
-          } else {
-            ul.appendChild(node);
-          }
+      if (node) _timelineNodesByRef[n.ref] = node;
+      // 渲染层：.timeline 存在才操作 DOM
+      var ul = global.document.querySelector('.timeline');
+      if (!ul || !node) return;
+      // 折叠态：直接 append（_trimTimelineDom 会裁剪旧的）
+      // 展开态：插入到 golden 节点之前（避免覆盖）
+      if (_timelineExpanded) {
+        var firstGolden = ul.querySelector('li.tl-item-golden');
+        if (firstGolden && firstGolden.parentNode) {
+          firstGolden.parentNode.insertBefore(node, firstGolden);
         } else {
           ul.appendChild(node);
         }
+      } else {
+        ul.appendChild(node);
       }
       // P2-1：裁剪 + "查看更多"按钮（用户反馈"210+ 节点塞满"）
       _trimTimelineDom(ul);
@@ -1014,21 +1082,21 @@
     _renderPerceptionStream();
     // 更新三端命令显示
     _renderCommandMap();
-    // audio 证据行追加（幂等：event_id 去重）
+    // audio 证据处理（幂等：event_id 去重；P0-A 修复：语义层与渲染层解耦——
+    // 原实现 table 缺失即 return，导致 seeState/Audio Health/感知流全部不更新，
+    // 且 seenAudio 先标记造成事件在本次 session 内永久丢失。
+    // 现改为：语义状态无条件先行（纯内存，不依赖任何 DOM Surface），
+    // audio-table 行渲染独立降级 + 挂起，Surface 后现由 _flushPendingSurfaces 补渲染）。
     (msg.audio || []).forEach(function (a) {
       var id = a.event_id || a.ref;
       if (!id || seenAudio.has(id)) return;
       seenAudio.add(id);
-      var table = global.document.querySelector('table.audio-table');
-      if (!table) return;
-      table.insertAdjacentHTML('beforeend', _buildAudioRow(a));
-      // LP-2：更新"AI 听到了"音频部分（人话 kind）。
+      // ── 语义层：Runtime Fact → Semantic State（无条件执行）──
+      // LP-2：人话 kind 聚合（"AI 听到了"数据源）。
       var kz = _AUDIO_KIND_ZH[a.kind] || a.kind;
       if (seeState.audio.indexOf(kz) < 0) seeState.audio.push(kz);
-      _renderSee();
-      // Phase 1 L0：更新 Audio Health 三值状态（最近事件 → RECENT_EVENT）
+      // Phase 1 L0：最近音频事件时间戳（Audio Health 三值状态机输入）
       _lastAudioEventMs = Date.now();
-      _updateAudioHealthDOM('RECENT_EVENT');
       // LP-3：音频事件 → 感知流条目（去重：按 event_id）。
       if (!_perceptionStream._seenAudioEventIds.has(id)) {
         _perceptionStream._seenAudioEventIds.add(id);
@@ -1043,18 +1111,26 @@
           detail: '',
           type: 'audio'
         });
-        _renderPerceptionStream();
       }
+      // ── 渲染层：各 Surface 独立降级（缺失由 _flushPendingSurfaces 补渲染）──
+      _renderAudioRow(a);
+      _renderSee();
+      _updateAudioHealthDOM('RECENT_EVENT');
+      _renderPerceptionStream();
     });
-    // Case Time 标记追加（幂等：kind@time 去重）
+    // Case Time 标记追加（幂等：kind@time 去重；P1-C 修复：track 缺失不再丢标记，
+    // 挂起 {sid, m} 由 _flushPendingSurfaces 按 track 当时的 data-max 重算补插）。
     (msg.case_time || []).forEach(function (m) {
       var key = m.kind + '@' + m.time;
       if (seenCaseTime.has(key)) return;
       seenCaseTime.add(key);
       var track = global.document.getElementById('case-time-track-' + sid);
-      if (!track) return;
-      var max = parseFloat(track.getAttribute('data-max') || '0') || 0;
-      track.insertAdjacentHTML('beforeend', _buildCaseTimeMark(m, max));
+      if (track) {
+        var max = parseFloat(track.getAttribute('data-max') || '0') || 0;
+        track.insertAdjacentHTML('beforeend', _buildCaseTimeMark(m, max));
+      } else {
+        _pendingCaseTimeMarks.push({ sid: sid, m: m });
+      }
     });
     // counts 更新（frames 计数实时推进）
     if (msg.counts && msg.counts.n_frames != null) _updateFrames(msg.counts.n_frames);
@@ -1067,6 +1143,8 @@
     _updateAcousticState(msg);
     // Phase 3 Waveform：RMS 连续波形绘制（telephone_risk 专属）
     _drawWaveform(sid, msg.rms_window);
+    // Surface 补渲染：本条 delta 处理完毕后，尝试补上此前因 Surface 缺失而挂起的渲染项
+    _flushPendingSurfaces();
   }
 
   // LP-1：真实同步帧流（frame_tick 心跳：frame_index / case_time / loop_count）。
@@ -1172,9 +1250,8 @@
           (levels.indexOf('HIGH') >= 0 ? '' : levels.indexOf('MEDIUM') >= 0 ? ' medium' : ' low');
       }
       var frameEl = global.document.getElementById('lrk-frame-' + sid);
-      if (frameEl) {
-        frameEl.textContent = 'F' + msg.frame_index +
-          (msg.case_time != null ? ' · ' + Number(msg.case_time).toFixed(1) + 's' : '');
+      if (frameEl && msg.case_time != null) {
+        frameEl.textContent = Number(msg.case_time).toFixed(1) + 's';
       }
       var reasonsEl = global.document.getElementById('lrk-reasons-' + sid);
       if (reasonsEl) {
@@ -1294,13 +1371,13 @@
       var levels = (msg.risk_levels || []).join(' / ');
       var time = msg.case_time != null
         ? Number(msg.case_time).toFixed(1) + 's'
-        : 'F' + msg.frame_index;
+        : '—';
       // P0-1：信号实体（signal_id / subject / severity）
       var signals = msg.risk_signals || [];
       var sigHtml = '';
       if (signals.length) {
         var sig = signals[0];
-        var sid_val = sig.signal_id || 'sig-' + msg.frame_index;
+        var sid_val = sig.signal_id || 'sig-unknown';
         var subject = sig.subject_id || sig.visitor_instance_id || '访客';
         var sev = sig.severity_hint != null ? Number(sig.severity_hint).toFixed(2) : '';
         var category = sig.category || '';
@@ -1470,6 +1547,9 @@
         else if (msg.type === 'risk_delta') _applyRiskDelta(msg);
         // Phase 3.3: memory_timeline 消息类型（🟡 Partial · 阻塞于 Memory API）
         else if (msg.type === 'memory_timeline') _applyMemoryTimeline(msg);
+        // P0-11.3.5 场景切换：source_switched 广播（切换视频源 / POST /demo/reset 共用此通道）
+        // 触发前端 resetSession() 清空跨帧累积状态，避免旧数据串场。
+        else if (msg.type === 'source_switched') resetSession();
       };
     }
     // P2-2: TTL 风险信号兜底计时器（每 5s 检查过期）
@@ -1479,6 +1559,60 @@
 
   _init();
 
+  // P0-11.3.5 会话重置：清空跨帧累积状态（新视频 = 新会话）。
+  // 由 source_switched 消息或 POST /demo/reset 广播触发；
+  // sid 不自动更新——由 _init() 在页面加载时从 .live-perception data-scenario 读取。
+  function resetSession() {
+    // 停止旧 audio stale timer（避免新会话计时器与旧场景混用）
+    if (_audioStaleTimer) { clearInterval(_audioStaleTimer); _audioStaleTimer = null; }
+    // 去重 Set：跨会话事件不再被跳过
+    seenRefs.clear();
+    seenAudio.clear();
+    seenCaseTime.clear();
+    // Surface 挂起渲染队列（新会话无历史挂起）
+    _pendingAudioRows = [];
+    _pendingCaseTimeMarks = [];
+    // PerceptionStream：条目、历史、last* 状态、去重集合全清
+    _perceptionStream.clear();
+    // 语义状态层：seeState.vision / seeState.audio
+    seeState.vision = [];
+    seeState.audio = [];
+    // Audio Health：最近事件时间戳 + 健康态重置
+    _lastAudioEventMs = null;
+    _audioHealthState = null;
+    // LiveState 聚合层：warningMap / behaviorEvents / commandMap / riskSignalMap
+    __LiveState.warningMap = {};
+    __LiveState.behaviorEvents = [];
+    __LiveState.behaviorN = 0;
+    __LiveState.visitorSeq = {};
+    __LiveState.visitorSeqN = 0;
+    __LiveState.visitorFirst = {};
+    __LiveState.commandMap = {};
+    __LiveState.riskSignalMap = new Map();
+    // 声学状态历史（新会话从零开始记录）
+    _acousticStateHistory = [];
+    // 重新开启 audio stale timer（新会话初始 NO_RECENT_EVENT → 下次音频事件后刷新）
+    _startAudioStaleTimer();
+  }
+
   global.__LiveState = __LiveState;
-  global.__LiveStream = { applyDelta: _applyDelta, seenRefs: seenRefs, renderBehaviorTimeline: _renderBehaviorTimeline, renderRiskSignals: _renderRiskSignals };
+  // __LiveStream 测试/调试导出口：seeState / perceptionStream 为语义层只读引用，
+  // 供 Surface Independence 回归测试直接断言"Surface 缺失 ≠ Runtime Fact 丢失"。
+  global.__LiveStream = {
+    applyDelta: _applyDelta,
+    seenRefs: seenRefs,
+    seenAudio: seenAudio,
+    seenCaseTime: seenCaseTime,
+    renderBehaviorTimeline: _renderBehaviorTimeline,
+    renderRiskSignals: _renderRiskSignals,
+    seeState: seeState,
+    perceptionStream: _perceptionStream,
+    pendingSurfaces: function () {
+      return { audioRows: _pendingAudioRows.length, caseTimeMarks: _pendingCaseTimeMarks.length };
+    },
+    // P0-11.3.5 场景切换：供测试直接调用，验证 resetSession 清空跨帧累积状态。
+    resetSession: resetSession,
+  };
+  // 默认暴露 resetSession 到全局，供 inline script 直接调用（非模块环境兼容）。
+  global.resetSession = resetSession;
 })(window);

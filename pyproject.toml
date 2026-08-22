@@ -79,3 +79,7 @@ line-length = 100
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q"
+markers = [
+    "e2e: 端到端浏览器测试（需要运行中的网关 + playwright）",
+    "slow: 耗时测试（单独启用）",
+]

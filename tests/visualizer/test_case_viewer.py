@@ -329,10 +329,9 @@ def test_viewer_lp1_live_frame_stream_renders_img(tmp_path):
     assert 'class="case-video-img"' in html
     assert 'id="case-video-el-sw_t1"' not in html
     assert 'id="case-video-canvas-sw_t1"' not in html
-    # LIVE badge + 帧 overlay（帧号/检测数）注入
+    # LIVE badge + Case Time overlay 注入（帧号和检测数已移除，见 §3.1）
     assert 'id="live-badge-sw_t1"' in html
-    assert 'id="ov-frame-sw_t1"' in html
-    assert 'id="ov-det-sw_t1"' in html
+    assert 'id="ov-time-sw_t1"' in html
     # LiveFrameStream 无 manifest 数据岛（帧由 WS 推，非文件帧模板）
     assert 'id="media-manifest-sw_t1"' not in html
 

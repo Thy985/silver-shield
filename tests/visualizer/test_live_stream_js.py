@@ -58,7 +58,16 @@ def test_live_stream_js_delta_renders_and_dedups():
               if (child) child.parentNode = this;
               return child;
             },
-            querySelector: function () { return null; },
+            querySelector: function (sel) {
+              // Surface flush 判重：li.tl-item[data-ref="X"] → 从自身 html 查 data-ref 是否已存在
+              var m = sel && sel.match(/^li\.tl-item\[data-ref="([^"]*)"\]$/);
+              if (m) {
+                return this.html.indexOf('data-ref="' + m[1] + '"') !== -1
+                  ? { getAttribute: function (k) { return k === 'data-ref' ? m[1] : null; }, parentNode: null }
+                  : null;
+              }
+              return null;
+            },
             querySelectorAll: function (sel) {
               if (sel === 'li.tl-item[data-ref]') {
                 var re = /data-ref="([^"]*)"/g, m, out = [];
@@ -200,6 +209,21 @@ def test_live_stream_js_missing_containers_noop():
         const closurePanel = { getAttribute: function () { return '/ws'; } };
         const codeEl = { text: 'live_telephone_risk' };
         const doc = {
+          createElement: function () {
+            // P0-B 数据层：_applyDelta 先经 tmp.innerHTML 构建 timeline 节点（与 Surface 是否存在无关）
+            var e = { attrs: {}, html: '', text: '', style: {}, className: '', onclick: null,
+                      getAttribute: function (k) { return this.attrs[k] != null ? this.attrs[k] : null; },
+                      setAttribute: function (k, v) { this.attrs[k] = String(v); } };
+            Object.defineProperty(e, 'innerHTML', {
+              set: function (v) {
+                e.html = String(v);
+                e.firstChild = { outerHTML: e.html, getAttribute: function () { return null; }, parentNode: null };
+              },
+              get: function () { return e.html; },
+              configurable: true,
+            });
+            return e;
+          },
           querySelector: function (sel) {
             if (sel === '.scenario-title code') return codeEl;
             if (sel === '.closure-panel') return closurePanel;
@@ -297,14 +321,14 @@ def test_live_stream_js_perception_delta_renders():
           ],
         })});
         const rendered = lp.innerHTML.indexOf('person') !== -1 && lp.innerHTML.indexOf('car') !== -1
-          && lp.innerHTML.indexOf('0.91') !== -1 && lp.innerHTML.indexOf('F42') !== -1;
+          && lp.innerHTML.indexOf('0.91') !== -1 && lp.innerHTML.indexOf('5.3s') !== -1;
         const latencyRecorded = typeof window.__LiveStream.lastLatencyMs === 'number';
         // 幂等：同检测再发一次 → innerHTML 覆盖式（当前状态），不累积
         global._ws.onmessage({ data: JSON.stringify({
           type: 'perception_delta', frame_index: 43, case_time: 5.38, server_ts: nowMs / 1000,
           detections: [{ class: 'person', bbox: [11, 21, 301, 401], confidence: 0.92 }],
         })});
-        const overwrite = lp.innerHTML.indexOf('F43') !== -1 && lp.innerHTML.indexOf('car') === -1;
+        const overwrite = lp.innerHTML.indexOf('5.4s') !== -1 && lp.innerHTML.indexOf('car') === -1;
         console.log(rendered && latencyRecorded && overwrite ? 'PERCEPTION_OK' : JSON.stringify({ rendered: rendered, latencyRecorded: latencyRecorded, overwrite: overwrite, html: lp.innerHTML }));
         process.exit(rendered && latencyRecorded && overwrite ? 0 : 1);
         """
@@ -406,8 +430,7 @@ def test_live_stream_js_risk_card_and_signal():
           cardShown: els['lrk-card-' + sid].style.display === '',
           emptyHidden: els['lrk-empty-' + sid].style.display === 'none',
           level: els['lrk-level-' + sid].textContent === 'HIGH 风险',
-          frame: els['lrk-frame-' + sid].textContent.indexOf('F23') !== -1
-            && els['lrk-frame-' + sid].textContent.indexOf('2.9s') !== -1,
+          frame: els['lrk-frame-' + sid].textContent === '2.9s',  // 仅 case_time，无 frame_index
           reasons: els['lrk-reasons-' + sid].innerHTML.indexOf('✓ 夜间访问') !== -1
             && els['lrk-reasons-' + sid].innerHTML.indexOf('✓ 检测到重复访问') !== -1,
           rec: els['lrk-rec-' + sid].innerHTML.indexOf('升级社区') !== -1,
