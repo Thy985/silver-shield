@@ -136,7 +136,7 @@ audio:
   tier1:
     enabled: true                 # 真实 YAMNet 推理（非 Stub）；需配合下方 model_path
     model_path: data/models/yamnet/onnx/yamnet_runtime.onnx   # YAMNet 运行时导出（输入动态 [samples]，可真实推理）；yamnet.onnx 为退化导出（输入固定 [1]），勿用
-    class_map_path: ""             # 可选：521 类名映射文件（yaml/json）
+    class_map_path: data/models/yamnet/yamnet_class_map.csv   # AudioSet 官方 CSV（index,mid,display_name）；ADR-0042 步骤6 修复后此字段真正生效（此前被无视恒 class_N 透传）
     threshold: 0.1                 # YAMNet 段级平均 score 阈值 [0,1]
     top_k: 10                      # 每段标签上限
     trigger: segment               # segment=每段 VAD 语音段都跑 | perception=仅 Tier0 命中时跑
