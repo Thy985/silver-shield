@@ -22,6 +22,19 @@
   详见 `docs/ADR/0017` 与 `docs/DEMO-SCRIPT-P0-11-5b.md`。展示层零穿透 7 层冻结契约（ADR-0015）。
 - 边界：本模块只做事实采集 + 事件生成，**不做诈骗风险判断、不输出 risk score、不调用 LLM**
 
+### 音频风险运行时契约（ADR-0039~0043 · 2026-08-22 Owner 拍板）
+
+> 触发：telephone_risk 全链路审计发现 audio→risk runtime 入口缺失、DecisionInput 未容纳
+> 多模态信号、Projection 单覆盖语义丢失 RAISED 历史（frame0 RAISED 被 frame1 CLEARED 覆盖）。
+> 经 5 问 ADR Preflight Review，Owner 逐项修订后全部拍板 Accepted。
+
+- ✅ **ADR-0039** RuntimeFrameContext 单容器进给：`process_frame(ctx)` 与 FrameResult 对称；四字段冻结，**不预留占位模态**（Context 是扩展边界不是字段垃圾桶）
+- ✅ **ADR-0040** DecisionInput.risk_signals 一等输入：结束"Audio RiskSignal 伪装 PerceptionEvent"幻觉路径；C7 **临时扩展 5→6、6 是硬顶**；policy 升级前 gateway 不接通 audio→risk 链
+- ✅ **ADR-0041** SignalTemporalLinker：**冻结机制、窗口数值 TBD by acceptance data**；时钟统一（episode_start_unix 锚定）为前置
+- ✅ **ADR-0042** Audio Evidence Strength 五档：**冻结等级、参数 TBD**；class_map 修复 + YAMNet 验证前 **MONITOR ceiling 硬门控**
+- ✅ **ADR-0043** RiskSignal 双轨投影：状态轨（覆盖式）+ 事件轨（累积式）；payload 形状留实现设计
+- 论证链：`docs/reports/ADR-PREFLIGHT-REVIEW-2026-08-22.md`（**§8 Owner 修订记录为准**）
+
 ### v2 验证体系（ADR-0032/0033/0034 · 全量验收完成，v1.0 冻结）
 
 - ✅ **ADR-0032 场景仿真层**：声明式 `Scenario` → 两通道生成（`detections` 零模型 / `frames` OpenCV 程序化），确定性可复现（seed + numpy/opencv 版本入指纹）。
@@ -61,6 +74,44 @@
 - **包导出**：`home_perception.memory` 现导出 `DefaultShortTermPolicy` / `DefaultEpisodeBuilder` / `MemoryStore` / `SnapshotStore` / `ColdStartCoordinator` 等（含 `episode_builder` 包级导出，Stage F 已接线）。
 - **下一步**：Stage G/H Semantic 聚合器（依赖 Phase 4 ReID，v1 不实现）。
 - 详见 `docs/ADR/0024-memory-architecture.md` 与 `docs/design/memory/DESIGN-memory-pipeline.md`。
+
+## 当前执行路线（Next Steps · 防偏离导航）
+
+> **下一个 Agent 开工前必读**：本节 + `AGENTS.md` §10.1 + `docs/reports/ADR-PREFLIGHT-REVIEW-2026-08-22.md` §8。
+> 动代码前先回答：本步对应哪个 ADR？是否踩硬门控？
+
+### 执行顺序（Owner 锁死，不可反序）
+
+| 步骤 | 内容 | 依据 |
+|---|---|---|
+| 1 | Audio Runtime Entry：RuntimeFrameContext + process_frame(ctx) 改造 | ADR-0039 |
+| 2 | RiskSignal → Decision：DecisionInput.risk_signals 字段 + RuleBasedDecisionPolicy 升级（同 PR 或紧随） | ADR-0040 |
+| 3 | 时钟统一：episode_start_unix 锚定 + SignalTemporalLinker 组件 | ADR-0041 |
+| 4 | RealTimeAudioRiskEvaluator 接线（MONITOR ceiling 下）+ modality-aware routing | ADR-0042 |
+| 5 | 双轨投影：ProjectionAccumulator 状态轨/事件轨扩展 | ADR-0043 |
+| 6 | YAMNet class_map 修复 → 真实 Δt / AudioKind 分布 → 参数回填（ADR-0041/0042 Open Items 关闭） | ADR-0037 数据基建（`data/generators/telephone_risk_v2.py`）|
+| 7 | Browser E2E 回归（含 P0-11 12 项端到端） | docs/05 §3 |
+| 8 | UI 打磨最后：Audio DOM / Risk Card / Narrative | LIVE-PERCEPTION-STREAM-SPEC |
+
+### 硬门控（违反即返工）
+
+1. YAMNet `class_map_path=""` 修复前：音频证据强度**封顶 MONITOR**（fallback 永不驱动 RAISE 及以上）；
+2. `RuleBasedDecisionPolicy` 未升级消费 `risk_signals` 前：gateway **不接通** audio→risk 链（防假通电）;
+3. **禁止**把 audio RiskSignal 翻译成视觉 event_type——`signal_adapter` 不是 audio 通路（audio_kind 不在其映射表，翻译必落幻觉兜底）；
+4. 依赖方向：Temporal Alignment（Q3）在 Evidence Strength（Q4）**之前**；ESCALATE 须经 LinkedSignalPair 验证，禁 audio 单方推断视觉事实。
+
+### 文档地图（按需取用）
+
+| 需要什么 | 去哪 |
+|---|---|
+| 本轮 5 项决策的最终事实 | `docs/ADR/0039` ~ `0043`（Accepted · 含 Owner 修订） |
+| 论证过程 / 候选方案对比 / Owner 修订记录 | `docs/reports/ADR-PREFLIGHT-REVIEW-2026-08-22.md`（§8 为准） |
+| 审计取证（2 CLEARED payload 拆解 / audio 旁路根因 / memory 错耦合） | `docs/reports/AUDIO-RISK-RUNTIME-AUDIT-CORRECTION-2026-08-22.md` |
+| ⚠️ 原审计报告 Layer 4「完全旁路」判定已被推翻 | `RUNTIME-RISK-ROOT-CAUSE-AUDIT-2026-08-22.md` 仅作历史记录，勿引用其结论 |
+| telephone_risk 能力边界（phone_interaction 已降级 optional_supporting） | `docs/ADR/0038` |
+| Evidence Fusion 架构母体（本轮为其 Phase 1 落地） | `docs/ADR/0019` |
+| 产品现状与设计差距盘点 | `docs/reports/LIVE-PRODUCT-STATE-AND-GAP-REPORT-2026-08-22.md` |
+| 决策契约本体（C1/C7 白名单黑名单机制） | `src/home_perception/analysis/decision_contract.py`（导入期 fail-closed） |
 
 ## 架构总览（团队入口）
 
