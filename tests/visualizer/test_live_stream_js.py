@@ -58,7 +58,16 @@ def test_live_stream_js_delta_renders_and_dedups():
               if (child) child.parentNode = this;
               return child;
             },
-            querySelector: function () { return null; },
+            querySelector: function (sel) {
+              // Surface flush 判重：li.tl-item[data-ref="X"] → 从自身 html 查 data-ref 是否已存在
+              var m = sel && sel.match(/^li\.tl-item\[data-ref="([^"]*)"\]$/);
+              if (m) {
+                return this.html.indexOf('data-ref="' + m[1] + '"') !== -1
+                  ? { getAttribute: function (k) { return k === 'data-ref' ? m[1] : null; }, parentNode: null }
+                  : null;
+              }
+              return null;
+            },
             querySelectorAll: function (sel) {
               if (sel === 'li.tl-item[data-ref]') {
                 var re = /data-ref="([^"]*)"/g, m, out = [];
@@ -200,6 +209,21 @@ def test_live_stream_js_missing_containers_noop():
         const closurePanel = { getAttribute: function () { return '/ws'; } };
         const codeEl = { text: 'live_telephone_risk' };
         const doc = {
+          createElement: function () {
+            // P0-B 数据层：_applyDelta 先经 tmp.innerHTML 构建 timeline 节点（与 Surface 是否存在无关）
+            var e = { attrs: {}, html: '', text: '', style: {}, className: '', onclick: null,
+                      getAttribute: function (k) { return this.attrs[k] != null ? this.attrs[k] : null; },
+                      setAttribute: function (k, v) { this.attrs[k] = String(v); } };
+            Object.defineProperty(e, 'innerHTML', {
+              set: function (v) {
+                e.html = String(v);
+                e.firstChild = { outerHTML: e.html, getAttribute: function () { return null; }, parentNode: null };
+              },
+              get: function () { return e.html; },
+              configurable: true,
+            });
+            return e;
+          },
           querySelector: function (sel) {
             if (sel === '.scenario-title code') return codeEl;
             if (sel === '.closure-panel') return closurePanel;
