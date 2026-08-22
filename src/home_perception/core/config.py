@@ -565,8 +565,8 @@ class Tier1AudioConfig(BaseModel):
         s = str(v).strip()
         if not s:
             return ""
-        if not s.lower().endswith((".yaml", ".yml", ".json")):
-            raise ValueError(f"class_map_path 必须是 .yaml/.yml/.json，收到 {s!r}")
+        if not s.lower().endswith((".csv", ".yaml", ".yml", ".json")):
+            raise ValueError(f"class_map_path 必须是 .csv/.yaml/.yml/.json，收到 {s!r}")
         if ".." in Path(s).parts:
             raise ValueError(f"class_map_path 拒绝路径遍历，收到 {s!r}")
         return s

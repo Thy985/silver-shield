@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -36,6 +37,14 @@ def _write_class_map(path, fmt: str = "json") -> str:
         import json
 
         path.write_text(json.dumps(_names()), encoding="utf-8")
+    elif fmt == "csv":
+        import csv
+
+        with path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["index", "mid", "display_name"])
+            for i, n in enumerate(_names()):
+                w.writerow([i, f"/m/0{i:05x}", n])
     else:
         import yaml
 
@@ -66,9 +75,9 @@ class TestLoadClassNames:
             load_class_names("")
 
     def test_bad_suffix_rejected(self, tmp_path):
-        p = tmp_path / "class_map.csv"
+        p = tmp_path / "class_map.txt"
         p.write_text("a,b\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="\\.yaml/.yml/.json"):
+        with pytest.raises(ValueError, match="\\.csv/\\.yaml/\\.yml/\\.json"):
             load_class_names(str(p))
 
     def test_missing_file_fail_fast(self, tmp_path):
@@ -98,6 +107,58 @@ class TestLoadClassNames:
 
 
 # ============================================================================
+# CSV 格式（AudioSet 官方分发格式：index,mid,display_name）
+# ============================================================================
+
+
+class TestCsvFormat:
+    def test_csv_roundtrip(self, tmp_path):
+        p = _write_class_map(tmp_path / "class_map.csv", fmt="csv")
+        names = load_class_names(p)
+        assert len(names) == 521
+        assert names[0] == "Speech"
+
+    def test_csv_missing_display_name_column_rejected(self, tmp_path):
+        p = tmp_path / "bad.csv"
+        p.write_text("index,mid\n0,/m/1\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="display_name"):
+            load_class_names(str(p))
+
+    def test_csv_non_contiguous_index_rejected(self, tmp_path):
+        import csv
+
+        p = tmp_path / "gap.csv"
+        with p.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["index", "mid", "display_name"])
+            for i in (0, 2, 3):  # 断裂：缺 1
+                w.writerow([i, "/m/1", f"c{i}"])
+        with pytest.raises(ValueError, match="连续递增"):
+            load_class_names(str(p))
+
+    def test_csv_empty_display_name_rejected(self, tmp_path):
+        import csv
+
+        p = tmp_path / "blank.csv"
+        with p.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["index", "mid", "display_name"])
+            for i in range(521):
+                w.writerow([i, "/m/1", "" if i == 7 else f"c{i}"])
+        with pytest.raises(ValueError, match="空 display_name"):
+            load_class_names(str(p))
+
+    def test_real_asset_smoke(self):
+        """真实资产 smoke：随权重分发的官方 CSV 可直接加载（无则 skip）。"""
+        asset = "data/models/yamnet/yamnet_class_map.csv"
+        if not Path(asset).exists():
+            pytest.skip("yamnet_class_map.csv not present in this environment")
+        names = load_class_names(asset)
+        assert len(names) == 521
+        assert names[0] == "Speech"
+
+
+# ============================================================================
 # Tier1AudioConfig · 配置期守卫
 # ============================================================================
 
@@ -111,8 +172,8 @@ class TestConfigGuard:
         assert cfg.class_map_path.endswith(".json")
 
     def test_invalid_suffix_rejected(self):
-        with pytest.raises(ValidationError, match="\\.yaml/.yml/.json"):
-            Tier1AudioConfig(class_map_path="x.csv")
+        with pytest.raises(ValidationError, match="\\.csv/\\.yaml/\\.yml/\\.json"):
+            Tier1AudioConfig(class_map_path="x.txt")
 
     def test_traversal_rejected(self):
         with pytest.raises(ValidationError, match="路径遍历"):
