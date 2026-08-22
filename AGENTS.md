@@ -279,9 +279,42 @@ AI Agent 在开始编码前，必须明确回答：
 | 项 | 说明 |
 | --- | --- |
 | 阶段 | MVP Release Candidate 已交付（tag `v0.1.0-mvp-rc`，P0-1~P0-10 全链路 + P0-10.5 冻结治理，2295 测试全绿）；P0-11 多角色协同闭环 Demo 已完成（12/12 端到端验证）。**本行为 README「当前状态」SSOT 的投影，须与 README 保持一致** |
-| 已完成 | P0-1 工程脚手架；P0-2 萤石稳健取流（RTSP/HLS + 断流重连）；P0-3 YOLO 检测；P0-4 FPS Benchmark；P0-5 目标跟踪；P0-6 VisitorEvent；P0-7a/b 特征 + 规则引擎；P0-8/9/10 决策 / 行动 / main 装配；P0-10.5 架构冻结治理；P0-11 多角色协同闭环 Demo（详见 `docs/08_roadmap.md` 与 `README.md`） |
-| 待办 | MVP 范围全部交付。v2 增量已落地 main：Memory（ADR-0024/0025）/ Audio（ADR-0026）/ Validation（ADR-0032）/ Evaluation（ADR-0033）/ Integration（ADR-0034）/ Visualizer（ADR-0035/0036）。后续增强：LLM 解释、多设备、中心联动、真实 App / 用户体系 / 推送 |
+| 已完成 | P0-1 工程脚手架；P0-2 萤石稳健取流（RTSP/HLS + 断流重连）；P0-3 YOLO 检测；P0-4 FPS Benchmark；P0-5 目标跟踪；P0-6 VisitorEvent；P0-7a/b 特征 + 规则引擎；P0-8/9/10 决策 / 行动 / main 装配；P0-10.5 架构冻结治理；P0-11 多角色协同闭环 Demo（详见 `docs/08_roadmap.md` 与 `README.md`）。**2026-08-22：音频风险运行时审计 + 5 项契约拍板（ADR-0039~0043 全部 Accepted，见下 §10.1）** |
+| 待办 | MVP 范围全部交付。v2 增量已落地 main：Memory（ADR-0024/0025）/ Audio（ADR-0026）/ Validation（ADR-0032）/ Evaluation（ADR-0033）/ Integration（ADR-0034）/ Visualizer（ADR-0035/0036）。**进行中：多模态运行时改造（ADR-0039~0043 实现队列，执行顺序与硬门控见 README「当前执行路线」节）**。后续增强：LLM 解释、多设备、中心联动、真实 App / 用户体系 / 推送 |
 | 已知基线偏差 | 早期 3 个脚手架提交已落 `origin/main`（早于本约定，属基线）；`prototypes/` 为历史验证脚本（含真实凭证，已 gitignore） |
 | 例外不视为违规 | 上述基线偏差已记录；新增代码必须按目标架构，不得延续"硬编码凭证 / 裸 print / 静默异常"等问题 |
+
+### 10.1 当前执行路线与文档导航（2026-08-22 · 防 Agent 偏离）
+
+> 本节是 README「当前执行路线」节的**投影**。开工前必读三件：
+> README 路线节 + 本节 + `docs/reports/ADR-PREFLIGHT-REVIEW-2026-08-22.md` §8。
+
+**决策链（全部 Accepted，实现须逐字遵循）**：
+
+| ADR | 契约 | 关键约束 |
+| --- | --- | --- |
+| ADR-0039 | RuntimeFrameContext 单容器进给 | 四字段冻结；**不预留占位模态**；case_time 显式化 |
+| ADR-0040 | DecisionInput.risk_signals 一等输入 | C7 **临时扩展 5→6 硬顶**；risk_signals ≠ Decision Result；policy 升级前不接通 audio→risk 链 |
+| ADR-0041 | SignalTemporalLinker | 机制冻结/**窗口数值 TBD by acceptance data**；时钟统一前置；与 episode 级 CrossModalLinker（ADR-0028）职责分离 |
+| ADR-0042 | Audio Evidence Strength 五档 | 等级冻结/**参数 TBD**；class_map 修复前 **MONITOR ceiling**；ESCALATE 须经 ADR-0041 LinkedSignalPair 验证 |
+| ADR-0043 | RiskSignal 双轨投影 | 状态轨+事件轨冻结；payload 形状留实现设计；signal_id 幂等主键 |
+
+**硬门控（违反即返工）**：
+
+1. YAMNet `class_map_path=""` 修复前，音频证据强度封顶 MONITOR；
+2. `RuleBasedDecisionPolicy` 未升级消费 `risk_signals` 前，gateway 不接通 audio→risk 链；
+3. 禁止把 audio RiskSignal 翻译成视觉 event_type（`signal_adapter._map_features_to_event`
+   不识别 audio_kind，翻译必落幻觉兜底 `visit_pending_verify`）;
+4. 依赖方向：Temporal Alignment 在 Evidence Strength 之前（Q3 → Q4）。
+
+**文档地图**：
+
+- 最终事实 → `docs/ADR/0039~0043`；
+- 论证过程 / Owner 修订 → `docs/reports/ADR-PREFLIGHT-REVIEW-2026-08-22.md`（§8 为准）;
+- 审计取证 → `docs/reports/AUDIO-RISK-RUNTIME-AUDIT-CORRECTION-2026-08-22.md`；
+- ⚠️ `RUNTIME-RISK-ROOT-CAUSE-AUDIT-2026-08-22.md` 的 Layer 4「完全旁路」判定已被
+  CORRECTION 报告推翻，仅作历史记录，**勿引用其结论**；
+- telephone_risk 能力边界 → ADR-0038（phone_interaction 已降级 optional_supporting）；
+- Evidence Fusion 架构母体 → ADR-0019。
 
 **新增代码不得延续已知问题，必须按目标架构编写。**
