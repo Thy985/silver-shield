@@ -161,3 +161,58 @@ def test_create_app_injects_live_audio_via_builder(monkeypatch):
     assert gw._live_audio_events[0]["kind"] == "audio_voice_raised"
     assert gw._live_audio_events[0]["event_id"] == "e1"
     assert captured["scenario_id"] == "sess-builder"
+
+
+# ----------------------------------------------------------------------
+# ADR-0042 运行时接线：_runtime_audio_events（Runtime 判定通道，
+# 与 _feed_live_audio 投影通道并行，同一确定性投递规则）
+# ----------------------------------------------------------------------
+
+
+def _pipeline_with_settings():
+    """最小真实 pipeline（from_settings 仅装配组件，音频通道不触发 detect）。"""
+    from home_perception.core.config import Settings
+    from home_perception.runtime import PerceptionPipeline
+
+    class _Det:
+        pass
+
+    return PerceptionPipeline.from_settings(Settings(), detector=_Det())
+
+
+def test_runtime_audio_events_deterministic_delivery():
+    """frame_index==k → 第 k 条；dict 经 pipeline.adapt_runtime_audio 转换为实例元组。"""
+    gw = _bare_gateway_with_scenario()
+    gw.set_live_audio_events([
+        _audio_ev(1700000000.0, "audio_voice_raised", event_id="e1"),
+        _audio_ev(1700000001.0, "audio_telephone_persistent", event_id="e2"),
+    ])
+    gw.pipeline = _pipeline_with_settings()
+    out0 = gw._runtime_audio_events(0)
+    out1 = gw._runtime_audio_events(1)
+    assert [e.event_id for e in out0] == ["e1"]
+    assert [e.event_id for e in out1] == ["e2"]
+    # 转换产物为 AudioPerceptionEvent 实例（duck 断言，守冻结边界不做类型 import 断言）
+    assert all(hasattr(e, "kind") and hasattr(e, "score") for e in (*out0, *out1))
+
+
+def test_runtime_audio_events_edge_cases_safe():
+    """负索引 / 越界 / pipeline 未装配 → 空元组（不抛、失败隔离）。"""
+    gw = _bare_gateway_with_scenario()
+    gw.set_live_audio_events([_audio_ev(1700000000.0, "audio_voice_raised", event_id="e1")])
+    assert gw._runtime_audio_events(-1) == ()
+    assert gw._runtime_audio_events(5) == ()
+    gw.pipeline = None
+    assert gw._runtime_audio_events(0) == ()
+    gw.pipeline = _pipeline_with_settings()
+    assert gw._runtime_audio_events(0)[0].event_id == "e1"
+
+
+def test_runtime_audio_events_fail_closed_on_bad_event():
+    """非法事件（forbidden 字段）→ 转换失败返回空元组（绝不抛、不阻断帧循环）。"""
+    gw = _bare_gateway_with_scenario()
+    gw.set_live_audio_events([
+        {**_audio_ev(1700000000.0, "audio_voice_raised"), "verdict": "FRAUD"},
+    ])
+    gw.pipeline = _pipeline_with_settings()
+    assert gw._runtime_audio_events(0) == ()

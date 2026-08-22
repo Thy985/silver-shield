@@ -28,6 +28,7 @@ from .decision_trace import (
     compute_policy_fingerprint,
 )
 from .perception import PerceptionEvent
+from .risk_signal import RiskSignal
 from .warning import WarningEvent
 
 log = get_logger(__name__)
@@ -131,8 +132,17 @@ class DecisionEngine:
             log.exception("memory.reasoning_input_failed", visitor=visitor_id)
             return None
 
-    def evaluate(self, perception_events: list[PerceptionEvent]) -> WarningEvent | None:
+    def evaluate(
+        self,
+        perception_events: list[PerceptionEvent],
+        risk_signals: tuple[RiskSignal, ...] = (),
+    ) -> WarningEvent | None:
         """单次决策：消费 PerceptionEvent 列表，输出 WarningEvent 或 None。
+
+        ``risk_signals``（ADR-0040 D1 一等输入）：本评估周期收到的 Runtime
+        RiskSignal（RAISED/CLEARED），原样透传 ``DecisionInput.risk_signals``
+        供 policy 消费；缺省空元组 = 无信号输入（视觉规则路径向后兼容，
+        ADR-0030 D2「Memory 可缺席」同款缺席语义）。
 
         返回 None 的典型情况：
         - 空列表
@@ -145,12 +155,15 @@ class DecisionEngine:
         reasoning_input = self._build_reasoning_input(perception_events)
         # Slice B：装配 DecisionInput（单入参契约）。本期记忆/推理/既往字段尚未接线，
         # 一律显式 None —— 满足 ADR-0030 D2「Memory 可缺席」原则，零行为变化。
+        # risk_signals（ADR-0040）：Runtime 信号一等输入透传；DecisionInput 内部
+        # 做 (created_at, signal_id) 稳定排序与元素级类型守卫，engine 不重复校验。
         input = DecisionInput(
             trigger_events=tuple(perception_events),
             decision_context=ctx,
             reasoning_input=reasoning_input,
             reasoning_result=None,
             prior_warning=None,
+            risk_signals=tuple(risk_signals),
         )
         # Slice C（D6.1）：trace 生命周期边界 CREATED。仅当 recorder 注入时开 span 并
         # 绑定到策略；span 为 None 时策略不写 partial，决策逐字不变（T2）。finally 解绑，
