@@ -227,6 +227,54 @@ class RealTimeAudioRiskEvaluator:
         """当前有活跃 RAISED 的 kind（只读视图，供审计/展示）。"""
         return tuple(sorted(self._active, key=lambda k: k.value))
 
+    def emit_combined_signal(
+        self,
+        *,
+        kind: AudioPerceptionKind,
+        pair: Any,
+        case_time: float,
+    ) -> RiskSignal:
+        """Evidence Synthesis 产物（Gate G · ADR-0019 母体 / ADR-0041 硬前提）：
+        Vision+Audio 经时间对齐成立 ``LinkedSignalPair`` → ESCALATE 组合风险信号。
+
+        与单模态 RAISED 的关系：**补充信号，不改写状态机**——原 RAISED 保持活跃
+        （其 CLEARED 配对语义不受影响）；本信号是瞬时多模态验证宣告（features 携带
+        pair 元数据供 policy/浏览器追溯贡献链），不进入 ``_active`` 去抖账本。
+
+        调用方契约：仅当 ``escalate_enabled=True`` **且** runtime 真实产出
+        ``LinkedSignalPair``（ADR-0041 D6 双重门控的第二道在调用方——link 先行，
+        EvidenceStrength 判级后行，Q3→Q4 依赖方向）时调用。
+        """
+        from .signal_temporal_linker import LinkedSignalPair  # 局部导入防环
+
+        if not isinstance(pair, LinkedSignalPair):
+            raise TypeError(
+                f"pair 必须是 LinkedSignalPair，收到 {type(pair).__name__}"
+            )
+        signal = self._make_signal(
+            kind=kind,
+            transition=SignalTransition.RAISED,
+            case_time=case_time,
+            paired_signal_id=None,
+            features_extra={
+                "combined_risk": True,
+                "linked_pair_level": pair.level.value,
+                "link_strength": pair.link_strength,
+                "linked_delta_s": pair.delta,
+                "vision_signal_id": pair.vision_signal.signal_id,
+                "paired_audio_signal_id": pair.audio_signal.signal_id,
+                "escalate_route": "HIGH/ESCALATE_COMMUNITY (ADR-0042 候选路由)",
+            },
+        )
+        log.info(
+            "audio.evaluator.combined_raised",
+            kind=kind.value,
+            signal_id=signal.signal_id,
+            linked_pair_level=pair.level.value,
+            link_strength=pair.link_strength,
+        )
+        return signal
+
     # ------------------------------------------------------------------
     # 内部：判级 / 剪枝 / 信号构造
     # ------------------------------------------------------------------
