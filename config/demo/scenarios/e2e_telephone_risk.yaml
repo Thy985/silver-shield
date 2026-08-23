@@ -1,0 +1,34 @@
+# Browser E2E Gate 专用场景（telephone_risk · Owner 验收标准 A-E）
+#
+# 与 live_telephone_risk.yaml 的唯一差异：
+#   1. realtime_risk 显式全开（enabled + decision_enabled）——E2E 仅此场景开启决策链，
+#      不改 config/live_audio.yaml 全局默认（Shadow Mode 灰度纪律不变）。
+#   2. source_type=video_file + media_path 内置本地 mp4，免去 --video 临时 yaml，
+#      保证 E2E 一条命令可复现。
+#
+# 运行：
+#   python scripts/run_demo.py --live --scenario config/demo/scenarios/e2e_telephone_risk.yaml
+#
+# 注意：scenario_id 前缀 e2e_ 不在 scenario_config._NARRATIVE_MODES 表内 →
+#   data-narrative-mode=neutral（fail-closed）。本 Gate 的 A-E 断言均不依赖 layout 权重，
+#   narrative 映射的 live_* 别名问题单独报告 Owner 决策。
+
+scenario_id: e2e_telephone_risk
+description: |
+  Browser E2E Gate：telephone_risk 全链路验收（Runtime→Perception→Risk→Decision→Action）。
+  视频为本地 CCTV mp4（gitignore），音频为 golden 混合素材 case_b_mix.wav。
+
+source: CCTV_Surveillance_Final
+source_type: video_file
+media_path: dataset/benign/media/CCTV_Surveillance_Final.mp4
+
+start_time: "2026-07-19T23:30:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true
+
+audio_path: data/golden/telephone_risk/audio_mix/case_b_mix.wav
+
+realtime_risk:
+  enabled: true
+  decision_enabled: true
