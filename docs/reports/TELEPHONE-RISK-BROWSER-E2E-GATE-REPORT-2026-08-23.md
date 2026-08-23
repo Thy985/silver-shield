@@ -351,3 +351,57 @@ ceiling / escalate 属 Owner 拍板项禁止场景 YAML 旁路）；e2e_telephon
    参数回填（ADR-0042 N/T/M、ADR-0041 窗口）与 policy 升级消费仍待真实验收数据与
    Owner 拍板；ESCALATE 档的 LinkedSignalPair 运行时装配（linker 进 pipeline 帧循环）
    为后续工作，本阶段验证组件契约与配置通道。
+
+## 11. Gate G 执行记录（2026-08-23 · True Multimodal Risk Story 全链贯通）
+
+> 本节为 Owner 下达的 Gate G 最终验收门执行记录。验证对象为冻结链在真实
+> Runtime + 真实 Browser Session 内的端到端成立：
+> Vision Evidence + Audio Evidence → Temporal Link → Evidence Synthesis →
+> EvidenceStrength（ESCALATE）→ Modality-aware Decision → Warning → Action →
+> Browser DOM。
+
+### 11.1 交付物与判定
+
+| Gate | 判定 | 测试载体 | 数量 |
+| --- | --- | --- | --- |
+| G1 真实 Runtime 生成 LinkedSignalPair | PASS | `tests/demo/test_gate_g_true_multimodal_risk_story.py` | 3 |
+| G2 Δt 使用真实 runtime 时钟域 | PASS | 同上 | 2 |
+| G3 Vision-only 不误升级 | PASS | 同上 | 2 |
+| G4 Audio-only 按 EvidenceStrength 处理 | PASS | 同上 | 2 |
+| G5 Vision+Audio link → Combined Risk | PASS | 同上 | 3 |
+| G6 Combined Risk → Warning → Action → Browser DOM | PASS | `tests/visualizer/test_gate_g_true_multimodal_e2e.py` | 4 |
+
+合计 16 个新测试：G1–G5 为 demo 装配级 torch-free 合约测试（12 passed）；
+G6 为真实 gateway + Playwright Chromium E2E（4 passed，96.7s）。
+`tests/demo/` 167 passed，ruff 0 error。
+
+### 11.2 关键执行语义与实现决策
+
+1. **Temporal Link 对称化（实现期修正）**：初版 synthesis 仅音频 RAISED 回看
+   视觉缓存（单向）。实测暴露盲区——真实素材常见时序「语音先于人物入画」下，
+   音频先现即结构性漏配。ADR-0041 定义的 pair 本就是无方向 |Δt| 关系，故改为
+   双向缓存 + 双锚点扫描；配对成功按 ``signal_id`` 从双侧缓存消费，防重复归因。
+   对称分支有专项单测固化（G1 第三用例），且恰为 G6 E2E 实际命中路径。
+2. **素材时序对齐（ADR-0041 D3 数据驱动窗口的实测落点）**：原片前 54s 无人入画，
+   音频事件绑前 9 帧（t≈0.3s RAISE），Δt≈54s 远超候选窗口上限 2.0s，Link 结构性
+   不可配对——**不调大窗口**（违背 ADR-0041 候选档位冻结），而是裁剪视频轨
+   （原片 52.5s 起 70s，``data/golden/telephone_risk/video/cctv_gate_g_open.mp4``，
+   gitignore 内不入库；音频独立于视频轨不受影响）。实测视觉/音频 RAISED
+   Δt≈0.6s，落入 NEAR_WINDOW 合法档位。
+3. **验收态边界（与 Gate F 同纪律）**：ceiling 解除 + escalate 开启 + window=2.0s
+   仅存在于 ``config/live_audio_gate_g.yaml``（经 ``DEMO_HP_CONFIG`` env 注入）与
+   测试内编程式装配；生产默认 MONITOR ceiling + escalate 关闭不变（硬门控 1/2）。
+   场景 yaml 覆盖段重申 enabled（网关覆盖先复位基线），window/escalate/ceiling
+   在白名单外保留 HP 验收态值，场景 YAML 无旁路通道。
+4. **G6 时序方案**：沿用 §1「先连接后重置」（reset 归零 frame_index 且保留音频
+   事件）；测试内置 scenario 匹配守卫（health 的 scenario 必须
+   = gate_g_true_multimodal），防误接非验收态 gateway 得出假阳性。
+5. **policy 最小消费边界不变**：combined 信号经 Stage D 统一入口进入
+   DecisionInput.risk_signals，Warning reason_summary 捕获
+   「实时风险信号: communication(audio)」，meta.risk_signals 记录贡献链——
+   audio 不单独驱动 level/action（硬门控 2/3 未触碰）；modality-aware routing
+   升级仍属 policy 消费 risk_signals 后续工作。
+6. **命名纪律终局声明**：Gate G PASS = 冻结链在验收态下的端到端贯通证明。
+   ADR-0041 窗口数值与 ADR-0042 N/T/M 参数的生产回填、class_map 标签真实性
+   拍板后的 ceiling 解除、policy 升级消费 risk_signals——仍须真实验收数据与
+   Owner 决策，不在本 Gate 范围内。
