@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from home_perception.visualizer.viewer.live_adapter import ProjectionAccumulator
 
 # === 冻结契约白名单 import（仅以下 home_perception 符号） ===
-from home_perception.core.config import RealtimeRiskConfig, Settings
+from home_perception.core.config import AudioEvidenceConfig, RealtimeRiskConfig, Settings
 from home_perception.runtime.pipeline import DemoClock, FrameResult, PerceptionPipeline
 from home_perception.runtime.runtime_context import RuntimeFrameContext
 
@@ -168,6 +168,9 @@ class DemoGateway:
         # RealTimeRiskEvaluator）。hp_settings 在 assemble / _rebuild_pipeline 复用同一对象，
         # 故只需 assemble 应用一次，循环重放 / 切换场景都会重新读取该对象。
         self._apply_scenario_realtime_overrides()
+        # 场景级音频证据评估开关覆盖（ADR-0042 · Gate F）：同型防泄漏 + from_settings 前
+        # 生效（pipeline.py 装配门控读 hp_settings.audio_evidence.enabled）
+        self._apply_scenario_audio_evidence_overrides()
         # Demo 默认开启 Memory 认知层（区域⑥ 运行时数据来源）；必须在 from_settings 之前
         self._apply_demo_memory_overrides()
         # Demo 推理尺寸覆盖（降 CPU 推理耗时、提帧率）；必须在 from_settings 之前，
@@ -544,6 +547,52 @@ class DemoGateway:
                     scenario=self.scenario.scenario_id,
                 )
 
+    # 允许经场景 YAML 覆盖的音频证据字段白名单：仅装配总开关 ``enabled``。
+    # 升级参数（raise_min_count / raise_window_s / notify_min_kinds）、monitor 门槛、
+    # ``ceiling_monitor_only``（硬门控：class_map 修复前不得解除）与
+    # ``escalate_enabled``（ADR-0042 D6 双重门控）均属 ADR-0042「参数 TBD by
+    # acceptance data / Owner 拍板」范畴——禁止经场景 YAML 旁路改写（防参数治理失守）。
+    _AUDIO_EVIDENCE_OVERRIDE_ALLOWED = ("enabled",)
+
+    def _apply_scenario_audio_evidence_overrides(self) -> None:
+        """场景级音频证据评估开关覆盖（ADR-0042 · Gate F 验收接入）。
+
+        从 ``scenario.audio_evidence`` 把开关覆盖进 ``hp_settings.audio_evidence``
+        （如 telephone_risk E2E 场景 ``{enabled: true}``），使单个场景可在
+        **MONITOR ceiling 内**开启音频证据评估，不影响全局默认与其他场景。
+
+        **跨场景复位（防状态泄漏，与 realtime_risk 覆盖同型）**：进入本方法先无条件把
+        ``enabled`` 复位为基线（``AudioEvidenceConfig`` 默认值 ``False``），再应用本场景
+        覆盖。否则从「已开启音频评估的场景」热切到「无 audio_evidence override」的场景时，
+        旧值会残留为 ``True``，导致音频评估意外开启（跨场景状态泄漏）。
+
+        **必须在 ``from_settings`` 之前调用**：``from_settings`` 读
+        ``hp_settings.audio_evidence.enabled`` 决定是否装配
+        ``RealTimeAudioRiskEvaluator``（pipeline.py 装配门控）；本方法在 ``assemble``
+        与 ``_rebuild_pipeline`` 的 ``from_settings`` 之前各调用一次，故切换场景 /
+        循环重放都会重新读取正确值。
+
+        **白名单**：仅 ``enabled`` 可被覆盖（见 ``_AUDIO_EVIDENCE_OVERRIDE_ALLOWED``
+        注释）；其他键视为未知键告警跳过，不写入配置对象。
+        """
+        ae = self.hp_settings.audio_evidence
+        # 1) 先复位到基线，杜绝跨场景泄漏
+        baseline = AudioEvidenceConfig()
+        ae.enabled = baseline.enabled
+        # 2) 再应用本场景覆盖（仅白名单内字段）
+        overrides = getattr(self.scenario, "audio_evidence", None)
+        if not overrides:
+            return
+        for k, v in overrides.items():
+            if k in self._AUDIO_EVIDENCE_OVERRIDE_ALLOWED:
+                setattr(ae, k, v)
+            else:
+                structlog.get_logger(__name__).warning(
+                    "scenario.audio_evidence.unknown_key",
+                    key=k,
+                    scenario=self.scenario.scenario_id,
+                )
+
     # ------------------------------------------------------------------
     # Demo 默认开启 Memory 认知层（ADR-0025 C-4/C-6 · Shadow 观测）
     # ------------------------------------------------------------------
@@ -670,6 +719,10 @@ class DemoGateway:
         # 因实时组件是否构造取决于 hp_settings.realtime_risk。内部先复位基线再覆盖，
         # 切到「无 realtime_risk override」的场景时不会残留上一个场景的 True（防泄漏）。
         self._apply_scenario_realtime_overrides()
+        # 场景级音频证据评估开关覆盖（与 assemble 对齐）：必须在 from_settings 之前，
+        # pipeline 装配门控读 hp_settings.audio_evidence.enabled；内部先复位基线再覆盖
+        # （防跨场景泄漏，与 realtime_risk 覆盖同型）。
+        self._apply_scenario_audio_evidence_overrides()
         # Demo 默认开启 Memory 认知层（区域⑥ 运行时数据来源）；必须在 from_settings 之前
         self._apply_demo_memory_overrides()
         self.pipeline = PerceptionPipeline.from_settings(

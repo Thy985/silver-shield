@@ -64,6 +64,13 @@ class ScenarioConfig(BaseModel):
     # 形如 {enabled: true, decision_enabled: true}，覆盖 settings.realtime_risk，
     # 使单个场景可开启实时风险旁路（如 CCTV 夜间场景），不影响全局默认与其他场景。
     realtime_risk: dict[str, Any] | None = None
+    # 场景级音频证据评估开关覆盖（ADR-0042 · Gate F 验收接入）：
+    # 形如 {enabled: true}，覆盖 settings.audio_evidence，使单个场景可开启音频
+    # 证据评估（MONITOR ceiling 内），不影响全局默认与其他场景。白名单仅 ``enabled``
+    # （网关侧强制）：升级参数 N/T/M、monitor 门槛、ceiling_monitor_only、
+    # escalate_enabled 均属 ADR-0042「参数 TBD by acceptance data / Owner 拍板」
+    # 范畴，禁止经场景 YAML 旁路改写。
+    audio_evidence: dict[str, Any] | None = None
     # 合成帧源参数（ADR-0032 Slice E）：仅当 source_type 由组装层注册为合成源时消费，
     # 形如 {scenario_path: "...", mode: "frames", seed: 42}。
     # 本模块**不解释**其内容——语义由注册进来的 builder 决定，从而 silver_demo
