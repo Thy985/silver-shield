@@ -13,13 +13,20 @@
 | 口径 | 实测 | 阈值 | 判定 |
 | --- | --- | --- | --- |
 | **A. Telephone Signaling Recall** | **100%**（7/7） | ≥90% | ✅ PASS |
-| **B. Telephone Speech Recall** | soft **100%**（2/2）；hard 待听检 | 双层 | ⏸ CONDITIONAL |
+| **B. Telephone Speech Recall** | soft **100%**（2/2）；hard 层 = **registered limitation** | 双层 | ⏸ CONDITIONAL PASS |
 | **C. Non-telephone FP** | **0%**（0/15） | =0% | ✅ PASS |
 | **D. Speech Fidelity** | **100%**（3/3） | ≥95% | ✅ PASS |
 
+> **B-hard 处置（Owner 决策 b，2026-08-23）**：LBJ×2 经 Owner 资产审查确认为「真正的通话语境」，
+> 但窄带频响 / 线路失真两判据未完成逐条可复核确认——**不宣告 hard PASS**。
+> 正式口径：`B = CONDITIONAL PASS; hard-layer limitation = registered,
+> non-blocking for current Layer2 qualification scope.`
+> 动机：「语义真实性」（通话语境成立）与「信道真实性」（窄带+失真特征）不得混同宣告。
+
 **一句话结论：在 Layer2 真实语料上，「真实电话 → 确认为 telephone evidence」与
 「真实非电话持续音 → 不误认为 telephone evidence」两个核心问题均获得肯定答案；
-唯一未闭合项是 narrowband-speech 的信道特征人工听检（Owner 动作）。**
+B 口径 hard 层作为已登记限制保留，对当前 Layer2 qualification scope 非阻塞。
+模型能力问题就此冻结；产品叙事验证转入独立的 Product Story Fixture 域（ADR-0044）。**
 
 对照 baseline（合成语料，#297 §5）的演进：
 
@@ -85,8 +92,10 @@ telephone）仍高于 threshold=0.05 两倍以上，但已提示：若未来收�
 | LBJ_FORD_phonecall_1963 | .953 | 无（预期内） |
 | LBJ_MCCORMACK_phonecall_1963 | .961 | 无（预期内） |
 
-两条真实窄带电话人声稳定落 `speech` 0.95+，soft 层无歧义。**hard 层（电话信道特征听检：
-频带限制/噪声底/失真确认）为 Owner 动作，是本 Gate 唯一开放项。**
+两条真实窄带电话人声稳定落 `speech` 0.95+，soft 层无歧义。hard 层处置见 §0 决策 b：
+**registered limitation，非阻塞**——「语义真实性」已由 Owner 资产审查确认
+（真正的通话语境），「信道真实性」（窄带/线路失真逐条证据）保留为登记项，
+不与语义宣告混同。
 
 ### 3.3 C · Non-telephone FP（0/15 = 0%，阈值 =0%）
 
@@ -108,15 +117,15 @@ normal_speech 三条 speech 分数 .521/.953/.996，全部命中。
 
 ## 4. Gate 判定与 MONITOR ceiling 影响
 
-**判定：CONDITIONAL PASS。**
+**判定：CONDITIONAL PASS（hard-layer limitation registered, non-blocking）。**
 
 - A/C/D 三口径在冻结语料上一次达标，且 C 口径 0% 优于 music 类 ≤5% 的放宽条款
   （未动用放宽）；
-- B 口径 soft 层满分，hard 层（Owner 信道特征听检）完成后 B 即闭合；
-- **MONITOR ceiling 处置建议**：ADR-0042 硬门控 #1（class_map 修复）已完成并有回归锁；
-  qualification 作为解除前置条件之一，本轮 A/C/D 已满足、B 待 hard 听检——建议
-  **Owner 完成 B hard 层听检后再一并拍板 ceiling 解除**，本报告不单方面宣告解除。
-  这与规格 §4.3「串联门控」一致。
+- B 口径定格为 `CONDITIONAL PASS + registered limitation`（Owner 决策 b）：
+  语义真实性已确认，信道真实性保留为非阻塞登记项；
+- **MONITOR ceiling 处置**：ADR-0042 硬门控 #1（class_map 修复）已完成并有回归锁；
+  qualification 前置条件在本 scope 内已满足（limitation 已登记且非阻塞），但 ceiling
+  解除仍由 **Owner 拍板**，本报告不单方面宣告。依据已充分：本节即为拍板材料。
 
 ### 4.1 判定边界声明
 
@@ -129,15 +138,18 @@ normal_speech 三条 speech 分数 .521/.953/.996，全部命中。
 
 ---
 
-## 5. 下一步
+## 5. 下一步（v2 更新：模型能力问题冻结，重心转 Product Story）
 
-1. **Owner**：B 口径 hard 层听检（LBJ×2 信道特征确认）→ B 闭合 + ceiling 拍板；
-   顺带裁决 Q2/Q3/Q4 挂起项；
-2. **Agent**：两级管道实施设计 ADR（Tier0 `persistent_narrowband_candidate` → Tier1
-   semantic confirm 的事件流转契约落点）——这是把 qualification 成果落进运行时的
-   最后一段；
-3. Hard Negative Regression Set 升级为 Layer1 全集 + Layer2 24 条，纳入 CI 常规回归；
-4. Layer3 现场语料规划（家庭环境实录）进入 roadmap 视野。
+1. ~~Owner B hard 听检~~ **已由决策 b 收口**（registered limitation, non-blocking）；
+   ceiling 解除由 Owner 依据 §4 材料拍板；
+2. **Agent（当前主线程）**：ADR-0044 数据资产三层解耦 + `telephone_risk Product Story
+   Fixture Contract`（StoryTimeline 单一真相源 + provenance 三态 + benign/risk 双
+   fixture）→ Browser Product Acceptance；
+3. **Agent（随后）**：两级管道实施设计 ADR（Tier0 `persistent_narrowband_candidate` →
+   Tier1 semantic confirm）——Runtime 作为 Story Contract 的实现者替换 fixture 的
+   `execution_path`，不阻塞产品叙事验收；
+4. Hard Negative Regression Set 升级为 Layer1 全集 + Layer2 24 条，纳入 CI 常规回归；
+5. Layer3 现场语料规划（家庭环境实录，`real_sensor` provenance）进入 roadmap 视野。
 
 ---
 
@@ -146,3 +158,4 @@ normal_speech 三条 speech 分数 .521/.953/.996，全部命中。
 | 时间 | 事项 |
 | --- | --- |
 | 2026-08-23 | 补采 2 条（McCormack/TU Delft）→ manifest v2 冻结 24/24 → 正式口径（threshold=0.05/top_k=10）三口径判定 → CONDITIONAL PASS，本报告成稿 |
+| 2026-08-23（v2） | Owner 决策 b：B-hard 登记为 limitation 不升格 PASS（语义真实性≠信道真实性）；qualification scope 收口，模型能力问题冻结；重心转 Product Story Fixture（ADR-0044） |
