@@ -1,27 +1,33 @@
 # Ambient 第三机制设计提案：包络平稳性判别器（Envelope Stationarity Discriminator）
 
-> 日期：2026-08-23
-> 状态：**PROPOSAL — 待 Owner 审批后实施**（本 PR 仅含本文档，零代码变更）
-> 任务定位：Precision Gate 执行序列第 ③ 步「ambient 第三机制」的第一阶段（提案）。
+> 日期：2026-08-23（同日修订：追加 §7 机制资格审查）
+> 状态：**REJECTED BY QUALIFICATION AUDIT — 提案经 Owner 审查流程否决，本文档存档完整证据链**
+> 修订要点：① §3.1 结论表述按 Owner 审定收紧；② §7 资格审查证明 env_cv 在真实运行时路径下
+> **双向失效**，§0/§4 的原始提案结论已被推翻；③ precision 收尾路径待重新拍板（§6）。
+> 任务定位：Precision Gate 执行序列第 ③ 步「ambient 第三机制」的第一阶段（提案 → 资格审查）。
 > 上游依据：`TELEPHONE-PRECISION-GATE-V2-2026-08-23.md`（唯一剩余 FP = N2_ambient）、
 > `AUDIO-EVIDENCE-MATRIX-TELEPHONE-RISK-2026-08-23.md`（telephone_persistent = 场景锚点，非充分条件）。
 
 ---
 
-## 0. 结论速览
+## 0. 结论速览（资格审查修订版）
 
-1. **谱维判别被数据证伪**：对全部 Gate 资产 421 个 VAD 段的帧级 STFT 统计显示，
-   N2 底噪段与真实电话阳性段在谱平坦度 / 峰能量占比 / 谱熵 / 过零率上**完全重叠**——
-   因为 telephone_persistent 正样本本身是合成平稳音，与合成底噪在「谱形状」上同构。
-   任何基于帧级谱统计的第三机制都不可行。
-2. **时间维找到可分离特征**：包络变异系数 `env_cv = std(env)/mean(env)`（30ms 帧 RMS）
-   在 N2（0.182）与全部 TP 长段（最低 0.312）之间存在干净间隙 `[0.18, 0.31]`。
-3. **提案机制**：telephone 分支增加条件 `env_cv >= telephone_min_env_cv`（建议默认 0.25）。
-   计算成本 O(n)、零新依赖、复用现有 `_envelope()`。
-4. **Gate V3 预测**：precision 88.89% → 100%（N2 两段被拒）；TP 召回零损失（全部 env_cv ≥ 0.31 > 0.25）。
-5. **失败方向安全论证**：该判别器的错误方向是「漏掉过度平稳的真电话」→ 锚点缺失仅回到
-   MONITOR ceiling 兜底（ADR-0042），不产生风险误升级；而它消除的是污染锚点 precision 的误报。
-   与 Evidence Matrix §4 升级路径图一致。
+1. **谱维负结果（表述已按 Owner 审定收紧）**：对全部 Gate 资产 421 个 VAD 段的帧级 STFT
+   统计显示，N2 底噪段与 TP 电话段在谱平坦度/峰能量占比/谱熵/过零率上完全重叠。
+   **在当前候选谱统计及当前语料上，未发现具有足够分离度的谱维特征**——这是实验结论，
+   不等于所有谱特征都不可能分离（原稿「同构/不存在任何判别器」的表述过强，已修正）。
+2. **env_cv 提案已被 §7 资格审查否决**：第一轮「整条资产口径」下的分离间隙 `[0.18, 0.31]`
+   是 VAD 段化伪影——真实运行时路径先切段后提特征，电话素材的 cadence 静默被 EnergyVAD
+   切除，**TP 段级 env_cv（0.065~0.074）反而低于 N2 底噪段（0.180~0.183）**，方向反转；
+   且周期性冰箱嗡鸣（0.253）可穿透 0.25 阈值。若实施：TP 召回 6/7 全灭 + hard negative
+   照样穿透，双向失效。
+3. **Owner 审查流程的价值实证**：本案例按「proposal → 资格审查 → 实施 → Gate V3 → 冻结」
+   流程执行，审查环节在零生产代码变更的成本下拦下一次必然返工的实现。
+4. **新暴露威胁域（§7.4）**：警报器、慢板音乐、宽带音乐等「窄带非电话持续音」在 Tier0
+   特征空间与 telephone 完全同簇（rate=0.0 + narrow），是比 N2 更广的系统性 FP 来源，
+   现有 min duration 无法拦截。
+5. **precision 收尾路径待重新拍板（§6）**：Tier0 特征空间内暂无合格第三机制候选；
+   后续选项涉及产品语义口径或 Tier1 承担，须 Owner 决策。
 
 ---
 
@@ -97,12 +103,16 @@ P3_tel_quiet rms 0.036，无可用响度阈值）。若接受 N2 为已知局限
 | zcr_med | 0.0635~0.0655 | [0.01857, 0.31281]，med=0.08798 | ❌ 重叠（B9 0.0498 低于 N2） |
 | lowband_ratio_med | 0.9862~0.9863 | [0.90513, 0.99997] | ❌ 重叠 |
 
-**根因（结构性，非调参可解）**：telephone_persistent 正样本素材本身是合成持续音
-（AGC 抹平包络、砖墙带限），与合成底噪同为「人造平稳音」，帧级谱统计同构。
-结论：**不存在任何基于谱形状的 Tier0 判别器能分离二者**——这同时证伪了
-V1 报告 §6 中「谱平坦度/窄带纯度」的初始候选方向，避免了一次注定无效的实现。
+**根因（Owner 审定表述）**：telephone_persistent 正样本素材本身是合成持续音
+（AGC 抹平包络、砖墙带限）。**在当前候选谱统计及当前语料上，未发现具有足够分离度的
+谱维特征。** 此为实验结论，不构成「所有谱特征都不可能分离」的理论断言；它证伪了
+V1 报告 §6 中「谱平坦度/窄带纯度」的初始候选方向，避免了一次无效实现。
 
-### 3.2 正结果：时间维 env_cv 干净分离（第二轮）
+### 3.2 正结果：时间维 env_cv 干净分离（第二轮 · ⚠️ 后被 §7 推翻）
+
+> **⚠️ 修订警示**：本节分离结论是在「整条资产」口径下测得的；§7 资格审查证明，
+> 在真实运行时路径（EnergyVAD 先切段 → 段级提特征）下该分离**不存在且方向反转**。
+> 本节仅作证据链存档，不得引用为实施依据。
 
 | 资产（整段） | 角色 | env_cv | cent_std_hz |
 | --- | --- | --- | --- |
@@ -118,7 +128,7 @@ V1 报告 §6 中「谱平坦度/窄带纯度」的初始候选方向，避免�
 - 排除项：`peak_freq_mad` 全体为 0（合成音主峰均锁相，无区分度）；
   `env_diff` 方向反常（N2 因包络均值低反而最大，0.306 vs TP 0.031~0.070）——均不可用。
 
-### 3.3 物理解释
+### 3.3 物理解释（⚠️ 该解释建立在整段口径上，已被 §7.4 伪影机制取代）
 
 机械/电气底噪是无限平稳过程（包络恒定、频谱成分恒定）；通信音频即使经 AGC 平滑，
 仍保有协议性或内容性起伏（铃音 cadence、通话轮替、线路噪声调制）→ 包络变异系数
@@ -128,6 +138,8 @@ speech_rate 看「有没有峰」，env_cv 看「整体有多平」。
 ---
 
 ## 4. 提案设计
+
+> **⚠️ REJECTED — 本节设计已被 §7 资格审查否决，仅存档，禁止实施。**
 
 ### 4.1 机制定义
 
@@ -168,6 +180,9 @@ O(n) 时间、零内存峰值变化、零新依赖（numpy 向量化即可）。
 
 ## 5. 风险登记与边界
 
+> ⚠️ 本表为原提案（§4）配套登记，前提已被 §7 推翻；保留存档。其中 R2 的
+> 「失败方向安全」论证在 §7.3 双向击穿后不再成立（实际结果是召回崩塌 + 穿透并存）。
+
 | # | 风险 | 评估 | 缓解 |
 | --- | --- | --- | --- |
 | R1 | 小样本：FP 侧仅 N2 一条资产（两段），TP 长段 6 条 | 阈值是「当前语料上的可行解」，非泛化证明 | 阈值标注 TBD by acceptance data（对齐 ADR-0042 惯例）；Layer2/3 真实录音验收时复校 |
@@ -177,17 +192,111 @@ O(n) 时间、零内存峰值变化、零新依赖（numpy 向量化即可）。
 
 ---
 
-## 6. 待 Owner 决策点
+## 6. 决策点与拍板记录
 
-1. **是否批准本机制进入实施**（批准后另起 `fix/tel-env-cv-discriminator` 分支，含测试 + Gate V3 报告）；
-2. **阈值默认值确认**：建议 0.25（TBD by acceptance data 标注保留）；
-3. **R2 trade-off 显式接受与否**（漏掉过度平稳真电话 vs 底噪不再污染锚点）；
-4. 关联事项提醒：缺陷 B 三选一（序列④）仍待拍板，与本提案相互独立、可并行推进。
+### 6.1 Owner 已拍板（2026-08-23，资格审查指令）
+
+1. ✅ **方向批准**：「研究并实施 env_cv 作为第三道 Precision Guard」的方向批准执行
+   ——已按流程完成资格审查（§7），结论为否决；
+2. ✅ **0.25 不冻结**：暂不批准「0.25 已是生产冻结值」——资格审查后该阈值随提案一并否决，
+   冻结议题不再存在；
+3. ✅ **流程定调**：proposal → 机制资格审查 → 通过 → 实施最小规则 → Gate V3（precision/
+   recall/hard-negative/quiet-phone/regression）→ Layer 2/3 真实录音 → 最终决定生产配置。
+   本报告即流程前两环的完整存档；
+4. ✅ **表述修正**：§3.1 已按 Owner 审定措辞收紧（实验结论 ≠ 理论不可能性）。
+
+### 6.2 新增待 Owner 决策点（资格审查后）
+
+1. **precision 收尾路径三选一**（Tier0 特征空间内暂无合格第三机制候选）：
+   - **选项 A · 接受局限 + 语义口径修正**：接受 N2/警报/音乐类 FP 为 Tier0 已知局限，
+     在 Evidence Matrix 中把 Tier0 telephone_persistent 锚点的实际语义登记为
+     「环境存在持续窄带平稳音」（persistent narrowband tone），MONITOR ceiling 兜底不变；
+     语义判别交 Tier1 YAMNet（ADR-0042 class_map 修复后）承担；
+   - **选项 B · Tier1 前置**：把 precision 收尾从序列③中摘出，挂到 ADR-0042 class_map
+     修复队列之后，由 Tier1 语义类承担「电话 vs 警报 vs 音乐 vs 家电」判别；
+   - **选项 C · 继续 Tier0 特征挖掘**：谐波族结构 / cadence 周期检测等更强时频结构特征
+     （边缘 CPU 成本更高、泛化未证，且 §3.1 已证当前候选谱统计无效，风险自担）；
+2. **§7.4 新威胁域（警报/音乐）是否纳入 Gate 语料基线**：建议纳入——它们比 N2 更广，
+   且全部穿透 P1-a；
+3. 关联事项：缺陷 B 三选一（序列④）仍待拍板，与上述决策独立、可并行。
 
 ---
 
-## 7. 附：本轮证据文件清单
+## 7. 机制资格审查（2026-08-23 修订追加 · Owner 指令执行）
 
-- `_proposal_probe.py` / `_probe_analyze.py` / `_probe_time.py`：一次性探针（已删除，不入库）；
-- `_probe_result.json` / `_probe_time_result.json`：原始段级/资产级数据（`dataset/**` gitignore 内，
-  本地留存供 Owner 复核）。
+### 7.1 审查问题（Owner 原话要旨）
+
+> env_cv 是否真的代表「电话的时间结构」，还是只是这批 synthetic TP 比 ambient 更活跃？
+> 至少把 TP 7 类形态与 negative 7 类全部跑一遍；尤其要专门找 hard negative：
+> **high env_cv + narrow + rate≈0 + long duration**——如果这种负样本大量存在，
+> env_cv 就不是充分有效的第三机制。
+
+### 7.2 审查语料（17 条新资产 + 6 条对照）
+
+生成配方（一次性脚本已删，本节即规格；ffmpeg/edge-tts，全部 16k mono PCM16）：
+
+| 组 | ID | 类别 | 配方要点 |
+| --- | --- | --- | --- |
+| POS | TP-A1~A7 | synthetic NB / real speech phone / speakerphone / handset / tel+bg TV / quiet phone / long playback | telephone_persistent 变体；far_end 窄带化；aecho 房间感；TV 对白混入 |
+| NEG | NEG-A1 | ambient | 复用 ambient_living_room |
+| NEG | NEG-A2/A3 | HVAC fan 稳态/调制 | brown noise 80~700Hz；A3 加 tremolo(1.2Hz, depth 0.6) |
+| NEG | NEG-A4/A5 | fridge hum 稳态/周期启停 | 100/150/200Hz 正弦族；A5 加 7s 周期音量起伏 |
+| NEG | NEG-A6 | TV 远场闷化 | edge-tts 新闻对白 + lowpass 500Hz（定向 hard-negative 候选） |
+| NEG | NEG-A7 | 警报器 | FM 扫频 700±75Hz @0.5Hz + lowpass 3000 |
+| NEG | NEG-A8/A9 | 慢板音乐 窄带/宽带 | 440/494/392Hz 音符序列（1.5s/音）；A9 加八度泛音 |
+| NEG | NEG-A10 | normal speech | voice_normal 素材 |
+| CTRL | — | N1/N2/N4/P1/P3/hn3 | 既有 Gate 资产 |
+
+### 7.3 结果：双向击穿
+
+段级 env_cv 排序（`kind=telephone_persistent` 且 P1-a 存活 dur≥1.0 的长段）：
+
+| env_cv | 段 | 角色 |
+| --- | --- | --- |
+| 0.0021 | NEG-A7 警报器 | **NEG（最低）** |
+| 0.0040 | NEG-A8 慢板窄带音乐 | NEG |
+| 0.0470 | NEG-A9 宽带音乐 | NEG |
+| 0.0559 | NEG-A4 冰箱稳态 | NEG |
+| **0.0649~0.0738** | **TP-A1/A3/A4/A5/A6/A7 全部 + CTRL P1/P3/hn3** | **TP 全体** |
+| 0.1534 | NEG-A2 风扇稳态 | NEG |
+| **0.1803~0.1830** | **N2 / NEG-A1 底噪** | **NEG（FP 源）** |
+| 0.2210 | NEG-A5 冰箱周期 seg0 | NEG |
+| **0.2532** | NEG-A5 冰箱周期 seg1 | **NEG · 击穿 0.25 阈值** |
+
+- **POS KILL 6/7**：若按提案实施 `env_cv≥0.25`，TP-A1/A3/A4/A5/A6/A7 与对照 P1/P3/HN3
+  全部被拒 → telephone 召回崩塌（仅 TP-A2 real speech phone 因走 crying 塌缩域不在统计内）；
+- **HARD-NEG HIT 1 例**：NEG-A5 seg1（cv=0.2532≥0.25）穿透阈值——Owner 预判的
+  hard negative 形态（narrow + rate≈0 + long duration + high env_cv）**存在**；
+- **方向反转**：N2 底噪段 cv（0.18）**高于**全部 TP 段（0.067）——与第一轮整段口径
+  完全相反。
+
+### 7.4 根因：第一轮分离是 VAD 段化伪影 + 新威胁域
+
+1. **伪影机制**：EnergyVAD（relative_ratio=0.4）按相对中位数切段。telephone_persistent
+   素材的 cadence on/off 结构中，静默部分被切掉，VAD 段只剩「平稳响段」→ 段级 env_cv
+   极低；而 ambient 全程过阈值形成大段，段内保留自然波动 → 段级 env_cv 反而更高。
+   第一轮对整条资产算 env_cv，把 cadence 起伏计入了统计——**该口径在运行时不存在**
+   （运行时先切段后提特征）。Owner 的质疑（「代表电话的时间结构，还是只是这批
+   synthetic TP 更活跃」）被数据精确证实：两者都不是，是测量口径伪影。
+2. **新威胁域（比 N2 更广）**：警报器（0.002）、慢板音乐（0.004）、宽带音乐（0.047）、
+   冰箱稳态 hum（0.056）全部命中 telephone 长段且 P1-a 无法拦截——它们与 TP 在
+   Tier0 特征空间（narrow + rate≈0）**同簇**。NEG-A6 TV 闷化对白产生 20+ 微段命中，
+   全部 dur<1.0 被 P1-a 正确拦截（P1-a 在该语料上有效）。
+3. **Tier0 特征空间的结构性边界**：narrow + speech_rate + tremor + am_rate（及任何
+   包络/谱统计量）无法区分「人造持续音」大类内部的 电话/警报/音乐/家电hum/底噪。
+   该判别需要语义级信息（Tier1 YAMNet 类别）或产品口径修正。
+
+### 7.5 审查结论
+
+**env_cv 不具备第三机制资格，提案撤回。** 0.25 阈值议题随提案一并关闭。
+precision 收尾路径转入 §6.2 三选一决策。
+
+---
+
+## 8. 附：证据文件清单
+
+- 第一轮：`_proposal_probe.py` / `_probe_analyze.py` / `_probe_time.py`（已删除）；
+  数据 `_probe_result.json` / `_probe_time_result.json`（`dataset/**` 本地留存）；
+- 第二轮（资格审查）：`_gen_env_cv_audit.py` / `_probe_env_cv_audit.py` / `_audit_dump.py`
+  （已删除）；语料 `dataset/_canonical/audio_mix/telephone_risk/env_cv_audit/{pos,neg}/` 与
+  数据 `_audit_result.json`（gitignore 内，本地留存供 Owner 复核）。
