@@ -1,12 +1,15 @@
 # Tier1 Semantic Qualification Gate 规格 + 8 类语义 Dataset v1（含 YAMNet Baseline 实测）
 
-> 日期：2026-08-23
-> 状态：**SPEC + BASELINE — 待 Owner 审批**（本 PR 仅含文档，零代码变更）
+> 日期：2026-08-23（v2 修订同日）
+> 状态：**SPEC v2 + BASELINE — 已合并并经 Layer2 候选池实证修订**（本 PR 仅含文档，零代码变更）
 > 任务定位：Owner 定调的方向切换——停止 Tier0 特征挖掘，转建
 > 「telephone_persistent 的 Tier1 semantic precision dataset」并形成新 Gate；
 > Precision Gate 重定义为两级架构。
 > 上游依据：`AUDIO-AMBIENT-DISCRIMINATOR-PROPOSAL-2026-08-23.md` §6.2（三选一决策，
 > 本报告即其执行：选项 C 出局，走 Tier1 路线）、ADR-0042、Gate I 报告（class_map 缺陷）。
+> **v2 修订**：§4.1 验收指标拆分为 Signaling / Speech / FP 三口径（Owner 指令，
+> 动因见该节引言）；执行流程插入 Pre-Freeze Review 关卡（见文末变更记录与
+> `LAYER2-PRE-FREEZE-REVIEW-2026-08-23.md`）。
 
 ---
 
@@ -158,19 +161,44 @@ Tier0 产物语义降级（事件 kind 字段是否新增中间态 vs 内部状�
 
 ## 4. Qualification Gate 规格
 
-### 4.1 验收指标
+### 4.1 验收指标（v2：Signaling / Speech / FP 三口径拆分）
 
-| 指标 | 定义 | 建议阈值（待批） |
-| --- | --- | --- |
-| telephone recall | telephone 类中 top-k 标签含 `telephone*` 的比例 | ≥ 90%（Layer2 语料上） |
-| alarm → telephone FP | alarm 类中被标 `telephone*` 的比例 | = 0% |
-| music → telephone FP | music 类中被标 `telephone*` 的比例 | = 0%（允许 music 标签共存时放宽 ≤5%） |
-| appliance → telephone FP | 同理 | = 0% |
-| ambient → telephone FP | 同理 | = 0% |
-| speech 保真 | normal_speech 被标 speech 的比例 | ≥ 95% |
-| far_end 行为 | 被标 speech 且不误报为风险升级 | 登记（far_end 承担交谈证据，非锚点） |
+> **修订动因（Owner 2026-08-23）**：Layer2 候选池出现结构反例——LBJ 真实电话录音
+> （ground truth = telephone narrowband speech）被 YAMNet 判为 `speech` 0.953、
+> 无 TEL 标签。这不是模型失败：AudioSet 的 telephone 标签学的是电话信令音色
+> （铃/忙音/拨号音），而「电话中的人声」的正确归类本就是 speech。把两者塞进同一
+> recall 口径，会把模型的正确行为计为漏报。
+>
+> **产品语义同步澄清（定版）**：
+>
+> ```
+> telephone_persistent ≠ telephone scam
+> telephone_persistent = 一个可靠的电话交互证据
+> ```
+>
+> 因此第一轮 Tier1 Gate 的核心问题只有两个：
+> **① 真实电话 → 能否确认为 telephone evidence；② 真实非电话持续音 → 能否不被误认为 telephone evidence。**
+> 不再要求 YAMNet 对所有电话语义统一达到单一高阈值。
 
-阈值均为建议值，须经 Owner 批准并在 Layer2 语料就绪后校准。
+| 口径 | 对象 | 判定方法 | 建议阈值（待批） |
+| --- | --- | --- | --- |
+| **A. Telephone Signaling Recall** | ringtone / dial-tone / busy-tone | top-k 含 TEL 标签集合（`telephone` / `telephone_ring` / `ringtone`） | ≥ 90% |
+| **B. Telephone Speech Recall** | narrowband-speech | 双层判定：`speech` 标签命中（soft，自动）+ 电话信道特征人工听检确认（hard）；**不要求 TEL 标签** | soft 层登记分布；hard 层听审通过；数值阈值待数据后校准 |
+| **C. Non-telephone FP** | alarm / music / appliance / ambient / normal_speech 全部非电话类 | top-k 出现任一 TEL 标签即计 FP（分项明细见下表，总口径合并判定） | = 0%（music 类允许标签共存放宽 ≤5%，沿 v1） |
+| D. Speech 保真 | normal_speech | 被标 `speech` 比例 | ≥ 95%（沿 v1） |
+
+C 口径分项登记表（判定不变，观察粒度保留）：
+
+| 分项 | v1 阈值 |
+| --- | --- |
+| alarm / appliance / ambient → telephone FP | = 0% |
+| music → telephone FP | = 0%（music 标签共存时 ≤5%） |
+| normal_speech → telephone FP | = 0% |
+
+口径 B 说明：far_end_speech 已按 Layer2 契约归并至 narrowband-speech 子形态，
+其「交谈证据而非锚点」的定位（v1 表 far_end 行）由 B 口径双层判定的听检环节承接。
+A/B 两口径分别对应产品语义中「电话交互存在」的两条证据路径：信令（有人在打电话）
+与人声（正在通话）——二者独立达标即可确认 evidence，不互相兜底。
 
 ### 4.2 分层判定原则（baseline 教训写入规格）
 
@@ -228,14 +256,16 @@ Tier0 产物语义降级（事件 kind 字段是否新增中间态 vs 内部状�
 
 ---
 
-## 6. 下一步（待 Owner 批准后执行）
+## 6. 下一步（v2 流程更新：Pre-Freeze Review 前置）
 
-1. **telephone 类语料换血（Layer2 seed）**：引入公开许可真实录音——电话铃（机械/电子）、
-   忙音、拨号音、DTMF 按键、真实通话片段；同步补齐 appliance/music/alarm 真实短样本；
-2. 在换血后的 dataset 上正式跑 Qualification Gate（§4.1 指标），产出首份判定报告；
-3. 两级管道实施设计（ADR 候选）：Tier0 候选化 + Tier1 语义确认的事件流转，
-   含 `persistent_narrowband_candidate` 的契约落点评审；
-4. Hard Negative Regression Set 纳入 CI 常规回归。
+1. ~~telephone 类语料换血（Layer2 seed）~~ **已完成**（#298/#299）：Commons 22 条
+   主干候选，license 三要素全合规，A4 soft check 非电话类零 TEL 误标；
+2. **Pre-Freeze Review**（Owner 指令新增关卡，先于冻结执行）：
+   `LAYER2-PRE-FREEZE-REVIEW-2026-08-23.md` 五项检查——telephone 子域覆盖 /
+   hard-negative 覆盖 / license-provenance 闭合 / 可疑标签样本 / 指标拆分必要性；
+3. Owner 听审（候选池报告 Q1~Q5）+ 补齐 narrowband-speech 第 2 条 → **冻结 manifest v2**；
+4. 冻结后正式跑 Qualification Gate（本报告 §4.1 v2 三口径），产出首份判定报告；
+5. 两级管道实施设计（ADR 候选）与 Hard Negative Regression Set CI 化（沿 v1 计划）。
 
 ---
 
@@ -245,3 +275,12 @@ Tier0 产物语义降级（事件 kind 字段是否新增中间态 vs 内部状�
 - dataset：`dataset/_canonical/audio_semantic/tier1_qualification/`（36 wav + manifest.jsonl，
   gitignore 内本地留存）；
 - baseline 原始输出：同目录 `_yamnet_baseline.json`（每条资产 top-10 标签+score）。
+
+---
+
+## 8. 变更记录
+
+| 版本 | 内容 |
+| --- | --- |
+| v1（2026-08-23，#297） | 初版规格 + 8 类 dataset v1 + YAMNet baseline；单一 telephone recall 口径 ≥90% |
+| v2（2026-08-23，本 PR） | §4.1 拆分为 Signaling / Speech / FP 三口径——动因：LBJ 反例证明 narrowband speech 的正确归类是 speech 而非 TEL 标签；产品语义定版 `telephone_persistent = 电话交互证据 ≠ scam`；§6 流程插入 Pre-Freeze Review 关卡 |
