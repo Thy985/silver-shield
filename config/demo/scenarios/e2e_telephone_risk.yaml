@@ -3,7 +3,11 @@
 # 与 live_telephone_risk.yaml 的唯一差异：
 #   1. realtime_risk 显式全开（enabled + decision_enabled）——E2E 仅此场景开启决策链，
 #      不改 config/live_audio.yaml 全局默认（Shadow Mode 灰度纪律不变）。
-#   2. source_type=video_file + media_path 内置本地 mp4，免去 --video 临时 yaml，
+#   2. audio_evidence.enabled=true（ADR-0042 · Gate F F1/F2）：场景级开启音频证据
+#      评估器装配，MONITOR ceiling 内验证 AUDIO RiskSignal 进 FrameResult.risk_signals
+#      （F1）与 DecisionInput.risk_signals 透传（F2）。白名单仅 enabled——升级参数 /
+#      ceiling / escalate 属 Owner 拍板项，不经场景 YAML 旁路。
+#   3. source_type=video_file + media_path 内置本地 mp4，免去 --video 临时 yaml，
 #      保证 E2E 一条命令可复现。
 #
 # 运行：
@@ -32,3 +36,6 @@ audio_path: data/golden/telephone_risk/audio_mix/case_b_mix.wav
 realtime_risk:
   enabled: true
   decision_enabled: true
+
+audio_evidence:
+  enabled: true
