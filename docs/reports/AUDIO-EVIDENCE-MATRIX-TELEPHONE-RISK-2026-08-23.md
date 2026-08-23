@@ -49,7 +49,7 @@
 
 ### 2.1 三条理由
 
-1. **可得性不对称**。「老人独自在家接诈骗电话」场景中，*长时间专注通话*几乎必然发生，*哭声*未必发生。锚点证据的选择天然应该偏向高频可观测事实。产品价值链 `持续通话 → 情绪/行为变化 → 人物上下文 → 升级` 的第一环和第三环都已成立，第二环（cry）不是必需路径。
+1. **可得性与充分性**。「老人独自在家接诈骗电话」场景中，*持续通话*是高频可观测事实，*哭声*未必发生——锚点选择偏向可稳定观测的证据。**措辞修正（Owner 审定）**：`telephone_persistent` 是 telephone_risk 的**必要/核心可观测证据之一，但不是充分条件**——正常老人打电话 30 秒同样产出 `telephone_persistent` 但并非风险。由此确立产品边界：**「电话存在」不是「风险存在」**；这条边界比 `distress_cry` 的取舍更重要，正是 hard-negative 集（`tel + normal_speech`）要守护的命题。产品价值链 `持续通话 → 情绪/行为变化 → 人物上下文 → 升级` 的第一环和第三环都已成立，第二环（cry）不是必需路径。
 2. **误报代价不对称**。tel_persistent 误报的代价是 MONITOR 多看一眼；把正常说话判成哭诉的代价是「狼来了」——污染事件流统计、消耗家庭信任。在当前特征栈连「哭诉 vs 正常语音」都无法区分（tremor 失效已实证）的情况下建 cry 正样本集，只会生产无法验证的数据。
 3. **差异化不在声学情绪识别**。SilverShield 的竞争力在于时空合成（门前行为 × 通话持续性 × 时域连续性），不在于做一个高难度的哭声分类器。竞品壁垒排序上，Evidence Synthesis >> 声学情感计算。
 
@@ -98,6 +98,17 @@ tremor 重定义与 crying 分支修复降级为 P2（感知层质量改进）�
 2. **规则侧**：修复后的 crying 分支保持极保守（多条件高阈值），目标是从「默认命中」变为「几乎不触发」，消除 normal/micro→cry 的语义污染；
 3. **契约侧**：`AUDIO_DISTRESS_CRY` 枚举保留（ADR-0042 五档框架容纳它），仅停留在感知层输出（UI 中文标签、Memory 记录），不进 risk_signals 升级消费面。
 
+**定位定稿（Owner 审定）：perception-only**。AudioKind 从「模型输出类别」提升为「产品证据角色」，四层结构如下——将来拿到真实哭诉样本时可重新打开该层，无需推翻架构：
+
+```text
+AudioPerceptionCapability
+        │
+        ├── telephone_persistent   → telephone_risk Policy（核心锚点）
+        ├── voice_raised           → future candidate（暂不进入 Policy）
+        ├── speech_rapid           → future candidate（暂不进入 Policy）
+        └── distress_cry           → perception-only（感知保留）
+```
+
 ### 3.4 far_end_speech 的意外发现
 
 远端人声是宽带语音（highband_ratio=0.083），当前 narrow 判据把它排除在所有 kind 之外。但产品语义上「电话另一端有人说话」正是通话存在的强旁证——它与 telephone_persistent 同源互补（近端窄带铃音/通话声 + 远端带限人声 = 更完整的「正在通话」图景）。建议：不新增 kind，将 far_end 作为锚点判定的 corroborating 特征候选记入 v2 备忘，本轮不动。
@@ -121,9 +132,25 @@ RiskSignal（MONITOR ceiling 内）
 配套约束：
 
 - 除锚点外的一切 AudioKind：感知层可见（UI/Memory），Policy 不可见；
-- `telephone_persistent alone → MONITOR`，永不单独升级（Owner 定调，与 ADR-0042 门控一致）；
-- 升级必须依赖合成证据（时域 + 视觉），单模态音频事件无升级权；
-- MONITOR ceiling 解除的前提条件由「锚点 precision 验证（§2.2-②）」给出，而非参数调优。
+- `telephone_persistent alone → MONITOR`，永不单独升级（Owner 定调，与 ADR-0042 门控一致）。**这是 Gate 级核心验收命题**：「系统识别到正在打电话，但不得把『正在打电话』当成『正在遭遇诈骗』」——只有这条守住，Vision 证据的加入才有增量意义；
+- 升级必须依赖合成证据（时域 + 视觉），单模态音频事件无升级权：
+
+```text
+telephone_persistent          ← 锚点（必要证据之一，非充分条件）
+        ↓
+      MONITOR
+        ↓
+   ┌────┴────┐
+temporal     vision evidence
+persistence  (abnormal/repeated visit, odd hour, ...)
+   └────┬────┘
+        ↓
+ Evidence Synthesis ── weak → MONITOR
+        │
+       strong → RAISE / NOTIFY ── verified multimodal → ESCALATE
+```
+
+- MONITOR ceiling 解除的前提条件由「锚点 precision 验证（hard-negative 集达标，§6）」给出，而非参数调优。
 
 ## 5. 与既有契约的对齐检查
 
@@ -137,20 +164,40 @@ RiskSignal（MONITOR ceiling 内）
 
 ## 6. 数据集行动指南（先模型后数据的落地）
 
+**当前 P0（Owner 指令）**：优先建立的不是 `distress_cry.wav`，而是锚点的正样本变体树 + hard-negative 组合——`telephone_persistent` 本身还没有通过足够强的 negative/hard-negative 证明它「纯净」：
+
+```text
+telephone_persistent（锚点变体树）
+├── + normal_speech          ← 决定性 negative control（P0）
+├── long_duration
+├── different speaker / different noise
+├── handset / speakerphone
+├── TV/background speech
+├── + ambient_noise
+└── + micro_events（hard negative 叠加）
+```
+
 | 动作 | 对象 | 说明 |
 | --- | --- | --- |
-| ✅ 建 positive | telephone_persistent 变体（不同铃音/免提/时长梯度） | 唯一值得扩充的正样本 |
-| ✅ 建 negative / hard-negative（服务评测，非 Policy） | voice_normal、ambient、micro_events、**tel+normal 组合** | hard-negative 组合是锚点 precision 的决定性用例 |
+| ✅ 建 positive | telephone_persistent 变体（不同铃音/免提/时长梯度/说话人/背景噪声） | 唯一值得扩充的正样本 |
+| ✅ 建 negative / hard-negative（服务评测，非 Policy） | voice_normal、ambient、micro_events、**tel+normal 组合（P0）**、tel+ambient、tel+micro | hard-negative 组合是锚点 precision 的决定性用例，升级为 Gate 核心验收 |
 | ⏸ 待定区冻结 | voice_raised、speech_rapid | Owner 批准前不建数据 |
-| ❌ 不建 | distress_cry | 未证明需要；等真实需求/真实样本 |
+| ❌ 不建 | distress_cry | 未证明需要；TTS 哭声回答的是「能否制造可控测试输入」，而当前要回答的是「telephone_risk 到底需要什么证据才能升级」——两个问题不混 |
 | 🔧 修数据记录 | manifest 格式声明、voice_stressed 重生成评估 | 审计 A-1/A-2 |
 
-## 7. 待 Owner 决策点
+## 7. Owner 已决事项与余留决策点
 
-1. 本矩阵的 Policy 最小集（§4）是否认可为 telephone_risk 的 MVP 音频风险模型；
-2. 修复优先级重排（§3.1：P1=护锚点精度两项，P2=tremor/narrow 感知纯度）是否批准——若批准，即可按此开步骤①机制修复；
-3. hard-negative 组合素材（tel+normal）的生成是否列入数据集动作（mix 基础设施已具备）；
-4. far_end 作为锚点旁证的 v2 备忘是否登记。
+**已决（2026-08-23 Owner 审定反馈）**：
+
+1. ✅ Policy 最小集认可：telephone_risk 围绕 `telephone_persistent` 建立「低风险锚点 + 多模态升级」模型，不围绕 `distress_cry` 建模；
+2. ✅ 修复优先级重排认可（P1=护锚点精度，P2=感知纯度）；当前最该保护的是「`telephone_persistent` 不能因为 VAD/narrow/rate=0 就轻易成立」；
+3. ✅ distress_cry 定位定稿：perception-only（§3.3），暂不建 positive、不进 Policy、不废除枚举；
+4. ✅ 下一步指令：建立 `tel+normal_speech` 等 hard-negative 组合 → 重新验证锚点 precision → 达标后才值得冻结 Gate I 的 N/T/window。
+
+**余留**：
+
+5. far_end 作为锚点旁证的 v2 备忘是否登记；
+6. P1 机制修复（VAD 能量下限 + tel 最短持续时间）的 Task Contract 待 precision 验证报告产出量化证据后提交审批。
 
 ---
 
