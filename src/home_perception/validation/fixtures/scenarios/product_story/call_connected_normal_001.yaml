@@ -1,0 +1,95 @@
+# Product Story Fixture · benign case（ADR-0044 契约 v1 实例 · D5 与 risk 成对强制）
+#
+# 核心命题验证：「识别到电话 ≠ 识别到诈骗风险」
+#   telephone_persistent evidence 成立 + 正常双向对话 + 无可疑视觉证据
+#   → MONITOR、不升级、不通知家属
+#
+# 这是比 golden_benign（空门厅无感知→不报警）更强的 benign 层级：
+#   有感知信号（电话交互）但不构成风险 → 系统知道「有电话」且知道「不升级」。
+#
+# audio→risk 直达链被 ADR-0040 硬门控保持，audio 事件不触发 risk；
+# 无视觉 actor → 无 abnormal_dwell → 无视觉 risk 驱动。全程 MONITOR。
+#
+# 时间基准：2026-08-23T12:00:00 UTC = 1756036800.0；duration_frames=60 @ 2fps → 30s。
+meta:
+  schema_version: "1.0"
+  scenario_id: call_connected_normal_001
+  product_question: "系统/识别到电话 ≠ 识别到诈骗风险/——系统能否在检测到电话交互时不误升级"
+  version: 1
+  description: "Product Story benign: 电话接通+正常双向对话+无可疑视觉 → MONITOR 不升级不通知"
+  seed: 43
+  duration_frames: 60
+  owner: perception-team
+  category: benign
+  difficulty: medium
+  tags: [product_story, telephone_risk, benign]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+  static_objects: []
+actors: []
+timeline: []
+expects:
+  emitted_event_types: []
+benchmark:
+  expected_alarm: false
+  severity: NONE
+  note: "电话交互存在但无可疑视觉证据，全程 MONITOR 不升级"
+integration:
+  perception:
+    min_perception_events: 0
+  decision:
+    outcome: NONE
+  action:
+    expected_notification: false
+    expected_command_types: []
+  memory:
+    min_records: 0
+audio:
+  - kind: audio_telephone_persistent
+    timestamp: 1756036800.0
+    score: 0.9
+    confidence: 0.8
+    source_segment_ids: ["seg-sig"]
+    labels: ["ringtone"]
+  - kind: audio_telephone_persistent
+    timestamp: 1756036802.0
+    score: 0.92
+    confidence: 0.85
+    source_segment_ids: ["seg-speech"]
+    labels: ["telephone", "speech"]
+  - kind: audio_telephone_persistent
+    timestamp: 1756036808.0
+    score: 0.95
+    confidence: 0.9
+    source_segment_ids: ["seg-persistent"]
+    labels: ["telephone", "speech"]
+# ---- ADR-0044 契约 v1 StoryTimeline 扩展 ----
+story_timeline:
+  provenance: synthetic_replay
+  category: benign
+  duration_s: 30
+  events:
+    - {t: 0,  event: signaling,                    source: audio, detail: "ring/dial → 线路接通"}
+    - {t: 2,  event: bidirectional_speech_start,   source: audio, detail: "正常双向对话开始"}
+    - {t: 8,  event: telephone_persistent_evidence, source: audio, detail: "持续交互语义成立（正常通话）"}
+    - {t: 30, event: call_ended,                   source: audio, detail: "通话正常结束"}
+  expected:
+    risk_transition: {from: none, to: none, at: null}
+    decision: {outcome: MONITOR, at: null}
+    action: {expected_notification: false, at: null}
+  dom_assertions:
+    - {region: "③ 风险解释",   expect: "检测到电话交互，未见异常（无『诈骗』判定词）"}
+    - {region: "③.5 风险信号", expect: "无 RAISED transition；保持 MONITOR/none"}
+    - {region: "④ 行动闭环",   expect: "无行动触发，家属/社区保持空态"}
+    - {region: "⑥ Memory",     expect: "电话交互证据可记录，但不构成风险事件"}
+provenance_meta:
+  audio_assets: "qualification/tier2_real 素材拼接（LBJ 对话 + ringtone 信令，license 已闭合）"
+  vision_source: "无视觉 actor（空门厅）"
+  notes: "synthetic_replay: audio 预录事件注入；验证核心产品命题的 benign 面"
