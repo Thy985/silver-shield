@@ -306,3 +306,48 @@ Runtime Entry   RiskSignal       Temporal Link
 区分开**。浏览器链路不再存疑；下一座山明确是 ADR-0039~0043 实施队列（依赖方向：
 Temporal Alignment 在 Evidence Strength 之前，Q3 → Q4），完成后以 Gate F 做真正的
 多模态产品语义验收。
+
+---
+
+## 10. Gate F 执行记录（2026-08-23 · F1–F6 全部落地）
+
+> 本节为 §8 冻结定义的执行结果记录。全部为 **demo 装配级 torch-free 合约测试**
+> （真实场景 yaml → 网关场景覆盖 → `from_settings` 装配链），不依赖 torch/YOLO/视频。
+
+### 10.1 交付物与判定
+
+| Gate | 判定 | 测试载体 | 数量 |
+| --- | --- | --- | --- |
+| F1 Audio RiskSignal 真进入 Runtime | PASS | `tests/demo/test_gate_f_audio_decision_acceptance.py` | 3+ |
+| F2 真进入 DecisionInput | PASS | 同上 | 2 |
+| F3 Temporal Alignment（ADR-0041） | PASS | `tests/demo/test_gate_f_temporal_strength_action.py` | 6 |
+| F4 EvidenceStrength 四档（ADR-0042） | PASS | 同上 | 7 |
+| F5 Action 贡献链 | PASS（当前架构可审计形态） | 同上 | 2 |
+| F6 反幻觉负例集 | PASS | 同上 | 5 |
+
+配套机制提交：场景级 `audio_evidence` 覆盖通道（白名单仅 `enabled`，升级参数 /
+ceiling / escalate 属 Owner 拍板项禁止场景 YAML 旁路）；e2e_telephone_risk.yaml 开启
+`enabled: true`（ceiling 保持默认 True，Browser E2E A–E 复跑 17P/1S 零行为变化，
+灰度纪律成立）。合计 28 个新测试，`tests/demo/` 155 passed，ruff 0 error。
+
+### 10.2 关键执行语义（防误读）
+
+1. **ceiling 局部解除**：F1/F2/F4/F5 升级档验证均在**测试内**对已装配 evaluator 的
+   config 引用局部解除 ceiling（与 runtime wiring 测试同范式）——只证明「链路通了」；
+   生产全局默认 `ceiling_monitor_only=True` 不变（硬门控 1），F4 门禁测试写死。
+2. **F3 窗口按配置读取**：`realtime_risk.signal_temporal_window_s` 默认 None 悬空 =
+   NEAR_WINDOW 结构性不可用（SAME_FRAME 不受影响）；测试以同一对信号在 window=2.0
+   与 window=1.0 下判定翻转证明「数值由配置驱动、非写死」（§8 冻结要求）。
+3. **F5 边界声明**：本阶段锁定的是贡献链**可审计形态**——Stage D 统一入口下视觉
+   RAISED（翻译）+ AUDIO RAISED（原生透传）同帧汇入 DecisionInput，
+   `Warning.meta.risk_signals.sources/signal_ids` 与 reason_summary 捕获 audio 贡献，
+   executor 产 ActionCommand。**audio 主导的 action 升级**（modality-aware routing
+   参与 level/action 判定）属「policy 升级消费 risk_signals」后续工作（硬门控 2），
+   届时 F5 断言须随 Owner 决策同步升级；纯音频零动作灰度语义已作为边界测试锁定。
+4. **F6 五条负例全部结构性不可绕过**：单次电话声不通知家属（持续性门槛）、fallback
+   kind 一切开关全开仍封顶 MONITOR（双保险第二道）、时间完全不重叠 UNLINKED 不合并、
+   class_map 缺失态（ceiling 开启）任何输入不允许 RAISE+、零音频输入零伪造信号。
+5. **命名纪律不变**：Gate F PASS ≠ telephone_risk Multimodal Risk Story 完整验收——
+   参数回填（ADR-0042 N/T/M、ADR-0041 窗口）与 policy 升级消费仍待真实验收数据与
+   Owner 拍板；ESCALATE 档的 LinkedSignalPair 运行时装配（linker 进 pipeline 帧循环）
+   为后续工作，本阶段验证组件契约与配置通道。
