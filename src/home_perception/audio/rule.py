@@ -44,6 +44,9 @@ class RuleThresholds:
     raised_rms: float = 0.30  # 响度阈值（raised fixture≈0.40，其余 ≤0.21）
     narrowband_hi: float = 0.05  # 高频能量占比阈值（低于 → 窄带/电话/哭腔）
     telephone_rate: float = 0.8  # 电话 AGC 后音节率上限（低于 → 无音节峰）
+    telephone_min_duration_s: float = 1.0  # 电话锚点最短持续时间（P1-a：拦截 <1s 微段误报；
+    #   Precision Gate V1/Batch B 实证 8 个 FP 中 7 个为 0.14~0.22s 微段；
+    #   features.duration<=0 视为未知（旧 fixture/手工构造），不约束以保持向后兼容）
     cry_min_rate: float = 1.5  # 哭腔音节率下限（达到 → 有自然音节）
     cry_tremor: float = 0.60  # 哭腔调制深度阈值
     rapid_min_am_rate: float = 5.5  # 急促 AM 速率下限（Hz，明显快于正常）
@@ -76,8 +79,17 @@ class AudioRule:
                 conf=self._clamp(0.6 + score * 0.4), ts=timestamp, seg=segment_id,
             )
 
-        # 2) 持续通话（窄带 + AGC 抹平包络致音节率≈0）
-        if narrow and features.speech_rate < self.t.telephone_rate:
+        # 2) 持续通话（窄带 + AGC 抹平包络致音节率≈0 + 最短持续时间）
+        #    P1-a：duration 约束拦截微段误报（底噪瞬态/短促人声过 VAD 后 narrow+rate≈0
+        #    误判为电话）；duration<=0 视为未知不约束（向后兼容旧 fixture）。
+        if (
+            narrow
+            and features.speech_rate < self.t.telephone_rate
+            and (
+                features.duration <= 0
+                or features.duration >= self.t.telephone_min_duration_s
+            )
+        ):
             score = self._norm(1.0 - features.highband_ratio, 1.0 - self.t.narrowband_hi, 1.0)
             return self._mk(
                 AudioPerceptionKind.AUDIO_TELEPHONE_PERSISTENT, score,
