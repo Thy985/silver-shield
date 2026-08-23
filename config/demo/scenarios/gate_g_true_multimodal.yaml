@@ -1,0 +1,40 @@
+# Gate G 专用场景：True Multimodal Risk Story（Owner 验收门 G6）
+#
+# 与 e2e_telephone_risk.yaml 同源素材，差异：
+#   1. 供 Gate G E2E 使用，配合 DEMO_HP_CONFIG=config/live_audio_gate_g.yaml
+#      （验收态：ceiling 解除 + escalate 开启 + temporal window 2.0s）。
+#   2. 场景覆盖段必须显式声明 enabled 开关——网关覆盖方法先复位基线再应用
+#      场景值（防跨场景泄漏），HP 层的 true 会被复位，故此处重申。
+#      window_s / escalate / ceiling 在覆盖白名单外，保留 HP 验收态值。
+#   3. 视频轨取原片 52.5s 起 70s（cctv_gate_g_open.mp4，无声轨）：原片前 54s
+#      无人入画，音频事件绑前 9 帧（t≈0.3s 即 RAISE），Δt 远超 ADR-0041 候选
+#      窗口上限 2.0s，Temporal Link 结构性不可配对；裁剪后人物 t≈1.5s 入画，
+#      视觉 RAISED 与音频 RAISED 的 Δt 落入 NEAR_WINDOW 实测分布。
+#      音频仍用 case_b_mix.wav（独立于视频轨，投递规则不受裁剪影响）。
+#
+# 运行：
+#   DEMO_HP_CONFIG=config/live_audio_gate_g.yaml python scripts/run_demo.py \
+#     --live --scenario config/demo/scenarios/gate_g_true_multimodal.yaml
+
+scenario_id: gate_g_true_multimodal
+description: |
+  Gate G：Vision + Audio → Temporal Link → Evidence Synthesis → ESCALATE
+  Combined Risk → Warning → Action → Browser DOM 全链路验收。
+
+source: cctv_gate_g_open
+source_type: video_file
+media_path: data/golden/telephone_risk/video/cctv_gate_g_open.mp4
+
+start_time: "2026-07-19T23:30:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true
+
+audio_path: data/golden/telephone_risk/audio_mix/case_b_mix.wav
+
+realtime_risk:
+  enabled: true
+  decision_enabled: true
+
+audio_evidence:
+  enabled: true
