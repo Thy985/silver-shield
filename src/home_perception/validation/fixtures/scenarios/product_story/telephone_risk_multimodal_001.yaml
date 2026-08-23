@@ -1,0 +1,111 @@
+# Product Story Fixture · risk case（ADR-0044 契约 v1 实例）
+#
+# 叙事：电话持续交互期间门前出现人物，多模态证据时间重叠触发风险升级与家属通知。
+# provenance = synthetic_replay：audio 预录事件注入 + vision detections runtime 计算。
+# Risk 升级由视觉 abnormal_dwell 驱动（既有行为）；audio 提供 evidence/叙事层，
+# 不接通 audio→risk 直达链（ADR-0040 硬门控保持）。
+#
+# 时间基准：2026-08-23T12:00:00 UTC = 1756036800.0；duration_frames=60 @ 2fps → 30s。
+meta:
+  schema_version: "1.0"
+  scenario_id: telephone_risk_multimodal_001
+  product_question: "多模态证据如何讲一个完整的电话风险故事"
+  version: 1
+  description: "Product Story risk: 电话持续交互 + 门前人物出现 + 时间重叠 → Combined Evidence → Risk → Action"
+  seed: 42
+  duration_frames: 60
+  owner: perception-team
+  category: risk
+  difficulty: medium
+  tags: [product_story, telephone_risk, multimodal, risk]
+mode: detections
+camera:
+  resolution: [384, 288]
+  fps: 2
+  viewpoint: "front-door"
+environment:
+  scene_type: home_entry
+  regions:
+    entrance: [0.0, 0.4, 0.4, 1.0]
+  static_objects: []
+actors:
+  - id: stranger_a
+    actor_type: human
+    tracks:
+      - frame: 40
+        pos: [130.0, 130.0]
+        size: [40.0, 120.0]
+      - frame: 55
+        pos: [180.0, 130.0]
+        size: [40.0, 120.0]
+    objects: []
+    appearance: {}
+timeline:
+  - frame: 48
+    type: abnormal_dwell
+expects:
+  emitted_event_types: [abnormal_dwell]
+  min_risk_level: LOW
+benchmark:
+  expected_alarm: true
+  severity: LOW
+  note: "电话持续交互 + 门前人物出现 + 时间重叠 → 多模态证据升级"
+integration:
+  perception:
+    min_perception_events: 1
+  decision:
+    outcome: WARN
+  action:
+    expected_notification: true
+    expected_command_types: [LOG_ONLY]
+  memory:
+    min_records: 2
+  cross_modal:
+    min_links: 1
+    expected_linked_modalities: [vision, audio]
+    required_relationships: [supports]
+audio:
+  - kind: audio_telephone_persistent
+    timestamp: 1756036800.0
+    score: 0.9
+    confidence: 0.8
+    source_segment_ids: ["seg-sig"]
+    labels: ["ringtone"]
+  - kind: audio_telephone_persistent
+    timestamp: 1756036802.0
+    score: 0.92
+    confidence: 0.85
+    source_segment_ids: ["seg-speech"]
+    labels: ["telephone", "speech"]
+  - kind: audio_telephone_persistent
+    timestamp: 1756036808.0
+    score: 0.95
+    confidence: 0.9
+    source_segment_ids: ["seg-persistent"]
+    labels: ["telephone", "speech"]
+# ---- ADR-0044 契约 v1 StoryTimeline 扩展 ----
+story_timeline:
+  provenance: synthetic_replay
+  category: risk
+  duration_s: 30
+  events:
+    - {t: 0,  event: signaling,                    source: audio,  detail: "ring/dial → 线路接通"}
+    - {t: 2,  event: bidirectional_speech_start,   source: audio,  detail: "双人对话开始"}
+    - {t: 8,  event: telephone_persistent_evidence, source: audio,  detail: "持续交互语义成立 ≠ 振铃"}
+    - {t: 20, event: PERSON_ENTERED,               source: vision, detail: "门前人物出现"}
+    - {t: 22, event: temporal_overlap,             source: fusion, detail: "Audio+Vision 落入时间窗"}
+  expected:
+    risk_transition: {from: none, to: raised, at: 24}
+    decision: {action_hint: notify_family_pending, at: 26}
+    action: {channel: family_app, state: delivered, at: 27}
+  dom_assertions:
+    - {region: "① 视频",       expect: "人物出现画面可见"}
+    - {region: "② 时间线",     expect: "telephone_persistent 与 PERSON_ENTERED 同窗显示"}
+    - {region: "③ 风险解释",   expect: "含电话交互+人员出现双证据表述，无『诈骗』判定词"}
+    - {region: "③.5 风险信号", expect: "RiskSignal 升级轨迹可观测"}
+    - {region: "④ 行动闭环",   expect: "家属通知状态流转可见"}
+    - {region: "⑥ Memory",     expect: "本次事件证据条目落库"}
+provenance_meta:
+  audio_assets: "qualification/tier2_real 素材拼接（LBJ 对话 + ringtone 信令，license 已闭合）"
+  vision_source: "ADR-0032 detections 通道（stranger_a @ frame 40-55）"
+  notes: "synthetic_replay: audio 预录事件注入 + vision detections runtime 计算；media wav 待构造"
