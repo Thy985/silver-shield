@@ -31,6 +31,7 @@ ActionExecutor (P0-9)      → ActionCommand（MQTT / 通知 / 社区，MVP Mock
 from __future__ import annotations
 
 import warnings
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -55,6 +56,13 @@ from ..analysis.recent_behavior_store import RecentBehaviorStore
 from ..analysis.risk_signal import RiskSignal, SignalTransition, SourceModality
 from ..analysis.rule_engine import RuleEngine
 from ..analysis.signal_adapter import risk_signal_to_perception
+from ..analysis.signal_temporal_linker import (
+    LinkedSignalPair,
+    SignalPosition,
+)
+from ..analysis.signal_temporal_linker import (
+    link as link_signal_pair,
+)
 from ..analysis.warning import WarningEvent
 from ..audio.event import AudioPerceptionEvent
 from ..common.logging import get_logger
@@ -180,6 +188,11 @@ class FrameResult:
     # 把被 process_frame 用完即弃的 ReasoningInput 一并留存，供 Dashboard 只读消费。
     # 只读、不接决策（守 ADR-0010）；默认空列表 = 向后兼容。
     memory_inputs: list[ReasoningInput] = field(default_factory=list)
+    # —— Gate G / ADR-0041 新增（默认空列表 = 向后兼容，synthesis 关闭时与基线逐字段一致）——
+    # linked_pairs 即本帧 Evidence Synthesis 真实产出的时间关联对（LinkedSignalPair）：
+    # 「Vision RAISED × Audio RAISED 在配置窗口内成立」的 runtime 事实（G1 观测点）。
+    # 只读观测面：combined ESCALATE 信号已并入 risk_signals；pairs 供审计/E2E/浏览器投影。
+    linked_pairs: list[LinkedSignalPair] = field(default_factory=list)
 
 
 @dataclass
@@ -291,6 +304,12 @@ class PerceptionPipeline:
         # audio_evidence.enabled 门控装配（见 from_settings）；process_frame 消费
         # ctx.audio_events 判级，RAISED/CLEARED 与视觉信号同通道进 FrameResult.risk_signals。
         audio_evaluator: RealTimeAudioRiskEvaluator | None = None,
+        # —— Gate G / ADR-0041 运行时接线：Signal 级 Temporal Link（可选；默认关）——
+        # temporal_window_s 来自 settings.realtime_risk.signal_temporal_window_s（None =
+        # 悬空期 NEAR_WINDOW 不可用）；escalate_enabled 来自 settings.audio_evidence.
+        # escalate_enabled（D6 双重门控之一）。两者均关闭时 synthesis 步骤零开销跳过。
+        temporal_window_s: float | None = None,
+        escalate_enabled: bool = False,
         # —— ADR-0024 Integration Closure Slice A：MemoryHook 实例（可选）——
         # from_settings 在构造 audio_recorder 前先建 hook 单例，两路（视觉/音频）
         # 共享同一实例（写同一 store、同一 metrics）；缺省时本方法自建（向后兼容）。
@@ -412,6 +431,20 @@ class PerceptionPipeline:
         self._audio_recorder = audio_recorder
         # —— ADR-0042 运行时接线：实时音频证据评估器（默认 None = 关闭零开销）——
         self._audio_evaluator = audio_evaluator
+        # —— Gate G / ADR-0041：Temporal Link + Evidence Synthesis 接线点 ——
+        # window None 或 escalate 关闭 → synthesis 结构性跳过（零行为变化）。
+        self._temporal_window_s = temporal_window_s
+        self._escalate_enabled = bool(escalate_enabled)
+        # 近窗 RAISED 位置缓存（跨帧 NEAR_WINDOW 判定的对侧证据源；
+        # (case_time, frame_index, signal) 三元组，按 temporal_window 剪枝。
+        # 双向各一份：Temporal Link 在 ADR-0041 中是无方向的 |Δt| 关系，
+        # 视觉先现 / 音频先现都必须可配对；配对成功即消费（防重复归因））
+        self._recent_vision_raised: deque[
+            tuple[float, int, RiskSignal]
+        ] = deque()
+        self._recent_audio_raised: deque[
+            tuple[float, int, RiskSignal]
+        ] = deque()
 
     # ------------------------------------------------------------------
     # ADR-0028 可观测性：跨模态关联边只读视图（审计 / Dashboard / E2E）
@@ -654,6 +687,10 @@ class PerceptionPipeline:
             audio_recorder=audio_recorder,
             memory_hook=pipeline_memory_hook,
             audio_evaluator=audio_evaluator,
+            # Gate G / ADR-0041：Temporal Link 窗口（悬空 None = NEAR_WINDOW 不可用）
+            # + ESCALATE 可达性开关（D6 双重门控之一，生产默认 False）
+            temporal_window_s=settings.realtime_risk.signal_temporal_window_s,
+            escalate_enabled=settings.audio_evidence.escalate_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -893,6 +930,18 @@ class PerceptionPipeline:
                     risk_signals.append(outcome.signal)
             risk_signals.extend(self._audio_evaluator.tick(now_case_time=ctx.case_time))
 
+        # —— Gate G / ADR-0041：Evidence Synthesis（Temporal Link → Combined Risk）——
+        # Owner Gate G 冻结链的 runtime 落点：Vision RAISHED × Audio RAISED 经
+        # SignalTemporalLinker 关联成立 LinkedSignalPair → ESCALATE 组合风险信号，
+        # 并入同一 risk_signals 通道进 Stage D（DecisionInput.risk_signals 完整可见）。
+        # window 悬空 / escalate 关闭 / 无音频信号 → 结构性跳过（零行为变化）。
+        linked_pairs: list[LinkedSignalPair] = []
+        if self._audio_evaluator is not None and risk_signals:
+            combined, linked_pairs = self._synthesize_combined_risk(
+                risk_signals, frame_index=frame_index, case_time=ctx.case_time
+            )
+            risk_signals.extend(combined)
+
         # —— Stage D：决策接入（feature flag 控制；默认关闭 = Shadow Mode）——
         # 自视觉评估帧块移出（ADR-0042 接线）：视觉信号仅产生于 is_eval_frame，音频信号
         # 逐帧可达——统一在此消费，保证同帧视觉+音频信号汇入同一个 DecisionInput
@@ -915,6 +964,7 @@ class PerceptionPipeline:
             detections=dets,
             behavior_states=behavior_states,
             risk_signals=risk_signals,
+            linked_pairs=linked_pairs,
             reasoning_results=reasoning_results,
             memory_inputs=memory_inputs,
         )
@@ -1008,6 +1058,193 @@ class PerceptionPipeline:
             for c in cmds:
                 self.metrics.record_command(c.command_type)
         return rt_percs, warnings, commands
+
+    # ------------------------------------------------------------------
+    # Gate G / ADR-0041：Evidence Synthesis（Temporal Link → Combined Risk）
+    # ------------------------------------------------------------------
+
+    def _synthesize_combined_risk(
+        self,
+        risk_signals: list[RiskSignal],
+        *,
+        frame_index: int,
+        case_time: float,
+    ) -> tuple[list[RiskSignal], list[LinkedSignalPair]]:
+        """Vision×Audio 时间关联 → ``LinkedSignalPair`` → ESCALATE 组合风险信号。
+
+        Owner Gate G 冻结链的 runtime 落点（ADR-0019 母体 / ADR-0041 硬前提 /
+        ADR-0042 ESCALATE 档语义）：``link 先行、判级后行``（Q3→Q4 依赖方向）。
+
+        - **window_s 按配置**：``settings.realtime_risk.signal_temporal_window_s``
+          （None = 悬空期，NEAR_WINDOW 结构性不可用，仅 SAME_FRAME 可关联）；
+        - **D6 双重门控之二**：仅 ``settings.audio_evidence.escalate_enabled=True``
+          时才产出 combined 信号——缺任一门控本方法结构性返回空；
+        - **双向配对**：Temporal Link 是无方向的 |Δt| 关系（ADR-0041），视觉先现
+          （音频 RAISED 回看视觉缓存）与音频先现（视觉 RAISED 回看音频缓存）
+          都必须可关联；同帧双 RAISED 经消费语义保证只产一次 pair；
+        - 一个信号至多归因一个对侧证据（新→旧扫描；配对成功即从双侧缓存移除，
+          以 ``signal_id`` 幂等主键防重复归因）；
+        - combined 信号为**补充宣告**，不改写 evaluator 状态机（原 RAISED 的
+          CLEARED 配对语义不变，见 ``emit_combined_signal`` docstring）。
+        """
+        from ..audio.event import AudioPerceptionKind
+
+        combined: list[RiskSignal] = []
+        pairs: list[LinkedSignalPair] = []
+        if (
+            self._audio_evaluator is None
+            or not self._escalate_enabled
+            or self._temporal_window_s is None
+        ):
+            return combined, pairs
+
+        def _raised(source: SourceModality) -> list[RiskSignal]:
+            return [
+                s
+                for s in risk_signals
+                if s.transition is SignalTransition.RAISED and s.source is source
+            ]
+
+        vision_raised = _raised(SourceModality.VISION)
+        audio_raised = _raised(SourceModality.AUDIO)
+        if not vision_raised and not audio_raised:
+            return combined, pairs
+
+        w = self._temporal_window_s
+
+        # 本帧 RAISED 并入双侧近窗缓存并剪枝（G2：位置统一在 runtime
+        # case_time 时钟域）。先入列再配对，使同帧双 RAISED 命中 SAME_FRAME。
+        for vs in vision_raised:
+            self._recent_vision_raised.append((case_time, frame_index, vs))
+        for a_sig in audio_raised:
+            self._recent_audio_raised.append((case_time, frame_index, a_sig))
+        for buf in (self._recent_vision_raised, self._recent_audio_raised):
+            while buf and case_time - buf[0][0] > w:
+                buf.popleft()
+
+        def _consume(buf: deque, signal_id: str) -> None:
+            # 配对成功即消费：按 signal_id 幂等主键移除，防重复归因
+            kept = [e for e in buf if e[2].signal_id != signal_id]
+            buf.clear()
+            buf.extend(kept)
+
+        def _try_link(
+            anchor: RiskSignal,
+            other_buf: deque,
+            *,
+            anchor_is_audio: bool,
+        ) -> None:
+            """锚点=本帧新 RAISED；扫描对侧近窗缓存（新→旧）取首个可配对者。"""
+            raw_kind = (
+                anchor.features.get("audio_kind")
+                if anchor_is_audio
+                else next(
+                    (
+                        b[2].features.get("audio_kind")
+                        for b in reversed(other_buf)
+                        if b[2].features.get("audio_kind")
+                    ),
+                    None,
+                )
+            )
+            try:
+                kind = AudioPerceptionKind(raw_kind) if raw_kind else None
+            except ValueError:
+                kind = None
+            if kind is None:
+                return  # 无有效音频 kind（非 evaluator 产出），不归因
+            for o_ct, o_fi, o_sig in reversed(other_buf):
+                vision_pos, audio_pos = (
+                    (
+                        SignalPosition(signal=o_sig, frame_index=o_fi, case_time=o_ct),
+                        SignalPosition(
+                            signal=anchor, frame_index=frame_index, case_time=case_time
+                        ),
+                    )
+                    if anchor_is_audio
+                    else (
+                        SignalPosition(
+                            signal=anchor, frame_index=frame_index, case_time=case_time
+                        ),
+                        SignalPosition(signal=o_sig, frame_index=o_fi, case_time=o_ct),
+                    )
+                )
+                pair = link_signal_pair(vision_pos, audio_pos, window_s=w)
+                if pair is None:
+                    continue
+                pairs.append(pair)
+                combined.append(
+                    self._audio_evaluator.emit_combined_signal(
+                        kind=kind, pair=pair, case_time=case_time
+                    )
+                )
+                _consume(other_buf, o_sig.signal_id)
+                _consume(
+                    self._recent_audio_raised if anchor_is_audio
+                    else self._recent_vision_raised,
+                    anchor.signal_id,
+                )
+                break
+
+        for a_sig in audio_raised:
+            if any(p.audio_signal.signal_id == a_sig.signal_id for p in pairs):
+                continue
+            _try_link(a_sig, self._recent_vision_raised, anchor_is_audio=True)
+        for v_sig in vision_raised:
+            if any(
+                p.vision_signal.signal_id == v_sig.signal_id for p in pairs
+            ) or any(p.audio_signal.signal_id == v_sig.signal_id for p in pairs):
+                continue
+            _try_link(v_sig, self._recent_audio_raised, anchor_is_audio=False)
+        return combined, pairs
+
+        vision_raised = [
+            s
+            for s in risk_signals
+            if s.transition is SignalTransition.RAISED and s.source is SourceModality.VISION
+        ]
+        audio_raised = [
+            s
+            for s in risk_signals
+            if s.transition is SignalTransition.RAISED and s.source is SourceModality.AUDIO
+        ]
+        if not audio_raised:
+            return combined, pairs
+
+        # 视觉侧并入近窗缓存并剪枝（G2：位置统一在 runtime case_time 时钟域）
+        for vs in vision_raised:
+            self._recent_vision_raised.append((case_time, frame_index, vs))
+        w = self._temporal_window_s
+        while self._recent_vision_raised and case_time - self._recent_vision_raised[0][0] > w:
+            self._recent_vision_raised.popleft()
+
+        for a_sig in audio_raised:
+            raw_kind = a_sig.features.get("audio_kind")
+            try:
+                kind = AudioPerceptionKind(raw_kind) if raw_kind else None
+            except ValueError:
+                kind = None
+            if kind is None:
+                continue  # 非 evaluator 产出的音频信号（无 kind 元数据），不归因
+            # 新→旧扫描：优先最近视觉证据（SAME_FRAME 命中本帧条目）
+            for v_ct, v_fi, v_sig in reversed(self._recent_vision_raised):
+                pair = link_signal_pair(
+                    SignalPosition(signal=v_sig, frame_index=v_fi, case_time=v_ct),
+                    SignalPosition(
+                        signal=a_sig, frame_index=frame_index, case_time=case_time
+                    ),
+                    window_s=w,
+                )
+                if pair is None:
+                    continue
+                pairs.append(pair)
+                combined.append(
+                    self._audio_evaluator.emit_combined_signal(
+                        kind=kind, pair=pair, case_time=case_time
+                    )
+                )
+                break
+        return combined, pairs
 
     def process_audio_session(
         self,
