@@ -41,4 +41,4 @@ python-multipart>=0.0.9
 # httpx 当前经 starlette 传递安装；但一旦 fastapi/starlette 在某版本移除该传递依赖，
 # 这些测试会静默 importorskip → false green（与 Stage 2 反静默跳过治理目标相悖）。
 # 这里显式声明，消除对传递依赖的隐式脆弱性。
-httpx>=0.27,<1
+httpx>=0.28.1,<1
