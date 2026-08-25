@@ -263,6 +263,57 @@ def _render_provenance_details(scenario: ScenarioEvidence) -> str:
       </details>"""
 
 
+def _modality_provenance_values(scenario: ScenarioEvidence) -> tuple[str, str, str]:
+    """按模态派生 provenance 三元组（vision / audio semantic / decision）。
+
+    Provenance 显性化（Owner 裁决 2026-08-24）：Simulation 与真实推理必须在页面上一眼可分。
+    全部从 projection 既有 provenance_kind 派生，不新增事实、不硬编码场景结论：
+    - 视觉源：timeline 节点全 REAL_SENSOR → 实时推理；否则标注实际来源；
+    - 音频语义源：全 FIXTURE（synthetic_replay 注入）→ 合成回放；全 REAL_SENSOR → 实时推理；
+    - 风险判定：decision_evidence 由 runtime decision policy 真算 → runtime-computed。
+    """
+    kinds = {n["provenance_kind"] for n in scenario["timeline"]}
+    if not kinds:
+        vision_src = "无视觉轨"
+    elif kinds == {"REAL_SENSOR"}:
+        vision_src = "实时推理 (REAL_RUNTIME_VIDEO)"
+    else:
+        vision_src = "混合来源：" + " · ".join(sorted(kinds))
+
+    audio_ev = scenario.get("audio_evidence") or ()
+    if not audio_ev:
+        audio_src = "无音频轨"
+    else:
+        audio_kinds = {n["provenance_kind"] for n in audio_ev}
+        if audio_kinds == {"FIXTURE"}:
+            audio_src = "合成回放 (SYNTHETIC_REPLAY)"
+        elif audio_kinds == {"REAL_SENSOR"}:
+            audio_src = "实时推理 (REAL_AUDIO_PIPELINE)"
+        else:
+            audio_src = "混合来源：" + " · ".join(sorted(audio_kinds))
+
+    decision_src = (
+        "runtime-computed" if scenario.get("decision_evidence") else "无决策证据"
+    )
+    return vision_src, audio_src, decision_src
+
+
+def _render_modality_provenance_line(scenario: ScenarioEvidence) -> str:
+    """渲染模态级 provenance 三段声明行（一等视觉，不藏折叠区）。
+
+    与 ``_render_provenance_details`` 的 4 行审计互补：details 可展开溯源，
+    本行常显——观看者无需任何交互即可区分 Simulation 与真实推理。
+    """
+    vision_src, audio_src, decision_src = _modality_provenance_values(scenario)
+    return (
+        "<div class='prov-modality'>"
+        f"<span class='prov-modality-item'>视觉源: {_R._esc(vision_src)}</span>"
+        f"<span class='prov-modality-item'>音频语义源: {_R._esc(audio_src)}</span>"
+        f"<span class='prov-modality-item'>风险判定: {_R._esc(decision_src)}</span>"
+        "</div>"
+    )
+
+
 def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
     """AC-7：每个案例视图显式呈现 provenance_kind 及文案（一等视觉，绝默认隐藏）。
 
@@ -288,32 +339,39 @@ def _render_provenance_banner(scenario: ScenarioEvidence) -> str:
             + " · ".join(_R._esc(_PROVENANCE_BADGE.get(k, k)) for k in sorted(kinds))
         )
     details = _render_provenance_details(scenario)
-    return f"<div class='prov-banner'>provenance: {badge}{details}</div>"
+    modality_line = _render_modality_provenance_line(scenario)
+    return f"<div class='prov-banner'>provenance: {badge}{modality_line}{details}</div>"
 
 
 def _render_audio_sensor_status(scenario: ScenarioEvidence) -> str:
     """AC-1c：音频传感器状态卡片（P0-11.x Live Audio Verifiability）。
 
-    根据 ``audio_evidence`` 的 provenance 派生传感器状态：
-    - 无音频证据 → UNAVAILABLE（场景无音频轨 / Phase 1 三值状态）
-    - 含 REAL_SENSOR 证据 → 初始 NO_RECENT_EVENT（runtime 事件由 JS 切换）
-    - 仅 SIMULATED/FIXTURE 证据 → UNAVAILABLE（非实时，不触发 ACTIVE）
+    SSOT v4.0 P0-①：Audio Surface State Contract（Owner 裁决 2026-08-25）。
+    音频面板必须呈现明确的运行态，杜绝"大面积空白 = 未开始"的歧义。定义四态：
 
-    遵循 AC-12：无音频证据绝不编造 ACTIVE 状态。
-    Phase 1 L0（live_surface.compute_audio_health）：初始状态使用三值语义，
-    ``data-audio-health`` 属性供 live_stream.js 实时切换。
+    - AUDIO_IDLE：场景已就绪、尚未投递任何音频事件（等待 case_time 推进）
+    - AUDIO_COLLECTING：已采集波形采样（rms_window 非空）但暂未检出语义事件
+    - AUDIO_HAS_EVENTS：已检出至少一条音频语义事件（audio_evidence 非空）
+    - AUDIO_ENDED：场景时长内音频流已走完（loop 结束/未配置音频）
+
+    每态配独立文案与 dot 颜色，waveform canvas 内嵌于卡片内，杜绝独立元素错位。
+    遵循 AC-12：无音频场景绝不编造 ACTIVE 状态。Phase 1 三值
+    （UNAVAILABLE/NO_RECENT_EVENT/RECENT_EVENT）保留供 live_stream.js 实时切换，
+    新增 ``data-audio-state`` 属性承载四态契约供 JS/审计使用。
     """
     sid_html = _R._esc(scenario["scenario_id"])
     audio_ev = scenario.get("audio_evidence") or ()
+
     if not audio_ev:
-        # Phase 1：UNAVAILABLE（场景本身无音频轨，如 cctv_surveillance）
+        # 无音频证据：场景本身无音频轨（cctv_surveillance 等），显式 UNAVAILABLE 态
         return f"""
-      <div class="sensor-card audio-sensor" data-status="unavailable" data-audio-health="UNAVAILABLE" id="audio-sensor-{sid_html}">
+      <div class="sensor-card audio-sensor audio-state-idle" data-status="unavailable" data-audio-health="UNAVAILABLE" data-audio-state="IDLE" id="audio-sensor-{sid_html}">
         <h3>
+          <span class="audio-status-dot audio-idle" aria-hidden="true"></span>
           <span>🔊 AUDIO SENSOR</span>
           <span class="sensor-card-status audio-na">UNAVAILABLE</span>
         </h3>
-        <p class="muted">Kinds detected: — · 本场景无音频轨</p>
+        <p class="audio-state-msg muted">本场景无音频轨</p>
       </div>"""
 
     kinds = {str(a.get("kind", "")) for a in audio_ev}
@@ -325,38 +383,68 @@ def _render_audio_sensor_status(scenario: ScenarioEvidence) -> str:
     )
     # Phase 1：初始三值；JS 接收 audio event 后会切到 RECENT_EVENT
     initial_state = "NO_RECENT_EVENT" if has_real else "UNAVAILABLE"
-    status_class = "audio-active" if has_real else "audio-na"
-    status_label = "RECENT_EVENT" if has_real else "UNAVAILABLE"
 
-    kinds_html = " · ".join(_R._esc(k) for k in kind_labels) if kind_labels else "—"
+    # SSOT v4.0 P0-①：四态契约派生（服务端首次渲染快照）
+    # audio_ev 非空 → HAS_EVENTS（用户能在折叠详情看到 audio-table 事件）
+    # IDLE/COLLECTING 仅由前端基于 rms_window 实时状态切换（JS 接管）
+    server_state = "HAS_EVENTS"
+    state_label = "采集中"
+    state_dot_class = "audio-active"
+    state_msg = "已检测到声学事件，详见下方证据列表"
+
+    # D0 AU-05b：Kinds 行经 AudioKind→中文映射人话化，不得直出裸 audio_* 枚举；
+    # 未登记枚举回退原值（AC-12 不编造语义）。
+    kind_zh_labels = [_R._AUDIO_KIND_ZH.get(k, k) for k in kind_labels]
+    kinds_html = " · ".join(_R._esc(z) for z in kind_zh_labels) if kind_zh_labels else "—"
+
+    # waveform 内嵌于卡片内（P0-① 整改：消除独立 .waveform-surface 元素错位/留白）
+    canvas_html = (
+        f'<canvas id="waveform-canvas-{sid_html}" width="400" height="48"'
+        f' data-scenario="{sid_html}"'
+        f' aria-label="RMS 连续波形"></canvas>'
+        if has_audio_surface(scenario.get("scenario_id", ""))
+        else ""
+    )
+
+    # SSOT v4.1：Audio Evidence Lane 容器（presentation-only DOM 槽位）。
+    # 内容（markers + cursor + 时间刻度）由 live_stream.js 纯前端派生：
+    # 事件点投影到 [t-16s, t] 滚动窗口，按 kind 分桶、相邻同类合并；
+    # 不写进 EvidenceProjection schema，不新增 runtime fact。
+    # 颜色映射走 CSS variables（见 .audio-marker.kind-*），不在 runtime 契约内。
+    lane_html = (
+        f'<div class="audio-evidence-lane" id="audio-evidence-lane-{sid_html}"'
+        f' data-scenario="{_R._esc(sid_html)}"'
+        f' aria-label="Audio Evidence 时间窗（左 0s 右当前 case_time）"></div>'
+        f'<p class="sensor-card-note muted">Audio Evidence Lane · '
+        f'标记=观察到的声学证据点（不承诺持续时长）</p>'
+        if has_audio_surface(scenario.get("scenario_id", ""))
+        else ""
+    )
 
     return f"""
-      <div class="sensor-card audio-sensor" data-status="{'active' if has_real else 'unavailable'}" data-audio-health="{initial_state}" id="audio-sensor-{sid_html}">
+      <div class="sensor-card audio-sensor audio-state-has-events" data-status="{'active' if has_real else 'unavailable'}" data-audio-health="{initial_state}" data-audio-state="{server_state}" id="audio-sensor-{sid_html}">
         <h3>
-          <span>🔊 AUDIO SENSOR</span>
-          <span class="sensor-card-status {status_class}">{status_label}</span>
+          <span class="audio-status-dot {state_dot_class}" aria-hidden="true"></span>
+          <span>🔊 AUDIO EVIDENCE</span>
+          <span class="sensor-card-status {('audio-active' if has_real else 'audio-na')}">{state_label}</span>
         </h3>
-        <p class="muted">Kinds detected: {_R._esc(kinds_html)}</p>
+        <p class="audio-state-msg muted">检测到的声学类型：{_R._esc(kinds_html)}</p>
+        <p class="audio-state-msg muted">{_R._esc(state_msg)}</p>
+        {canvas_html}
+        <p class="sensor-card-note muted">RMS 连续波形 · 最近 20 采样</p>
+        {lane_html}
       </div>"""
 
 
 def _render_waveform_surface(scenario: ScenarioEvidence) -> str:
-    """Phase 3 Waveform：RMS 连续波形 Canvas（telephone_risk 专属，cctv 等无音频场景返回空串）。
+    """Phase 3 Waveform：独立外部波形容器（SSOT v4.0 P0-① 已弃用，保留返回空串）。
 
-    数据源：``evidence_delta.rms_window``（list[float]，最近 N 个 RMS 采样）。
-    前端由 live_stream.js ``_drawWaveform(sid, rms_window)`` 驱动绘制。
-    AC-12：无音频场景不输出 canvas 元素（完全隐藏，非禁用）。
+    P0-① 整改：waveform canvas 已内嵌到 ``_render_audio_sensor_status`` 卡片内，
+    此函数保留以维持 caller 调用栈兼容（``render_case_viewer`` 仍传入 layout 槽位），
+    但不再输出独立 DOM 元素——避免与卡片内嵌 canvas ID 冲突 + 布局错位。
+    cctv 等无音频场景仍走 ``AC-12`` 不输出元素。
     """
-    sid_html = _R._esc(scenario.get("scenario_id", ""))
-    if not has_audio_surface(scenario.get("scenario_id", "")):
-        return ""
-    return f"""
-      <div class="waveform-surface" id="waveform-surface-{sid_html}">
-        <canvas id="waveform-canvas-{sid_html}" width="400" height="60"
-                data-scenario="{sid_html}"
-                aria-label="RMS 连续波形（最近 {20} 个音频采样）"></canvas>
-        <p class="sensor-card-note muted">RMS 连续波形 · 最近 20 采样</p>
-      </div>"""
+    return ""
 
 
 def _render_current_risk(scenario: ScenarioEvidence) -> str:
@@ -511,7 +599,7 @@ def _render_case_time_tracks(scenario: ScenarioEvidence) -> str:
         <button type="button" class="rp-btn case-time-play" id="case-time-play-{sid_html}"
                 onclick="window.__caseTimeReplay('{sid_html}')"
                 title="证据时间回放（事件按 Case Time 涌现）">▶</button>
-        <span class="muted">Case Time（证据时间轴 · 0~{max_time:.1f}s）— 回放 = 事件按序涌现；媒体时间≠证据时间（VM-10）</span>
+        <span class="muted">Case Time（事件时间 · 0~{max_time:.1f}s）— 回放时，事件按发生顺序依次涌现</span>
       </div>
     </div>"""
 
@@ -571,7 +659,10 @@ def _render_case_video_inner(
             f'<span class="live-badge" id="live-badge-{sid_html}">'
             f'<span class="ldot"></span> LIVE</span>'
             f'<div class="live-ov muted" id="live-ov-{sid_html}">'
-            f'<span>Case Time <b id="ov-time-{sid_html}">00:00</b></span>'
+            # D0 V-02：Case Time chip 属工程排障信息，双模隔离——data-debug-only 标记 +
+            # product mode 默认隐藏（inline display:none 优先于 .live-ov 的 flex 布局）。
+            f'<span>Case Time <b id="ov-time-{sid_html}" data-debug-only="true" '
+            f'style="display:none">00:00</b></span>'
             f'</div></div>'
         )
         # PR-B：Live 感知摘要卡（"AI 看到了"），由 live_stream.js 经 perception_delta（视觉）
@@ -590,13 +681,16 @@ def _render_case_video_inner(
         )
         # P2：Demo 状态面板（证明这是实时系统，非静态页面）。视觉权重低于主叙事区（muted 样式）。
         # 消费 gateway /health + frame_index 计时，由 live_stream.js 每秒刷新。
+        # D0 V-01/V-06：Demo 状态面板与 Session 计时器属工程排障信息，双模隔离——
+        # data-debug-only 标记 + product mode 默认隐藏（live_stream.js 不再强制显示）。
         live_demo_stat = (
-            f'<div class="demo-stat" id="demo-stat-{sid_html}" style="display:none">'
+            f'<div class="demo-stat" id="demo-stat-{sid_html}" '
+            f'data-debug-only="true" style="display:none">'
             f'<div class="ds-row"><span class="ds-k">源</span><span class="ds-v" id="ds-src-{sid_html}">—</span></div>'
             f'<div class="ds-row"><span class="ds-k">帧</span><span class="ds-v" id="ds-frame-{sid_html}">0</span></div>'
             f'<div class="ds-row"><span class="ds-k">循环</span><span class="ds-v" id="ds-loop-{sid_html}">0</span></div>'
             f'<div class="ds-row"><span class="ds-k">延迟</span><span class="ds-v" id="ds-latency-{sid_html}">—</span></div>'
-            f'<div class="ds-row"><span class="ds-k">Session</span><span class="ds-v" id="ds-session-{sid_html}">00:00</span></div>'
+            f'<div class="ds-row"><span class="ds-k">Session</span><span class="ds-v" id="ds-session-{sid_html}" data-debug-only="true">00:00</span></div>'
             f'</div>'
         )
     elif (
@@ -631,12 +725,19 @@ def _render_case_video_inner(
         media_area = canvas_fallback
 
     # 绑定文案降级为脚注（方案 3）：不再占主轴 C 位。
-    # 媒体缺失（Media Source Adapter 未解析到 manifest）→ 不展示孤儿 ref，标注"无媒体绑定"
+    # 媒体缺失（媒体源未解析到 manifest）→ 不展示孤儿 ref，标注"无媒体绑定"
     # （评审 R1-#4：ref 只在确有媒体资产时才对应真实绑定，否则误导）。
+    # D0 V-03：Live 产品页绑定行人话化——内部组件名（LiveFrameStream / Media Source
+    # Adapter 等）不得进入用户可见文本；Artifact 审计视图保留工程标注不变。
     if media_manifest is None:
         binding_footnote = (
-            '<p class="muted case-video-binding">无媒体绑定（Media Source Adapter 未解析到媒体资产；'
-            '控制条仍可驱动纯 UI 进度与 Evidence Timeline）</p>'
+            '<p class="muted case-video-binding">无媒体绑定（视频源未接入；'
+            '时间与事件轴仍可正常展示）</p>'
+        )
+    elif str(media_manifest.get("source_kind", "")) == "LiveFrameStream":
+        binding_footnote = (
+            '<p class="muted case-video-binding">媒体源绑定：实时视频流 · 已连接'
+            '（受控演示输入，画面与感知同源推进）</p>'
         )
     else:
         # P11 整改：source_kind/ref 从已解析的 media_manifest 读取（真实值），而非
@@ -675,7 +776,7 @@ def _render_case_video_inner(
           <button class="rp-btn media-play" id="media-play-{sid_html}" title="播放/暂停">▶</button>
           <span class="rp-progress-wrap"><span class="media-progress" id="media-progress-{sid_html}"></span></span>
           <span class="media-time-label" id="media-time-label-{sid_html}">0.0s / --</span>
-          <span class="muted">Media Timeline（Case Time 纯展示轴，经映射驱动 Evidence Timeline）</span>
+          <span class="muted">播放进度 · 与下方事件记录同步推进</span>
         </div>"""
 
     case_time = _render_case_time_tracks(scenario)
@@ -1353,7 +1454,7 @@ def _render_action_closure(
            </div>
          </div>
        </div>
-       <p class="muted">按钮与状态为实时工作流态（UI/Workflow，不进 EvidenceProjection）；「完成处置」后产生的 Resolution 事实由后端投影为 Evidence Timeline 的 ACTION 节点（只读证据）。</p>
+       <p class="muted">按钮与状态为实时工作状态；「完成处置」后的处置结果会由系统记录为只读证据节点（可在证据时间线中回溯）。</p>
      </section>"""
 
 
@@ -1464,9 +1565,37 @@ def _render_live_shell(
     # 改为：在 details 模板内直接内联图 HTML + JS，由浏览器在 details 展开时自然解析执行。
     g_html, g_js = _R._render_evidence_graph(scenario)
     cm_html, cm_js = _R._render_graph(scenario)
-    # 将图 JS 内联进 details 区域（用 IIFE 立即执行，容器此时已在 DOM 中）
-    g_js_inline = f"<script>\n{g_js}\n</script>" if g_js else ""
-    cm_js_inline = f"<script>\n{cm_js}\n</script>" if cm_js else ""
+    # 将图 JS 内联进 details 区域。
+    # ⚠️ 浏览器事实：<script> 在 HTML 解析期立即执行，与 details 开合无关；
+    # 此处位于文档中段，而 echarts 定义在页尾 script —— 裸内联会在解析期抛
+    # ReferenceError: echarts is not defined（步骤 H console/pageerror=0 校验抓到，
+    # Evidence Graph 在 Live 页从未渲染成功过）。改为 toggle-gated：details 首次
+    # 展开时才执行图 JS —— 此时 echarts 已就绪且容器可见，同时规避隐藏容器上
+    # ECharts 0-size init 问题（与下方原设计意图一致）。
+    def _live_gated_inline(js: str) -> str:
+        if not js:
+            return ""
+        return (
+            "<script>\n"
+            "(function() {\n"
+            f"  var section = document.getElementById('fs-details-{sid_html}');\n"
+            "  if (!section) return;\n"
+            "  var box = section.querySelector('details');\n"
+            "  if (!box) return;\n"
+            "  var done = false;\n"
+            "  var run = function() {\n"
+            "    if (done) return;\n"
+            "    done = true;\n"
+            f"    {js}\n"
+            "  };\n"
+            "  if (box.open) { run(); return; }\n"
+            "  box.addEventListener('toggle', function() { if (box.open) run(); });\n"
+            "})();\n"
+            "</script>"
+        )
+
+    g_js_inline = _live_gated_inline(g_js)
+    cm_js_inline = _live_gated_inline(cm_js)
 
     # 区域①：Live 帧流容器（与 Artifact Case Video 共用内部构建器，单一事实源）。
     video_inner, manifest_island = _render_case_video_inner(
@@ -2553,6 +2682,18 @@ def render_case_viewer(
   .sensor-card-meta dt {{ color:#64748b; font-weight:600; }}
   .sensor-card-meta dd {{ margin:0; color:#1c2733; }}
    .sensor-card-note {{ font-size:11px; line-height:1.4; margin:0; }}
+    /* SSOT v4.0 P0-①：Audio Surface State Contract（4态样式区分）
+       - IDLE：场景无音频轨 / 未开始 → 灰底 + 灰点
+       - COLLECTING：waveform 有采样但无事件 → 蓝底 + 蓝点
+       - HAS_EVENTS：已有事件 → 绿底 + 绿点
+       - ENDED：音频流已结束 → 黄底 + 黄点 */
+   .audio-state-idle {{ background:#f8fafc; border-color:#e3e8ee; }}
+   .audio-state-collecting {{ background:#eff6ff; border-color:#bfdbfe; }}
+   .audio-state-has-events {{ background:#f0fdf4; border-color:#bbf7d0; }}
+   .audio-state-ended {{ background:#fefce8; border-color:#fde68a; }}
+   .audio-status-dot.audio-collecting {{ background:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,0.18); }}
+   .audio-status-dot.audio-ended {{ background:#eab308; box-shadow:0 0 0 3px rgba(234,179,8,0.18); }}
+   .audio-state-msg {{ margin:2px 0 0; font-size:12px; }}
    /* Phase 3 Waveform：RMS 连续波形 Canvas */
    .waveform-surface {{ grid-column:span 12; background:#f8fafc; border:1px solid #e3e8ee;
                         border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }}
@@ -2572,8 +2713,35 @@ def render_case_viewer(
   .audio-status-dot.audio-active {{ background:#16a34a;
                                      box-shadow:0 0 0 3px rgba(22,163,74,0.18); }}
   .audio-status-dot.audio-idle {{ background:#94a3b8; }}
-  .video-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%;
-                        background:#dc2626; box-shadow:0 0 0 3px rgba(220,38,38,0.18); }}
+.video-status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%;
+                        background:#dc2626; box-shadow:0 0 0 3px rgba(220,38,91,.18); }}
+  /* ===== SSOT v4.1 Audio Evidence Lane 三层组件 =====
+     presentation-only DOM 槽位；markers / cursor / 时间刻度由 live_stream.js 纯前端派生。
+     颜色映射走 CSS variables（主题层）；audio kind 是数据语义，不持有颜色。 */
+  .audio-evidence-lane {{ position:relative; height:64px; margin:8px 0 2px;
+                           border:1px solid #e3e8ee; border-radius:6px;
+                           background:linear-gradient(180deg,#f8fafc 0%,#eef2f7 100%);
+                           overflow:hidden; }}
+  .audio-marker {{ position:absolute; top:18px; height:8px; border-radius:2px;
+                   min-width:2px; opacity:0.85; transition:opacity .25s;
+                   box-sizing:border-box; }}
+  .audio-marker.kind-telephone      {{ background:var(--lane-color-telephone,#3b82f6); }}
+  .audio-marker.kind-voice-raised   {{ background:var(--lane-color-voice-raised,#f59e0b); }}
+  .audio-marker.kind-speech-rapid   {{ background:var(--lane-color-speech-rapid,#10b981); }}
+  .audio-marker.kind-distress-cry   {{ background:var(--lane-color-distress,#9b59b6); }}
+  .audio-marker.kind-anomaly-other  {{ background:var(--lane-color-anomaly,#94a3b8); }}
+  .audio-marker:hover {{ opacity:1; box-shadow:0 0 0 1px rgba(0,0,0,.15); }}
+  .audio-cursor {{ position:absolute; top:0; bottom:0; width:2px;
+                   background:var(--cursor-color,#dc2626);
+                   transition:left .15s ease-out; pointer-events:none;
+                   box-shadow:0 0 4px rgba(220,38,91,.4); }}
+  .audio-cursor::before {{ content:""; position:absolute; top:0; left:-3px;
+                            width:8px; height:8px; border-radius:50%;
+                            background:var(--cursor-color,#dc2626); }}
+  .audio-lane-scale {{ position:absolute; left:0; right:0; bottom:2px;
+                        height:14px; pointer-events:none; }}
+  .audio-lane-tick {{ position:absolute; transform:translateX(-50%);
+                      font-size:10px; color:#6b7a8a; font-family:monospace; }}
   .audio-sensor-kinds {{ list-style:none; margin:0; padding:0; display:flex;
                           flex-direction:column; gap:2px; }}
   .audio-sensor-kinds li {{ display:flex; gap:8px; align-items:baseline; }}

@@ -50,10 +50,17 @@
   var _AUDIO_KIND_ZH = {
     audio_voice_raised: '音高升高',
     audio_speech_rapid: '语速加快',
-    audio_distress_cry: '哭腔/求助',
+    audio_distress_cry: '声学异常活动',
     audio_telephone_persistent: '持续电话声',
     audio_anomaly_other: '其他声学异常'
   };
+  // LP-7 语义降级（Owner 裁决 2026-08-24 · H-5 semantic collapse）：已知误识别类别
+  // 禁止确定性「检测到」断言框架，降级为「声学特征(当前算法判定): 疑似 …」+ 详情声明；
+  // 不作为风险升级依据（audio→risk 链本就未接通，ADR-0040 硬门控）。感知能力保留，
+  // 枚举/映射不动，仅产品语义强度下调——Perception ≠ Truth ≠ Risk Decision。
+  var _AUDIO_KIND_CAUTION = { audio_distress_cry: true };
+  var _AUDIO_KIND_CAUTION_NOTE =
+    '当前版本该类别存在正常电话语音误识别，暂不作为风险升级依据';
   // Phase 1 L0：Audio Health 三值状态机（见 LIVE-PERCEPTION-STREAM-SPEC §2.4）
   // 铁律：非二元健康度；RECENT_EVENT 仅表"最近有事件"；NO_RECENT_EVENT 仅表"5s 内无事件"
   // 仅前端推断（无后端 audio_input_tick / audio_last_seen 字段，🟡 Partial）
@@ -64,6 +71,92 @@
   var _lastAudioEventMs = null;             // 最近 audio event 时间戳（Unix ms）
   var _audioStaleThresholdMs = 5000;        // 5s 无事件 → NO_RECENT_EVENT
   var _audioStaleTimer = null;              // 周期检查定时器 handle
+  var _audioEventCount = 0;                 // SSOT v4.0 P0-①：累计音频事件数（4 态派生用）
+  var _rmsWindowLength = 0;                 // SSOT v4.0 P0-①：当前 RMS 采样数（COLLECTING 判定）
+
+  // v4.1 Audio Evidence Lane：缓存音频事件 payload（projection 派生源，不入 Runtime fact）
+  // 仅前端用于 lane markers 派生 + cursor 平移；不清空语义层 seenAudio。
+  // loop_count 切换时清空（与 seenAudio 同步），避免跨轮次污染。
+  var _audioEvidenceCache = [];            // [{event_id, kind, case_time, score, confidence}]
+  // Lane 视觉宽度（秒）。事件点 → 派生为 1 个时长 MIN_S 矩形（不承诺"持续"语义），
+  // 相邻同 kind 在 MIN_S 内合并；超过 MIN_S 视为新 marker（仅表"曾观察到"，非持续时长）。
+  var _LANE_MIN_MARK_S = 0.4;              // 单 marker 最小宽度（秒）；窗内事件密度高时填满
+  var _LANE_WINDOW_S = 16;                 // lane 时间窗长度（秒）；左 0s 右 _LANE_WINDOW_S
+  // SSOT v4.1 红线：color 映射在 CSS variables（视觉主题层），不写进 Runtime 契约。
+  // kind → CSS class 派生（presentation only）；audio_kind 是数据语义，不持有颜色。
+  var _AUDIO_KIND_LANE = {
+    audio_telephone_persistent: 'kind-telephone',
+    audio_voice_raised: 'kind-voice-raised',
+    audio_speech_rapid: 'kind-speech-rapid',
+    audio_distress_cry: 'kind-distress-cry',
+    audio_anomaly_other: 'kind-anomaly-other'
+  };
+
+  // SSOT v4.1：纯函数 segments 派生（被 _renderAudioEvidenceLane 调用，可单测）。
+  // 输入：audioEvidenceCache 列表（已按 case_time 升序），窗口 [windowStart, windowEnd]。
+  // 输出：[{kind, start_pct, end_pct, score_max, semantic_class}]（按 kind 分桶，相邻同类合并）。
+  // 语义边界：marker 表"在此 case_time 观察到该 kind 的证据"，不承诺"持续时长"。
+  function deriveAudioEvidenceSegments(events, windowStart, windowEnd) {
+    if (!events || !events.length || windowEnd <= windowStart) return [];
+    var winDur = windowEnd - windowStart;
+    if (winDur <= 0) return [];
+    // 按 kind 分桶（仅含窗口内事件，case_time 缺失跳过）
+    var buckets = {};
+    var kindOrder = [];
+    for (var i = 0; i < events.length; i++) {
+      var e = events[i];
+      var ct = Number(e.case_time);
+      if (!isFinite(ct)) continue;
+      // 窗口裁剪：窗口外事件不在本帧渲染（仍可在窗口滚动时回填）
+      if (ct < windowStart || ct > windowEnd) continue;
+      var k = String(e.kind || 'audio_anomaly_other');
+      if (!buckets[k]) { buckets[k] = []; kindOrder.push(k); }
+      buckets[k].push({ case_time: ct, score: Number(e.score) || 0 });
+    }
+    var segments = [];
+    for (var ki = 0; ki < kindOrder.length; ki++) {
+      var kind = kindOrder[ki];
+      var pts = buckets[kind].sort(function (a, b) { return a.case_time - b.case_time; });
+      if (!pts.length) continue;
+      // 相邻同类合并：ct 间隔 ≤ MIN_MARK_S 且无 score 重置阈值则视为同段。
+      var segStart = pts[0].case_time;
+      var segEnd = pts[0].case_time;
+      var scoreMax = pts[0].score;
+      for (var pi = 1; pi < pts.length; pi++) {
+        var p = pts[pi];
+        // 合并条件：当前点与上段末间隔 ≤ MIN_MARK_S → 合并（仅"观察密度"语义，非持续）
+        if (p.case_time - segEnd <= _LANE_MIN_MARK_S) {
+          segEnd = p.case_time;
+          if (p.score > scoreMax) scoreMax = p.score;
+        } else {
+          // 输出当前段 + 起新段
+          var segPctStart = Math.max(0, (segStart - windowStart) / winDur * 100);
+          var segPctEnd = Math.max(segPctStart + 0.5, (segEnd - windowStart) / winDur * 100);
+          segments.push({
+            kind: kind,
+            semantic_class: _AUDIO_KIND_LANE[kind] || 'kind-anomaly-other',
+            start_pct: segPctStart,
+            end_pct: segPctEnd,
+            score_max: scoreMax
+          });
+          segStart = p.case_time;
+          segEnd = p.case_time;
+          scoreMax = p.score;
+        }
+      }
+      // 收尾：最后一段
+      var tailPctStart = Math.max(0, (segStart - windowStart) / winDur * 100);
+      var tailPctEnd = Math.max(tailPctStart + 0.5, (segEnd - windowStart) / winDur * 100);
+      segments.push({
+        kind: kind,
+        semantic_class: _AUDIO_KIND_LANE[kind] || 'kind-anomaly-other',
+        start_pct: tailPctStart,
+        end_pct: tailPctEnd,
+        score_max: scoreMax
+      });
+    }
+    return segments;
+  }
 
   function computeAudioHealth(lastEventMs, nowMs, scenarioHasAudio) {
     if (!scenarioHasAudio) return 'UNAVAILABLE';
@@ -100,6 +193,43 @@
       badge.textContent = labelMap[newState];
       badge.className = 'sensor-card-status ' + classMap[newState];
     }
+    // SSOT v4.0 P0-①：同步更新 Audio Surface State Contract（4态契约）。
+    // 把三值 health 派生到 4 态：HAS_EVENTS（≥1 条音频事件）> COLLECTING（waveform 有数据）
+    // > IDLE（场景就绪、尚未投递）。ENDED 由 loop 边界触发（待 P1 接入）。
+    var fourState = 'IDLE';
+    if (newState === 'UNAVAILABLE') fourState = 'IDLE';
+    else if (_audioEventCount > 0) fourState = 'HAS_EVENTS';
+    else if (_rmsWindowLength > 0) fourState = 'COLLECTING';
+    else fourState = 'IDLE';
+    _applyAudioSurfaceState(card, fourState);
+  }
+
+  function _applyAudioSurfaceState(card, stateName) {
+    if (!card) return;
+    card.setAttribute('data-audio-state', stateName);
+    // 切换文案（卡片内 .audio-state-msg 第二行）
+    var stateMsgMap = {
+      'IDLE': '等待音频数据…',
+      'COLLECTING': '正在采集声学波形，暂未检出语义事件',
+      'HAS_EVENTS': '已检测到声学事件，详见下方证据列表',
+      'ENDED': '本次音频已结束'
+    };
+    var dotClassMap = {
+      'IDLE': 'audio-idle',
+      'COLLECTING': 'audio-collecting',
+      'HAS_EVENTS': 'audio-active',
+      'ENDED': 'audio-ended'
+    };
+    var msgs = card.querySelectorAll('.audio-state-msg');
+    if (msgs.length >= 2) {
+      msgs[1].textContent = stateMsgMap[stateName] || '';
+    }
+    var dot = card.querySelector('.audio-status-dot');
+    if (dot) {
+      dot.className = 'audio-status-dot ' + (dotClassMap[stateName] || 'audio-idle');
+    }
+    card.classList.remove('audio-state-idle', 'audio-state-collecting', 'audio-state-has-events', 'audio-state-ended');
+    card.classList.add('audio-state-' + stateName.toLowerCase());
   }
 
   function _startAudioStaleTimer() {
@@ -264,8 +394,15 @@
     visit_normal: '异常时段访问',
     visit_pending_verify: '待核实到访',
     high_risk_approach: '高风险逼近',
-    odd_hour_visit: '夜间访问'
+    odd_hour_visit: '夜间访问',
+    // ADR-0040 RiskSignal 投影 reason（decision_policy 实时信号格式，
+    // category(source) 为服务端原文键；译文同步进 BA REASON_RUNTIME_ALLOWLIST）。
+    '实时风险信号: behavioral(vision)': '实时风险信号: 行为特征（视觉）'
   };
+  // 风险级别英文枚举 → 中文（rt-card / 风险卡共用语义，仅显示层映射）。
+  var _LEVEL_ZH = { HIGH: '高', MEDIUM: '中', LOW: '低' };
+  // RiskSignal category 枚举 → 中文特征名；未知名类不渲染（禁裸英文枚举上屏）。
+  var _SIGNAL_CATEGORY_ZH = { behavioral: '行为', acoustic: '声学' };
   // P0-3: BEHAV 映射（event_type → 行为里程碑 icon/color/label）。
   // 对齐原 Demo b593a01 BEHAV 表，枚举→人话同义映射，不扩展语义。
   var _BEHAV = {
@@ -340,7 +477,12 @@
       }
     } else if (t === 'audio') {
       var am = /audio \d+: (\S+)/.exec(s);
-      if (am) return '听到 ' + (_AUDIO_KIND_ZH[am[1]] || am[1]);
+      if (am) {
+        var azh = _AUDIO_KIND_ZH[am[1]] || am[1];
+        return _AUDIO_KIND_CAUTION[am[1]]
+          ? azh + '(疑似，当前算法判定)'
+          : '听到 ' + azh;
+      }
     } else if (t === 'resolution') {
       // "处置完成：warning abc123 由 family「NOTIFY_FAMILY」（community_done）"
       return s.replace(/处置完成：warning ([a-f0-9]+) 由 (\w+)「(\w+)」.*/,
@@ -486,8 +628,8 @@
     if (ol && snapMeta.loop_count != null) ol.textContent = snapMeta.loop_count;
     var oc = global.document.getElementById('ov-time-' + sid);
     if (oc) oc.textContent = '00:00';
-    var os = global.document.getElementById('demo-stat-' + sid);
-    if (os) os.style.display = 'flex';
+    // D0 V-01：demo-stat 为 data-debug-only 排障面板，product mode 保持隐藏；
+    // 此处只更新数据字段，不再强制显示（渲染可见性由双模规则统一控制）。
     var odsf = global.document.getElementById('ds-frame-' + sid);
     if (odsf && snapMeta.frame_index != null) odsf.textContent = snapMeta.frame_index;
     // 触发全量重渲染
@@ -543,14 +685,46 @@
       '</div></li>';
   }
 
+  // D0 AU-01：音频信号强度定性描述（与 renderer._signal_strength_label 同档：
+  // 阈值 0.75 / 0.45，防两端文案漂移；score 数值对用户无意义，不直出）。
+  function _strengthZh(score) {
+    var s = Number(score);
+    if (!isFinite(s)) return '声学特征未知';
+    if (s >= 0.75) return '声学特征强烈明确';
+    if (s >= 0.45) return '声学特征明显';
+    return '声学特征微弱';
+  }
+
+  // SSOT v4.0：音频时间戳显示层格式化（与 renderer._audio_ts_display_labels 同规则）。
+  // epoch 绝对秒（synthetic_replay fixture）→ 以首个所见事件为原点的会话相对秒，
+  // 防「@ 1756036800.0」类工程数值上屏；相对秒（REAL pipeline）原样透传。
+  // 数据层契约不变（原始值保留在 data-ts 属性供排障审计）。投递按时间轴升序
+  // （gateway 排序保证），首见即最小值。
+  var _audioT0 = null;
+  var _EPOCH_TS_THRESHOLD_S = 1000000.0;
+  function _displayTs(raw) {
+    var n = Number(raw);
+    if (!isFinite(n)) return String(raw == null ? '' : raw);
+    if (n > _EPOCH_TS_THRESHOLD_S) {
+      if (_audioT0 == null) _audioT0 = n;
+      return (n - _audioT0).toFixed(1) + 's';
+    }
+    return n.toFixed(1) + 's';
+  }
+
   function _buildAudioRow(a) {
     var ts = _esc(a.timestamp);
+    var tsDisp = _esc(_displayTs(a.timestamp));
     var labels = (a.labels || []).map(_esc).join(', ');
     var segs = (a.source_segment_ids || []).map(_esc).join(', ');
+    // D0 AU-01：score/conf 工程数值不进可见文本（以定性强度呈现），
+    // 降级为首个 td 的 data-* 属性供排障审计（textContent 不含数值；
+    // tr 保持裸标签，兼容既有行数统计与结构断言）。
     return '<tr>' +
-      '<td>🔊</td>' +
-      '<td>' + _esc(a.kind) + ' <span class="muted">@ ' + ts + '</span></td>' +
-      '<td>score=' + Number(a.score).toFixed(2) + ' · conf=' + Number(a.confidence).toFixed(2) + '</td>' +
+      '<td data-score="' + Number(a.score).toFixed(2) + '"' +
+      ' data-confidence="' + Number(a.confidence).toFixed(2) + '">🔊</td>' +
+      '<td>' + _esc(a.kind) + ' <span class="muted" data-ts="' + ts + '"> @ ' + tsDisp + '</span></td>' +
+      '<td>' + _esc(_strengthZh(a.score)) + '</td>' +
       '<td>' + labels + '</td>' +
       '<td>' + segs + '</td>' +
       '</tr>';
@@ -585,7 +759,8 @@
     body.innerHTML = events.slice(0, 20).map(function (ev) {
       var who = ev.who ? (' <span class="muted">. ' + _esc(ev.who) + '</span>') : '';
       var detail = ev.detail ? (' <span class="tl-meta">' + _esc(ev.detail) + '</span>') : '';
-      var score = ev.score != null ? (' <span class="muted">' + Number(ev.score).toFixed(2) + '</span>') : '';
+      // D0 AU-02：行为里程碑不直出裸 score 数值，定性档位替代（数值仍在 state 层可审计）。
+      var score = ev.score != null ? (' <span class="muted">强度·' + _strengthZh(ev.score).replace('声学特征', '') + '</span>') : '';
       var repeat = ev.repeat != null ? (' <span class="muted">第' + ev.repeat + '次</span>') : '';
       // Use template literal to avoid quote-escaping hell
       var html = '<div class="tl-item" style="border-left:3px solid '
@@ -782,18 +957,28 @@
   }
 
   // P1-A：实时感知状态（perception_delta → 结构化渲染）。浏览器只渲染服务端投影的
-  // 检测子集（class/bbox/confidence），零推理、不判断风险（VM-9）。
+  // 检测子集，零推理、不判断风险（VM-9）。
+  // D0 V-05：条目人话化——class 经 _CLASS_ZH 中文映射，conf/bbox 工程数值不直出
+  // （原始数值仍在 perception_delta 消息流中，可经排障通道获取）。
   function _applyPerceptionDelta(msg) {
     var el = global.document.getElementById('live-perception-' + sid);
     if (!el) return;
     var rows = (msg.detections || []).map(function (d) {
-      var b = (d.bbox || []).map(function (v) { return Math.round(v); }).join(',');
-      return '<li><span class="lp-class">' + _esc(d.class) + '</span>' +
-        '<span class="muted"> conf ' + Number(d.confidence).toFixed(2) + '</span>' +
-        '<span class="muted"> · bbox [' + b + ']</span></li>';
+      var zh = _CLASS_ZH[d.class] || d.class;
+      // 工程字段（class/confidence/bbox）降级为 li 的 data-* 属性供排障审计；
+      // 可见文本仅人话（D0 V-05：innerText 不得含 conf/bbox 工程字段）。
+      var attrs = ' data-class="' + _esc(d.class) + '"';
+      if (d.confidence != null && isFinite(Number(d.confidence))) {
+        attrs += ' data-confidence="' + Number(d.confidence).toFixed(2) + '"';
+      }
+      if (d.bbox && d.bbox.length) {
+        attrs += ' data-bbox="' + d.bbox.map(function (v) { return Math.round(v); }).join(',') + '"';
+      }
+      return '<li' + attrs + '><span class="lp-class">👤 ' + _esc(zh) + '</span>' +
+        '<span class="muted">已识别</span></li>';
     }).join('');
     var head = (msg.case_time != null ? Number(msg.case_time).toFixed(1) + 's' : '—');
-    el.innerHTML = '<div class="lp-head">Visual perception <span class="muted">' + head + '</span></div>' +
+    el.innerHTML = '<div class="lp-head">实时感知 <span class="muted">' + head + '</span></div>' +
       (rows ? '<ul>' + rows + '</ul>' : '<span class="muted">（当前无检测）</span>');
     // PR-B：空态"当前 N 人在场"跟踪（③ 风险卡空态文案同源）。
     lastPersons = (msg.detections || []).length;
@@ -933,6 +1118,7 @@
   // - Surface 后现时由 _flushPendingSurfaces 从已保存 state 补渲染。
   // ============================================================
   var _pendingAudioRows = [];      // audio-table 缺失期间挂起的行 HTML
+  var _PENDING_AUDIO_ROWS_MAX = 200;  // D0 B3/B7：挂起队列上限（防长时无 Surface 时无界累积）
   var _pendingCaseTimeMarks = [];  // case-time-track 缺失期间挂起的标记 {sid, m}
 
   function _renderAudioRow(a) {
@@ -940,10 +1126,38 @@
     var table = global.document.querySelector('table.audio-table');
     if (table) {
       table.insertAdjacentHTML('beforeend', html);
+      _applyDebugAnnotations(table);
     } else {
       _pendingAudioRows.push(html);
+      // 有界化：超限丢弃最旧挂起行（Surface 长期缺失时不无限吃内存；
+      // 语义层 seenAudio 去重不受影响——丢的只是渲染重放，不是 Runtime Fact）。
+      if (_pendingAudioRows.length > _PENDING_AUDIO_ROWS_MAX) {
+        _pendingAudioRows.shift();
+      }
     }
   }
+
+  // SSOT v4.0 T5 · Debug Mode（?debug=1）：工程元数据只在显式调试意图下显形，
+  // Product Mode 保持干净（Owner 裁决：backend/score/segment_id 不回灌产品界面）。
+  // 数值早已降级为 data-* 溯源属性（AU-01），此处仅按需可视化，无新数据通道。
+  var _DEBUG_MODE = /(?:^|[?&])debug=1(?:&|$)/.test(global.location.search || '');
+  function _applyDebugAnnotations(root) {
+    if (!_DEBUG_MODE) return;
+    var tds = (root || global.document).querySelectorAll('td[data-score]');
+    for (var i = 0; i < tds.length; i++) {
+      var td = tds[i];
+      if (td.querySelector('.debug-meta')) continue;
+      var s = td.getAttribute('data-score') || '-';
+      var c = td.getAttribute('data-confidence') || '-';
+      var note = global.document.createElement('span');
+      note.className = 'debug-meta muted';
+      note.textContent = ' score=' + s + ' conf=' + c;
+      note.style.fontSize = '11px';
+      note.style.opacity = '0.75';
+      td.appendChild(note);
+    }
+  }
+  try { _applyDebugAnnotations(null); } catch (e) { /* 静态表未就绪则由 delta 补 */ }
 
   // timeline Surface 后现 → 从节点缓存补插（折叠态由 _trimTimelineDom 裁剪到最新 N 个）
   function _flushTimelineIntoDom(ul) {
@@ -1092,6 +1306,25 @@
       if (seeState.audio.indexOf(kz) < 0) seeState.audio.push(kz);
       // Phase 1 L0：最近音频事件时间戳（Audio Health 三值状态机输入）
       _lastAudioEventMs = Date.now();
+      _audioEventCount += 1;  // SSOT v4.0 P0-①：累计计数驱动 4 态契约
+      // SSOT v4.1：缓存音频事件 payload（仅前端派生用，loop 切换时清空，见 seenAudio.clear 处）
+      // 锚点优先级：case_time（来自 timeline 节点，相对最早证据 T0）→ timestamp（wav 相对起点）→ null
+      // timestamp 字段是已存在事实（不承诺"持续时长"，仅"事件发生时刻"），符合红线。
+      var ct = null;
+      if (a.case_time != null && isFinite(Number(a.case_time))) {
+        ct = Number(a.case_time);
+      } else if (a.timestamp != null && isFinite(Number(a.timestamp))) {
+        ct = Number(a.timestamp);
+      }
+      if (ct != null) {
+        _audioEvidenceCache.push({
+          event_id: id,
+          kind: String(a.kind || ''),
+          case_time: ct,
+          score: Number(a.score) || 0,
+          confidence: Number(a.confidence) || 0
+        });
+      }
       // LP-3：音频事件 → 感知流条目（去重：按 event_id）。
       if (!_perceptionStream._seenAudioEventIds.has(id)) {
         _perceptionStream._seenAudioEventIds.add(id);
@@ -1099,11 +1332,14 @@
         var at = a.case_time != null
           ? _formatCaseTime(Number(a.case_time))
           : '--:--:--';
+        var cautious = _AUDIO_KIND_CAUTION[a.kind];
         _perceptionStream.push({
           timestamp: at,
           icon: '🔊',
-          label: '检测到' + kz,
-          detail: '',
+          label: cautious
+            ? kz + '(当前算法判定)'
+            : '检测到' + kz,
+          detail: cautious ? _AUDIO_KIND_CAUTION_NOTE : '',
           type: 'audio'
         });
       }
@@ -1138,8 +1374,95 @@
     _updateAcousticState(msg);
     // Phase 3 Waveform：RMS 连续波形绘制（telephone_risk 专属）
     _drawWaveform(sid, msg.rms_window);
+    // SSOT v4.0 P0-①：累计 rms_window 长度驱动 COLLECTING 判定
+    _rmsWindowLength = (msg.rms_window && msg.rms_window.length) || 0;
     // Surface 补渲染：本条 delta 处理完毕后，尝试补上此前因 Surface 缺失而挂起的渲染项
     _flushPendingSurfaces();
+    // SSOT v4.1：Audio Evidence Lane 重绘（新增 audio event → 派生 segments → DOM 更新）
+    // cursor 移动交给 _applyFrame（frame_tick）处理——delta 路径只更新 lane markers。
+    _renderAudioEvidenceLane(sid);
+  }
+
+  // SSOT v4.1：渲染 Audio Evidence Lane（markers + 时间刻度）
+  // 纯前端派生，不依赖 audio_evidence schema 变更；windowEnd 取当前 case_time，
+  // windowStart = windowEnd - _LANE_WINDOW_S（向左滚动窗口）。
+  function _renderAudioEvidenceLane(scenarioId) {
+    var lane = global.document.getElementById('audio-evidence-lane-' + scenarioId);
+    if (!lane) return;
+    // 1. 取窗口边界（窗口右端 = 最近 case_time；左端 = 右端 - _LANE_WINDOW_S）
+    var winEnd = 0;
+    for (var i = 0; i < _audioEvidenceCache.length; i++) {
+      var ct = Number(_audioEvidenceCache[i].case_time);
+      if (isFinite(ct) && ct > winEnd) winEnd = ct;
+    }
+    if (winEnd <= 0) {
+      // 尚无音频事件：仅渲染空态刻度，不画 markers
+      _renderLaneTimeScale(lane, 0, _LANE_WINDOW_S);
+      return;
+    }
+    var winStart = Math.max(0, winEnd - _LANE_WINDOW_S);
+    var segs = deriveAudioEvidenceSegments(_audioEvidenceCache, winStart, winEnd);
+    // 2. 清空 lane 子节点，重建（presentation-only，每次重绘成本可控：≤ 32 events）
+    while (lane.firstChild) lane.removeChild(lane.firstChild);
+    // 3. 时间刻度（00s / 05s / 10s / 15s）
+    _renderLaneTimeScale(lane, winStart, winEnd);
+    // 4. markers（每个 marker 是绝对定位的 <span>，百分比定位）
+    for (var si = 0; si < segs.length; si++) {
+      var s = segs[si];
+      var marker = global.document.createElement('span');
+      marker.className = 'audio-marker ' + s.semantic_class;
+      marker.style.left = s.start_pct.toFixed(2) + '%';
+      marker.style.width = Math.max(0.5, s.end_pct - s.start_pct).toFixed(2) + '%';
+      marker.setAttribute('data-kind', s.kind);
+      marker.setAttribute('data-score-max', s.score_max.toFixed(2));
+      marker.setAttribute('title', s.kind + ' @ ' + s.start_pct.toFixed(1) + '% · score_max=' + s.score_max.toFixed(2));
+      lane.appendChild(marker);
+    }
+    // 5. cursor（reference，由 _applyFrame 调 _moveAudioCursor 平移）
+    var cursor = global.document.getElementById('audio-cursor-' + scenarioId);
+    if (!cursor) {
+      cursor = global.document.createElement('div');
+      cursor.id = 'audio-cursor-' + scenarioId;
+      cursor.className = 'audio-cursor';
+      lane.appendChild(cursor);
+    }
+  }
+
+  function _renderLaneTimeScale(lane, winStart, winEnd) {
+    var scale = global.document.createElement('div');
+    scale.className = 'audio-lane-scale';
+    var ticks = [0, 0.25, 0.5, 0.75, 1.0];
+    for (var ti = 0; ti < ticks.length; ti++) {
+      var pct = ticks[ti] * 100;
+      var t = global.document.createElement('span');
+      t.className = 'audio-lane-tick';
+      t.style.left = pct.toFixed(1) + '%';
+      var secs = winStart + ticks[ti] * (winEnd - winStart);
+      t.textContent = secs.toFixed(0) + 's';
+      scale.appendChild(t);
+    }
+    lane.appendChild(scale);
+  }
+
+  // SSOT v4.1：移动 cursor（frame_tick 路径调用）
+  // case_time → 窗口百分比 → translateX
+  function _moveAudioCursor(scenarioId, caseTime) {
+    var cursor = global.document.getElementById('audio-cursor-' + scenarioId);
+    if (!cursor) return;
+    var ct = Number(caseTime);
+    if (!isFinite(ct) || ct < 0) return;
+    // 窗口右端 = max(case_time) in cache（若 cursor 第一次出现，winEnd 由 lane 派生）
+    var winEnd = 0;
+    for (var i = 0; i < _audioEvidenceCache.length; i++) {
+      var ict = Number(_audioEvidenceCache[i].case_time);
+      if (isFinite(ict) && ict > winEnd) winEnd = ict;
+    }
+    if (winEnd <= 0) return;
+    var winStart = Math.max(0, winEnd - _LANE_WINDOW_S);
+    var pct = (ct - winStart) / (winEnd - winStart) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    cursor.style.left = pct.toFixed(2) + '%';
+    cursor.setAttribute('data-case-time', ct.toFixed(2));
   }
 
   // LP-1：真实同步帧流（frame_tick 心跳：frame_index / case_time / loop_count）。
@@ -1149,7 +1472,37 @@
   // 同步节流 overlay chips（帧号/Case Time），避免"画面不动、数字狂跳"体验差。
   var _lastFrameTs = 0;
   var FRAME_DISPLAY_INTERVAL_MS = 150;
+  // SSOT v4.0 T2：loop 轮次切换感知——服务端每轮重置投影并按事件时间轴重演音频
+  // 流入（case_time 驱动投递）；前端检测 loop_count 变更后清空判重集合与音频
+  // 证据行，使新一轮事件得以逐条重新涌现（重播体验），audio-table 保持有界。
+  var _lastLoopCount = null;
+  function _resetAudioSurfacesForNewLoop() {
+    seenAudio.clear();
+    // SSOT v4.1：loop 切换同步清空音频事件缓存与 lane DOM
+    if (typeof _audioEvidenceCache !== 'undefined' && _audioEvidenceCache) {
+      _audioEvidenceCache = [];
+    }
+    var lanes = global.document.querySelectorAll('[id^="audio-evidence-lane-"]');
+    for (var li = 0; li < lanes.length; li++) {
+      // 清空所有子节点（markers + 时间刻度），下一帧重建
+      while (lanes[li].firstChild) lanes[li].removeChild(lanes[li].firstChild);
+    }
+    try { _perceptionStream._seenAudioEventIds.clear(); } catch (e) { /* 未初始化则跳过 */ }
+    var tables = global.document.querySelectorAll('table.audio-table');
+    for (var ti = 0; ti < tables.length; ti++) {
+      var rows = tables[ti].querySelectorAll('tr');
+      for (var ri = rows.length - 1; ri >= 1; ri--) rows[ri].remove();
+    }
+    var loc = global.document.querySelectorAll('.audio-event-locator');
+    for (var li = 0; li < loc.length; li++) loc[li].remove();
+  }
   function _applyFrame(msg) {
+    if (msg.loop_count != null) {
+      if (_lastLoopCount !== null && msg.loop_count !== _lastLoopCount) {
+        _resetAudioSurfacesForNewLoop();
+      }
+      _lastLoopCount = msg.loop_count;
+    }
     var img = global.document.getElementById('video-img-' + sid);
     // 首帧心跳到达：隐藏 placeholder（MJPEG 已在加载视频）
     if (img) {
@@ -1177,11 +1530,14 @@
         var ss = String(totalSec % 60).padStart(2, '0');
         ct.textContent = mm + ':' + ss;
       }
+      // SSOT v4.1：cursor 跟随 frame_tick 平移（presentation-only）
+      if (msg.case_time != null) _moveAudioCursor(sid, Number(msg.case_time));
     }
     // P2：Demo 状态面板（首帧时显示，后续每秒刷新 Session 计时）。
+    // D0 V-01：面板为 data-debug-only 排障面，product mode 默认隐藏——只更新数据，
+    // 不再强制 display:flex（Session 计时照常运行，debug 需要时数据已就绪）。
     var stat = global.document.getElementById('demo-stat-' + sid);
     if (stat) {
-      stat.style.display = 'flex';
       var df = global.document.getElementById('ds-frame-' + sid);
       if (df) df.textContent = msg.frame_index;
       var dl = global.document.getElementById('ds-loop-' + sid);
@@ -1291,9 +1647,14 @@
           barWrap.style.display = 'none';
         }
       }
-      // P0-1: warning_id + device/elder 元数据
+      // P0-1: warning_id + device/elder 元数据（warning_id 属 runtime 标识，
+      // 降级为 data-* 溯源属性，不裸显截断码于产品表面）。
       var widEl = global.document.getElementById('lrk-wid-' + sid);
-      if (widEl) widEl.textContent = (msg.warning_ids || []).slice(0, 1).map(function (w) { return w.slice(0, 8); }).join(',');
+      if (widEl) {
+        var firstWid = (msg.warning_ids || []).slice(0, 1)[0] || '';
+        widEl.textContent = '';
+        if (firstWid) widEl.setAttribute('data-warning-id', firstWid);
+      }
       var metaEl = global.document.getElementById('lrk-meta-' + sid);
       if (metaEl) {
         var parts = [];
@@ -1363,24 +1724,29 @@
     var empty = global.document.getElementById('live-signals-empty-' + sid);
     if (!box) return;
     if (t === 'raised' || t === 'active') {
-      var levels = (msg.risk_levels || []).join(' / ');
+      var levels = (msg.risk_levels || []).map(function (l) { return _LEVEL_ZH[l] || l; }).join(' / ');
       var time = msg.case_time != null
         ? Number(msg.case_time).toFixed(1) + 's'
         : '—';
-      // P0-1：信号实体（signal_id / subject / severity）
+      // P0-1：信号实体（signal_id / subject / severity）。
+      // 产品表面只呈现用户可读语义；runtime 标识（signal_id / subject_id /
+      // category 原枚举 / severity_hint 数值）降级为 data-* 溯源属性，
+      // 不裸显 UUID 片段与英文枚举（Vision Acceptance D-I1 修复纪律）。
       var signals = msg.risk_signals || [];
       var sigHtml = '';
       if (signals.length) {
         var sig = signals[0];
-        var sid_val = sig.signal_id || 'sig-unknown';
-        var subject = sig.subject_id || sig.visitor_instance_id || '访客';
+        var sid_val = sig.signal_id || '';
+        var subject = sig.subject_id || sig.visitor_instance_id || '';
         var sev = sig.severity_hint != null ? Number(sig.severity_hint).toFixed(2) : '';
-        var category = sig.category || '';
-        sigHtml = '<div class="rt-sig"><span class="rt-sid">信号 ' + _esc(sid_val.slice(0, 12)) + '</span>'
-          + (category ? '<span class="rt-cat">' + _esc(category) + '</span>' : '')
-          + (sev ? '<span class="rt-sev">严重度 ' + _esc(sev) + '</span>' : '')
-          + '<span class="rt-subj">主体：' + _esc(subject) + '</span></div>';
-        // TTL 续期：记录最后出现帧（P0-2 audit fix → __LiveState.riskSignalMap.set 已 TTL）
+        var catZh = _SIGNAL_CATEGORY_ZH[sig.category || ''] || '';
+        sigHtml = '<div class="rt-sig"'
+          + (sid_val ? ' data-signal-id="' + _esc(sid_val) + '"' : '')
+          + (subject ? ' data-subject-id="' + _esc(subject) + '"' : '')
+          + (sev ? ' data-severity="' + _esc(sev) + '"' : '')
+          + '>'
+          + (catZh ? '<span class="rt-cat">' + _esc(catZh) + '特征</span>' : '')
+          + '<span class="rt-subj">主体：在场人员</span></div>';
       }
       box.innerHTML = '<div class="rt-card' + (t === 'raised' ? ' live' : '') + '"><div class="rt-head">' +
         '<span class="rt-badge' + (t === 'raised' ? ' live' : '') + '">' + (t === 'raised' ? 'RAISED' : 'ACTIVE') + '</span>' +

@@ -74,6 +74,18 @@ _SCENARIO_SURFACES: dict[str, frozenset[ScenarioSurface]] = {
         ScenarioSurface.L4_RISK_SIGNALS,
         ScenarioSurface.L5_PROVENANCE,
     }),
+    # SSOT v4.1：telephone_risk_reality_check 沿用 telephone_risk Surface 集
+    # （同场景族，仅 source 标识不同——audio real pipeline + visual real runtime），
+    # 否则 has_audio_surface()=False 门控会把 audio 面板（含 Audio Evidence Lane）屏蔽，
+    # 触发"audio 区域巨大空白"回归。
+    "telephone_risk_reality_check": frozenset({
+        ScenarioSurface.L0_AUDIO_HEALTH,
+        ScenarioSurface.L1_AUDIO_PERCEPTION,
+        ScenarioSurface.L2_ACOUSTIC_STATE,
+        ScenarioSurface.L3_PERCEPTION_STREAM,
+        ScenarioSurface.L4_RISK_SIGNALS,
+        ScenarioSurface.L5_PROVENANCE,
+    }),
     "cctv_surveillance": frozenset({
         ScenarioSurface.L0_AUDIO_HEALTH,
         ScenarioSurface.L3_PERCEPTION_STREAM,
@@ -87,6 +99,17 @@ _SCENARIO_SURFACES: dict[str, frozenset[ScenarioSurface]] = {
         ScenarioSurface.L4_RISK_SIGNALS,
         ScenarioSurface.L5_PROVENANCE,
         # ScenarioSurface.L6_MEMORY_CONTEXT,  # 🟡 Phase 3 阻塞
+    }),
+    # D0 AU-06（B4）根因修复：product_story_risk 场景含 synthetic_replay 音频注入
+    # （audio_replay_path），此前未注册音频 Surface → has_audio_surface()=False 门控
+    # 了 waveform canvas 渲染。该场景音频是叙事主轴之一，注册 L1/L2 音频 Surface。
+    "product_story_risk": frozenset({
+        ScenarioSurface.L0_AUDIO_HEALTH,
+        ScenarioSurface.L1_AUDIO_PERCEPTION,
+        ScenarioSurface.L2_ACOUSTIC_STATE,
+        ScenarioSurface.L3_PERCEPTION_STREAM,
+        ScenarioSurface.L4_RISK_SIGNALS,
+        ScenarioSurface.L5_PROVENANCE,
     }),
 }
 
