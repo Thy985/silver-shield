@@ -131,6 +131,11 @@ class DemoGateway:
         self._frame_index = 0
         self._last_case_time = 0.0  # ADR-0039：当前帧 case_time（ctx 构造时更新）
         self.loop_count = 0  # 循环重放计数（P0-11.3.5 状态面板）
+        # SSOT v4.0 T2：case_time 驱动的音频投递游标（本轮已投递条数；
+        # loop 重放时归零重演，见 run_loop StopIteration 分支与 _feed_live_audio）。
+        self._audio_feed_cursor = 0
+        # 与事件列表对齐的投递时刻轴（set_live_audio_events 构建；epoch 流归一化）。
+        self._audio_feed_timeline: list[float] = []
 
     @classmethod
     def create_for_test(cls) -> DemoGateway:
@@ -234,6 +239,16 @@ class DemoGateway:
                     self.loop_count += 1
                     self._rebuild_pipeline(self.scenario)
                     self._frame_index = 0
+                    # SSOT v4.0 T2：loop 重放 = 新一轮演示时间线（Owner「可观察的
+                    # 时间过程」裁决）。重置音频投递游标 + Live 投影累积器 + delta
+                    # 指纹基线——新一轮事件重新作为新增证据流入 WS，晚连页面即可
+                    # 观察事件按时间轴逐条涌现；前端以 frame_tick.loop_count 感知
+                    # 轮次切换并清空判重集合（live_stream.js），audio-table 有界性
+                    # 由轮内重演替代跨轮累积保持（AU-03/AU-07a 语义不变）。
+                    self._audio_feed_cursor = 0
+                    self._live_accumulator = None
+                    self._prev_evidence_fp = None
+                    self._delta_seq = 0
                     frame_iter = iter(self.source)
                     continue
                 break
@@ -388,7 +403,29 @@ class DemoGateway:
         """
         if not isinstance(events, (list, tuple)):
             raise TypeError(f"live_audio_events 须为 list/tuple，收到 {type(events).__name__}")
-        self._live_audio_events = list(events)
+
+        def _ts_key(ev: object) -> float:
+            data = ev.to_dict() if hasattr(ev, "to_dict") else ev
+            try:
+                return float(str(data.get("timestamp", "")) or 0.0)
+            except (ValueError, TypeError, AttributeError):
+                return 0.0
+
+        # SSOT v4.0 T2：按事件时间轴稳定排序——case_time 驱动投递要求有序流，
+        # 才能保证「轮内单调、不重复不遗漏」的确定性语义。
+        self._live_audio_events = sorted(events, key=_ts_key)
+        # 投递时间轴（与事件列表对齐）：synthetic_replay fixture 可能携带 epoch 绝对秒
+        # （如 1756036800.0），与网关 case_time（相对秒）永不相交 → 事件将积压到末帧
+        # flush 才出现。检测量级并以首事件为原点整体平移（保持间隔不变）；REAL
+        # AudioPipeline 产出已是相对秒（< 阈值）原样保留。仅影响投递节奏判断，
+        # 不改动事件数据本身（VM-9 投影保真）。
+        ts_list = [_ts_key(e) for e in self._live_audio_events]
+        if ts_list and max(ts_list) > 1_000_000.0:
+            origin = min(ts_list)
+            self._audio_feed_timeline = [t - origin for t in ts_list]
+        else:
+            self._audio_feed_timeline = ts_list
+        self._audio_feed_cursor = 0
 
     def _runtime_audio_events(self, frame_index: int) -> tuple:
         """按 frame_index==k → 第 k 条的确定性规则取本帧应进 Runtime 的音频事件。
@@ -408,28 +445,41 @@ class DemoGateway:
         return (adapted,) if adapted is not None else ()
 
     def _feed_live_audio(self, acc: ProjectionAccumulator) -> None:
-        """按帧位置把注入的音频事件流入 Live Adapter（确定性、幂等）。
+        """按事件时间轴把注入的音频事件流入 Live Adapter（SSOT v4.0 T2 · Owner 裁决）。
 
-        投递规则：``frame_index == k`` 时喂入第 k 条音频事件（k 从 0 起），超出列表长度后不再喂。
-        因 ``frame_index`` 单调递增（loop 重放不回绕），每条事件仅喂一次；同一有序流重放
-        N 次 → 同一 audio_evidence（VM-8 幂等）。失败隔离：单条音频摄入异常 → 记日志跳过，
-        绝不阻断实时帧循环（VM-5 / 探针铁律）。
+        投递规则（case_time 驱动）：``timestamp <= 当前 case_time`` 的事件按序喂入，
+        ``_audio_feed_cursor`` 保证轮内单调、不重复不遗漏；场景末帧强制 flush 兜底，
+        超出场景时长的事件也不丢失（AU-08 全量可见契约不受节奏影响）。
+        与 Runtime 通道（``_runtime_audio_events``，ADR-0042 冻结的索引规则）解耦：
+        audio→risk 链未接通前该通道实际零消费，一致性统一挂账 ADR-0042 激活时。
+        幂等语义：VM-8 由 Live Adapter event_id 主键去重承担（单轮内重复摄入不污染证据）；
+        跨轮重放经 run_loop 重置 accumulator 成为合法新事实（晚连页面可观察逐条涌现）。
+        失败隔离：单条音频摄入异常 → 记日志跳过，绝不阻断实时帧循环（VM-5 / 探针铁律）。
         """
         events = self._live_audio_events
-        if not events:
+        n = len(events)
+        timeline = getattr(self, "_audio_feed_timeline", None) or []
+        if not events or self._audio_feed_cursor >= n:
             return
-        idx = self._frame_index
-        if idx < 0 or idx >= len(events):
-            return
-        ev = events[idx]
-        # 支持 AudioPerceptionEvent 对象（to_dict）或直接 dict（组装层已转换）。
-        data = ev.to_dict() if hasattr(ev, "to_dict") else ev
-        try:
-            acc.ingest_audio(data)
-        except Exception as exc:  # noqa: BLE001
-            structlog.get_logger(__name__).warning(
-                "live_audio_frame_ingest_failed", frame_index=idx, exc_info=exc
-            )
+        now = self._last_case_time
+        # 场景末帧兜底：剩余事件全部投出（正常 delta 通道广播，无需特殊路径）。
+        last_frame = getattr(self, "n_frames", 0) or 0
+        flush_all = last_frame > 0 and self._frame_index >= last_frame - 1
+        while self._audio_feed_cursor < n:
+            ev = events[self._audio_feed_cursor]
+            data = ev.to_dict() if hasattr(ev, "to_dict") else ev
+            due = timeline[self._audio_feed_cursor] if self._audio_feed_cursor < len(timeline) else 0.0
+            if due > now and not flush_all:
+                break
+            self._audio_feed_cursor += 1
+            try:
+                acc.ingest_audio(data)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning(
+                    "live_audio_frame_ingest_failed",
+                    frame_index=self._frame_index,
+                    exc_info=exc,
+                )
 
     def stop(self) -> None:
         """停止帧循环。"""
@@ -678,6 +728,10 @@ class DemoGateway:
         self.store = DemoStateStore()  # 新会话：清空历史闭环状态
         # Live Adapter 投影累积器重置（新会话 = 新证据投影；GET /live 重渲染即干净状态）
         self._live_accumulator = None
+        # SSOT v4.0 T2 fix：音频投递游标同步归零——switch_source 重置 accumulator 但
+        # 未重置 cursor → _feed_live_audio 检查 cursor >= n 直接 return，新 accumulator
+        # 永远收不到音频事件（D0 AU-10 reset 后 audio-table 无行涌现根因）。
+        self._audio_feed_cursor = 0
         # P0 delta 基线同步重置（新会话 = 新投影，避免陈旧指纹造成首帧全量重发）
         self._prev_evidence_fp = None
         self._delta_seq = 0

@@ -7,8 +7,9 @@
 # 这是比 golden_benign（空门厅无感知→不报警）更强的 benign 层级：
 #   有感知信号（电话交互）但不构成风险 → 系统知道「有电话」且知道「不升级」。
 #
-# audio→risk 直达链被 ADR-0040 硬门控保持，audio 事件不触发 risk；
-# 无视觉 actor → 无 abnormal_dwell → 无视觉 risk 驱动。全程 MONITOR。
+# audio-native path（ADR-0040 D6 升级 · ADR-0044）：audio 产出 LOW + MONITOR warning（证据面）；
+# 无视觉 actor → 无 abnormal_dwell → 无视觉 risk 驱动 → 不通知家属（LOG_ONLY）。
+# 核心命题：「识别到电话 ≠ 识别到诈骗风险」——系统知道「有电话」(LOW+MONITOR) 且知道「不升级」(不通知)。
 #
 # 时间基准：2026-08-23T12:00:00 UTC = 1756036800.0；duration_frames=60 @ 2fps → 30s。
 meta:
@@ -39,36 +40,87 @@ expects:
   emitted_event_types: []
 benchmark:
   expected_alarm: false
-  severity: NONE
+  # severity=null：fail-closed 仅接受 LOW/MEDIUM/HIGH；「无报警」用 expected_alarm=false 表达。
+  # BenchmarkExpectation.severity 字段 Optional，None 合法（contracts.py:89-99）。
+  severity: null
   note: "电话交互存在但无可疑视觉证据，全程 MONITOR 不升级"
 integration:
   perception:
     min_perception_events: 0
   decision:
-    outcome: NONE
+    outcome: WARN
   action:
-    expected_notification: false
-    expected_command_types: []
+    expected_notification: true
+    expected_command_types: [LOG_ONLY]
   memory:
-    min_records: 0
+    min_records: 1
+# ---- ADR-0044 契约 v1 持续区间 audio（8 枚 · 与 risk fixture 完全同源 · 硬约束 3）----
+# audio 通道与 risk fixture 逐枚相同（event_id 不同以保 fixture 内唯一；asset/score/labels 一致）；
+# 唯一的差异是 actors=[] / timeline=[] —— 无视觉 actor → 无 abnormal_dwell → 无视觉 risk 驱动。
+# audio→risk 直达链被 ADR-0040 硬门控保持，audio 事件不触发 risk；全程 MONITOR。
+# 验证核心产品命题：「识别到电话 ≠ 识别到诈骗风险」（audio 相同 → 决策应不同）。
+#
+# 时间分布修订记录（与 risk fixture 同步）：见 risk fixture 注释。
+# mix.wav：US_dial_tone (0~5s) + LBJ_FORD (5~30s, 25s 截段)
 audio:
+  # ---- 0~5s：US_dial_tone 区间（yamnet baseline top1=telephone 0.981）----
   - kind: audio_telephone_persistent
+    event_id: call_connected_normal_001-aev-000
     timestamp: 1756036800.0
-    score: 0.9
-    confidence: 0.8
-    source_segment_ids: ["seg-sig"]
-    labels: ["ringtone"]
+    score: 0.981
+    confidence: 0.95
+    source_segment_ids: ["telephone__dial-tone__US_dial_tone"]
+    labels: ["telephone", "dial_tone"]
   - kind: audio_telephone_persistent
+    event_id: call_connected_normal_001-aev-001
     timestamp: 1756036802.0
-    score: 0.92
-    confidence: 0.85
-    source_segment_ids: ["seg-speech"]
+    score: 0.981
+    confidence: 0.95
+    source_segment_ids: ["telephone__dial-tone__US_dial_tone"]
+    labels: ["telephone", "dial_tone"]
+  - kind: audio_telephone_persistent
+    event_id: call_connected_normal_001-aev-002
+    timestamp: 1756036804.0
+    score: 0.981
+    confidence: 0.95
+    source_segment_ids: ["telephone__dial-tone__US_dial_tone"]
+    labels: ["telephone", "dial_tone"]
+  # ---- 5~30s：LBJ_FORD_phonecall_1963 区间（yamnet baseline top1=speech 0.953）----
+  - kind: audio_telephone_persistent
+    event_id: call_connected_normal_001-aev-003
+    timestamp: 1756036808.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
     labels: ["telephone", "speech"]
   - kind: audio_telephone_persistent
-    timestamp: 1756036808.0
-    score: 0.95
-    confidence: 0.9
-    source_segment_ids: ["seg-persistent"]
+    event_id: call_connected_normal_001-aev-004
+    timestamp: 1756036812.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
+    labels: ["telephone", "speech"]
+  # ---- t=20 benign 无 vision actor（PERSON_ENTERED 不存在），验证「无视觉 → 不升级」----
+  - kind: audio_telephone_persistent
+    event_id: call_connected_normal_001-aev-005
+    timestamp: 1756036820.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
+    labels: ["telephone", "speech"]
+  - kind: audio_telephone_persistent
+    event_id: call_connected_normal_001-aev-006
+    timestamp: 1756036824.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
+    labels: ["telephone", "speech"]
+  - kind: audio_telephone_persistent
+    event_id: call_connected_normal_001-aev-007
+    timestamp: 1756036828.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
     labels: ["telephone", "speech"]
 # ---- ADR-0044 契约 v1 StoryTimeline 扩展 ----
 story_timeline:
@@ -77,7 +129,7 @@ story_timeline:
   duration_s: 30
   events:
     - {t: 0,  event: signaling,                    source: audio, detail: "ring/dial → 线路接通"}
-    - {t: 2,  event: bidirectional_speech_start,   source: audio, detail: "正常双向对话开始"}
+    - {t: 2,  event: telephone_conversation_start, source: audio, detail: "正常对话开始（单侧信道记录，F-1 命名规则）"}
     - {t: 8,  event: telephone_persistent_evidence, source: audio, detail: "持续交互语义成立（正常通话）"}
     - {t: 30, event: call_ended,                   source: audio, detail: "通话正常结束"}
   expected:

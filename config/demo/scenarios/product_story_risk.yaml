@@ -1,0 +1,39 @@
+# Product Story Browser Acceptance · risk case（ADR-0044 · Owner P1-P8 验收）
+#
+# 视觉源：真实 CCTV 视频（YOLO 可检测人）。
+# 音频事实源（Owner 裁决 2026-08-24，出处 docs/reports/RISK-MIX-SIXTUPLE-VERIFICATION-2026-08-24.md §6）：
+#   synthetic_replay —— audio_replay_path 指向 validation fixture（声明式 audio 注入，
+#   不经 AudioPipeline 推理）；audio_path（mix.wav）降级为浏览器播放介质，不承担语义判定。
+# rule_overrides 降 long_duration_seconds=30s 使停留触发 abnormal_dwell。
+# loop=true 确保观察窗内风险可重复触发。
+#
+# 运行：
+#   python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
+
+scenario_id: product_story_risk
+description: |
+  Product Story risk: 电话持续交互 + 门前人物出现 + 时间重叠 → Combined Evidence → Risk → Action
+
+source: CCTV_Surveillance_Final
+source_type: video_file
+media_path: dataset/benign/media/CCTV_Surveillance_Final.mp4
+
+start_time: "2026-08-23T12:00:00+00:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true
+
+# 播放介质（浏览器 <audio> 播放 mix.wav），非语义判定事实源
+audio_path: dataset/_canonical/audio_semantic/product_story/telephone_risk/audio/mix.wav
+# 音频语义事实源（synthetic_replay · validation fixture 声明式注入）
+audio_replay_path: src/home_perception/validation/fixtures/scenarios/product_story/telephone_risk_multimodal_001.yaml
+
+realtime_risk:
+  enabled: true
+  decision_enabled: true
+
+audio_evidence:
+  enabled: true
+
+rule_overrides:
+  long_duration_seconds: 30.0

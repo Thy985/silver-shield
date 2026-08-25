@@ -169,6 +169,14 @@ class IntegrationRunner:
         pipeline = self._assemble(
             ctx, synth.detector, memory_aware=memory_aware
         )  # L2 注入 runtime
+        # 应用 scenario.rule_overrides（与 gateway._apply_scenario_rule_overrides 同语义）：
+        # 单场景阈值微调（如 synthetic_replay 缩短时间尺度），不影响全局默认。
+        overrides = getattr(scenario.meta, "rule_overrides", None)
+        if overrides:
+            th = pipeline.rule_engine.thresholds
+            for k, v in overrides.items():
+                if hasattr(th, k):
+                    setattr(th, k, v)
         # G0-3：确定性身份桥——memory_aware 场景把 actor.id 预置为确定性 visitor_id
         # （uuid5(NS, actor.id)），使运行时 visitor 身份可预测、prior 历史可跨日匹配。
         if memory_aware:
