@@ -1196,7 +1196,13 @@ def create_app(
 
     @app.post("/demo/scenario")
     async def switch_scenario(req: Request) -> dict[str, Any]:
-        """P0-11.4 场景输入：按 scenario_id（或路径）热切换到预置场景（模拟场景 / CAVIAR 工程验证）。"""
+        """P0-11.4 场景输入：按 scenario_id（或路径）热切换到预置场景（模拟场景 / CAVIAR 工程验证）。
+
+        PR-C 错误响应增强（演示可复现性 · 比赛现场可用）：
+          - 未知 scenario：列出 Product Scenario Registry 白名单 + 引导 ``--diagnose``
+          - YAML 解析失败：附 ``yaml.YAMLError`` 错误位置（行/列）
+          - 切换失败：区分 视频缺失 / 音频路径错 / pipeline 错误 三类，给具体修复命令
+        """
         if not demo_settings.live_enabled:
             return JSONResponse(
                 status_code=404,
@@ -1213,18 +1219,47 @@ def create_app(
         scenarios_root = Path(demo_settings.scenarios_dir).resolve()
         candidate = (scenarios_root / f"{scn_id}.yaml").resolve()
         if not candidate.is_relative_to(scenarios_root) or not candidate.is_file():
+            # PR-C：错误响应列出 Product Scenario Registry 白名单（演示人员一眼看清可选）
+            registry_hint = _registry_whitelist_hint()
             return JSONResponse(
                 status_code=404,
                 content={
-                    "error": f"场景不存在: {scn_id}（应在 {demo_settings.scenarios_dir}/ 下）"
+                    "error": f"场景不存在: {scn_id}（应在 {demo_settings.scenarios_dir}/ 下）",
+                    "hint": registry_hint,
+                    "diagnose_cmd": "python scripts/run_demo.py --diagnose",
                 },
             )
         found = candidate
+        # PR-C：区分 YAML 解析错误 vs 切换失败
         try:
             sc = load_scenario(found)
+        except Exception as exc:  # noqa: BLE001  # YAML 解析失败
+            err_type = type(exc).__name__
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": f"YAML 解析失败：{err_type}",
+                    "detail": str(exc),
+                    "yaml_path": str(found),
+                    "fix_hint": f"检查 YAML 语法：python -c \"import yaml; yaml.safe_load(open({str(found)!r}))\"",
+                },
+            )
+        try:
             await gateway.switch_source(sc)
-        except Exception as exc:  # noqa: BLE001  # 场景切换失败：返回 422
-            return JSONResponse(status_code=422, content={"error": f"场景切换失败：{exc}"})
+        except Exception as exc:  # noqa: BLE001  # 场景切换失败：分类错误
+            category, fix = _categorize_switch_failure(exc, sc)
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": f"场景切换失败：{type(exc).__name__}",
+                    "category": category,
+                    "detail": str(exc),
+                    "scenario_id": sc.scenario_id,
+                    "media_path": getattr(sc, "media_path", ""),
+                    "audio_path": getattr(sc, "audio_path", "") or getattr(sc, "audio_replay_path", ""),
+                    "fix_hint": fix,
+                },
+            )
         return {
             "status": "ok",
             "scenario": sc.scenario_id,
@@ -1358,6 +1393,60 @@ def create_app(
     # 把 gateway 挂到 app.state，便于测试 / 调试访问
     app.state.gateway = gateway
     return app
+
+
+def _registry_whitelist_hint() -> str:
+    """PR-C 辅助：列 Product Scenario Registry 白名单（供 /demo/scenario 错误响应使用）。
+
+    不存在时容错返回空串，避免 silver_demo.product_scenarios 不可用时崩溃。
+    """
+    try:
+        from silver_demo.product_scenarios import list_product_scenarios
+    except ImportError:
+        return ""
+    scenarios = list_product_scenarios()
+    if not scenarios:
+        return ""
+    ids = " / ".join(f"{ps.scenario_id} [{ps.expected_product_result}]" for ps in scenarios)
+    return f"Product Scenario Registry 白名单：{ids}"
+
+
+def _categorize_switch_failure(exc: Exception, sc: Any) -> tuple[str, str]:
+    """PR-C 辅助：分类场景切换失败原因 + 给具体修复命令。
+
+    返回 (category, fix_hint)。category 取值：
+      - "media_missing": 视频/音频文件缺失
+      - "audio_invalid": 音频路径错误或解析失败
+      - "pipeline": pipeline 装配失败（YOLO 权重缺失等）
+      - "unknown": 其他
+    """
+    msg = str(exc).lower()
+    # 媒体缺失（FileNotFoundError + 路径含视频/音频关键字）
+    if "filenotfounderror" in type(exc).__name__.lower() or "no such file" in msg:
+        # 区分视频 vs 音频
+        media = getattr(sc, "media_path", "")
+        audio = getattr(sc, "audio_path", "") or getattr(sc, "audio_replay_path", "")
+        if media and ("media" in msg or "video" in msg or media in msg):
+            return (
+                "media_missing",
+                f"视频文件缺失：{media}（gitignore 资产需手动准备；或启动时用 --video <path> 覆盖）",
+            )
+        if audio and ("audio" in msg or audio in msg):
+            return (
+                "audio_invalid",
+                f"音频文件缺失/无效：{audio}（检查路径或音频解码器）",
+            )
+        return (
+            "media_missing",
+            f"文件缺失：{exc}（检查 YAML 中 media_path / audio_path 是否指向真实文件）",
+        )
+    # pipeline 装配失败（torch / YOLO 权重）
+    if "weight" in msg or "yolo" in msg or "torch" in msg or "ultralytics" in msg:
+        return (
+            "pipeline",
+            f"AI 运行时装配失败：{exc}（torch / ultralytics 权重问题，详见 docs/DEVELOPMENT_ENV.md）",
+        )
+    return ("unknown", f"未分类错误：{exc}（运行 python scripts/run_demo.py --diagnose 排查）")
 
 
 # 模块级 app（uvicorn silver_demo.gateway:app 直接启动）

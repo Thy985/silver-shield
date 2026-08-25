@@ -199,6 +199,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="列出 Product Scenario Registry 中所有产品演示场景（含 RAISED/WARN/MONITOR 与启动命令），不启动网关、不做环境预检",
     )
+    p.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="运行 5 项自检诊断（环境 / Registry / yaml / 媒体 / 端口）后退出，不启动网关；适合比赛现场开机前使用",
+    )
     return p.parse_args()
 
 
@@ -225,6 +230,28 @@ def _list_product_scenarios() -> None:
         print()
     print(f"共 {len(scenarios)} 个产品演示场景（白名单冻结，不得新增 / 删除）。")
     print("=" * 72)
+
+
+def _print_multi_scenario_readiness() -> None:
+    """打印 3 场景就绪状态（仅媒体 / yaml 部分，零 torch 依赖）。
+
+    在 ``_run_live`` / ``_run_flagship`` 启动 banner 前调用，让演示人员一眼看清
+    3 场景的视频/音频是否就位；缺失时给具体修复命令（不阻塞启动，可降级 synthetic）。
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        from demo_diagnostics import diagnose_media_assets
+    except ImportError:
+        return  # 精简部署容错：diagnose 模块不可用时跳过
+
+    result = diagnose_media_assets(ROOT)
+    print(f"\n产品场景就绪状态：{result.status.value}")
+    for line in result.details:
+        print(line)
+    if result.status.value == "WARN":
+        print("  ⚠  缺失资产将降级到 synthetic 帧源演示，视觉效果有限")
+        print(f"      修复：见 {result.fix_hint}" if result.fix_hint else "")
+    print()
 
 
 def _register_synthetic_source() -> None:
@@ -327,6 +354,9 @@ def _run_live(args: argparse.Namespace) -> None:
         atexit.register(lambda: temp_path.unlink(missing_ok=True))
     preflight_media(scenario_path)
 
+    # 启动前：3 场景就绪状态（仅当前场景之外的场景给提示；当前场景已通过 preflight_media 校验）
+    _print_multi_scenario_readiness()
+
     os.environ["DEMO_SCENARIO"] = str(scenario_path)
     if args.host:
         os.environ["DEMO_HOST"] = args.host
@@ -407,6 +437,9 @@ def _run_flagship(args: argparse.Namespace) -> None:
     if args.port:
         os.environ["DEMO_PORT"] = str(args.port)
 
+    # 启动前：3 场景就绪状态（让演示人员一眼看清演示资产是否齐备）
+    _print_multi_scenario_readiness()
+
     # 确定 case_artifacts_dir：优先 DEMO_CASE_ARTIFACTS；否则尽力本地构建 high_risk 案例
     artifacts_dir = os.environ.get("DEMO_CASE_ARTIFACTS")
     if not artifacts_dir or not (Path(artifacts_dir) / "case_viewer.html").is_file():
@@ -441,6 +474,17 @@ def main() -> None:
     if args.list_scenarios:
         _list_product_scenarios()
         sys.exit(0)
+
+    # --diagnose 在环境预检前处理：跑 5 项诊断（含环境）后退出，不启动网关
+    if args.diagnose:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            from demo_diagnostics import print_diagnostics, run_all_diagnostics
+        except ImportError as exc:
+            sys.stderr.write(f"❌ 无法加载 demo_diagnostics：{exc}\n")
+            sys.exit(2)
+        results = run_all_diagnostics(repo_root=ROOT)
+        sys.exit(print_diagnostics(results))
 
     # 1) 环境预检（纯标准库，不拉 torch）
     ok, lines, missing = run_checks()
