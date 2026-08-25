@@ -1,0 +1,135 @@
+{
+  "schema_version": "1.0",
+  "report_id": "vision-eval-product-story-risk-2026-08-24",
+  "scenario_id": "product_story_risk",
+  "captured_at": "2026-08-24",
+  "pipeline": "Playwright screenshots -> 5-dim Visual Rubric -> Vision Judge -> structured report",
+  "rubric_frozen": [
+    "信息层级",
+    "叙事完整性",
+    "调试元素残留",
+    "视觉压迫感",
+    "产品感"
+  ],
+  "verdict_enum": ["PASS", "WARN", "FAIL"],
+  "rounds": [
+    {
+      "round": 1,
+      "note": "首轮评审（修复前截图），发现 FAIL x2 图 / WARN x4 图",
+      "summary": {"pass": 11, "warn": 14, "fail": 5},
+      "shots": [
+        {"file": "01-video-sensor.png", "verdict": "FAIL"},
+        {"file": "02-behavior-timeline.png", "verdict": "WARN"},
+        {"file": "03-risk-explain-card.png", "verdict": "WARN"},
+        {"file": "04-risk-signals.png", "verdict": "FAIL"},
+        {"file": "05-action-closure.png", "verdict": "WARN"},
+        {"file": "06-memory-context.png", "verdict": "WARN"}
+      ]
+    },
+    {
+      "round": 2,
+      "note": "产品修复后重走完整流水线（六张重截重评）；30 项无未解释 FAIL",
+      "summary": {"pass": 26, "warn": 4, "fail": 0},
+      "shots": [
+        {
+          "file": "01-video-sensor.png",
+          "anchor": "#video-sensor-product_story_risk",
+          "verdict": "WARN",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "视频主画面+时间戳+AI事件标签+播放控件层级清晰"},
+            "叙事完整性": {"verdict": "PASS", "note": "感知→判断→回溯叙事链完整"},
+            "调试元素残留": {"verdict": "WARN", "note": "残留：进度条 '--' 占位符；'受控演示输入' 工程语境；Case Time 小数精度"},
+            "视觉压迫感": {"verdict": "PASS", "note": "深色背景高对比，无密集弹窗"},
+            "产品感": {"verdict": "PASS", "note": "自然语言统一，无技术黑话"}
+          }
+        },
+        {
+          "file": "02-behavior-timeline.png",
+          "anchor": "#behavior-timeline-product_story_risk",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "倒序+重要性分层清晰，风险项优先级突出"},
+            "叙事完整性": {"verdict": "PASS", "note": "首次出现→停留超阈值→风险预警闭环自洽"},
+            "调试元素残留": {"verdict": "PASS", "note": "behavioral(vision) 已翻译为中文，英文枚举彻底消除"},
+            "视觉压迫感": {"verdict": "WARN", "note": "窄区域条目密度偏高，重复预警未折叠（打磨建议）"},
+            "产品感": {"verdict": "PASS", "note": "图标语义明确，术语统一"}
+          }
+        },
+        {
+          "file": "03-risk-explain-card.png",
+          "anchor": "#lrk-card-product_story_risk",
+          "verdict": "WARN",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "等级→原因→规则→强度→建议动线清晰"},
+            "叙事完整性": {"verdict": "PASS", "note": "为什么触发/多严重/怎么做三问齐答"},
+            "调试元素残留": {"verdict": "WARN", "note": "残留：触发规则 chips 旁裸 score 0.50（warning_id 与英文枚举已修复）"},
+            "视觉压迫感": {"verdict": "PASS", "note": "颜色克制、渐变柔和"},
+            "产品感": {"verdict": "PASS", "note": "用语本土化、建议明确"}
+          }
+        },
+        {
+          "file": "04-risk-signals.png",
+          "anchor": "#live-signals-product_story_risk",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "状态→等级→内容→元数据动线合理"},
+            "叙事完整性": {"verdict": "PASS", "note": "事件全貌可独立理解"},
+            "调试元素残留": {"verdict": "PASS", "note": "UUID 片段与英文枚举完全消失，本轮修复彻底"},
+            "视觉压迫感": {"verdict": "PASS", "note": "浅绿温和，状态标签克制"},
+            "产品感": {"verdict": "PASS", "note": "术语本地化到位，界面精致"}
+          }
+        },
+        {
+          "file": "05-action-closure.png",
+          "anchor": "#fs-action-closure-product_story_risk",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "三端任务卡主次分明"},
+            "叙事完整性": {"verdict": "PASS", "note": "系统建议→谁处理→进度的闭环清晰"},
+            "调试元素残留": {"verdict": "WARN", "note": "底部说明仍有『只读证据节点』『证据时间线』内部术语（打磨项）"},
+            "视觉压迫感": {"verdict": "PASS", "note": "密度适中留白适度"},
+            "产品感": {"verdict": "PASS", "note": "专业可信、操作路径直观"}
+          }
+        },
+        {
+          "file": "06-memory-context.png",
+          "anchor": "#memory-context-product_story_risk",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "标题突出、空态居中降噪"},
+            "叙事完整性": {"verdict": "PASS", "note": "空态如实呈现且文案友好（如实记录原则）"},
+            "调试元素残留": {"verdict": "PASS", "note": "无调试痕迹"},
+            "视觉压迫感": {"verdict": "PASS", "note": "柔和配色呼吸感良好"},
+            "产品感": {"verdict": "PASS", "note": "风格统一符合产品调性"}
+          }
+        }
+      ]
+    }
+  ],
+  "fail_resolution": [
+    {
+      "defect_id": "D-I1",
+      "round_1_evidence": "04 图 signal_id/subject UUID 片段裸显、category/severity 英文枚举裸显；01 图 Visual perception/VM-10 条款号泄漏",
+      "fix": "live_stream.js rt-card 人话化（UUID/数值降级 data-* 属性；levels/category 中文映射）；render.py 说明文人话化去 VM-10",
+      "round_2_verdict": "resolved"
+    },
+    {
+      "defect_id": "D-I2",
+      "round_1_evidence": "behavioral(vision) 枚举在 02/03/04 三图裸露",
+      "fix": "live_stream.js _REASON_ZH 增加确定性译文映射（实时风险信号: 行为特征（视觉）），BA REASON_RUNTIME_ALLOWLIST 同步（润色白名单机制既有架构）",
+      "round_2_verdict": "resolved"
+    },
+    {
+      "defect_id": "G-H1",
+      "round_1_evidence": "H 步骤 console/pageerror=0 校验抓到 ReferenceError: echarts is not defined（Live 页 Evidence Graph 从未渲染成功）",
+      "fix": "render.py toggle-gated 内联（details 首次展开才 init echarts）",
+      "round_2_verdict": "resolved"
+    }
+  ],
+  "polish_backlog": [
+    {"id": "W-1", "shot": "01-video-sensor.png", "note": "进度条 '--' 占位符改总时长语义；『受控演示输入』改演示模式措辞；Case Time 秒数口语化"},
+    {"id": "W-2", "shot": "02-behavior-timeline.png", "note": "重复预警合并/折叠，增加行间距"},
+    {"id": "W-3", "shot": "03-risk-explain-card.png", "note": "trigger chips 裸 score 0.50 定性化或 data-* 化（涉 D0 AU-02 断言边界，需契约联动）"},
+    {"id": "W-4", "shot": "05-action-closure.png", "note": "底部『只读证据节点/证据时间线』改用户友好表述（如『系统自动存档，历史可查』)"}
+  ]
+}
