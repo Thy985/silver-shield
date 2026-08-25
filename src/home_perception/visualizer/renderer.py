@@ -144,7 +144,15 @@ _AUDIO_KIND_ZH = {
     "audio_speech_rapid": "急促言语",
     "audio_voice_raised": "高声争吵",
     "audio_telephone_persistent": "持续电话声音",
-    "audio_distress_cry": "哭诉求助声",
+    # H-5 已知误识别类别（Owner 处置矩阵 · SSOT v3.8/v4.0）：产品语义降级——该类别
+    # 对正常电话语音存在稳定误报（六组素材实证，含 F-1 benign normal_call fixture，
+    # 2026-08-24 T1 证伪实验复现），禁止任何「哭腔/求助/哭诉求助声」语义断言口吻，
+    # 主标签统一降级为「声学异常活动」（perception-only，不作为风险升级依据，
+    # audio→risk 链未接通）。Perception ≠ Truth ≠ Risk Decision。
+    # P0-③（Owner 2026-08-25 措辞收紧）：摘除括号内「当前算法判定」（避免主标签复合
+    # 名称在窄卡片内被自动按字换行成竖排感）；详情层 audio_table caution_note 已说明
+    # 「算法候选：疑似情绪异常语音」语义背景，主标签保持纯净。
+    "audio_distress_cry": "声学异常活动",
     "audio_anomaly_other": "其他异常声学信号",
 }
 
@@ -761,19 +769,130 @@ def _render_gate(scenario: ScenarioEvidence) -> str:
     </table>"""
 
 
+def _signal_strength_label(score: float) -> str:
+    """音频信号强度定性描述（Live 产品页人话化用 · D0 AU-01）。
+
+    score/confidence 数值仅对工程排障有意义，对居民 / 评委呈现定性档位即可；
+    阈值与 live_stream.js `_strengthZh` 保持同档（0.75 / 0.45），防两端文案漂移。
+    """
+    if score >= 0.75:
+        return "声学特征强烈明确"
+    if score >= 0.45:
+        return "声学特征明显"
+    return "声学特征微弱"
+
+
+# 与 silver_demo.gateway._set_live_audio_events 同阈值约定：超过即视为 Unix 绝对秒。
+_EPOCH_TS_THRESHOLD_S = 1_000_000.0
+
+
+def _audio_ts_display_labels(values: list[float]) -> list[str]:
+    """音频时间戳的显示层格式化（SSOT v4.0 · epoch 裸显产品表面缺陷修复）。
+
+    数据层契约不变（timestamp 仍为原始 Unix 秒，VM-9 投影保真）；仅显示装饰：
+    - 全体 ≤ 阈值（REAL AudioPipeline 相对秒）→ 原样一位小数；
+    - 任一 > 阈值（synthetic_replay fixture 携带绝对秒）→ 以首事件为原点的
+      会话相对秒（与 Case Time 轨 T0 归一约定一致），杜绝 1756036800.0s 类
+      工程数值上屏。调用方保证 ``values`` 非空。
+    """
+    if max(values) > _EPOCH_TS_THRESHOLD_S:
+        origin = min(values)
+        return [f"{v - origin:.1f}s" for v in values]
+    return [f"{v:.1f}s" for v in values]
+
+
+def _render_audio_event_locator(audio: list[dict]) -> str:
+    """声学事件定位条（SSOT v4.0 T3 · Owner 裁决：波形只标「检测时刻」位置）。
+
+    纯静态 SVG 时间轴：每个音频事件按 timestamp 定位一个中性圆点——它只是
+    「检测事件发生位置的可视化」，绝不构成对事件语义（如哭诉）的任何背书
+    （H-5 semantic collapse 六组素材实证）。零 WS 依赖，晚开页面可见全程全貌；
+    与动态 rms_window 波形（过程感）互补。timestamp 解析失败的事件跳过
+    （fail-closed 不编造位置）；无有效事件返回空串（AC-12 不编造空卡）。
+    """
+    points: list[tuple[float, int]] = []
+    for idx, a in enumerate(audio):
+        try:
+            ts = float(str(a.get("timestamp", "")).replace("s", "").strip())
+        except ValueError:
+            continue
+        points.append((max(ts, 0.0), idx))
+    if not points:
+        return ""
+    # 以首事件为原点归一化（timestamp 可能是 epoch 绝对秒或相对 case_time 秒，
+    # 归一化同时消除大数量级——否则固定步长刻度循环在 epoch 输入下等效死循环）。
+    origin = min(t for t, _ in points)
+    span = max(max(t for t, _ in points) - origin, 1.0)
+    is_epoch = max(t for t, _ in points) > _EPOCH_TS_THRESHOLD_S
+    # 刻度与悬浮标题走显示层标签（epoch 输入显示会话相对秒，数据契约不变）。
+    disp_labels = _audio_ts_display_labels([t for t, _ in points])
+    W, H, BASE_Y = 400, 52, 30
+    dots = []
+    for (ts, _idx), d_label in zip(points, disp_labels):
+        x = round((ts - origin) / span * (W - 16) + 8, 1)
+        title = _esc(f"声学事件 @ {d_label}")
+        dots.append(
+            f'<circle cx="{x}" cy="{BASE_Y}" r="4" fill="#64748b">'
+            f"<title>{title}</title></circle>"
+        )
+    ticks = []
+    n_ticks = 6
+    for i in range(n_ticks + 1):
+        off = span * i / n_ticks
+        x = round(off / span * (W - 16) + 8, 1)
+        label_val = off if is_epoch else origin + off
+        label = f"{label_val:.0f}" if span > 20 else f"{label_val:.1f}"
+        ticks.append(
+            f'<line x1="{x}" y1="{BASE_Y - 4}" x2="{x}" y2="{BASE_Y + 4}" '
+            'stroke="#cbd5e1" stroke-width="1"/>'
+            f'<text x="{x}" y="{BASE_Y + 14}" font-size="9" fill="#94a3b8" '
+            f'text-anchor="middle">{_esc(label)}s</text>'
+        )
+    dots_svg = "".join(dots)
+    ticks_svg = "".join(ticks)
+    return f"""
+      <div class="audio-event-locator">
+        <svg viewBox="0 0 {W} {H}" width="100%" height="{H}" role="img"
+             aria-label="声学事件定位时间轴">
+          <line x1="8" y1="{BASE_Y}" x2="{W - 8}" y2="{BASE_Y}"
+                stroke="#e2e8f0" stroke-width="2"/>{ticks_svg}{dots_svg}
+        </svg>
+        <p class="muted">● 声学事件检测时刻定位（仅标注检测发生的时间位置，不代表对声音语义的判定结论；共 {len(points)} 个事件）。</p>
+      </div>"""
+
+
+def _parse_audio_ts(value: object) -> float | None:
+    """音频 timestamp 宽容解析（容忍 ``"12.5s"`` 形态）；失败返回 None（fail-closed）。"""
+    try:
+        return float(str(value).replace("s", "").strip())
+    except ValueError:
+        return None
+
+
 def _render_audio_evidence(scenario: ScenarioEvidence) -> str:
     """🔊 音频证据区块（VM-13 Phase C：仅真实音频符号进入 canonical 后渲染）。
 
     无音频证据（``audio_evidence`` 为空）时返回空串——绝不编造空卡片（AC-12 / VM-7）。
     渲染只展示投影白名单字段（kind/score/confidence/labels/segments），不渲染媒体字节
     / text / transcript（VM-9）。表格稳定锚点 ``audio-<sid>`` 供验收断言。
+
+    D0 AU-01（B1）：Live 产品页（mode=live）行内 score=/conf= 数值对用户无意义，
+    以定性强度描述替代；Artifact 审计视图保留原始数值字段（既有渲染契约不变）。
     """
     audio = scenario.get("audio_evidence") or ()
     if not audio:
         return ""  # AC-12：无音频证据不渲染区块
+    humanized = str(scenario.get("mode", "")) == "live"
+    value_head = "<th>信号强度</th>" if humanized else "<th>score / conf</th>"
     rows: list[str] = []
-    for a in audio:
-        ts = _esc(str(a.get("timestamp", "")))
+    # 显示层时间标签：epoch 绝对秒 → 会话相对秒（SSOT v4.0，数据契约不变，
+    # 原始值保留在 data-ts 供排障审计）；解析失败的行回退原样字符串。
+    parsed_ts = [_parse_audio_ts(a.get("timestamp")) for a in audio]
+    numeric_ts = [t for t in parsed_ts if t is not None]
+    disp_labels = iter(_audio_ts_display_labels(numeric_ts)) if numeric_ts else iter([])
+    for a, t_val in zip(audio, parsed_ts):
+        raw_ts = str(a.get("timestamp", ""))
+        ts = _esc(next(disp_labels)) if t_val is not None else _esc(raw_ts)
         # 人话化：显示「中文（原始枚举）」，既给非技术读者可读文案，
         # 又保留原始枚举供审计（测试可继续断言原始枚举串）。
         kind = _esc(_translate_audio_kind(str(a.get("kind", ""))))
@@ -781,21 +900,37 @@ def _render_audio_evidence(scenario: ScenarioEvidence) -> str:
         conf = float(a.get("confidence") or 0.0)
         labels = ", ".join(_esc(str(v)) for v in (a.get("labels") or ()))
         segs = ", ".join(_esc(str(v)) for v in (a.get("source_segment_ids") or ()))
+        if humanized:
+            # 数值降级为 td 的 data-* 属性（不进 textContent），与 live_stream.js 审计对等。
+            value_cell = (
+                f'<td data-score="{score:.2f}" data-confidence="{conf:.2f}">'
+                f"{_esc(_signal_strength_label(score))}</td>"
+            )
+        else:
+            value_cell = f"<td>score={score:.2f} · conf={conf:.2f}</td>"
         rows.append(
             f"""      <tr>
         <td>{_MODALITY_MARKER["AUDIO"]}</td>
-        <td>{kind} <span class="muted">@ {ts}</span></td>
-        <td>score={score:.2f} · conf={conf:.2f}</td>
+        <td>{kind} <span class="muted" data-ts="{_esc(raw_ts)}"> @ {ts}</span></td>
+        {value_cell}
         <td>{labels}</td>
         <td>{segs}</td>
       </tr>"""
         )
+    kinds = {str(a.get("kind", "")) for a in audio}
+    caution_note = (
+        "\n      <p class='muted audio-caution-note'>当前版本「声学异常活动」类别存在"
+        "正常电话语音误识别（已知缺陷 H-5），暂不作为风险升级依据。</p>"
+        if "audio_distress_cry" in kinds
+        else ""
+    )
     return f"""
       <h3 id="audio-{_esc(scenario['scenario_id'])}" class="view-anchor">⑥ Audio Evidence（音频感知证据）</h3>
+      {_render_audio_event_locator(audio)}
       <table class="audio-table">
-        <tr><th></th><th>kind</th><th>score / conf</th><th>labels</th><th>segments</th></tr>
+        <tr><th></th><th>kind</th>{value_head}<th>labels</th><th>segments</th></tr>
         {''.join(rows)}
-      </table>"""
+      </table>{caution_note}"""
 
 
 def _render_scenario(scenario: ScenarioEvidence) -> tuple[str, str]:

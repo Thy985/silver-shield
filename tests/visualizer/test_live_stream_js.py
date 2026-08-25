@@ -557,3 +557,243 @@ def test_live_stream_js_draw_waveform():
     )
     assert r.returncode == 0, f"waveform 断言失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
 
+
+# ---------------------------------------------------------------------------
+# SSOT v4.0（Owner 裁决 2026-08-24）：T2 loop 重播 / T5 Debug Mode / epoch 显示
+# ---------------------------------------------------------------------------
+
+
+def _run_node(harness: str, src: str) -> str:
+    """写临时 harness + 引擎源码 → node 运行 → 返回 stdout（非零退出即断言失败）。"""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        harness_path = f.name
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(src)
+        src_path = f.name
+    r = subprocess.run(
+        ["node", harness_path, src_path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert r.returncode == 0, f"live_stream.js 断言失败\nSTDOUT: {r.stdout}\nSTDERR: {r.stderr}"
+    return r.stdout
+
+
+_MOCK_DOM_JS = """
+const fs = require('fs');
+function makeEl() {
+  var el = { attrs: {}, html: '', text: '', className: '', style: {}, onclick: null,
+    _children: [],
+    classList: { add: function () {}, remove: function () {} },
+    parentNode: { querySelector: function () { return null; }, insertBefore: function () {},
+      removeChild: function () {}, nextSibling: null },
+    getAttribute: function (k) { return this.attrs[k] != null ? this.attrs[k] : null; },
+    setAttribute: function (k, v) { this.attrs[k] = String(v); },
+    insertAdjacentHTML: function (pos, h) { this.html += h; },
+    appendChild: function (c) { this._children.push(c); if (c) c.parentNode = el; return c; },
+    remove: function () { this._removed = true; },
+    querySelector: function () { return null; },
+    querySelectorAll: function () { return []; },
+  };
+  Object.defineProperty(el, 'textContent', {
+    set: function (v) { this.text = String(v); },
+    get: function () { return this.text; },
+  });
+  return el;
+}
+const table = makeEl();   // table.audio-table
+const ul = makeEl();      // .timeline
+const codeEl = makeEl(); codeEl.text = 'live_telephone_risk';
+const closurePanel = makeEl();
+closurePanel.getAttribute = function (k) { return k === 'data-ws-path' ? '/ws' : null; };
+var locatorRemoved = false;
+const locatorEl = { remove: function () { locatorRemoved = true; } };
+const doc = {
+  querySelector: function (sel) {
+    if (sel === '.scenario-title code') return codeEl;
+    if (sel === '.timeline') return ul;
+    if (sel === 'table.audio-table') return table;
+    if (sel === '.closure-panel') return closurePanel;
+    return null;
+  },
+  querySelectorAll: function (sel) {
+    if (sel === 'table.audio-table') return [table];
+    if (sel === '.audio-event-locator') return locatorRemoved ? [] : [locatorEl];
+    return [];
+  },
+  getElementById: function () { return null; },
+  // 最小 DOM 解析：innerHTML 设入 → firstChild.outerHTML 透出（_applyDelta 节点重建）。
+  createElement: function () {
+    var e = makeEl();
+    var _inner = '';
+    Object.defineProperty(e, 'innerHTML', {
+      set: function (v) {
+        _inner = String(v);
+        e.firstChild = { outerHTML: _inner, getAttribute: function () { return null; },
+          parentNode: e, className: '', style: {}, textContent: '', onclick: null,
+          querySelector: function () { return null; }, querySelectorAll: function () { return []; } };
+      },
+      get: function () { return _inner; },
+      configurable: true,
+    });
+    return e;
+  },
+  body: makeEl(),
+};
+global.document = doc;
+global.location = { protocol: 'http:', host: '127.0.0.1:8765', search: __SEARCH__ };
+global.WebSocket = function () { global._ws = this; };
+global.window = global;
+eval(fs.readFileSync(process.argv[2], 'utf-8'));
+"""
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("node"),
+    reason="CI 无 node 则跳过（html-inline-js 纪律）",
+)
+def test_live_stream_js_loop_wrap_resets_audio_dedup_and_replays():
+    """SSOT v4.0 T2：frame_tick.loop_count 回绕 → 清空音频判重集合 + 移除定位条；
+    同一 event_id 的证据在轮内仍幂等去重、跨轮回绕后重新涌现（重播语义）。
+    晚开页面因此可在新一轮观察到事件按时间轴逐条流入。"""
+    harness = _MOCK_DOM_JS.replace("__SEARCH__", "''") + textwrap.dedent(
+        r"""
+        const AUDIO = { event_id: 'evt_loop_1', ref: 'live://audio/1', timestamp: '1756036800',
+          kind: 'audio_telephone_persistent', score: 0.9, confidence: 0.95,
+          labels: ['telephone'], source_segment_ids: ['seg-1'] };
+        const mkDelta = () => ({ type: 'evidence_delta', timeline: [],
+          audio: [JSON.parse(JSON.stringify(AUDIO))], case_time: [], counts: {} });
+        const tick = (i, lc) => global._ws.onmessage({ data: JSON.stringify(
+          { type: 'frame_tick', frame_index: i, case_time: i * 30, loop_count: lc }) });
+        const count = () => (table.html.match(/audio_telephone_persistent/g) || []).length;
+
+        tick(0, 0);                       // 初始化 loop 基线（首轮）
+        global._ws.onmessage({ data: JSON.stringify(mkDelta()) });
+        const first = count();
+        global._ws.onmessage({ data: JSON.stringify(mkDelta()) });   // 轮内重放同 delta
+        const dup = count();
+        tick(1, 1);                       // loop 回绕：0 → 1
+        global._ws.onmessage({ data: JSON.stringify(mkDelta()) });   // 同 event_id 再流一次
+        const replay = count();
+
+        const ok = first === 1 && dup === 1 && replay === 2 && locatorRemoved === true;
+        console.log(ok ? 'LOOP_REPLAY_OK'
+          : JSON.stringify({ first: first, dup: dup, replay: replay, locatorRemoved: locatorRemoved }));
+        process.exit(ok ? 0 : 1);
+        """
+    )
+    out = _run_node(harness, _live_stream_source())
+    assert "LOOP_REPLAY_OK" in out
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("node"),
+    reason="CI 无 node 则跳过（html-inline-js 纪律）",
+)
+def test_live_stream_js_debug_mode_metadata_annotations():
+    """SSOT v4.0 T5：``?debug=1`` 显式调试意图下，audio-table 行的 score/conf
+    data-* 元数据以 .debug-meta 标注显形；Product Mode（默认无参数）零标注——
+    工程数值不回灌产品界面，且不引入新数据通道。"""
+    delta_js = textwrap.dedent(
+        r"""
+        global._ws.onmessage({ data: JSON.stringify({
+          type: 'evidence_delta', timeline: [],
+          audio: [{ event_id: 'evt_dbg_1', ref: 'live://audio/1', timestamp: '1756036800',
+                    kind: 'audio_voice_raised', score: 0.7, confidence: 0.8,
+                    labels: ['raised'], source_segment_ids: ['seg-1'] }],
+          case_time: [], counts: {},
+        }) });
+        """
+    )
+    # 表 mock 需支持 td[data-score] 解析（_applyDebugAnnotations 的查询面）。
+    # 关键：按匹配序号注册表复用同一 td 对象——引擎标注与探针读取必须是同一实例
+    # （querySelectorAll 每次调用都重解析 html，若每次新建对象，_note 会丢失）。
+    td_mock = """
+var _tdReg = [];
+table.querySelectorAll = function (sel) {
+  if (sel !== 'td[data-score]') return [];
+  var out = [], re = /<td data-score="([\\d.]+)" data-confidence="([\\d.]+)">/g, m, i = 0;
+  while ((m = re.exec(table.html)) !== null) {
+    var td = _tdReg[i];
+    if (!td) {
+      td = makeEl();
+      td.attrs['data-score'] = m[1];
+      td.attrs['data-confidence'] = m[2];
+      td.querySelector = function (sel2) { return this._note != null ? this._note : null; };
+      td.appendChild = function (c) { this._note = c; return c; };
+      _tdReg[i] = td;
+    }
+    out.push(td);
+    i++;
+  }
+  return out;
+};
+"""
+    probe = """
+var tds = table.querySelectorAll('td[data-score]');
+console.log(JSON.stringify({
+  rows: tds.length,
+  annotated: tds.filter(function (t) { return t._note != null; }).length,
+  sample: tds.length && tds[0]._note ? tds[0]._note.text : '',
+  cls: tds.length && tds[0]._note ? tds[0]._note.className : '',
+}));
+process.exit(0);   // 引擎内存在常驻定时器，必须显式退出
+"""
+    # Product Mode：行存在但零标注。
+    out_p = _run_node(
+        _MOCK_DOM_JS.replace("__SEARCH__", "''") + td_mock + delta_js + probe,
+        _live_stream_source(),
+    )
+    import json as _json
+
+    info_p = _json.loads(out_p.strip().splitlines()[-1])
+    assert info_p["rows"] == 1 and info_p["annotated"] == 0, (
+        f"Product Mode 出现调试标注或行缺失：{info_p}"
+    )
+    # Debug Mode（?debug=1）：同一数据通道，标注显形。
+    out_d = _run_node(
+        _MOCK_DOM_JS.replace("__SEARCH__", "'?debug=1'") + td_mock + delta_js + probe,
+        _live_stream_source(),
+    )
+    info_d = _json.loads(out_d.strip().splitlines()[-1])
+    assert info_d["rows"] == 1 and info_d["annotated"] == 1, (
+        f"Debug Mode 标注未显形：{info_d}"
+    )
+    assert "score=0.70" in info_d["sample"] and "conf=0.80" in info_d["sample"]
+    assert "debug-meta" in info_d["cls"]
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("node"),
+    reason="CI 无 node 则跳过（html-inline-js 纪律）",
+)
+def test_live_stream_js_epoch_timestamp_relative_display():
+    """SSOT v4.0：epoch 绝对秒时间戳 → 行显示会话相对秒；原始值保留 data-ts。
+    与 renderer._audio_ts_display_labels 同规则（双端防漂移）。"""
+    harness = _MOCK_DOM_JS.replace("__SEARCH__", "''") + textwrap.dedent(
+        r"""
+        const mkA = (id, ts) => ({ event_id: id, ref: 'live://audio/' + id, timestamp: ts,
+          kind: 'audio_telephone_persistent', score: 0.9, confidence: 0.95,
+          labels: ['telephone'], source_segment_ids: ['seg-1'] });
+        const send = (a) => global._ws.onmessage({ data: JSON.stringify({
+          type: 'evidence_delta', timeline: [], audio: [a], case_time: [], counts: {} }) });
+        send(mkA('e1', '1756036800'));
+        send(mkA('e2', '1756036804'));
+        send(mkA('e3', '12.5'));   // REAL pipeline 相对秒路径
+        const has = (s) => table.html.indexOf(s) !== -1;
+        const ok = has('@ 0.0s') && has('@ 4.0s') && has('@ 12.5s')
+          && has('data-ts="1756036800"')
+          && table.html.match(/@ 17\d{8}/) === null;
+        console.log(ok ? 'EPOCH_DISPLAY_OK' : table.html);
+        process.exit(ok ? 0 : 1);
+        """
+    )
+    out = _run_node(harness, _live_stream_source())
+    assert "EPOCH_DISPLAY_OK" in out
+

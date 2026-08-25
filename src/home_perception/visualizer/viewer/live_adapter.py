@@ -70,13 +70,26 @@ _LIVE_REF_PREFIX = "live"
 
 # Live Case Time 音频 Lane 标签（仅本地最小映射，不 import renderer 生产展示表；
 # 与 loader 的 audio kind → 中文标签语义对齐，缺失回落原始枚举，绝不编造）。
+# P0-③（Owner 2026-08-25）：所有声学异常类降级为"声学异常活动"主标签，
+# 详见 renderer._AUDIO_KIND_ZH + audio_table caution_note 注释，禁止任何"哭腔/求助"语义。
 _AUDIO_KIND_ZH: dict[str, str] = {
     "audio_voice_raised": "音高升高",
     "audio_speech_rapid": "语速加快",
-    "audio_distress_cry": "哭腔/求助",
+    "audio_distress_cry": "声学异常活动",
     "audio_telephone_persistent": "持续电话声音",
     "audio_anomaly_other": "其他声学异常",
 }
+
+# 音频证据 provenance 判定（Provenance 显性化 · Owner 裁决 2026-08-24）：
+# 注入方声明优先——synthetic_replay 通道（scripts/run_demo.py）注入的事件携带
+# ``provenance="SYNTHETIC_REPLAY"``，投影为 FIXTURE（固定测试素材·非实时），
+# 禁止混入 REAL_SENSOR 与真实推理不可区分；REAL pipeline 事件无该字段 → REAL_SENSOR。
+_SYNTHETIC_REPLAY_PROVENANCE = "SYNTHETIC_REPLAY"
+
+
+def _audio_provenance_kind(la: dict) -> str:
+    """按注入方声明派生音频证据 provenance_kind（缺省 REAL_SENSOR，行为不变）。"""
+    return "FIXTURE" if la.get("provenance") == _SYNTHETIC_REPLAY_PROVENANCE else "REAL_SENSOR"
 
 
 class LiveIngestError(ValueError):
@@ -165,6 +178,8 @@ class LiveAudioFrame(TypedDict):
     labels: tuple[str, ...]            # ← .labels / .scored_labels
     event_id: NotRequired[str]         # ← AudioPerceptionEvent.event_id（透传，可选，溯源/幂等）
     rms: NotRequired[float]            # ← Phase 3.2: 音频能量 RMS 采样（供 Waveform 组件消费）
+    provenance: NotRequired[str]       # ← 注入方来源声明（synthetic_replay → SYNTHETIC_REPLAY；
+                                       #    REAL pipeline 事件缺省，投影层据此派生 provenance_kind）
 
 
 def _require_float(obj: Any, key: str, *, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -238,6 +253,10 @@ def audio_result_to_live_audio(audio_result: Any) -> LiveAudioFrame:
         **({"event_id": event_id} if event_id is not None else {}),
         **({"rms": float(_pick(audio_result, "rms"))}
            if isinstance(_pick(audio_result, "rms", default=None), (int, float)) else {}),
+        **({"provenance": raw_prov}
+           if isinstance(
+               (raw_prov := _pick(audio_result, "provenance", default=None)), str
+           ) and raw_prov else {}),
     )
 
 
@@ -582,6 +601,13 @@ class ProjectionAccumulator:
         # Phase 3.2: rms_window 连续波形（最近 N 个 RMS 采样，供 Waveform 组件消费）
         self._rms_window_size = 20
         self._rms_window: list[float] = []
+        # P0-②：track 聚合状态（替代逐帧 frame 节点：30+ 重复节点折叠为单一 track_summary 节点）
+        # 单 ref 稳定：避免被 _timelineNodesByRef 折叠逻辑误处理；累积字段随摄入单调更新。
+        self._track_first_frame: int = -1
+        self._track_last_frame: int = -1
+        self._track_total_frames: int = 0
+        self._track_total_detections: int = 0
+        self._track_total_warnings: int = 0
 
     @property
     def n_frames(self) -> int:
@@ -668,6 +694,47 @@ class ProjectionAccumulator:
         return self
 
     # ------------------------------------------------------------------
+    # P0-② track 聚合（替代逐帧 frame 节点：30+ 重复折叠为单一 track_summary 节点）
+    # ------------------------------------------------------------------
+    # Live 帧的 detections 不携带 track_id（运行时 detection 输出去重在前端跟踪层完成，
+    # 上行契约未含 track_id），无法做真正的跨帧 track 关联；故改为 **会话级时间聚合**——
+    # 把"持续在场 X.X 秒 · 累计 N 检测 · M 警告"作为一个聚合节点投影到时间轴，根除
+    # 30 条同形 frame 节点造成的"AI 正在观察重复"视觉噪音。聚合节点：
+    #   - ref 固定 `live://track_summary`（去重键 + 折叠/展开复用稳定）
+    #   - type=`track_summary` / stage=`perception` / verdict=INFO（持续在场是过程摘要）
+    #   - modality=VISION / provenance_kind=REAL_SENSOR（与原 frame 节点一致）
+    # 持续时长由 (last_frame - first_frame) / 8 估算，对齐现有人在场状态机的 8fps 假设
+    # （L928 / L1141 同口径），无新事实依赖。
+    def _track_summary_node(self) -> dict | None:
+        if self._track_total_frames <= 0:
+            return None
+        dur_s = (
+            (self._track_last_frame - self._track_first_frame) / 8.0
+            if self._track_last_frame > self._track_first_frame
+            else 0.0
+        )
+        dur_s = round(dur_s, 1)
+        return {
+            "timestamp": (
+                f"T{self._track_first_frame}→{self._track_last_frame}"
+                if self._track_first_frame != self._track_last_frame
+                else f"T{self._track_first_frame}"
+            ),
+            "stage": "perception",
+            "type": "track_summary",
+            "summary": (
+                f"AI 持续观察 · 时长 {dur_s:g}s · "
+                f"{self._track_total_frames} 帧 · "
+                f"{self._track_total_detections} 次检测 · "
+                f"{self._track_total_warnings} 警告"
+            ),
+            "verdict": "INFO",
+            "modality": "VISION",
+            "provenance_kind": "REAL_SENSOR",
+            "ref": f"{_LIVE_REF_PREFIX}://track_summary",
+        }
+
+    # ------------------------------------------------------------------
     # P0 增量投影（EvidenceProjection delta stream · Owner 2026-08-17 拍板）
     # ------------------------------------------------------------------
     # 只读派生：绝不 mutate 累积状态；浏览器只渲染、不推理、不判断风险、不建第二事实模型
@@ -708,10 +775,14 @@ class ProjectionAccumulator:
     def _delta_timeline_refs(self) -> list[str]:
         """当前时间轴 ref 序列（与 _build_timeline 同源同规则）。"""
         refs: list[str] = []
+        # P0-②：frame 节点已折叠为 track_summary 节点，_delta_timeline_refs 与之同源。
+        if self._track_total_frames > 0:
+            refs.append(f"{_LIVE_REF_PREFIX}://track_summary")
         for ev in self._recent_events:
             kind = ev["kind"]
             if kind == "frame":
-                refs.append(f"{_LIVE_REF_PREFIX}://frame/{ev['frame']['frame_index']}")
+                # P0-②：不再逐帧产生 ref（已折叠为 track_summary）。
+                continue
             elif kind == "resolution":
                 refs.append(f"{_LIVE_REF_PREFIX}://resolution/{ev['resolution']['index']}")
         for ev in self._audio_events:
@@ -721,26 +792,18 @@ class ProjectionAccumulator:
     def _delta_timeline_nodes(self, new_refs: set[str]) -> list[dict]:
         """按新增 ref 构造 timeline 节点 dict（字段与 _build_timeline 对齐，DRY 债）。"""
         nodes: list[dict] = []
+        # P0-②：track 聚合节点（若 ref 在 new_refs 即新出现；固定 ref → 仅首次增量推送，
+        # 后续因 seenRefs 去重不再重复发送，前端 _timelineNodesByRef 也按 ref 幂等）。
+        ts_ref = f"{_LIVE_REF_PREFIX}://track_summary"
+        if ts_ref in new_refs:
+            ts_node = self._track_summary_node()
+            if ts_node is not None:
+                nodes.append(ts_node)
         for ev in self._recent_events:
             kind = ev["kind"]
             if kind == "frame":
-                lf = ev["frame"]
-                fi = lf["frame_index"]
-                ref = f"{_LIVE_REF_PREFIX}://frame/{fi}"
-                if ref in new_refs:
-                    nw = len(lf["risk_levels"])
-                    nodes.append(
-                        {
-                            "timestamp": f"F{fi}",
-                            "stage": "perception",
-                            "type": "frame",
-                            "summary": f"frame {fi}: {lf['n_detections']} 检测, {nw} 警告",
-                            "verdict": "INFO",
-                            "modality": "VISION",
-                            "provenance_kind": "REAL_SENSOR",
-                            "ref": ref,
-                        }
-                    )
+                # P0-②：frame 节点已折叠为 track_summary（见上），不再逐帧展开。
+                continue
             elif kind == "resolution":
                 rs = ev["resolution"]
                 ref = f"{_LIVE_REF_PREFIX}://resolution/{rs['index']}"
@@ -776,7 +839,7 @@ class ProjectionAccumulator:
                         ),
                         "verdict": "INFO",
                         "modality": "AUDIO",
-                        "provenance_kind": "REAL_SENSOR",
+                        "provenance_kind": _audio_provenance_kind(la),
                         "ref": ref,
                     }
                 )
@@ -798,7 +861,7 @@ class ProjectionAccumulator:
                 "labels": list(la["labels"]),
                 "source_segment_ids": list(la["source_segment_ids"]),
                 "ref": f"{_LIVE_REF_PREFIX}://audio/{ev['audio_index']}",
-                "provenance_kind": "REAL_SENSOR",
+                "provenance_kind": _audio_provenance_kind(la),
             }
             if event_id is not None:
                 node["event_id"] = event_id
@@ -1022,6 +1085,14 @@ class ProjectionAccumulator:
         if len(self._recent_events) > self.window_size:
             # 确定性裁剪：仅保留末尾 window_size 事件（滚动窗口逐帧/逐音频细节）。
             self._recent_events = self._recent_events[-self.window_size:]
+        # P0-②：track 聚合累积（替换原逐帧 frame 时间轴节点：30+ 重复折叠为单一 track_summary）
+        fi = int(live["frame_index"])
+        if self._track_first_frame < 0:
+            self._track_first_frame = fi
+        self._track_last_frame = fi
+        self._track_total_frames += 1
+        self._track_total_detections += int(live.get("n_detections", 0) or 0)
+        self._track_total_warnings += len(live.get("risk_levels", ()) or ())
         # P1-A：最近一帧检测子集（覆盖式，非累积——"当前感知状态"语义 + 明确生命周期）。
         self._last_detections = live.get("detections", ())
         self._last_detection_frame = live["frame_index"]
@@ -1195,24 +1266,17 @@ class ProjectionAccumulator:
         # 按摄入顺序呈现视觉/处置结果（AC-9：统一时间轴，不三套独立时间轴）。
         # 注：音频节点不再经 _recent_events 滚动窗口——已迁至持久列表 _audio_events，
         # 与时间轴 AUDIO 节点 ↔ audio_evidence ↔ Case Time 音频 Lane 同源一致（VM-13 / Gate 4 缺陷 #2）。
+        # P0-②：所有 frame 节点折叠为单一 track_summary 节点（替代原 30+ 重复 frame 节点）。
+        # 节点 ref 固定 `live://track_summary`——前端 _timelineNodesByRef 按 ref 去重，
+        # 故累积更新天然幂等；折叠/展开逻辑（TIMELINE_MAX_VISIBLE）也不再触发。
+        ts_node = self._track_summary_node()
+        if ts_node is not None:
+            nodes.append(TimelineNode(**ts_node))
         for ev in self._recent_events:
             kind = ev["kind"]
             if kind == "frame":
-                lf = ev["frame"]
-                fi = lf["frame_index"]
-                nw = len(lf["risk_levels"])
-                nodes.append(
-                    TimelineNode(
-                        timestamp=f"F{fi}",
-                        stage="perception",
-                        type="frame",
-                        summary=f"frame {fi}: {lf['n_detections']} 检测, {nw} 警告",
-                        verdict="INFO",
-                        modality="VISION",
-                        provenance_kind="REAL_SENSOR",
-                        ref=f"{_LIVE_REF_PREFIX}://frame/{fi}",
-                    )
-                )
+                # P0-②：frame 节点已折叠为 track_summary（见上），不再逐帧展开。
+                continue
             elif kind == "resolution":  # P0-1 处置闭环事实
                 rs = ev["resolution"]
                 nodes.append(
@@ -1374,7 +1438,7 @@ class ProjectionAccumulator:
                 labels=la["labels"],
                 source_segment_ids=la["source_segment_ids"],
                 ref=f"{_LIVE_REF_PREFIX}://audio/{a_idx}",
-                provenance_kind="REAL_SENSOR",
+                provenance_kind=_audio_provenance_kind(la),
             )
             event_id = la.get("event_id")
             if event_id is not None:

@@ -191,7 +191,7 @@ def test_render_case_time_tracks_marks(tmp_path):
     assert "mark-audio" in html
     assert "mark-memory" in html
     assert "case-time-cursor" in html
-    assert "Case Time（证据时间轴" in html
+    assert "Case Time（事件时间" in html
     assert "__caseTime" in html  # media.js 引擎
 
 
@@ -201,7 +201,7 @@ def test_render_no_events_no_case_time(tmp_path):
     proj, desc = load_case_presentation(canon)
     html = render_case_viewer(proj, desc)
     assert 'id="case-time-track-' not in html  # 无 case-time 组件（媒体引擎字符串另计）
-    assert "Case Time（证据时间轴" not in html
+    assert "Case Time（事件时间" not in html
 
 
 def test_render_case_time_mark_no_quote_corruption(tmp_path):

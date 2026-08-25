@@ -188,10 +188,11 @@ def test_rolling_window_trims_timeline_but_counts_cumulative():
     # 累计帧数 = 5（独立于窗口裁剪）
     assert acc.n_frames == 5
     assert scn["n_frames"] == 5
-    # 时间轴：1 会话锚点 + 窗口内 2 帧（最近 frame_index 3,4），frame 0..2 被裁剪。
-    assert len(scn["timeline"]) == 3
-    frame_ts = [n["timestamp"] for n in scn["timeline"] if n["type"] == "frame"]
-    assert frame_ts == ["F3", "F4"], "滚动窗口应只保留最近 2 帧"
+    # 时间轴：1 会话锚点 + 1 track_summary 聚合节点（替代原 5 帧逐帧节点）。
+    # frame 节点已折叠为 track_summary（P0-②），不再逐帧出现。
+    assert len(scn["timeline"]) == 2
+    ts_nodes = [n for n in scn["timeline"] if n["type"] == "track_summary"]
+    assert len(ts_nodes) == 1, "track_summary 节点应唯一且覆盖全量摄入"
     # 累计计数仍覆盖全量 5 帧
     assert scn["counts"]["perception_events"] == 5
     assert scn["event_types"] == ("visit_normal",)
@@ -303,7 +304,8 @@ def test_ingest_audio_emits_audio_timeline_nodes():
     # 音频节点与视觉节点按摄入顺序交错（AC-9：统一时间轴，非三套独立时间轴）。
     types_in_order = [n["type"] for n in scn["timeline"]]
     assert types_in_order[0] == "session"
-    assert "audio" in types_in_order and "frame" in types_in_order
+    # P0-②：frame 已折叠为 track_summary（单节点），仍属视觉域 + 摄入顺序保持。
+    assert "audio" in types_in_order and "track_summary" in types_in_order
     # audio_kinds 累积（去重排序）
     assert acc.audio_kinds == ("audio_distress_cry", "audio_voice_raised")
     assert acc.n_audio == 2
@@ -351,10 +353,11 @@ def test_all_timeline_nodes_carry_modality():
     for n in scn["timeline"]:
         assert "modality" in n, "时间轴节点必须带 modality（AC-9）"
         assert n["modality"] in valid, f"modality 越界：{n['modality']}"
-    # session + frame 节点 modality=VISION；audio 节点 modality=AUDIO
+    # session + track_summary 节点 modality=VISION（聚合节点取代原 frame 节点，P0-②）；
+    # audio 节点 modality=AUDIO。
     by_type = {n["type"]: n["modality"] for n in scn["timeline"]}
     assert by_type["session"] == "VISION"
-    assert by_type["frame"] == "VISION"
+    assert by_type["track_summary"] == "VISION"
     assert by_type["audio"] == "AUDIO"
 
 
@@ -505,9 +508,10 @@ def test_audio_evidence_persists_beyond_rolling_window():
     # 时间轴 AUDIO 节点也须一致（不变式：时间轴 ↔ audio_evidence 同源）
     audio_nodes = [n for n in scn["timeline"] if n["type"] == "audio"]
     assert len(audio_nodes) == 3
-    # 帧窗口只保留最近 4 帧（独立裁剪），但音频不受影响
-    frame_nodes = [n for n in scn["timeline"] if n["type"] == "frame"]
-    assert len(frame_nodes) == 4
+    # 帧窗口已折叠为 track_summary（P0-②），不再逐帧出现；滚动窗口裁剪与音频
+    # 持久化相互独立——音频永远不裁切，视觉节点折叠后仅 1 条 track_summary 节点。
+    ts_nodes = [n for n in scn["timeline"] if n["type"] == "track_summary"]
+    assert len(ts_nodes) == 1
 
 
 def test_audio_evidence_dedup_on_repeat_feed():
@@ -539,8 +543,8 @@ def test_evidence_delta_none_prev_returns_full():
     acc.ingest_audio(_make_audio(1700000000.0, "audio_voice_raised", event_id="e0"))
     delta = acc.extract_evidence_delta(None)
     assert delta["type"] == "evidence_delta"
-    # 全量：frame + audio 两类 timeline 节点、1 条 audio 证据
-    assert {n["type"] for n in delta["timeline"]} == {"frame", "audio"}
+    # 全量：track_summary（替代 frame）+ audio 两类 timeline 节点、1 条 audio 证据
+    assert {n["type"] for n in delta["timeline"]} == {"track_summary", "audio"}
     assert {a["event_id"] for a in delta["audio"]} == {"e0"}
     assert delta["counts"]["n_frames"] == 1
 
@@ -559,12 +563,62 @@ def test_evidence_delta_includes_new_nodes_and_tracks():
     acc.ingest_audio(_make_audio(1700000001.0, "audio_distress_cry", event_id="e2"))
     delta2 = acc.extract_evidence_delta(prev)
     tl_types = {n["type"] for n in delta2["timeline"]}
-    assert "frame" in tl_types and "audio" in tl_types
+    # P0-②：track_summary ref 固定，prev 指纹已含 → delta2 不再推；仅 audio 节点出现。
+    assert "audio" in tl_types
+    assert "track_summary" not in tl_types  # ref 幂等：已存在则不重复推送
     audio_ids = {a["event_id"] for a in delta2["audio"]}
     assert audio_ids == {"e2"}
     assert delta2["case_time"] and delta2["case_time"][0]["kind"] == "audio"
     assert delta2["counts"]["n_frames"] == 2
     assert delta2["counts"]["n_audio"] == 2
+
+
+def test_track_summary_aggregates_frames_into_single_node():
+    """P0-②：track_summary 节点替代原逐帧 frame 节点（30+ 重复折叠为单一摘要）。
+
+    守约：
+      - 全量投影仅 1 个 track_summary 节点（不随帧数线性增长）；
+      - summary 包含时长、帧数、累计检测数、累计警告数；
+      - delta 增量时固定 ref 幂等（已存在则不重复推送）；
+      - 持续时长 = (last_frame - first_frame) / 8（对齐现 8fps 假设）。
+    """
+    acc = ProjectionAccumulator("sess-track", window_size=64)
+    # 连续摄入 5 帧：含检测 + 风险等级（需配套 recommended_actions 才能产出 warnings）
+    for i in range(5):
+        acc.ingest(
+            _make_frame(
+                i,
+                n_detections=2,
+                risk_levels=("elevated",),
+                recommended_actions=("MONITOR",),
+                event_types=["visit_normal"],
+            )
+        )
+    scn = acc.to_evidence_projection()["scenarios"][0]
+    ts_nodes = [n for n in scn["timeline"] if n["type"] == "track_summary"]
+    # 30+ 重复 frame 节点已折叠为单节点
+    assert len(ts_nodes) == 1, ts_nodes
+    node = ts_nodes[0]
+    # 全字段对齐
+    assert node["stage"] == "perception"
+    assert node["verdict"] == "INFO"
+    assert node["modality"] == "VISION"
+    assert node["provenance_kind"] == "REAL_SENSOR"
+    assert node["ref"] == "live://track_summary"
+    # summary 包含时长、帧数、累计检测、累计警告（产品语义友好）
+    summary = node["summary"]
+    assert "5 帧" in summary
+    assert "10 次检测" in summary  # 5 帧 × 2 检测 = 10
+    assert "5 警告" in summary  # 5 帧 × 1 risk_level = 5
+    assert "0.5s" in summary  # (frame_index 0→4) / 8 = 0.5
+    # delta 增量：prev 指纹已含 track_summary ref → 后续 delta 不再推（幂等）
+    fp = acc.projection_fingerprint()
+    acc.ingest(_make_frame(5, n_detections=1, event_types=["visit_normal"]))
+    delta = acc.extract_evidence_delta(fp)
+    delta_types = {n["type"] for n in delta["timeline"]}
+    assert "track_summary" not in delta_types, (
+        "固定 ref 已存在 → 增量不再推送（ref 幂等）"
+    )
 
 
 def test_evidence_delta_idempotent_second_extract_empty():
