@@ -6,7 +6,7 @@ validation fixture ``audio:`` 声明式注入（经 ``audio_replay_path``），m
 浏览器播放介质、不再承担语义判定。本测试锁定四层合约：
 
 1. **字段合约**：``ScenarioConfig.audio_replay_path`` 默认 None（旧场景零影响）；
-2. **场景接线**：product_story_risk / product_story_benign 两 yaml 必须配置
+2. **场景接线**：telephone_risk / product_story_benign 两 yaml 必须配置
    ``audio_replay_path``（防后续改 yaml 漏检，与 test_scenario_audio_evidence_override 同型）；
 3. **fixture 编译**：``_load_audio_events_from_fixture`` 与 validation compiler 同款映射
    （event_id/kind/score/confidence/labels/source_segment_ids 透传；非法 kind fail-closed）;
@@ -75,7 +75,7 @@ def test_scenario_config_accepts_audio_replay_path():
     ("name", "fixture_tail"),
     [
         (
-            "product_story_risk.yaml",
+            "telephone_risk.yaml",
             "telephone_risk_multimodal_001.yaml",
         ),
         (
