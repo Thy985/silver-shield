@@ -7,7 +7,7 @@
 通用化：通过 ScenarioAcceptanceContract 驱动场景配置，支持产品故事和多场景扩展。
 
 运行前提（外部 fixture，测试内探测 skip）：
-    python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
+    python scripts/run_demo.py --live --scenario config/demo/scenarios/telephone_risk.yaml
 """
 
 from __future__ import annotations

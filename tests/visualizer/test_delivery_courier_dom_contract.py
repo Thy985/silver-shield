@@ -300,7 +300,7 @@ class TestAu08Provenance:
         other_scenarios = [
             ("telephone_risk_reality_check", "REAL_AUDIO_PIPELINE"),
             ("telephone_risk_reality_check", "合成回放 (SYNTHETIC_REPLAY)"),
-            ("product_story_risk", "合成回放 (SYNTHETIC_REPLAY)"),
+            ("telephone_risk", "合成回放 (SYNTHETIC_REPLAY)"),
             ("product_story_benign", "无视觉轨"),
         ]
         for scenario_id, keyword in other_scenarios:

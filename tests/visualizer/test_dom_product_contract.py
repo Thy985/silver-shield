@@ -8,7 +8,7 @@ SSOT：``docs/reports/DOM-E2E-UPGRADE-ACCEPTANCE-CHECKLIST-2026-08-24.md`` v3.2 
     - AU-04/05/05b/06/07a/010：telephone_risk 有音频表面，正常执行
 
 运行前提（外部 fixture，模块级探测 skip）：
-    python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
+    python scripts/run_demo.py --live --scenario config/demo/scenarios/telephone_risk.yaml
 """
 
 from __future__ import annotations
@@ -449,7 +449,7 @@ class TestAuAudioLifecycle:
         if canvas is None:
             pytest.skip("音频事件未出现，canvas 样本检查无从进行")
         assert canvas["exists"], (
-            "B4/AU-06 RMS 波形 canvas 不存在于 DOM（已知根因：product_story_risk 未注册 "
+            "B4/AU-06 RMS 波形 canvas 不存在于 DOM（已知根因：telephone_risk 未注册 "
             "_SCENARIO_SURFACES 音频 Surface，has_audio_surface()=False 门控了渲染）"
         )
         assert canvas["w"] > 0 and canvas["h"] > 0, (
