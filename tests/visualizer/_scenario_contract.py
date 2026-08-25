@@ -2,7 +2,8 @@
 
 Defines:
     - ScenarioAcceptanceContract: base class declaring scenario narrative + phases
-    - Three concrete contracts: ProductStoryRisk, ProductStoryBenign, CctvSurveillanceSuspicious
+    - Four concrete contracts: ProductStoryRisk, ProductStoryBenign,
+      CctvSurveillanceSuspicious, DeliveryCourierNormal
     - Shared JS / helpers used by browser, visual, and CCTV acceptance tests
 
 Usage:
@@ -440,5 +441,60 @@ class CctvSurveillanceSuspiciousContract(ScenarioAcceptanceContract):
             skip_reason=(
                 "需先启动: python scripts/run_demo.py --live "
                 "--scenario config/demo/scenarios/cctv_surveillance_suspicious.yaml"
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Delivery courier normal contract（与 cctv_surveillance_suspicious 形成
+# 「正常 vs 异常」对照基线，验证系统"看到人 ≠ 报警"的克制能力）
+# ---------------------------------------------------------------------------
+
+
+class DeliveryCourierNormalContract(ScenarioAcceptanceContract):
+    """delivery_courier_normal single-phase acceptance contract.
+
+    Narrative (frozen):
+        白天正常单次来访 → 系统识别为普通来访 → 至多 visit_normal / 微弱异常 → LOG_ONLY / MONITOR
+        （与 cctv_surveillance_suspicious 形成「正常 vs 异常」对照基线）
+
+    Key properties:
+        - No audio surface (delivery_courier video has no sound)
+        - Single phase (no benign/switch_back)
+        - Expected max risk level: LOW (no upgrade, system stays restrained)
+        - Daytime (start_time 14:00 UTC) → OddHourRule does NOT trigger
+        - Single visit → repeat_visit rule does NOT trigger
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            scenario_id="delivery_courier_normal",
+            narrative="白天单次正常来访 → visit_normal / MONITOR（系统克制，不升级）",
+            phases=[
+                PhaseSpec("courier_observe", observe_ms=90_000, need_source_switch=True),
+            ],
+            observe_times={
+                "courier_observe": 60_000,
+            },
+            has_audio_surface=False,
+            _skip_assertions=[
+                "TestP1AudioEvidenceArrives",
+                "TestP2RiskStory",
+                "TestP3BenignStory",
+                "TestP6AntiHallucination",
+                "TestP7SceneSwitch",
+            ],
+        )
+        self.d0 = D0Contract(
+            scenario_id="delivery_courier_normal",
+            has_audio_surface=False,
+            provenance={
+                "video": "实时推理 (REAL_RUNTIME_VIDEO)",
+                "audio": "无音频轨",
+                "risk": "runtime-computed",
+            },
+            skip_reason=(
+                "需先启动: python scripts/run_demo.py --live "
+                "--scenario config/demo/scenarios/delivery_courier_normal.yaml"
             ),
         )

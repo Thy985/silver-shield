@@ -23,6 +23,7 @@ REPORTS_DIR = Path(__file__).resolve().parents[2] / "docs" / "reports"
 REGISTERED_REPORTS: tuple[str, ...] = (
     "vision-eval-product-story-risk-2026-08-24.json",
     "vision-eval-cctv-surveillance-suspicious-2026-08-25.json",
+    "vision-eval-delivery-courier-normal-2026-08-25.json",
 )
 
 SCHEMA_VERSION = "1.0"
