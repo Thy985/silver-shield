@@ -6,6 +6,7 @@
     python scripts/run_demo.py --scenario delivery_courier_normal
     python scripts/run_demo.py --video data/demo/my_door.mp4
     python scripts/run_demo.py --check               # 仅做环境预检，不启动
+    python scripts/run_demo.py --list-scenarios      # 列出 Product Scenario Registry 白名单后退出
 
 设计要点
 --------
@@ -98,6 +99,7 @@ def resolve_scenario(args: argparse.Namespace) -> tuple[Path, Path | None]:
             f"   可用场景（config/demo/scenarios/ 下）：night_visit / real_doorway\n"
             f"   或用 --scenario <name|.yaml> 指定，或用 --video <path> 直接接入本地视频。\n"
             f"   Golden case 入口：--scenario golden_stranger_visit | golden_repeated_visit | golden_telephone_risk | golden_evidence_insufficient\n"
+            f"   💡 产品演示场景白名单：--list-scenarios（输出 telephone_risk / cctv / delivery 三项 RAISED/WARN/MONITOR）\n"
         )
         sys.exit(1)
 
@@ -192,7 +194,37 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="启用 Live 次级入口（/live + WS + /demo/*）；默认旗舰 Case Viewer 模式（/）",
     )
+    p.add_argument(
+        "--list-scenarios",
+        action="store_true",
+        help="列出 Product Scenario Registry 中所有产品演示场景（含 RAISED/WARN/MONITOR 与启动命令），不启动网关、不做环境预检",
+    )
     return p.parse_args()
+
+
+def _list_product_scenarios() -> None:
+    """打印 Product Scenario Registry 中所有产品演示场景。
+
+    完全独立于环境预检 / torch 装配：仅 import ``silver_demo.product_scenarios``
+    （stdlib dataclass，零 torch 依赖），可在精简部署（无 AI 运行时）下正常工作。
+
+    输出每项：scenario_id / expected_product_result / 展示名 / 启动命令 / Contract /
+    简短说明。便于 Demo 演示人员 / 测试工程师在不启动网关的情况下看清产品白名单。
+    """
+    from silver_demo.product_scenarios import list_product_scenarios
+
+    scenarios = list_product_scenarios()
+    print("银龄盾 Demo · 产品演示场景白名单（Product Scenario Registry SSOT）")
+    print("=" * 72)
+    for ps in scenarios:
+        print(f"  • {ps.scenario_id}  [{ps.expected_product_result}]")
+        print(f"      展示名   ：{ps.display_name}")
+        print(f"      启动命令 ：python scripts/run_demo.py --live --scenario {ps.scenario_yaml}")
+        print(f"      Contract ：{ps.contract_module}.{ps.contract_class}")
+        print(f"      说明     ：{ps.description}")
+        print()
+    print(f"共 {len(scenarios)} 个产品演示场景（白名单冻结，不得新增 / 删除）。")
+    print("=" * 72)
 
 
 def _register_synthetic_source() -> None:
@@ -404,6 +436,11 @@ def _run_flagship(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = parse_args()
+
+    # --list-scenarios 在环境预检前处理：纯字符串输出，不拉 torch，可在精简部署下工作
+    if args.list_scenarios:
+        _list_product_scenarios()
+        sys.exit(0)
 
     # 1) 环境预检（纯标准库，不拉 torch）
     ok, lines, missing = run_checks()
