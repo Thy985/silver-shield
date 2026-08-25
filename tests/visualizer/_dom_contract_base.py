@@ -81,7 +81,10 @@ _AUDIO_KIND_ZH_LABELS: tuple[str, ...] = (
     "持续电话声",
     "其他声学异常",
 )
-_DISTRESS_CAUTION_NOTE = "当前版本该类别存在正常电话语音误识别，暂不作为风险升级依据"
+_DISTRESS_CAUTION_NOTE = (
+    "当前版本「声学异常活动」类别存在正常电话语音误识别（已知缺陷 H-5），"
+    "暂不作为风险升级依据"
+)
 
 # ---------------------------------------------------------------------------
 # AU-03 显示上限契约
@@ -184,7 +187,7 @@ def make_counts_js(sid: str) -> str:
 
 
 def make_snapshot_js(sid: str) -> str:
-    counts_body = make_counts_js(sid)
+
     return f"""\
 (() => {{
   const g = (id) => document.getElementById(id);
@@ -212,7 +215,25 @@ def make_snapshot_js(sid: str) -> str:
   const moreBtn = tlUl ? tlUl.parentNode.querySelector('.tl-more-toggle') : null;
   const psRecent = g('ps-recent-{sid}');
   const behavior = g('behavior-timeline-{sid}');
-  const counts = (() => {{{counts_body}}})();
+  const counts = (() => {{
+    const g = (id) => document.getElementById(id);
+    const tl = g('timeline-list-{sid}') || document.querySelector('.timeline');
+    let runtimeLi = -1;
+    if (tl) {{
+      runtimeLi = Array.from(tl.querySelectorAll('li.tl-item[data-ref]')).filter(
+        (li) => ((li.getAttribute('data-ref') || '').indexOf('golden://') !== 0)
+      ).length;
+    }}
+    return {{
+      audioTableRows: document.querySelectorAll('table.audio-table tr').length,
+      psRecentEntries: document.querySelectorAll('#ps-recent-{sid} .ps-entry').length,
+      psHistoryRendered: document.querySelectorAll('#ps-history-list-{sid} .ps-entry').length,
+      behaviorItems: document.querySelectorAll('#behavior-timeline-{sid} .tl-item').length,
+      timelineRuntimeLi: runtimeLi,
+      caseTimeMarks: document.querySelectorAll('#case-time-track-{sid} .case-time-mark').length,
+      bodyNodes: document.querySelectorAll('*').length,
+    }};
+  }})();
   return {{
     bodyText: document.body.innerText,
     demoStat: probe(g('demo-stat-{sid}')),
@@ -435,7 +456,10 @@ def create_dom_fixtures(contract: D0Contract):
     def audio_lifecycle(_browser):
         if not contract.has_audio_surface:
             return {"states": [], "saw_recent": False, "canvas_info": None,
-                    "baseline": {}, "samples": []}
+                    "baseline": {"audioTableRows": 0, "psRecentEntries": 0,
+                                "psHistoryRendered": 0, "behaviorItems": 0,
+                                "timelineRuntimeLi": 0, "caseTimeMarks": 0, "bodyNodes": 0},
+                    "samples": []}
         page = _browser
         requests.post(f"{BASE}/demo/reset", timeout=15)
         page.goto(URL, wait_until="domcontentloaded", timeout=30_000)
