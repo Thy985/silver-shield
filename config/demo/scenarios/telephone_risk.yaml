@@ -1,4 +1,8 @@
-# Product Story Browser Acceptance · risk case（ADR-0044 · Owner P1-P8 验收）
+# Telephone Risk · Browser Acceptance · multimodal case（ADR-0044 · Owner P1-P8 验收）
+#
+# 历史命名：曾以 product_story_risk 命名（2026-08-25 重命名为 telephone_risk，
+# 决策见 docs/design/architecture/SCENARIO-RENAME-CONFLICTS-2026-08-25.md §3 D1）；
+# 旧 D2 报告保留原文件名（vision-eval-product-story-risk-2026-08-24.*）。
 #
 # 视觉源：真实 CCTV 视频（YOLO 可检测人）。
 # 音频事实源（Owner 裁决 2026-08-24，出处 docs/reports/RISK-MIX-SIXTUPLE-VERIFICATION-2026-08-24.md §6）：
@@ -8,11 +12,12 @@
 # loop=true 确保观察窗内风险可重复触发。
 #
 # 运行：
-#   python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
+#   python scripts/run_demo.py --live --scenario config/demo/scenarios/telephone_risk.yaml
 
-scenario_id: product_story_risk
+scenario_id: telephone_risk
 description: |
-  Product Story risk: 电话持续交互 + 门前人物出现 + 时间重叠 → Combined Evidence → Risk → Action
+  Telephone Risk: 电话持续交互 + 门前人物出现 + 时间重叠 → Combined Evidence → RAISED → 通知家属 + 社区上报
+  （历史命名 product_story_risk；2026-08-25 重命名以更贴近"电话交互 + 异常视觉 → 多模态风险"产品语义）
 
 source: CCTV_Surveillance_Final
 source_type: video_file
