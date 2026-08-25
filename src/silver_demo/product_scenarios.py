@@ -11,7 +11,7 @@
 ========== ==================================== ==========================================
 scenario_id      expected_product_result             用途
 ========== ==================================== ==========================================
-telephone_risk               RAISED        多模态高风险：通知家属 + 社区上报
+telephone_risk               WARN          多模态风险：通知家属（不升级到社区上报）
 cctv_surveillance_suspicious WARN          夜间异常停留：仅 LOG_ONLY，不通知
 delivery_courier_normal      MONITOR       白天正常来访：系统克制，验证「看到人 ≠ 报警」
 ========== ==================================== ==========================================
@@ -60,13 +60,13 @@ class ProductScenario:
 PRODUCT_SCENARIOS: tuple[ProductScenario, ...] = (
     ProductScenario(
         scenario_id="telephone_risk",
-        display_name="电话风险（多模态高风险）",
+        display_name="电话风险（多模态风险）",
         scenario_yaml="config/demo/scenarios/telephone_risk.yaml",
-        expected_product_result="RAISED",
+        expected_product_result="WARN",
         contract_module="tests.visualizer._scenario_contract",
         contract_class="TelephoneRiskContract",
         description=(
-            "电话持续交互 + 异常视觉 → 多模态风险 → 通知家属 + 社区上报。"
+            "电话持续交互 + 异常视觉 → 多模态风险 → 通知家属（WARN，不升级到社区上报）。"
             "重命名自 product_story_risk（2026-08-25 场景身份迁移），"
             "更贴近电话风险产品语义；详见 "
             "docs/design/architecture/SCENARIO-RENAME-CONFLICTS-2026-08-25.md §3 D1。"

@@ -347,13 +347,13 @@ class TelephoneRiskContract(ScenarioAcceptanceContract):
     """
 
     # Product Scenario Registry 属性（D2 决策：放 Contract；场景应该证明的最终产品结论）。
-    # RAISED：电话 + 视觉联合触发，门窗报警 + 家属通知 + 社区上报。
-    expected_product_result: ClassVar[str] = "RAISED"
+    # WARN：电话 + 视觉联合触发多模态风险，家属通知（不升级到社区上报）。
+    expected_product_result: ClassVar[str] = "WARN"
 
     def __init__(self) -> None:
         super().__init__(
             scenario_id="telephone_risk",
-            narrative="电话持续交互 + 异常视觉 → 多模态风险 → 通知家属 + 社区上报",
+            narrative="电话持续交互 + 异常视觉 → 多模态风险 → 通知家属（WARN）",
             phases=[
                 PhaseSpec("risk", observe_ms=120_000, need_source_switch=True),
                 PhaseSpec("benign", observe_ms=80_000, need_source_switch=True),

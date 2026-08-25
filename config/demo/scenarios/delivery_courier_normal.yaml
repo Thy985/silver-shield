@@ -27,3 +27,8 @@ start_time: "2026-07-19T14:00:00+00:00"   # 白天，OddHourRule 不触发
 frame_interval_s: 0.5
 fps_target: 8
 loop: true                               # Demo 演示：循环重放，保持 Dashboard 持续有内容
+
+# 场景专属阈值覆盖：正常快递短暂停留 ~5.5s，全局 Demo 阈值 1.5s（CAVIAR 调优）会误报
+# abnormal_dwell。此处覆盖为 30s（正常快递不会在门口停留 30s+），确保「看到人 ≠ 报警」。
+rule_overrides:
+  long_duration_seconds: 30
