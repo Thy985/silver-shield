@@ -54,6 +54,12 @@ class ScenarioConfig(BaseModel):
     # 缺省 None = 本场景无音频（audio_evidence 恒 ()，诚实空，绝不编造）。组装层（run_demo.py）
     # 负责构建 AudioPipeline 并把事件注入网关（网关本身不 import home_perception.audio，守冻结边界）。
     audio_path: str | None = None
+    # Product Story 音频事实源（synthetic_replay · Owner 裁决 2026-08-24，出处
+    # docs/reports/RISK-MIX-SIXTUPLE-VERIFICATION-2026-08-24.md §6）：指向 validation
+    # fixture yaml 的声明式音频事实源；组装层命中本字段时按 compiler 同款映射把
+    # ``Scenario.audio`` specs 直接产出 dict 列表注入网关（不经 AudioPipeline 推理）。
+    # 与 ``audio_path`` 职责分离：后者仅作浏览器播放介质声明（mix.wav），不承担语义判定。
+    audio_replay_path: str | None = None
     start_time: datetime
     frame_interval_s: float = 0.5
     fps_target: int = 8

@@ -146,6 +146,12 @@ def preflight_media(scenario_path: Path) -> None:
         print(f"   视频源：{mp}  ✓")
         return
 
+    if source_type == "synthetic":
+        # synthetic 帧源由 ADR-0032 demo_adapter 注册，precheck 阶段无法校验
+        # （合成帧由 validation fixture 运行时生成，不落盘）；跳过，由 assemble 阶段兜底。
+        print(f"   合成源：{source}  ✓（synthetic，validation fixture 运行时生成）")
+        return
+
     # caviar_jpg：检查 caviar_base_dir/<source> 帧目录
     frame_dir = _caviar_base_dir() / source
     has_frames = frame_dir.is_dir() and any(frame_dir.iterdir())
@@ -209,6 +215,46 @@ def _register_synthetic_source() -> None:
     install_into(register_frame_source, replace=True)
 
 
+def _load_audio_events_from_fixture(fixture_path: str) -> list[dict]:
+    """把 validation fixture yaml 的 ``audio`` specs 编译为网关可消费的 dict 列表。
+
+    Product Story 音频事实源切换（synthetic_replay · Owner 裁决 2026-08-24，出处
+    docs/reports/RISK-MIX-SIXTUPLE-VERIFICATION-2026-08-24.md §6）：mix.wav 降级为
+    浏览器播放介质，不再承担语义判定；语义事实源 = fixture ``audio:`` 声明式注入。
+
+    映射与 ``validation/scenario/compiler.py`` 的 spec→AudioPerceptionEvent 同款
+    （event_id 缺省确定性补 ``aev-{i}``；labels/source_segment_ids 透传）；产出为
+    ``to_dict()`` 形态 dict 但**不含 created_at**——由下游 pipeline.adapt_runtime_audio
+    自动补齐。kind 经枚举闭合校验归一为值字符串（非法 kind fail-closed 抛错）。
+    """
+    from home_perception.audio.event import AudioPerceptionKind
+    from home_perception.validation.scenario.scenario import (
+        load_scenario as load_validation_scenario,
+    )
+
+    p = Path(fixture_path)
+    if not p.is_absolute():
+        p = ROOT / p
+    scn = load_validation_scenario(p)
+    events: list[dict] = []
+    for i, spec in enumerate(scn.audio):
+        events.append(
+            {
+                "event_id": spec.event_id or f"aev-{i}",
+                "timestamp": spec.timestamp,
+                "kind": AudioPerceptionKind(spec.kind).value,
+                "score": round(spec.score, 4),
+                "confidence": round(spec.confidence, 4),
+                "source_segment_ids": list(spec.source_segment_ids),
+                "labels": list(spec.labels),
+                # Provenance 显性化（Owner 裁决 2026-08-24）：声明式注入必须可溯源，
+                # 下游投影据此标 FIXTURE（合成回放），禁止混入 REAL_SENSOR。
+                "provenance": "SYNTHETIC_REPLAY",
+            }
+        )
+    return events
+
+
 def _build_live_audio_events(hp_settings: object, scenario: object) -> list[dict]:
     """组装层构建真实音频事件（依赖倒置接缝，网关不 import audio）。
 
@@ -216,12 +262,19 @@ def _build_live_audio_events(hp_settings: object, scenario: object) -> list[dict
     ``AudioPerceptionEvent`` 以 ``to_dict()`` 列表注入网关，由 Live Adapter 投影为
     ``audio_evidence``（provenance=REAL_SENSOR）。
 
-    仅在 ``hp_settings.audio.enabled`` 且 ``scenario.audio_path`` 设置时运行；否则返回 ``[]``
+    仅在 ``hp_settings.audio.enabled`` 时运行；否则返回 ``[]``
     （本场景无音频，诚实空）。失败隔离：任何异常 → 返回 ``[]``，绝不阻断 demo 启动/循环。
+
+    synthetic_replay 前置分支（Owner 裁决 2026-08-24）：``scenario.audio_replay_path``
+    有值时音频事实源切换为 validation fixture 声明式注入（不经 AudioPipeline 推理，
+    mix.wav 降级为浏览器播放介质）；未命中回落既有 FileAudioSource+AudioPipeline 路径。
     """
     audio_cfg = getattr(hp_settings, "audio", None)
     if audio_cfg is None or not getattr(audio_cfg, "enabled", False):
         return []
+    replay_path = getattr(scenario, "audio_replay_path", None)
+    if replay_path:
+        return _load_audio_events_from_fixture(replay_path)
     audio_path = getattr(scenario, "audio_path", None)
     if not audio_path:
         return []

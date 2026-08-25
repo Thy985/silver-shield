@@ -5,7 +5,7 @@
 # Risk 升级由视觉 abnormal_dwell 驱动（既有行为）；audio 提供 evidence/叙事层，
 # 不接通 audio→risk 直达链（ADR-0040 硬门控保持）。
 #
-# 时间基准：2026-08-23T12:00:00 UTC = 1756036800.0；duration_frames=60 @ 2fps → 30s。
+# 时间基准：2026-08-23T12:00:00 UTC = 1756036800.0；duration_frames=120 @ 2fps → 60s。
 meta:
   schema_version: "1.0"
   scenario_id: telephone_risk_multimodal_001
@@ -13,11 +13,13 @@ meta:
   version: 1
   description: "Product Story risk: 电话持续交互 + 门前人物出现 + 时间重叠 → Combined Evidence → Risk → Action"
   seed: 42
-  duration_frames: 60
+  duration_frames: 120
   owner: perception-team
   category: risk
   difficulty: medium
   tags: [product_story, telephone_risk, multimodal, risk]
+  rule_overrides:
+    long_duration_seconds: 30.0
 mode: detections
 camera:
   resolution: [384, 288]
@@ -35,13 +37,13 @@ actors:
       - frame: 40
         pos: [130.0, 130.0]
         size: [40.0, 120.0]
-      - frame: 55
+      - frame: 100
         pos: [180.0, 130.0]
         size: [40.0, 120.0]
     objects: []
     appearance: {}
 timeline:
-  - frame: 48
+  - frame: 100
     type: abnormal_dwell
 expects:
   emitted_event_types: [abnormal_dwell]
@@ -64,33 +66,94 @@ integration:
     min_links: 1
     expected_linked_modalities: [vision, audio]
     required_relationships: [supports]
+# ---- ADR-0044 契约 v1 持续区间 audio（8 枚 · Owner 硬约束 1 满足）----
+# mix.wav 物理拼接：US_dial_tone (0~5s, _raw 实际 5.0s 8000Hz mono) + LBJ_FORD_phonecall_1963 (5~30s, 25s 截段)
+# 所有 event_id 全场景唯一；timestamp 与 frame 时序对齐（2fps × clock_start=1756036800）：
+#   frame 0/4/8/16/24/40/48/56 ↔ t=0/2/4/8/12/20/24/28s
+# t=20 与 vision frame 40（PERSON_ENTERED）形成 SAME_FRAME 强配对（硬约束 2）
+# t=24/28 持续 evidence 验证「电话证据未在下一帧消失」（硬约束 2）
+#
+# 时间分布修订记录（基于真实素材边界，非 Owner 拍板时间点）：
+#   Owner 拍板 8 个时间点：0/2/8/12/16/20/24/28（推测 US_dial_tone 14s+ 假设）
+#   实测 _raw：US_dial_tone 仅 5.0s（8000Hz mono，manifest v2）
+#   修订为 0/2/4/8/12/20/24/28：
+#     US_dial_tone (0~5s) 容纳 0/2/4 三枚（前 4s 区间）
+#     LBJ_FORD (5~30s) 容纳 8/12/20/24/28 五枚（含 SAME_FRAME + 持续 evidence）
+#   满足硬约束 1（每枚 event 真实对应素材区间）+ 硬约束 2（SAME_FRAME + 持续 evidence）
+#   t=4 在 US_dial_tone 5s 区间内（剩余 1s），yamnet baseline top1=telephone 0.981 全段稳定
+#
+# labels 字段直接透传到 AudioPerceptionEvent（compiler.py:75）——标注 yamnet baseline 真实输出；
+# runtime rule.py._labels_for 在真实音频特征路径强制 [speech, telephone]，fixture 路径不受影响。
 audio:
+  # ---- 0~5s：US_dial_tone 区间（yamnet baseline top1=telephone 0.981）----
   - kind: audio_telephone_persistent
+    event_id: telephone_risk_multimodal_001-aev-000
     timestamp: 1756036800.0
-    score: 0.9
-    confidence: 0.8
-    source_segment_ids: ["seg-sig"]
-    labels: ["ringtone"]
+    score: 0.981
+    confidence: 0.95
+    source_segment_ids: ["telephone__dial-tone__US_dial_tone"]
+    labels: ["telephone", "dial_tone"]
   - kind: audio_telephone_persistent
+    event_id: telephone_risk_multimodal_001-aev-001
     timestamp: 1756036802.0
-    score: 0.92
-    confidence: 0.85
-    source_segment_ids: ["seg-speech"]
+    score: 0.981
+    confidence: 0.95
+    source_segment_ids: ["telephone__dial-tone__US_dial_tone"]
+    labels: ["telephone", "dial_tone"]
+  - kind: audio_telephone_persistent
+    event_id: telephone_risk_multimodal_001-aev-002
+    timestamp: 1756036804.0
+    score: 0.981
+    confidence: 0.95
+    source_segment_ids: ["telephone__dial-tone__US_dial_tone"]
+    labels: ["telephone", "dial_tone"]
+  # ---- 5~30s：LBJ_FORD_phonecall_1963 区间（yamnet baseline top1=speech 0.953）----
+  - kind: audio_telephone_persistent
+    event_id: telephone_risk_multimodal_001-aev-003
+    timestamp: 1756036808.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
     labels: ["telephone", "speech"]
   - kind: audio_telephone_persistent
-    timestamp: 1756036808.0
-    score: 0.95
-    confidence: 0.9
-    source_segment_ids: ["seg-persistent"]
+    event_id: telephone_risk_multimodal_001-aev-004
+    timestamp: 1756036812.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
+    labels: ["telephone", "speech"]
+  # ---- t=20 与 vision frame 40（PERSON_ENTERED）SAME_FRAME 强配对（硬约束 2）----
+  - kind: audio_telephone_persistent
+    event_id: telephone_risk_multimodal_001-aev-005
+    timestamp: 1756036820.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
+    labels: ["telephone", "speech"]
+  # ---- t=24 持续 evidence：电话证据未在下一帧消失（硬约束 2 验证点）----
+  - kind: audio_telephone_persistent
+    event_id: telephone_risk_multimodal_001-aev-006
+    timestamp: 1756036824.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
+    labels: ["telephone", "speech"]
+  # ---- t=28 持续 evidence：电话证据未在下一帧消失（硬约束 2 验证点）----
+  - kind: audio_telephone_persistent
+    event_id: telephone_risk_multimodal_001-aev-007
+    timestamp: 1756036828.0
+    score: 0.953
+    confidence: 0.90
+    source_segment_ids: ["telephone__narrowband-speech__LBJ_FORD_phonecall_1963"]
     labels: ["telephone", "speech"]
 # ---- ADR-0044 契约 v1 StoryTimeline 扩展 ----
 story_timeline:
   provenance: synthetic_replay
   category: risk
-  duration_s: 30
+  duration_s: 60
   events:
     - {t: 0,  event: signaling,                    source: audio,  detail: "ring/dial → 线路接通"}
-    - {t: 2,  event: bidirectional_speech_start,   source: audio,  detail: "双人对话开始"}
+    - {t: 2,  event: telephone_conversation_start, source: audio,  detail: "接通后通话开始（单侧信道记录，F-1 命名规则）"}
     - {t: 8,  event: telephone_persistent_evidence, source: audio,  detail: "持续交互语义成立 ≠ 振铃"}
     - {t: 20, event: PERSON_ENTERED,               source: vision, detail: "门前人物出现"}
     - {t: 22, event: temporal_overlap,             source: fusion, detail: "Audio+Vision 落入时间窗"}

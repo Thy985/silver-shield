@@ -1,0 +1,41 @@
+# Reality Check 演示入口（Owner 裁决 2026-08-24 · SSOT v3.8 双层收口结论的 Real-World 侧）
+#
+# 定位：Telephone Risk **Real-World Validation** 演示——与 product_story_risk
+#（Product Story Simulation，音频走 synthetic_replay）严格分层：
+#   - 视觉：telephone_risk_demo.mp4（室内客厅老人持手机通话）→ YOLO runtime 真实推理；
+#   - 音频：本 mp4 提取音轨 → FileAudioSource + AudioPipeline 真实推理（无 synthetic_replay，
+#     run_demo.py 在无 audio_replay_path 时自动回落 REAL pipeline 路径）。
+# 页面按「Perception ≠ Truth ≠ Risk Decision」如实呈现 Runtime 实际输出：
+#   - ✓ 检测到电话交互 / 人物（真实感知）；
+#   - ⚠ distress_cry 幻觉为已知缺陷 H-5（Tier0 semantic collapse，五组素材实证），
+#     前端已按 Owner 处置矩阵降级为「声学特征(当前算法判定): 疑似哭腔/求助」+ 已知误识别声明；
+#   - 预期风险不升级（audio→risk 链未接通 ADR-0040 + 室内在场无门前进入跃迁 ≠ PERSON_ENTERED）
+#     ——「当前证据不足，未升级风险」是 Runtime 真实结论，非预设。
+# 若真实输出与预期不符，如实展示，不修饰（Reality Check = 诚实性证据）。
+#
+# 运行：
+#   python scripts/run_demo.py --live --scenario config/demo/scenarios/telephone_risk_reality_check.yaml
+
+scenario_id: telephone_risk_reality_check
+description: |
+  Reality Check：真实电话视频端到端自主感知（REAL_AUDIO_PIPELINE + REAL_RUNTIME_VIDEO）。
+  展示 Runtime 对真实素材的实际感知输出与风险判断，含已知误识别类别的诚实标注。
+
+source: telephone_risk_demo
+source_type: video_file
+media_path: dataset/telephone_risk/media/telephone_risk_demo.mp4
+
+start_time: "2026-08-16T19:45:00+08:00"
+frame_interval_s: 0.5
+fps_target: 8
+loop: true
+
+# REAL 音频语义事实源（AudioPipeline 真实推理）；16k PCM16 mono，提取自 demo.mp4 音轨。
+audio_path: dataset/telephone_risk/audio/telephone_risk_demo_16k_mono.wav
+
+realtime_risk:
+  enabled: true
+  decision_enabled: true
+
+audio_evidence:
+  enabled: true

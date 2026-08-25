@@ -7,8 +7,7 @@
 ::
 
     AudioPerceptionEvent ──AudioAdapter.adapt_audio_event──▶ RiskSignal(source=AUDIO)
-        ──signal_adapter.risk_signal_to_perception──▶ PerceptionEvent
-        ──DecisionEngine.evaluate──▶ WarningEvent（可为 None）
+        ──DecisionEngine.evaluate(risk_signals=...)──▶ WarningEvent（可为 None）
         ──ActionExecutor.execute──▶ ActionCommand[]
         ──MemoryHook.record(ev=None, warnings, actions, evidence, audio_session_id)──▶
             EpisodicRecord(visitor_instance_id=None, modalities=[AUDIO], D4 匿名)
@@ -16,8 +15,10 @@
 **硬约束（ADR-0027 D3 基石，本组件必须守）**：
 
 - **不新增 Audio Memory 写入链**：音频仍只经
-  ``RiskSignal → DecisionPolicy → WarningEvent → EpisodeBuilder`` 入 Memory——
-  本组件不做「音频 → 直接写 Memory」的旁路；
+  ``RiskSignal → DecisionEngine.evaluate(risk_signals=...) → WarningEvent → EpisodeBuilder``
+  入 Memory（audio-native path，ADR-0040 D1/D6）——本组件不做「音频 → 直接写 Memory」
+  的旁路，也不经 ``signal_adapter.risk_signal_to_perception`` 冒充视觉 PerceptionEvent
+  （硬门控 3）；
 - **决策门槛**：只有经 ``DecisionEngine`` 确认产出 ``WarningEvent`` 的会话才落库
   （``warning is None`` → 不记录）。Memory 记录的是「系统已确认的风险事件」，
   不是感知模型的原始打分；
@@ -42,9 +43,7 @@ from uuid import uuid4
 from ..action.command import ActionCommand
 from ..action.executor import ActionExecutor
 from ..analysis.decision_engine import DecisionEngine
-from ..analysis.perception import PerceptionEvent
 from ..analysis.risk_signal import SignalTransition
-from ..analysis.signal_adapter import risk_signal_to_perception
 from ..analysis.warning import WarningEvent
 from ..audio.event import AudioPerceptionEvent
 from ..common.logging import get_logger
@@ -212,6 +211,7 @@ class AudioSessionRecorder:
                     subject_id=subject_id,
                 )
                 sig.visitor_instance_id = None  # D4 匿名：信号层不携带访客身份
+                sig.features["device_id"] = self._device_id  # 供 audio-native decision 取 device_id
                 if sig.transition is SignalTransition.RAISED:
                     signals.append(sig)
             except Exception as exc:  # noqa: BLE001  # 单事件翻译失败：跳过
@@ -221,28 +221,19 @@ class AudioSessionRecorder:
                     error=str(exc),
                 )
 
-        # 3) 感知映射 + 决策（复用既有 DecisionEngine，单一决策中心）
-        #    感知映射与决策同层降级：risk_signal_to_perception 可能抛 ValueError
-        #    （subject_id 非合法 UUID 等脏信号），单信号失败只跳过该信号，绝不
-        #    上抛破坏「不抛未分类异常」契约。
-        percs: list[PerceptionEvent] = []
-        for sig in signals:
-            try:
-                perc = risk_signal_to_perception(sig, self._device_id)
-            except Exception as exc:  # noqa: BLE001  # 单信号映射失败：跳过
-                log.warning(
-                    "audio.recorder.perception_failed",
-                    session_id=session_id,
-                    signal_id=getattr(sig, "signal_id", None),
-                    error=str(exc),
-                )
-                continue
-            if perc is not None:
-                percs.append(perc)
+        # 3) Audio-native 决策（ADR-0040 D1/D6 · ADR-0044 配套）
+        #    RiskSignal 直达 DecisionEngine.risk_signals 一等输入，不经
+        #    signal_adapter.risk_signal_to_perception（硬门控 3：audio 不翻译
+        #    为视觉 PerceptionEvent）。modality-aware DecisionPolicy 消费
+        #    risk_signals 产出 WarningEvent。
         warning: WarningEvent | None = None
         actions: list[ActionCommand] = []
         try:
-            warning = self._decision_engine.evaluate(percs) if percs else None
+            warning = (
+                self._decision_engine.evaluate([], risk_signals=tuple(signals))
+                if signals
+                else None
+            )
             if warning is not None:
                 actions = list(self._executor.execute(warning))
         except Exception as exc:  # noqa: BLE001  # 决策失败：降级为不落库（不崩调用方）
