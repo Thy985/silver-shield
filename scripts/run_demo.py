@@ -204,6 +204,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="运行 5 项自检诊断（环境 / Registry / yaml / 媒体 / 端口）后退出，不启动网关；适合比赛现场开机前使用",
     )
+    p.add_argument(
+        "--verify-all",
+        action="store_true",
+        help="一键产品结论回归：对 3 个产品场景各跑 N 帧（含音频注入），校验 expected_product_result（RAISED/WARN/MONITOR）",
+    )
+    p.add_argument(
+        "--frames",
+        type=int,
+        default=480,
+        help="--verify-all 每场景跑的帧数（默认 480）",
+    )
     return p.parse_args()
 
 
@@ -504,6 +515,13 @@ def main() -> None:
     if args.check:
         print("\n✅ 环境检查通过。")
         sys.exit(0)
+
+    # --verify-all：一键产品结论回归（3 场景 × N 帧 + 校验 expected_product_result）
+    if args.verify_all:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from scenario_verify import main as verify_main
+
+        sys.exit(verify_main(args.frames))
 
     # Task 0 双入口：--live 走 Legacy 实时；默认走旗舰 Case Viewer
     if args.live:
