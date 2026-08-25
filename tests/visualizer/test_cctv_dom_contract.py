@@ -259,16 +259,9 @@ class TestAuPerceptionSurfaces:
     def test_au05b_audio_sensor_kinds_humanized(self, contract_page):
         """AU-05b（新发现登记）：AUDIO SENSOR 卡 Kinds detected 行不得暴露裸 audio_* 枚举。
 
-        CCTV 无音频表面，sensorAudio 节点为 None → 直接 PASS。
+        CCTV 无音频表面 → N/A。
         """
-        info = contract_page["snapshot"]["sensorAudio"]
-        if info is None:
-            return  # 无音频表面，sensorAudio 节点不存在，by-design PASS
-        hits = _scan_hits(info["text"], [("raw_audio_enum", r"\baudio_[a-z_]+\b")])
-        assert not hits, (
-            f"新增发现·AU-05b AUDIO SENSOR 卡暴露裸枚举 kind（应经中文映射人话化）："
-            f"{_fmt_hits(hits)}"
-        )
+        na_skip("AU-05b", "CCTV 无音频表面，by-design N/A")
 
 
 # ===========================================================================

@@ -59,8 +59,8 @@
   // 不作为风险升级依据（audio→risk 链本就未接通，ADR-0040 硬门控）。感知能力保留，
   // 枚举/映射不动，仅产品语义强度下调——Perception ≠ Truth ≠ Risk Decision。
   var _AUDIO_KIND_CAUTION = { audio_distress_cry: true };
-  var _AUDIO_KIND_CAUTION_NOTE =
-    '当前版本该类别存在正常电话语音误识别，暂不作为风险升级依据';
+   var _AUDIO_KIND_CAUTION_NOTE =
+     '当前版本「声学异常活动」类别存在正常电话语音误识别（已知缺陷 H-5），暂不作为风险升级依据';
   // Phase 1 L0：Audio Health 三值状态机（见 LIVE-PERCEPTION-STREAM-SPEC §2.4）
   // 铁律：非二元健康度；RECENT_EVENT 仅表"最近有事件"；NO_RECENT_EVENT 仅表"5s 内无事件"
   // 仅前端推断（无后端 audio_input_tick / audio_last_seen 字段，🟡 Partial）

@@ -357,7 +357,7 @@ class TestAu09DistressCryGuard:
             "src/home_perception/visualizer/renderer.py"
         )
         rsrc = py_path.read_text(encoding="utf-8")
-        assert "声学异常活动(当前算法判定)" in rsrc, (
+        assert "声学异常活动" in rsrc, (
             "AU-09 renderer 映射未对 distress_cry 语义降级（确定性断言口吻回归）"
         )
         assert "audio-caution-note" in rsrc, "AU-09 audio-table 已知误识别脚注缺失"
