@@ -397,10 +397,10 @@ class TestF5ActionAttributionChain:
         assert cmds[0].command_type
 
     def test_f5_pure_audio_zero_action_grayscale_semantics(self):
-        """灰度语义边界：纯音频帧零视觉触发 → 零 Warning 零 ActionCommand。
+        """Audio-native path（ADR-0040 D6 升级 · ADR-0044）：纯音频帧零视觉触发 →
+        audio-native Warning(LOW + MONITOR) + LOG_ONLY ActionCommand。
 
-        （policy 升级消费 risk_signals 参与判定前的既定行为；升级后本测试随 Owner
-        决策同步修订。）
+        不经 signal_adapter.risk_signal_to_perception（硬门控 3：percs 恒空）。
         """
         clock = ManualClock()
         p, hp = build_demo_chain(clock)
@@ -412,8 +412,11 @@ class TestF5ActionAttributionChain:
         percs, warnings, cmds = p._act_on_signals([audio_sig], NOW)
 
         assert percs == []  # AUDIO 不经视觉翻译（硬门控 3）
-        assert warnings == []
-        assert cmds == []
+        # audio-native path：纯 audio 产出 LOW + MONITOR warning
+        assert len(warnings) == 1
+        assert warnings[0].risk_level == "LOW"
+        assert warnings[0].recommended_action == "MONITOR"
+        assert len(cmds) >= 1  # ActionExecutor 消费 MONITOR → LOG_ONLY command
 
 
 def _ctx(case_time: float, events: tuple = ()):

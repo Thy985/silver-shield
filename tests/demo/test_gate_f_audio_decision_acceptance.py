@@ -215,8 +215,10 @@ class TestF1AudioSignalContract:
         assert sig.created_at.tzinfo is not None
         # ⑤ 未被翻译成视觉事件（硬门控 3：无幻觉兜底 visit_pending_verify）
         assert all(pe.event_type != "visit_pending_verify" for pe in r0.perception_events)
-        # ⑥ 未经 signal_adapter：trigger_events 不含 audio 派生视觉事件
-        assert r0.warnings == []
+        # ⑥ audio-native path（ADR-0040 D6 升级 · ADR-0044）：纯 audio 产出 LOW + MONITOR warning
+        assert len(r0.warnings) == 1
+        assert r0.warnings[0].risk_level == "LOW"
+        assert r0.warnings[0].recommended_action == "MONITOR"
 
     def test_f1_cleared_paired_after_silence(self):
         """CLEARED 与 RAISED 成对（paired_signal_id 回填）——双轨投影的事件轨完整性。"""
