@@ -1,0 +1,377 @@
+"""Shared Scenario Acceptance Contract — multi-scenario acceptance test infrastructure.
+
+Defines:
+    - ScenarioAcceptanceContract: base class declaring scenario narrative + phases
+    - Three concrete contracts: ProductStoryRisk, ProductStoryBenign, CctvSurveillanceSuspicious
+    - Shared JS / helpers used by browser, visual, and CCTV acceptance tests
+
+Usage:
+    Import the contract you need and replace the hardcoded SID in test files.
+    The contracts are designed so that each concrete class owns its phase sequence,
+    observe times, and assertion hooks while sharing all infrastructure code here.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+# ---------------------------------------------------------------------------
+# JS templates (use __SID__ placeholder replaced at instantiation)
+# ---------------------------------------------------------------------------
+
+WS_CAPTURE_INIT = """
+window.__wsLog = [];
+window.__wsMeta = { opened: 0, closed: 0 };
+window.__wsInstances = [];
+(function () {
+  var OW = window.WebSocket;
+  function PatchedWS(url, protocols) {
+    var ws = protocols !== undefined ? new OW(url, protocols) : new OW(url);
+    window.__wsMeta.opened++;
+    window.__wsInstances.push(ws);
+    ws.addEventListener('close', function () { window.__wsMeta.closed++; });
+    ws.addEventListener('message', function (ev) {
+      try {
+        var m = JSON.parse(ev.data);
+        m.__t = Date.now();
+        window.__wsLog.push(m);
+        if (window.__wsLog.length > 20000) window.__wsLog.shift();
+      } catch (e) { /* 非 JSON 帧忽略 */ }
+    });
+    return ws;
+  }
+  PatchedWS.prototype = OW.prototype;
+  window.WebSocket = PatchedWS;
+})();
+"""
+
+
+def make_video_sig_js(sid: str) -> str:
+    return f"""\
+(() => {{
+  const img = document.getElementById('video-img-{sid}')
+           || document.querySelector('img[src*="/mjpeg/"]');
+  if (!img) return {{ error: 'no-video-img-el' }};
+  if (!img.complete || !img.naturalWidth) return {{ error: 'not-decoded-yet' }};
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 36;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0, 64, 36);
+  return {{ sig: c.toDataURL('image/png').slice(-192), w: img.naturalWidth, h: img.naturalHeight }};
+}})()
+"""
+
+
+def make_signals_poll_js(sid: str) -> str:
+    return f"""\
+(() => {{
+  const box = document.getElementById('live-signals-{sid}');
+  if (!box) return {{ txt: '', cards: -1, badges: [] }};
+  return {{
+    txt: box.textContent || '',
+    cards: box.querySelectorAll('.rt-card').length,
+    badges: Array.from(box.querySelectorAll('.rt-badge')).map(b => b.textContent || ''),
+  }};
+}})()
+"""
+
+
+def make_layout_js(sid: str) -> str:
+    return f"""\
+(() => {{
+  const main = document.querySelector('main') || document.body;
+  const grid = main.querySelector('.grid, .live-grid, [class*="grid"], main > div') || main;
+  const gtc = getComputedStyle(grid).gridTemplateColumns || '';
+  const findEl = id => document.getElementById(id);
+  const findTop = id => {{
+    const el = findEl(id);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return Math.round(r.top + window.scrollY);
+  }};
+  const findH = id => {{
+    const el = findEl(id);
+    if (!el) return null;
+    return Math.round(el.getBoundingClientRect().height);
+  }};
+  const totalH = Math.max(
+    document.body.scrollHeight,
+    document.documentElement.scrollHeight
+  );
+  const sysarch = document.getElementById('lv-sysarch-{sid}');
+  return {{
+    grid_template_columns: gtc,
+    total_height: totalH,
+    video_top: findTop('video-img-{sid}'),
+    video_height: findH('video-img-{sid}'),
+    timeline_top: findTop('behavior-timeline-{sid}') ?? findTop('perception-stream-{sid}'),
+    timeline_height: findH('behavior-timeline-{sid}') ?? findH('perception-stream-{sid}'),
+    risk_explanation_top: findTop('lrk-card-{sid}'),
+    risk_explanation_height: findH('lrk-card-{sid}'),
+    signals_top: findTop('live-signals-{sid}'),
+    signals_height: findH('live-signals-{sid}'),
+    action_top: findTop('fs-action-closure-{sid}'),
+    action_height: findH('fs-action-closure-{sid}'),
+    sysarch_visible: sysarch ? sysarch.offsetParent !== null : false,
+    sysarch_top: sysarch ? Math.round(sysarch.getBoundingClientRect().top + window.scrollY) : null,
+  }};
+}})()
+"""
+
+
+def make_dom_capture_js(sid: str) -> str:
+    return f"""\
+(() => {{
+  const findText = id => document.getElementById(id)?.innerText || '';
+  const findTextContent = id => document.getElementById(id)?.textContent || '';
+  const lrk = (() => {{
+    const card = document.getElementById('lrk-card-{sid}');
+    const reasons = Array.from(document.querySelectorAll('#lrk-reasons-{sid} li'))
+      .map(li => (li.textContent || '').trim().replace(/^✓\\\\s*/, ''));
+    return {{
+      visible: card ? card.style.display !== 'none' : false,
+      level: document.getElementById('lrk-level-{sid}')?.innerText || '',
+      reasons,
+      empty_text: document.getElementById('lrk-empty-{sid}')?.innerText || '',
+    }};
+  }})();
+  const tasks = (() => {{
+    const g = id => document.getElementById(id + '-{sid}')?.innerText || '';
+    return {{
+      family_status: g('task-family-status'),
+      family_body: g('task-family-body'),
+      community_status: g('task-community-status'),
+      community_body: g('task-community-body'),
+      log_status: g('task-log-status'),
+      log_body: g('task-log-body'),
+    }};
+  }})();
+  const riskMap = (() => {{
+    const out = [];
+    if (window.__LiveState && window.__LiveState.riskSignalMap) {{
+      window.__LiveState.riskSignalMap.forEach((v, k) => out.push({{ key: String(k), value: v }}));
+    }}
+    return out;
+  }})();
+  const sysarch = document.getElementById('lv-sysarch-{sid}');
+  const sysarchTop = sysarch ? Math.round(sysarch.getBoundingClientRect().top + window.scrollY) : null;
+  return {{
+    video_natural_width: document.getElementById('video-img-{sid}')?.naturalWidth || 0,
+    timeline_text: findTextContent('behavior-timeline-{sid}') || findText('perception-stream-{sid}'),
+    signals_text: findText('live-signals-{sid}'),
+    lrk,
+    tasks,
+    risk_signal_map: riskMap,
+    sysarch_visible: sysarch ? sysarch.offsetParent !== null : false,
+    sysarch_top: sysarchTop,
+  }};
+}})()
+"""
+
+
+def make_full_dom_js(sid: str) -> str:
+    """Full DOM dump including memory, closure, perception stream, risk signal map."""
+    return f"""\
+(() => {{
+  const g = (id) => document.getElementById(id);
+  const findTextContent = id => document.getElementById(id)?.textContent || '';
+  const lrk = (() => {{
+    const card = document.getElementById('lrk-card-{sid}');
+    const reasons = Array.from(document.querySelectorAll('#lrk-reasons-{sid} li'))
+      .map(li => (li.textContent || '').trim().replace(/^✓\\\\s*/, ''));
+    return {{
+      visible: card ? card.style.display !== 'none' : false,
+      level: document.getElementById('lrk-level-{sid}')?.innerText || '',
+      reasons,
+      empty_text: document.getElementById('lrk-empty-{sid}')?.innerText || '',
+    }};
+  }})();
+  const tasks = (() => {{
+    const g2 = id => document.getElementById(id + '-{sid}')?.innerText || '';
+    return {{
+      family_status: g2('task-family-status'),
+      family_body: g2('task-family-body'),
+      community_status: g2('task-community-status'),
+      community_body: g2('task-community-body'),
+      log_status: g2('task-log-status'),
+      log_body: g2('task-log-body'),
+    }};
+  }})();
+  const riskMap = (() => {{
+    const out = [];
+    if (window.__LiveState && window.__LiveState.riskSignalMap) {{
+      window.__LiveState.riskSignalMap.forEach((v, k) => out.push({{ key: String(k), value: v }}));
+    }}
+    return out;
+  }})();
+  const ps = window.__LiveStream && window.__LiveStream.perceptionStream;
+  const sysarch = document.getElementById('lv-sysarch-{sid}');
+  const sysarchTop = sysarch ? Math.round(sysarch.getBoundingClientRect().top + window.scrollY) : null;
+  return {{
+    pill: g('ws-pill')?.className || '',
+    pill_text: g('ws-text')?.textContent || '',
+    ps_recent: g('ps-recent-{sid}')?.innerText || '',
+    ps_state: g('ps-state-{sid}')?.innerText || '',
+    ps_history_count: g('ps-history-count-{sid}')?.textContent || '0',
+    audio_rows: Array.from(document.querySelectorAll('table.audio-table tr'))
+      .map(r => (r.textContent || '').replace(/\\\\s+/g, ' ').trim()),
+    signals_text: g('live-signals-{sid}')?.innerText || '',
+    lrk: {{
+      visible: lrk.visible,
+      level: lrk.level,
+      reasons: lrk.reasons,
+      empty_text: lrk.empty_text,
+    }},
+    tasks,
+    memory: g('live-memory-timeline-{sid}')?.textContent || '',
+    closure: g('fs-action-closure-{sid}')?.innerText || '',
+    pstream: ps ? {{
+      entries: ps.entries,
+      history: ps.history,
+      seen_audio_ids: Array.from(ps._seenAudioEventIds || []),
+      seen_risk_trans: Array.from(ps._seenRiskTransitions || []),
+    }} : null,
+    risk_signal_map: riskMap,
+    sysarch_visible: sysarch ? sysarch.offsetParent !== null : false,
+    sysarch_top: sysarchTop,
+  }};
+}})()
+"""
+
+
+# ---------------------------------------------------------------------------
+# Phase definition
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PhaseSpec:
+    """Single observation phase within a multi-phase acceptance run."""
+    name: str
+    observe_ms: int
+    need_source_switch: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Contract base class
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ScenarioAcceptanceContract:
+    """Declares a scenario's narrative, phase sequence, and observation budgets.
+
+    Concrete subclasses own:
+      - scenario_id: server-side scenario_id string
+      - skip_reason: message shown when server is not running this scenario
+      - phases: ordered list of PhaseSpec
+      - observe_times: overrides per-phase (used by visual screenshots)
+      - has_audio_surface: True if the scenario produces audio evidence
+      - expected_phases: ordered phase names for the runner to execute
+      - skip_assertions(phase_name: str) -> list[str]: returns assertion class prefixes to skip
+    """
+    scenario_id: str = ""
+    narrative: str = ""
+    phases: list[PhaseSpec] = field(default_factory=list)
+    observe_times: dict[str, int] = field(default_factory=dict)
+    has_audio_surface: bool = True
+    # Assertion hooks: which Test* classes to skip for this scenario
+    _skip_assertions: list[str] = field(default_factory=list)
+
+    def get_phase(self, name: str) -> PhaseSpec | None:
+        for p in self.phases:
+            if p.name == name:
+                return p
+        return None
+
+    def skip_reason(self) -> str:
+        return (
+            f"需先启动: python scripts/run_demo.py --live "
+            f"--scenario config/demo/scenarios/{self.scenario_id}.yaml"
+        )
+
+    def should_skip_audio_assertions(self, phase: str) -> bool:
+        """Return True if audio-dependent assertions should be skipped for this phase."""
+        return not self.has_audio_surface
+
+    def phase_order(self) -> list[str]:
+        return [p.name for p in self.phases]
+
+
+# ---------------------------------------------------------------------------
+# Product story contracts (replicate existing test structure)
+# ---------------------------------------------------------------------------
+
+
+class ProductStoryRiskContract(ScenarioAcceptanceContract):
+    """product_story_risk + product_story_benign four-phase acceptance contract."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            scenario_id="product_story_risk",
+            narrative="夜间电话+人员 → 风险升级 → 通知家属 + 社区上报",
+            phases=[
+                PhaseSpec("risk", observe_ms=120_000, need_source_switch=True),
+                PhaseSpec("benign", observe_ms=80_000, need_source_switch=True),
+                PhaseSpec("switch_back", observe_ms=30_000, need_source_switch=True),
+                PhaseSpec("reset", observe_ms=15_000, need_source_switch=True),
+            ],
+            observe_times={
+                "risk": 90_000,
+                "benign": 60_000,
+                "switch_back": 30_000,
+            },
+            has_audio_surface=True,
+            _skip_assertions=[],
+        )
+
+    def benign_scenario_id(self) -> str:
+        return "product_story_benign"
+
+
+class ProductStoryBenignContract(ProductStoryRiskContract):
+    """Standalone benign-side validation (no risk+benign switch required)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scenario_id = "product_story_benign"
+        self._skip_assertions = ["TestP2RiskStory", "TestP7SceneSwitch"]
+
+
+# ---------------------------------------------------------------------------
+# CCTV surveillance contract
+# ---------------------------------------------------------------------------
+
+
+class CctvSurveillanceSuspiciousContract(ScenarioAcceptanceContract):
+    """cctv_surveillance_suspicious single-phase acceptance contract.
+
+    Narrative (frozen):
+        夜间人员出现 → 重复出现 → 异常停留 → 视觉风险信号 → RiskSignal → WARN → LOG_ONLY
+
+    Key differences from product_story_risk:
+        - No audio surface (CCTV video has no sound)
+        - Single phase (no benign/benign switch)
+        - Expected max risk level: WARN (not HIGH)
+        - repeat_visit_count override: 2
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            scenario_id="cctv_surveillance_suspicious",
+            narrative="夜间反复出现 + 异常停留 → 视觉风险信号 → WARN/LOG_ONLY（无音频）",
+            phases=[
+                PhaseSpec("cctv_observe", observe_ms=120_000, need_source_switch=True),
+            ],
+            observe_times={
+                "cctv_observe": 90_000,
+            },
+            has_audio_surface=False,
+            _skip_assertions=[
+                "TestP1AudioEvidenceArrives",
+                "TestP2RiskStory",
+                "TestP3BenignStory",
+                "TestP6AntiHallucination",
+                "TestP7SceneSwitch",
+            ],
+        )

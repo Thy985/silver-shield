@@ -4,6 +4,8 @@
     只验证用户看到的页面是否像一个完整、可信的产品故事，不重新审 Runtime。
     重点：整体布局、视觉叙事顺序、六区域产品表现、risk/benign 对照、浏览器卫生、截图证据。
 
+通用化：通过 ScenarioAcceptanceContract 驱动场景配置，支持产品故事和多场景扩展。
+
 运行前提（外部 fixture，测试内探测 skip）：
     python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
 """
@@ -23,17 +25,27 @@ try:
 except ImportError:  # pragma: no cover
     pytest.skip("playwright not installed", allow_module_level=True)
 
+from tests.visualizer._scenario_contract import (
+    ProductStoryRiskContract,
+    make_dom_capture_js,
+    make_layout_js,
+    make_video_sig_js,
+)
+
 BASE = "http://127.0.0.1:8765"
 URL = f"{BASE}/live"
-SID = "product_story_risk"
+
+# 契约驱动
+_CONTRACT = ProductStoryRiskContract()
+SID = _CONTRACT.scenario_id
 
 SCREENSHOT_DIR = Path("docs/reports/product_story_visual_acceptance")
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # 视觉验收观察窗口（按场景特性调优，CPU 推理慢于 nominal）
-OBSERVE_RISK_MS = 90_000       # risk: 等异常停留触发
-OBSERVE_BENIGN_MS = 60_000     # benign: 等音频事件 + MONITOR 确认
-OBSERVE_SWITCH_MS = 30_000     # scene switch: 验视觉残留
+OBSERVE_RISK_MS = _CONTRACT.observe_times.get("risk", 90_000)
+OBSERVE_BENIGN_MS = _CONTRACT.observe_times.get("benign", 60_000)
+OBSERVE_SWITCH_MS = _CONTRACT.observe_times.get("switch_back", 30_000)
 
 POLL_MS = 1_000
 
@@ -62,7 +74,7 @@ def _server_available() -> bool:
 
 pytestmark = pytest.mark.skipif(
     not _server_available(),
-    reason="需先启动: python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml",
+    reason=_CONTRACT.skip_reason(),
 )
 
 
@@ -353,107 +365,24 @@ class TestScreenshots:
 
 def _capture_layout(page) -> dict:
     """采集页面布局信息（grid / 区域定位 / 高度）。"""
-    js = """
-    (() => {
-      const main = document.querySelector('main') || document.body;
-      const grid = main.querySelector('.grid, .live-grid, [class*="grid"], main > div') || main;
-      const gtc = getComputedStyle(grid).gridTemplateColumns || '';
-      const findEl = id => document.getElementById(id);
-      const findTop = id => {
-        const el = findEl(id);
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return Math.round(r.top + window.scrollY);
-      };
-      const findH = id => {
-        const el = findEl(id);
-        if (!el) return null;
-        return Math.round(el.getBoundingClientRect().height);
-      };
-      const totalH = Math.max(
-        document.body.scrollHeight,
-        document.documentElement.scrollHeight
-      );
-      const sysarch = document.getElementById('lv-sysarch-__SID__');
-      return {
-        grid_template_columns: gtc,
-        total_height: totalH,
-        video_top: findTop('video-img-__SID__'),
-        video_height: findH('video-img-__SID__'),
-        timeline_top: findTop('behavior-timeline-__SID__') ?? findTop('perception-stream-__SID__'),
-        timeline_height: findH('behavior-timeline-__SID__') ?? findH('perception-stream-__SID__'),
-        risk_explanation_top: findTop('lrk-card-__SID__'),
-        risk_explanation_height: findH('lrk-card-__SID__'),
-        signals_top: findTop('live-signals-__SID__'),
-        signals_height: findH('live-signals-__SID__'),
-        action_top: findTop('fs-action-closure-__SID__'),
-        action_height: findH('fs-action-closure-__SID__'),
-        sysarch_visible: sysarch ? sysarch.offsetParent !== null : false,
-        sysarch_top: sysarch ? Math.round(sysarch.getBoundingClientRect().top + window.scrollY) : null,
-      };
-    })()
-    """.replace("__SID__", SID)
+    js = make_layout_js(SID)
     return _js(page, js)
 
 
 def _capture_dom(page) -> dict:
     """采集六区域 DOM 内容。"""
-    js = """
-    (() => {
-      const findText = id => document.getElementById(id)?.innerText || '';
-      const findTextContent = id => document.getElementById(id)?.textContent || '';
-      const lrk = (() => {
-        const card = document.getElementById('lrk-card-__SID__');
-        const reasons = Array.from(document.querySelectorAll('#lrk-reasons-__SID__ li'))
-          .map(li => (li.textContent || '').trim().replace(/^✓\\s*/, ''));
-        return {
-          visible: card ? card.style.display !== 'none' : false,
-          level: document.getElementById('lrk-level-__SID__')?.innerText || '',
-          reasons,
-          empty_text: document.getElementById('lrk-empty-__SID__')?.innerText || '',
-        };
-      })();
-      const tasks = (() => {
-        const g = id => document.getElementById(id + '-__SID__')?.innerText || '';
-        return {
-          family_status: g('task-family-status'),
-          family_body: g('task-family-body'),
-          community_status: g('task-community-status'),
-          community_body: g('task-community-body'),
-          log_status: g('task-log-status'),
-          log_body: g('task-log-body'),
-        };
-      })();
-      const riskMap = (() => {
-        const out = [];
-        if (window.__LiveState && window.__LiveState.riskSignalMap) {
-          window.__LiveState.riskSignalMap.forEach((v, k) => out.push({ key: String(k), value: v }));
-        }
-        return out;
-      })();
-      const sysarch = document.getElementById('lv-sysarch-__SID__');
-      const sysarchTop = sysarch ? Math.round(sysarch.getBoundingClientRect().top + window.scrollY) : null;
-      return {
-        video_natural_width: document.getElementById('video-img-__SID__')?.naturalWidth || 0,
-        timeline_text: findTextContent('behavior-timeline-__SID__') || findText('perception-stream-__SID__'),
-        signals_text: findText('live-signals-__SID__'),
-        lrk,
-        tasks,
-        risk_signal_map: riskMap,
-        sysarch_visible: sysarch ? sysarch.offsetParent !== null : false,
-        sysarch_top: sysarchTop,
-      };
-    })()
-    """.replace("__SID__", SID)
+    js = make_dom_capture_js(SID)
     return _js(page, js)
 
 
 @pytest.fixture(scope="module")
 def _browser():
-    """单真实 Browser Session。"""
+    """单真实 Browser Session（headless Chromium，1440x900 viewport）。"""
     with sync_playwright() as p:
-        browser, _ctx, page = _new_page(p)
-        yield page, browser
+        browser = p.chromium.launch(executable_path=r"C:\Users\lenovo\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe", headless=True)
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        page = ctx.new_page()
+        yield page
         browser.close()
 
 
@@ -497,7 +426,7 @@ def risk_screenshot(_browser):
     seen_action = False
     steps = OBSERVE_RISK_MS // POLL_MS
     for i in range(steps):
-        signals = _js(page, "document.getElementById('live-signals-__SID__')?.textContent || ''".replace("__SID__", SID))
+        signals = _js(page, make_video_sig_js(SID) if False else "document.getElementById('live-signals-__SID__')?.textContent || ''".replace("__SID__", SID))
         if "RAISED" in signals:
             seen_raised = True
         tasks = _js(page, "document.getElementById('task-family-body-__SID__')?.innerText || ''".replace("__SID__", SID))
@@ -549,7 +478,7 @@ def benign_screenshot(_browser):
     page, _browser = _browser
     requests.post(
         f"{BASE}/demo/scenario",
-        json={"scenario_id": "product_story_benign"},
+        json={"scenario_id": _CONTRACT.benign_scenario_id()},
         timeout=15,
     )
     page.wait_for_timeout(5_000)
@@ -574,7 +503,7 @@ def switch_back_screenshot(_browser):
     page, _browser = _browser
     requests.post(
         f"{BASE}/demo/scenario",
-        json={"scenario_id": "product_story_risk"},
+        json={"scenario_id": _CONTRACT.scenario_id},
         timeout=15,
     )
     page.wait_for_timeout(5_000)
@@ -599,7 +528,7 @@ def overview_path(_browser):
     # 切回 risk + reset 拿稳定态
     requests.post(
         f"{BASE}/demo/scenario",
-        json={"scenario_id": "product_story_risk"},
+        json={"scenario_id": _CONTRACT.scenario_id},
         timeout=15,
     )
     page.wait_for_timeout(3_000)
