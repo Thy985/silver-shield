@@ -20,8 +20,12 @@ import pytest
 REPORTS_DIR = Path(__file__).resolve().parents[2] / "docs" / "reports"
 
 # 已注册需要校验的 vision-eval 报告（文件名 = `vision-eval-{scenario_id}-YYYY-MM-DD.json`）。
+# 双注册（C9 α 决策 2026-08-25）：
+# - 保留 2026-08-24 历史 product_story_risk 报告（场景身份迁移前的 D2 验收快照，文件名不可改）
+# - 新增 telephone_risk 报告占位（场景身份迁移后，等 C11 全链路验证生成）
 REGISTERED_REPORTS: tuple[str, ...] = (
-    "vision-eval-product-story-risk-2026-08-24.json",
+    "vision-eval-product-story-risk-2026-08-24.json",       # 历史 · product_story_risk D2 验收快照
+    "vision-eval-telephone-risk-2026-08-25.json",            # 新场景身份 · C11 全链路验证后生成
     "vision-eval-cctv-surveillance-suspicious-2026-08-25.json",
     "vision-eval-delivery-courier-normal-2026-08-25.json",
 )

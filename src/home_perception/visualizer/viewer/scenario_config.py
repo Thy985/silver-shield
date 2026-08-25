@@ -100,17 +100,12 @@ _SCENARIO_SURFACES: dict[str, frozenset[ScenarioSurface]] = {
         ScenarioSurface.L5_PROVENANCE,
         # ScenarioSurface.L6_MEMORY_CONTEXT,  # 🟡 Phase 3 阻塞
     }),
-    # D0 AU-06（B4）根因修复：product_story_risk 场景含 synthetic_replay 音频注入
+    # D0 AU-06（B4）根因修复历史：原 product_story_risk 场景含 synthetic_replay 音频注入
     # （audio_replay_path），此前未注册音频 Surface → has_audio_surface()=False 门控
     # 了 waveform canvas 渲染。该场景音频是叙事主轴之一，注册 L1/L2 音频 Surface。
-    "product_story_risk": frozenset({
-        ScenarioSurface.L0_AUDIO_HEALTH,
-        ScenarioSurface.L1_AUDIO_PERCEPTION,
-        ScenarioSurface.L2_ACOUSTIC_STATE,
-        ScenarioSurface.L3_PERCEPTION_STREAM,
-        ScenarioSurface.L4_RISK_SIGNALS,
-        ScenarioSurface.L5_PROVENANCE,
-    }),
+    # 2026-08-25 决策：product_story_risk 已重命名为 telephone_risk（场景身份迁移，详见
+    # docs/design/architecture/SCENARIO-RENAME-CONFLICTS-2026-08-25.md §3 D1），
+    # 上面 telephone_risk key 直接接管全部 Surface 注册；下方原 product_story_risk key 删除。
 }
 
 # 未知场景默认 Surface（最小集）

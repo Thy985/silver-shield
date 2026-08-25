@@ -14,7 +14,7 @@ SSOT：``docs/reports/DOM-E2E-UPGRADE-ACCEPTANCE-CHECKLIST-2026-08-24.md`` v3.4�
 Vision Judge 评分结论做任何断言（那是步骤 I 的人工/vision 验收职责）。
 
 运行前提（外部 fixture，模块级探测 skip）：
-    python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
+    python scripts/run_demo.py --live --scenario config/demo/scenarios/telephone_risk.yaml
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover
 
 BASE = "http://127.0.0.1:8765"
 URL = f"{BASE}/live"
-SID = "product_story_risk"
+SID = "telephone_risk"
 
 CHROMIUM_PATH = (
     r"C:\Users\lenovo\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe"
@@ -82,7 +82,7 @@ def _server_available() -> bool:
 pytestmark = pytest.mark.skipif(
     not _server_available(),
     reason="需先启动: python scripts/run_demo.py --live --scenario "
-    "config/demo/scenarios/product_story_risk.yaml",
+    "config/demo/scenarios/telephone_risk.yaml",
 )
 
 
@@ -228,7 +228,7 @@ def _write_manifest(rows: list[dict[str, str]], session: dict[str, Any]) -> Path
         f"- captured_at: {session['captured_at']}",
         f"- frame_index: {session['frame_index']}",
         "- viewport: 1440x900 (headless Chromium)",
-        "- source: tests/visualizer/test_product_screenshots.py（SSOT §3.4 步骤 H）",
+        "- source: tests/visualizer/test_telephone_risk_screenshots.py（SSOT §3.4 步骤 H）",
         "",
         "| file | anchor | 说明 | bytes | md5 |",
         "|---|---|---|---|---|",

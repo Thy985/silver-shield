@@ -7,7 +7,7 @@
 通用化：通过 ScenarioAcceptanceContract 驱动场景配置，支持产品故事和多场景扩展。
 
 运行前提（外部 fixture，测试内探测 skip）：
-    python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
+    python scripts/run_demo.py --live --scenario config/demo/scenarios/telephone_risk.yaml
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover
     pytest.skip("playwright not installed", allow_module_level=True)
 
 from tests.visualizer._scenario_contract import (
-    ProductStoryRiskContract,
+    TelephoneRiskContract,
     make_dom_capture_js,
     make_layout_js,
     make_video_sig_js,
@@ -36,7 +36,7 @@ BASE = "http://127.0.0.1:8765"
 URL = f"{BASE}/live"
 
 # 契约驱动
-_CONTRACT = ProductStoryRiskContract()
+_CONTRACT = TelephoneRiskContract()
 SID = _CONTRACT.scenario_id
 
 SCREENSHOT_DIR = Path("docs/reports/product_story_visual_acceptance")
