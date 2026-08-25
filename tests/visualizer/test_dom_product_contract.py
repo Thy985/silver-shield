@@ -306,9 +306,14 @@ class TestAu08Provenance:
             )
 
     def test_au08_reload_synthetic_marker_for_audio_scenarios(self, contract_risk):
-        """AU-08d：有音频表面时，reload 后 prov-banner 含合成回放标注。
+        """AU-08d：有音频表面时，reload 后 prov-banner 含音频源声明。
 
         无音频场景（CCTV 等）跳过此条（改由 AU-08b 覆盖）。
+
+        2026-08-25 修复：telephone_risk 命中 GOLDEN_CASES → inject_golden_evidence 追加
+        provenance_kind=SIMULATED pre-event 节点 → audio_evidence kinds 包含 SIMULATED →
+        渲染走 "混合来源" 分支（详见 AU-08b 配置变更）。故此处 query 字面量改为
+        "混合来源：SIMULATED"，覆盖新旧两条渲染路径（任何含 SIMULATED 的 audio 声明）。
         """
         if not _D0.has_audio_surface:
             na_skip("AU-08d", "无音频表面，by-design skip")
@@ -321,16 +326,16 @@ class TestAu08Provenance:
         )
         assert audio_ready, (
             "AU-08d 观察窗 50s 内无任何 audio-table 行涌现"
-            "（replay 注入未生效，无法验证合成回放声明）"
+            "（replay 注入未生效，无法验证音频源声明）"
         )
         page.reload(wait_until="domcontentloaded", timeout=30_000)
         synthetic_ready = _poll_until(
             page,
-            "document.body.innerText.indexOf('合成回放 (SYNTHETIC_REPLAY)') >= 0",
+            "document.body.innerText.indexOf('混合来源：SIMULATED') >= 0",
             30_000,
         )
         assert synthetic_ready, (
-            "AU-08d reload 后 prov-banner 未见「合成回放 (SYNTHETIC_REPLAY)」"
+            "AU-08d reload 后 prov-banner 未见「混合来源：SIMULATED」"
             "（provenance 显性化回归：Simulation 与真实推理不可区分即违契约）"
         )
 
