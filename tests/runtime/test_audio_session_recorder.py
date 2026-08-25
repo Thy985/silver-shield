@@ -211,17 +211,19 @@ class TestClosedLoopRecord:
         assert store.snapshot()["episodic"] == []
 
     def test_d3_perception_mapping_failure_no_record(self, monkeypatch) -> None:
-        """D3 负例：risk_signal_to_perception 抛异常（脏信号）→ 单信号降级跳过，
+        """D3 负例：adapt_audio_event 抛异常（脏信号）→ 单信号降级跳过，
         不破坏「不抛未分类异常」契约（审查修复：原实现此阶段无 try/except）。"""
         from home_perception.runtime import audio_session_recorder as rec_mod
 
         store = InMemoryStore()
         recorder = _build_recorder(store)
 
-        def boom(sig, device_id):
+        def boom(event, device_id, **kwargs):
             raise ValueError("subject_id 非合法 UUID（脏信号）")
 
-        monkeypatch.setattr(rec_mod, "risk_signal_to_perception", boom)
+        # ADR-0040 D1/D6：audio 不翻译为视觉 PerceptionEvent，模块级翻译入口
+        # 为 adapt_audio_event（risk_signal_to_perception 已随旧架构移除）
+        monkeypatch.setattr(rec_mod, "adapt_audio_event", boom)
         summary = recorder.record_session(
             [_audio_event(AudioPerceptionKind.AUDIO_DISTRESS_CRY, 1710000010.0)]
         )

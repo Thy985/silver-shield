@@ -131,7 +131,7 @@ def test_no_false_positive_conflicts(dataset):
 def test_c1_no_score_fields(dataset):
     """C1：ReasoningInput 不得含 risk_score / decision / warning。"""
     # 与 consumer 测试共享同一白名单常量（口径唯一，防漂移）
-    from memory.consumer._c1 import REASONING_INPUT_FIELD_WHITELIST
+    from .consumer._c1 import REASONING_INPUT_FIELD_WHITELIST
 
     assert set(ReasoningInput.__dataclass_fields__.keys()) == REASONING_INPUT_FIELD_WHITELIST
     layer = _load_layer(dataset, "case_001_repeat_visitor")
