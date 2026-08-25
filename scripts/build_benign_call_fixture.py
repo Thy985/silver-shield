@@ -139,7 +139,8 @@ def build() -> dict[str, float]:
         "composed_at": datetime.now(UTC).date().isoformat(),
         "purpose": (
             "SSOT v3.2 收尾路径步骤 A（F-1 冻结方案）：benign 正常通话音轨，"
-            "供 product_story_benign.yaml 替换 synthetic 音源（步骤 C 成对冻结）"
+            "供 telephone_risk_benign.yaml 替换 synthetic 音源（步骤 C 成对冻结；"
+            "2026-08-25 场景身份迁移：product_story_benign → telephone_risk_benign）"
         ),
         "recipe": "telephone signaling + telephone-channel speech + normal conversational continuity",
         "story_timeline_label_rule": (
