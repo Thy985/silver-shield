@@ -1,0 +1,143 @@
+{
+  "schema_version": "1.0",
+  "report_id": "vision-eval-cctv-surveillance-suspicious-2026-08-25",
+  "scenario_id": "cctv_surveillance_suspicious",
+  "captured_at": "2026-08-25",
+  "pipeline": "Playwright screenshots -> 5-dim Visual Rubric -> Vision Judge -> structured report",
+  "rubric_frozen": [
+    "信息层级",
+    "叙事完整性",
+    "调试元素残留",
+    "视觉压迫感",
+    "产品感"
+  ],
+  "verdict_enum": ["PASS", "WARN", "FAIL"],
+  "rounds": [
+    {
+      "round": 1,
+      "note": "CCTV D2 首轮评审（六图直出，无 FAIL）；本轮为收口轮，不再后续修复后第二轮",
+      "summary": {"pass": 28, "warn": 2, "fail": 0},
+      "shots": [
+        {
+          "file": "01-video-sensor.png",
+          "anchor": "#video-sensor-cctv_surveillance_suspicious",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "视频主体居中占据首屏最大权重；时间戳 23:36:19 / AI 事件标签 / 控件 / 媒体源绑定 层级清晰降权"},
+            "叙事完整性": {"verdict": "PASS", "note": "门前场景如实呈现，AI 识别为「人」中立描述，未越界定性"},
+            "调试元素残留": {"verdict": "PASS", "note": "无 bbox/坐标/conf/track_id/frame@；底部调试信息降级为产品化「媒体源绑定：实时视频流·已连接」"},
+            "视觉压迫感": {"verdict": "PASS", "note": "深色背景高对比，无弹窗、无堆叠面板"},
+            "产品感": {"verdict": "PASS", "note": "面向家庭用户的安防 App 视觉调性；AI 标签使用人话；无 YOLO/Agent 调试痕迹"}
+          }
+        },
+        {
+          "file": "02-behavior-timeline.png",
+          "anchor": "#behavior-timeline-cctv_surveillance_suspicious",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "三条聚合行为事件分层清晰：风险预警置顶（带三角警告图标+LOW）→ 待核实到访（蓝色）→ 首次出现（蓝色）"},
+            "叙事完整性": {"verdict": "PASS", "note": "首次出现 → 待核实到访 → 风险预警 形成完整行为→判断→风险叙事链"},
+            "调试元素残留": {"verdict": "WARN", "note": "时间线 detail 仍含英文枚举「实时风险信号: behavioral(vision)」；lrk-reasons 已正确翻译为「行为特征（视觉）」，时间线 detail 路径未走 _REASON_ZH 映射（W-1 打磨项）"},
+            "视觉压迫感": {"verdict": "PASS", "note": "仅 3 条聚合事件，密度极低，无每帧 person 重复"},
+            "产品感": {"verdict": "PASS", "note": "访客#1 / 入户门 / 强度·微弱 等本土化描述；图标语义明确"}
+          }
+        },
+        {
+          "file": "03-risk-explain-card.png",
+          "anchor": "#lrk-card-cctv_surveillance_suspicious",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "等级（LOW 风险）→ 人话原因（✓ 待核实到访 / 行为特征（视觉））→ 触发规则 chips（带分数）→ 强度条 → 建议（继续观察）动线清晰"},
+            "叙事完整性": {"verdict": "PASS", "note": "三问齐答：为什么触发（人话原因）/ 多严重（LOW + 强度条）/ 怎么做（继续观察）"},
+            "调试元素残留": {"verdict": "WARN", "note": "风险等级英文枚举 LOW 裸显（live_stream.js:1599 levels.join(' / ') + ' 风险' 未走 _LEVEL_ZH 映射）；reasons 已翻译为「行为特征（视觉）」（W-2 打磨项）"},
+            "视觉压迫感": {"verdict": "PASS", "note": "颜色克制、绿色 LOW 标签 + 柔和强度条"},
+            "产品感": {"verdict": "PASS", "note": "「✓ 人话原因」「继续观察」口语化；底部 device/elder 标签属业务语义而非调试 ID"}
+          }
+        },
+        {
+          "file": "04-risk-signals.png",
+          "anchor": "#live-signals-cctv_surveillance_suspicious",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "状态徽章（RAISED 红）→ 严重等级（低）→ 内容（行为特征 + 主体：在场人员）→ 元数据（41.0s 时长）从左到右动线清晰"},
+            "叙事完整性": {"verdict": "PASS", "note": "单卡呈现「人员在场 41 秒」聚合行为事件，可独立理解"},
+            "调试元素残留": {"verdict": "PASS", "note": "无 UUID/ID/枚举；category 译为「行为特征」，severity 译为「低」（D-I1 修复在 CCTV 已生效）"},
+            "视觉压迫感": {"verdict": "PASS", "note": "单卡密度适中，留白充分"},
+            "产品感": {"verdict": "PASS", "note": "RAISED 红徽章醒目；中文标签统一；非调试面板"}
+          }
+        },
+        {
+          "file": "05-action-closure.png",
+          "anchor": "#fs-action-closure-cctv_surveillance_suspicious",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "三端卡结构清晰：家属端（暂无命令下发）/ 社区端（暂无工单）/ 风险日志（已记录 LOW）"},
+            "叙事完整性": {"verdict": "PASS", "note": "CCTV 无电话链路 → 仅「记录 + 等待人工处置」闭环，符合模块边界"},
+            "调试元素残留": {"verdict": "PASS", "note": "无 command_count / ActionCommand 字段；无 API endpoint 路径；reasons 文案内含「behavioral(vision)」英文（W-1 同源，不重复计入）"},
+            "视觉压迫感": {"verdict": "PASS", "note": "三端卡密度适中、间距合理"},
+            "产品感": {"verdict": "PASS", "note": "「我知道了」「通知社区」「接受任务」用户友好按钮；非 ActionCommand 调试输出"}
+          }
+        },
+        {
+          "file": "06-memory-context.png",
+          "anchor": "#memory-context-cctv_surveillance_suspicious",
+          "verdict": "PASS",
+          "dimensions": {
+            "信息层级": {"verdict": "PASS", "note": "CURRENT EPISODE 标题突出（橙色加粗），空态文案居中灰色降噪"},
+            "叙事完整性": {"verdict": "PASS", "note": "如实呈现空态（「本次通话暂无历史相关事件」），未编造内容——Memory UI 后置策略生效"},
+            "调试元素残留": {"verdict": "PASS", "note": "无 UUID/episode_id/内部枚举名；空态文案友好而非「暂无/N/A」技术态"},
+            "视觉压迫感": {"verdict": "PASS", "note": "空态卡片柔和配色，呼吸感良好"},
+            "产品感": {"verdict": "PASS", "note": "消费级产品 UI 风格；Memory 后置决策落地，非强行凑六区域"}
+          }
+        }
+      ],
+      "critical_failure_check": {
+        "page_looks_like_debug_panel": false,
+        "user_cant_understand_why_risk_raised": false,
+        "bbox_conf_track_id_frame_leak": false,
+        "timeline_flooded_by_per_frame_detection": false,
+        "risk_conclusion_exceeds_evidence": false,
+        "risk_action_relationship_unclear": false,
+        "critical_blank_or_crowding_in_above_fold": false
+      },
+      "polish_backlog": [
+        {
+          "id": "W-1",
+          "shot": "02-behavior-timeline.png / 05-action-closure.png",
+          "note": "时间线 detail 字段与行动闭环 reasons 仍含英文枚举「实时风险信号: behavioral(vision)」；_REASON_ZH 已定义映射但 timeline 构建路径（ev.detail）未走该映射。修法：live_stream.js timeline detail 渲染前过 _REASON_ZH（line 761 附近），或上游 live_adapter 构造 ev.detail 时预先翻译",
+          "severity": "WARN",
+          "blocking": false
+        },
+        {
+          "id": "W-2",
+          "shot": "03-risk-explain-card.png",
+          "note": "风险等级英文枚举 LOW 裸显（「LOW 风险」）；_LEVEL_ZH 已定义但 live_stream.js:1599 未走映射。修法：levels.map(_LEVEL_ZH[l] || l).join(' / ') + ' 风险'",
+          "severity": "WARN",
+          "blocking": false
+        }
+      ]
+    }
+  ],
+  "fail_resolution": [],
+  "polish_backlog_registered": ["W-1", "W-2"],
+  "summary": {
+    "pass": 28,
+    "warn": 2,
+    "fail": 0,
+    "critical_failures": 0,
+    "unexplained_failures": 0,
+    "gate_d2": "PASS"
+  },
+  "evidence_boundary_check": {
+    "evidence_boundary_intact": true,
+    "forbidden_terms_found": [],
+    "narrative_alignment": "CCTV 风险事实（行为异常 / 视觉风险信号 / WARN/LOG_ONLY）正确投影为人话，未越界为诈骗/犯罪/入侵/骗子等结论"
+  },
+  "provenance": {
+    "video_source": "实时推理 (REAL_RUNTIME_VIDEO)",
+    "audio_source": "无音频轨",
+    "risk_decision": "runtime-computed",
+    "screenshot_frame_index": 86,
+    "captured_at": "2026-08-25 16:54:54 +0800"
+  }
+}
