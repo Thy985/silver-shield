@@ -2,6 +2,9 @@
 
 SSOT：``docs/reports/DOM-E2E-UPGRADE-ACCEPTANCE-CHECKLIST-2026-08-24.md`` v3.5。
 
+参数化（2026-08-25）：支持多场景 vision-eval 报告校验。
+每个场景的 vision-eval-{scenario_id}-YYYY-MM-DD.json 必须存在并满足 schema 约束。
+
 红线（§3.4）：本文件仅校验报告**存在性**与 **schema 结构**（字段齐全/枚举合法/
 6 图 × 5 维 = 30 项齐全）；**禁止对 Vision Judge 评分结论做任何 assert**——
 PASS/WARN/FAIL 的语义判断属人工/vision 验收职责，自动化断言评分结论即伪验收。
@@ -14,9 +17,12 @@ from pathlib import Path
 
 import pytest
 
-REPORT_JSON = (
-    Path(__file__).resolve().parents[2]
-    / "docs" / "reports" / "vision-eval-product-story-risk-2026-08-24.json"
+REPORTS_DIR = Path(__file__).resolve().parents[2] / "docs" / "reports"
+
+# 已注册需要校验的 vision-eval 报告（文件名 = `vision-eval-{scenario_id}-YYYY-MM-DD.json`）。
+REGISTERED_REPORTS: tuple[str, ...] = (
+    "vision-eval-product-story-risk-2026-08-24.json",
+    "vision-eval-cctv-surveillance-suspicious-2026-08-25.json",
 )
 
 SCHEMA_VERSION = "1.0"
@@ -25,15 +31,20 @@ VERDICT_ENUM = ("PASS", "WARN", "FAIL")
 SHOT_COUNT = 6
 
 
-def _load_report() -> dict:
-    if not REPORT_JSON.exists():
-        pytest.skip(f"vision-eval 报告未生成: {REPORT_JSON.name}")
-    return json.loads(REPORT_JSON.read_text(encoding="utf-8"))
+def _load_report(path: Path) -> dict:
+    if not path.exists():
+        pytest.skip(f"vision-eval 报告未生成: {path.name}")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_report_exists_with_valid_schema():
+@pytest.fixture(params=REGISTERED_REPORTS)
+def report_path(request) -> Path:
+    return REPORTS_DIR / request.param
+
+
+def test_report_exists_with_valid_schema(report_path):
     """报告存在 + 顶层字段齐全 + 枚举合法。"""
-    report = _load_report()
+    report = _load_report(report_path)
     assert report["schema_version"] == SCHEMA_VERSION
     assert report["scenario_id"]
     assert set(report["rubric_frozen"]) == set(RUBRIC_FROZEN)
@@ -41,9 +52,9 @@ def test_report_exists_with_valid_schema():
     assert isinstance(report["rounds"], list) and report["rounds"]
 
 
-def test_final_round_has_30_dimensions_all_legal():
+def test_final_round_has_30_dimensions_all_legal(report_path):
     """末轮（当前验收轮）必须 6 图 × 5 维 = 30 项，且每项判定枚举合法。"""
-    report = _load_report()
+    report = _load_report(report_path)
     final = report["rounds"][-1]
     assert len(final["shots"]) == SHOT_COUNT
     total = 0
@@ -59,16 +70,15 @@ def test_final_round_has_30_dimensions_all_legal():
     assert total == SHOT_COUNT * len(RUBRIC_FROZEN)
 
 
-def test_fail_items_must_be_explained_in_resolution():
+def test_fail_items_must_be_explained_in_resolution(report_path):
     """收口条件：若存在 FAIL 判定，必须在 fail_resolution 中逐条登记闭环。"""
-    report = _load_report()
+    report = _load_report(report_path)
     final = report["rounds"][-1]
     fail_shots = [
         s["file"] for s in final["shots"] if s["verdict"] == "FAIL"
     ]
     resolutions = report.get("fail_resolution") or []
     resolved_ids = {r.get("defect_id") for r in resolutions}
-    # FAIL 图要么为空（全绿），要么每张都有对应闭环记录且 verdict 标记 resolved。
     for shot_file in fail_shots:
         assert any(
             r.get("round_2_verdict") == "resolved" for r in resolutions
@@ -78,9 +88,9 @@ def test_fail_items_must_be_explained_in_resolution():
     )
 
 
-def test_summary_counts_consistent():
+def test_summary_counts_consistent(report_path):
     """末轮 summary 三计数与 30 个维度判定一致（防手改汇总失真）。"""
-    report = _load_report()
+    report = _load_report(report_path)
     final = report["rounds"][-1]
     counts = {"PASS": 0, "WARN": 0, "FAIL": 0}
     for shot in final["shots"]:
@@ -92,13 +102,9 @@ def test_summary_counts_consistent():
     assert summary["fail"] == counts["FAIL"]
 
 
-def test_no_unexplained_dimension_fail():
-    """收口条件（§8）：30 个维度判定中不得存在未解释的 FAIL。
-
-    判定为 FAIL 的维度必须能在 fail_resolution 的 round_2_verdict=resolved
-    闭环记录覆盖下消除——若末轮仍出现 FAIL 维度即视为未收口。
-    """
-    report = _load_report()
+def test_no_unexplained_dimension_fail(report_path):
+    """收口条件（§8）：30 个维度判定中不得存在未解释的 FAIL。"""
+    report = _load_report(report_path)
     final = report["rounds"][-1]
     dim_fails = [
         f"{shot['file']}/{name}"
