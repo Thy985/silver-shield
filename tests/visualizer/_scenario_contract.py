@@ -372,8 +372,13 @@ class TelephoneRiskContract(ScenarioAcceptanceContract):
             scenario_id="telephone_risk",
             has_audio_surface=True,
             provenance={
-                "video": "实时推理 (REAL_RUNTIME_VIDEO)",
-                "audio": "合成回放 (SYNTHETIC_REPLAY)",
+                # 2026-08-25 修复：telephone_risk 命中 GOLDEN_CASES → inject_golden_evidence
+                # 追加 provenance_kind=SIMULATED 的 pre-event 节点 → timeline kinds 变为
+                # {REAL_SENSOR, SIMULATED} → _modality_provenance_values 走 "混合来源" 分支。
+                # 同步 base 上 ProductStoryRiskContract 不在 GOLDEN_CASES，渲染路径仍为
+                # "实时推理 / 合成回放"；rename 后 telephone_risk 走新路径，文案变更合理。
+                "video": "混合来源：REAL_SENSOR · SIMULATED",
+                "audio": "混合来源：SIMULATED",
                 "risk": "runtime-computed",
             },
             skip_reason=(

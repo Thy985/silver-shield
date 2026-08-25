@@ -1,4 +1,13 @@
-# Product Story Browser Acceptance · benign case（ADR-0044 · Owner P1-P8 验收）
+# Telephone Risk · Browser Acceptance benign case（ADR-0044 · Owner P1-P8 验收）
+#
+# 历史重命名（2026-08-25）：曾以 product_story_benign 命名；2026-08-25 场景身份迁移
+# 为 telephone_risk_benign（对齐 telephone_risk），详见
+# docs/design/architecture/SCENARIO-RENAME-CONFLICTS-2026-08-25.md §3 D1。
+#
+# 注：本文件**不**进入 Product Scenario Registry 白名单（白名单只有 telephone_risk /
+# cctv_surveillance_suspicious / delivery_courier_normal 三项；详见 C3 决策选 A）。
+# 仅作 TelephoneRiskContract 的 internal acceptance fixture，驱动 Browser Acceptance
+# 的 risk ↔ benign 切换。
 #
 # 桥接 product_story fixture 视觉帧（synthetic，actors=[] 空门厅）+ 音频 synthetic_replay。
 # 无视觉 actor → 无 abnormal_dwell → audio-native path → MONITOR 不通知。
@@ -8,11 +17,11 @@
 # 不承担语义判定。裁决出处：docs/reports/RISK-MIX-SIXTUPLE-VERIFICATION-2026-08-24.md §6。
 #
 # 运行：
-#   python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_benign.yaml
+#   python scripts/run_demo.py --live --scenario config/demo/scenarios/telephone_risk_benign.yaml
 
-scenario_id: product_story_benign
+scenario_id: telephone_risk_benign
 description: |
-  Product Story benign: 电话接通+正常对话+无可疑视觉 → MONITOR 不升级不通知
+  Telephone Risk benign: 电话接通+正常对话+无可疑视觉 → MONITOR 不升级不通知
 
 source: call_connected_normal_001
 source_type: synthetic
