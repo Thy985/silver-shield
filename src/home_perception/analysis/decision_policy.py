@@ -21,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover - 仅供类型注解；运行期不导入�
 
 from ..common.logging import get_logger
 from .perception import PerceptionEvent
-from .risk_signal import SignalTransition
+from .risk_signal import SignalTransition, SourceModality
 from .warning import (
     RECOMMENDED_ACTIONS,
     RISK_LEVELS,
@@ -205,6 +205,12 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
         perception_events = input.trigger_events
         ctx = input.decision_context
         if not perception_events:
+            # Audio-native path（ADR-0040 D6 升级 · ADR-0044 配套）
+            # 纯 audio 无视觉触发时，基于 RiskSignal.category 产出 WarningEvent。
+            # 不经 signal_adapter.risk_signal_to_perception（硬门控 3）。
+            audio_warning = self._decide_audio_native(input)
+            if audio_warning is not None:
+                return audio_warning
             self._emit_suppress(SuppressReason.NO_TRIGGER_EVENTS, ())
             return None
 
@@ -313,6 +319,69 @@ class RuleBasedDecisionPolicy(DecisionPolicy):
             # 而非墙钟。否则 Demo/测试场景下 WarningEvent.created_at 落在墙钟时间线，
             # 与 VisitorEvent 的模拟时间线错位，导致下游按时间窗关联（如 ADR-0024
             # Episode Builder 的 [enter, leave+60s] 窗口）失败。
+            created_at=ctx.now,
+        )
+
+    def _decide_audio_native(self, input: DecisionInput) -> WarningEvent | None:
+        """Audio-native 决策（ADR-0040 D6 升级 · ADR-0044 配套）。
+
+        纯 audio 无视觉触发时，基于 RiskSignal.category 产出 WarningEvent。
+        不经 signal_adapter.risk_signal_to_perception（硬门控 3）。
+
+        当前映射（adapt_audio_event 始终设 category=COMMUNICATION）：
+        - COMMUNICATION → LOW + MONITOR（ADR-0026 §5.1：audio 证据面，仅记录不通知）
+
+        边界：
+        - 仅消费 source=AUDIO + transition=RAISED 的信号；
+        - CLEARED 信号不产出 Warning（解除消息）；
+        - 无 audio RAISED 信号 → 返回 None（回退到视觉早退分支）。
+        """
+        raised = [
+            s for s in input.risk_signals
+            if s.transition is SignalTransition.RAISED and s.source is SourceModality.AUDIO
+        ]
+        if not raised:
+            return None
+
+        ctx = input.decision_context
+        final_level = "LOW"
+        final_action = "MONITOR"
+        reasons = [f"实时音频信号: {s.category.value}({s.source.value})" for s in raised]
+        meta = {
+            "policy": self.name,
+            "decided_at": ctx.now.isoformat(),
+            "audio_native": True,
+            "trigger_event_types": ["audio_signal"],
+            "routing_table_version": "v1",
+            "risk_signals": {
+                "count": len(input.risk_signals),
+                "raised": len(raised),
+                "sources": sorted({s.source.value for s in raised}),
+                "signal_ids": [s.signal_id for s in raised],
+            },
+        }
+        agg_score = max(
+            (s.severity_hint for s in raised if s.severity_hint is not None), default=0.0
+        )
+        trigger_dicts = [
+            {
+                "event_id": s.signal_id,
+                "event_type": "audio_signal",
+                "score": round(s.severity_hint or 0.0, 4),
+                "timestamp": s.created_at,
+            }
+            for s in raised
+        ]
+        device_id = str(raised[0].features.get("device_id", "home_entry_01"))
+        return WarningEvent(
+            elder_id=ctx.elder_id,
+            device_id=device_id,
+            risk_level=final_level,
+            recommended_action=final_action,
+            trigger_events=trigger_dicts,
+            reason_summary=reasons,
+            perception_score=agg_score,
+            meta=meta,
             created_at=ctx.now,
         )
 

@@ -16,9 +16,11 @@
 - ``CLEARED`` 信号 → ``None``（不产出 PerceptionEvent；CLEARED 仅随 FrameResult 供展示层熄灭风险卡）
 
 **模块边界铁律**：
-- 翻译产物过 ``PerceptionEvent`` 的 schema 校验（5 类 EventType 之一，score ∈ [0,1]）；
+- 翻译产物过 ``PerceptionEvent`` 的 schema 校验（5 类 ``EventType`` 之一，score ∈ [0,1]）；
 - 黑名单字段（fraud/suspect/verdict 等）结构性拒绝（``PerceptionEvent.__post_init__`` 已守，
-  本适配器不再额外校验，但 docstring 明示此约束）。
+  本适配器不再额外校验，但 docstring 明示此约束）；
+- **ADR-0040 硬门控 3**：``signal.source is SourceModality.AUDIO`` 时**直接返回 None**，
+  禁止 audio RiskSignal 翻译为视觉 event_type（详见函数实现注释）。
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from .perception import PerceptionEvent
-from .risk_signal import RiskSignal, SignalTransition
+from .risk_signal import RiskSignal, SignalTransition, SourceModality
 
 
 def risk_signal_to_perception(
@@ -58,6 +60,14 @@ def risk_signal_to_perception(
 
     # CLEARED 不产出 PerceptionEvent
     if signal.transition is SignalTransition.CLEARED:
+        return None
+
+    # ADR-0040 硬门控 3：禁止 audio RiskSignal 翻译为视觉 event_type。
+    # audio features 不含 dwell/visits/odd_hour 等视觉语义，_map_features_to_event
+    # 必落幻觉兜底 ``visit_pending_verify`` —— 把音频证据伪装成视觉事件。
+    # audio 信号应在 audio 层处置（evidence 采集 + 纯音频 episode 落库 + CrossModalLinker
+    # 建边），绝**不**进入视觉决策链冒充电影觉事件。
+    if signal.source is SourceModality.AUDIO:
         return None
 
     # RAISED：按 features 主导证据映射 EventType
