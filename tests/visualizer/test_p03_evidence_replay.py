@@ -75,7 +75,7 @@ def test_render_replay_button_and_mark_data(tmp_path):
     assert "__caseTimeReplay" in html  # 引擎
     assert 'data-time="' in html
     assert 'data-kind="audio' in html
-    assert "回放 = 事件按序涌现" in html
+    assert "事件按发生顺序依次涌现" in html
 
 
 def test_render_no_events_no_replay(tmp_path):

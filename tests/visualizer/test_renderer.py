@@ -1093,3 +1093,70 @@ def test_renderer_guard_script_close_rewrites_closing_tag():
     # 无 </script 的子串应原样返回（不误伤）。
     assert renderer._guard_script_close("var x = '</not-close';") == "var x = '</not-close';"
 
+
+# ---------------------------------------------------------------------------
+# SSOT v4.0 · 音频时间戳显示层格式化（epoch 裸显产品表面缺陷修复）
+# ---------------------------------------------------------------------------
+
+
+def _audio_scenario(audio: list[dict]) -> dict:
+    return {"scenario_id": "ssot_v4_t", "mode": "live", "audio_evidence": audio}
+
+
+def _audio_row(ts: object, kind: str = "audio_telephone_persistent") -> dict:
+    return {
+        "timestamp": ts,
+        "kind": kind,
+        "score": 0.9,
+        "confidence": 0.9,
+        "labels": ["telephone"],
+        "source_segment_ids": ["seg-0"],
+    }
+
+
+def test_audio_surfaces_epoch_timestamps_render_relative():
+    """synthetic_replay fixture 携带 Unix 绝对秒 → 定位条刻度与表格行显示
+    会话相对秒；任何 10 位以上裸数值不得进入可见文本（工程事实不上屏）；
+    原始值保留在 data-ts 属性供排障审计（数据契约不变）。"""
+    audio = [
+        _audio_row(1756036800.0),
+        _audio_row(1756036804.0),
+        _audio_row(1756036812.5),
+    ]
+    html = renderer._render_audio_evidence(_audio_scenario(audio))
+    locator = renderer._render_audio_event_locator(audio)
+    combined = html + locator
+    # 裸 epoch 数值（≥10 位数字）不得出现在任何可见文本/刻度/悬浮标题中。
+    bare_epoch = re.search(r"\d{10,}", re.sub(r'data-ts="[^"]*"', "", combined))
+    assert bare_epoch is None, f"epoch 数值裸显：{bare_epoch.group(0) if bare_epoch else ''}"
+    # 表格行 → 会话相对秒（以首事件为原点）。
+    assert "@ 0.0s" in html and "@ 4.0s" in html and "@ 12.5s" in html
+    # 原始绝对秒保留在 data-ts（审计通道）。
+    assert 'data-ts="1756036800.0"' in html
+    # 定位条首刻度为相对原点 0。
+    assert ">0.0s<" in locator
+    # 悬浮标题同样走显示层标签。
+    assert "声学事件 @ 0.0s" in locator
+
+
+def test_audio_surfaces_relative_seconds_render_absolute():
+    """REAL AudioPipeline 相对秒输入（≤ 阈值）→ 保持绝对 case 秒语义，
+    刻度自事件区间起点标注（非强制归零），行显示原样一位小数。"""
+    audio = [_audio_row(8.0), _audio_row(12.5), _audio_row(28.0)]
+    html = renderer._render_audio_evidence(_audio_scenario(audio))
+    locator = renderer._render_audio_event_locator(audio)
+    assert "@ 8.0s" in html and "@ 12.5s" in html and "@ 28.0s" in html
+    # 非 epoch 输入：刻度仍为绝对 case 秒（origin + off；span=20 时终刻度
+    # 恰为最后事件时刻 8+20=28）。
+    assert ">8.0s<" in locator
+    assert ">28.0s<" in locator
+
+
+def test_audio_ts_display_unparseable_falls_back_raw():
+    """timestamp 解析失败的行回退原样字符串（fail-closed 不编造位置/时刻）。"""
+    html = renderer._render_audio_evidence(
+        _audio_scenario([_audio_row("not-a-number")])
+    )
+    assert "@ not-a-number" in html
+
+
