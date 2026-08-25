@@ -16,6 +16,34 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
+# D0 Product Surface Contract configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class D0Contract:
+    """D0 产品表面契约的 scenario 级配置。
+
+    每个测试模块实例化一个 D0Contract 并通过 fixture_factory() 注入基座 fixture。
+    字段说明：
+      - scenario_id: 服务端 scenario_id（用于 WS / DOM 元素定位）
+      - has_audio_surface: 是否产生音频证据（控制 AU-04/05/05b/06/07a/010 跳过）
+      - provenance: {"video": ..., "audio": ..., "risk": ...} 三段渲染文案
+                   测试只验证 DOM 包含这些字符串，不关心具体场景语义
+      - skip_reason: skipif 消息
+      - observe_first_frame_ms: 首帧等待超时（默认 30s）
+      - observe_perception_ms: 感知数据等待超时（默认 60s）
+      - observe_behavior_ms: 行为数据等待超时（默认 95s）
+    """
+    scenario_id: str = ""
+    has_audio_surface: bool = True
+    provenance: dict[str, str] = field(default_factory=dict)
+    skip_reason: str = ""
+    observe_first_frame_ms: int = 30_000
+    observe_perception_ms: int = 60_000
+    observe_behavior_ms: int = 95_000
+
+# ---------------------------------------------------------------------------
 # JS templates (use __SID__ placeholder replaced at instantiation)
 # ---------------------------------------------------------------------------
 
@@ -324,6 +352,19 @@ class ProductStoryRiskContract(ScenarioAcceptanceContract):
             has_audio_surface=True,
             _skip_assertions=[],
         )
+        self.d0 = D0Contract(
+            scenario_id="product_story_risk",
+            has_audio_surface=True,
+            provenance={
+                "video": "实时推理 (REAL_RUNTIME_VIDEO)",
+                "audio": "合成回放 (SYNTHETIC_REPLAY)",
+                "risk": "runtime-computed",
+            },
+            skip_reason=(
+                "需先启动: python scripts/run_demo.py --live "
+                "--scenario config/demo/scenarios/product_story_risk.yaml"
+            ),
+        )
 
     def benign_scenario_id(self) -> str:
         return "product_story_benign"
@@ -336,6 +377,19 @@ class ProductStoryBenignContract(ProductStoryRiskContract):
         super().__init__()
         self.scenario_id = "product_story_benign"
         self._skip_assertions = ["TestP2RiskStory", "TestP7SceneSwitch"]
+        self.d0 = D0Contract(
+            scenario_id="product_story_benign",
+            has_audio_surface=True,
+            provenance={
+                "video": "无视觉轨",
+                "audio": "合成回放 (SYNTHETIC_REPLAY)",
+                "risk": "runtime-computed",
+            },
+            skip_reason=(
+                "需先启动: python scripts/run_demo.py --live "
+                "--scenario config/demo/scenarios/product_story_benign.yaml"
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -374,4 +428,17 @@ class CctvSurveillanceSuspiciousContract(ScenarioAcceptanceContract):
                 "TestP6AntiHallucination",
                 "TestP7SceneSwitch",
             ],
+        )
+        self.d0 = D0Contract(
+            scenario_id="cctv_surveillance_suspicious",
+            has_audio_surface=False,
+            provenance={
+                "video": "实时推理 (REAL_RUNTIME_VIDEO)",
+                "audio": "无音频轨",
+                "risk": "runtime-computed",
+            },
+            skip_reason=(
+                "需先启动: python scripts/run_demo.py --live "
+                "--scenario config/demo/scenarios/cctv_surveillance_suspicious.yaml"
+            ),
         )
