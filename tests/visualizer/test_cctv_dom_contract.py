@@ -362,6 +362,123 @@ class TestAu10Locator:
 
 
 # ===========================================================================
+# AU-11 · Product Narrative Consistency（CCTV 专属事实投影）
+# ===========================================================================
+
+_CCTV_FORBIDDEN_TERMS: tuple[str, ...] = (
+    "入侵者",
+    "罪犯",
+    "诈骗人员",
+    "犯罪嫌疑人",
+    "危险人物",
+    "可疑人员",
+    "恐怖分子",
+)
+
+_CCTV_EXPECTED_NARRATIVE_LABELS: tuple[str, ...] = (
+    "重复访问",
+    "异常停留",
+    "待核实到访",
+    "高风险逼近",
+)
+
+
+class TestAu11NarrativeConsistency:
+    """AU-11 · 产品叙事一致性守护（SSOT v4.0 Owner 裁决 2026-08-25）。
+
+    CCTV 场景叙事（冻结）：
+        夜间人员出现 → 重复出现 → 异常停留 → 视觉风险信号 → RiskSignal → WARN → LOG_ONLY
+
+    断言核心：
+        1. 行为时间线 / 感知流出现的人话标签必须在已知映射集合内
+        2. DOM 任意可见文本不得含犯罪/入侵/诈骗类超范围结论
+        3. 风险级别不得超出 WARN 档（LOW/MEDIUM 可接受，HIGH 不允许）
+        4. 行动结论须为 LOG_ONLY（或无行动任务），不得出现 NOTIFY_FAMILY / CREATE_COMMUNITY_TASK
+    """
+
+    def _forbidden_hits(self, text: str) -> list[dict[str, str]]:
+        hits: list[dict[str, str]] = []
+        for term in _CCTV_FORBIDDEN_TERMS:
+            if term in text:
+                idx = text.find(term)
+                start = max(0, idx - 30)
+                end = min(len(text), idx + len(term) + 30)
+                hits.append({"term": term, "context": text[start:end].replace("\n", "\\n")})
+        return hits
+
+    def _tl_item_labels(self, page) -> list[str]:
+        """返回行为时间线各条目的可见文本标签（去除时间戳前缀）。"""
+        items = page.evaluate("""
+            (() => {
+              const ul = document.querySelector('#behavior-timeline-cctv_surveillance_suspicious');
+              if (!ul) return [];
+              return Array.from(ul.querySelectorAll('li.tl-item')).map(li =>
+                (li.textContent || '').trim()
+              );
+            })()
+        """)
+        return items or []
+
+    def test_au11_no_forbidden_criminal_terms_in_visible_text(self, contract_page):
+        """AU-11①：用户可见文本不得含犯罪/入侵/诈骗类超范围结论。"""
+        body = contract_page["snapshot"]["bodyText"]
+        hits = self._forbidden_hits(body)
+        assert not hits, (
+            "AU-11① 用户可见文本出现犯罪/入侵类超范围结论："
+            + "; ".join(
+                f"[{h['term']}]"
+                for h in hits[:5]
+            )
+        )
+
+    def test_au11_tl_labels_within_know_mapping(self, contract_page):
+        """AU-11②：行为时间线条目标签须在已知人话映射集合内。
+
+        若观察窗内无行为事件，以 N/A 如实上报。
+        """
+        if not contract_page["behavior_ready"]:
+            na_skip("AU-11②", "观察窗内无行为时间线条目（数据缺口，如实上报）")
+        labels = self._tl_item_labels(contract_page["page"])
+        if not labels:
+            na_skip("AU-11②", "行为时间线条目为空（首帧后无新增行为事件）")
+            return
+        allowed = set(_CCTV_EXPECTED_NARRATIVE_LABELS) | {"停留超过阈值", "检测到重复访问",
+                                                          "待核实到访", "高风险逼近"}
+        unknown = [lbl for lbl in labels if not any(a in lbl for a in allowed)]
+        assert not unknown, (
+            f"AU-11② 行为时间线出现未知标签（未在已知人话映射内）：{unknown}"
+        )
+
+    def test_au11_risk_level_not_exceed_warn(self, contract_page):
+        """AU-11③：LRK 风险卡不得出现 HIGH（CCTV 预期上限为 WARN/MEDIUM）。
+
+        LRK 未渲染时 N/A（尚未触发风险评估）。
+        """
+        lvl_text = contract_page["snapshot"].get("lrkLevel", "")
+        if not lvl_text:
+            na_skip("AU-11③", "LRK 风险卡未渲染（观察窗内无风险信号），by-design N/A")
+            return
+        # _LEVEL_ZH 映射：HIGH→高, MEDIUM→中, LOW→低
+        if "高" in lvl_text or "HIGH" in lvl_text.upper():
+            pytest.fail(f"AU-11③ LRK 风险级别超出 WARN 档（CCTV 预期上限 MEDIUM/WARN）：{lvl_text}")
+
+    def test_au11_action_not_family_or_community(self, contract_page):
+        """AU-11④：行动结论不得含通知家属/创建社区任务（CCTV 仅 LOG_ONLY）。
+
+        无行动任务 DOM 时 N/A。
+        """
+        closure_text = contract_page["snapshot"].get("closureText", "")
+        if not closure_text:
+            na_skip("AU-11④", "行动闭环区未渲染（观察窗内无行动触发），by-design N/A")
+            return
+        forbidden_actions = ["通知家属", "创建社区任务", "NOTIFY_FAMILY", "CREATE_COMMUNITY"]
+        hits = [a for a in forbidden_actions if a in closure_text]
+        assert not hits, (
+            f"AU-11④ 行动结论含超范围处置（CCTV 仅限 LOG_ONLY）：{hits}"
+        )
+
+
+# ===========================================================================
 # AU-04 / AU-06 / AU-07a · 音频生命周期（CCTV 专属：全部 N/A）
 # ===========================================================================
 

@@ -252,6 +252,8 @@ def make_snapshot_js(sid: str) -> str:
       return p;
     }}),
     counts: counts,
+    lrkLevel: (g('lrk-level-{sid}') || {{}}).innerText || '',
+    closureText: (g('fs-action-closure-{sid}') || {{}}).innerText || '',
   }};
 }})()
 """
@@ -374,16 +376,44 @@ def get_na_summary() -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
-    """在 pytest 报告末尾追加各模块的 D0 N/A 汇总。"""
+    """在 pytest 报告末尾追加各模块的 D0 N/A 汇总 + Gate 判定。"""
     summary = get_na_summary()
-    if not summary:
-        return
-    lines = ["\n" + "=" * 60, "D0 通用产品表面契约 — N/A 汇总", "=" * 60]
-    for mod, ids in sorted(summary.items()):
-        short = mod.split(".")[-1] if "." in mod else mod
-        lines.append(f"  {short}: {', '.join(ids)}")
-    lines.append("=" * 60)
-    terminalreporter.write_line("\n".join(lines), sep="\n", bold=True, yellow=True)
+    lines = []
+    if summary:
+        lines.append("\n" + "=" * 60)
+        lines.append("D0 通用产品表面契约 — N/A 汇总")
+        lines.append("=" * 60)
+        for mod, ids in sorted(summary.items()):
+            short = mod.split(".")[-1] if "." in mod else mod
+            lines.append(f"  {short}: {', '.join(ids)}")
+
+    # Gate 判定（PASS / FAIL / N/A / SKIP）
+    stats = terminalreporter.stats
+    passed = len(stats.get("passed", []))
+    failed = len(stats.get("failed", []))
+    skipped = len(stats.get("skipped", []))
+    errors = len(stats.get("error", []))
+    na_count = sum(len(ids) for ids in summary.values())
+    # N/A 以 skip 形式上报，应从总 skip 中剥离计入 N/A
+    gate_pass_count = passed
+    gate_fail_count = failed + errors
+    gate_na_count = na_count
+    # 其余 skip（server 不可达等）不计入 Gate
+    gate_skip = max(0, skipped - na_count)
+    gate_result = "PASS" if (gate_fail_count == 0) else "FAIL"
+
+    if passed or failed or errors or na_count:
+        lines.append("=" * 60)
+        lines.append("D0 Gate 判定")
+        lines.append(f"  PASS  = {gate_pass_count}")
+        lines.append(f"  N/A   = {gate_na_count}  （不适用该场景，由 na_skip() 显式标记）")
+        lines.append(f"  FAIL  = {gate_fail_count}")
+        if gate_skip:
+            lines.append(f"  SKIP  = {gate_skip}  （server 未运行等外部条件）")
+        lines.append(f"  Gate D0 = {gate_result}")
+        lines.append("=" * 60)
+    if lines:
+        terminalreporter.write_line("\n".join(lines), sep="\n", bold=True, yellow=True)
 
 
 def make_skipif(scenario_id: str, reason: str) -> pytest.MarkDecorator:

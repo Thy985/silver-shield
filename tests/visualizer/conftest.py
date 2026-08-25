@@ -376,3 +376,49 @@ def make_d3a_artifact_dir(base: Path, scenario_id: str = "sw_adr0034_elderly_dwe
 def built_artifact_dir(tmp_path: Path) -> Path:
     """返回一份合法的 hermetic artifact 目录（CI 与本地一致，不依赖未提交产物）。"""
     return make_d3a_artifact_dir(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# D0 DOM Contract — pytest hooks（N/A 汇总 + Gate 报告）
+# ---------------------------------------------------------------------------
+from tests.visualizer._dom_contract_base import get_na_summary
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """在 pytest 报告末尾追加各模块的 D0 N/A 汇总 + Gate 判定。"""
+    summary = get_na_summary()
+    lines = []
+    if summary:
+        lines.append("\n" + "=" * 60)
+        lines.append("D0 通用产品表面契约 — N/A 汇总")
+        lines.append("=" * 60)
+        for mod, ids in sorted(summary.items()):
+            short = mod.split(".")[-1] if "." in mod else mod
+            lines.append(f"  {short}: {', '.join(ids)}")
+
+    # Gate 判定（PASS / FAIL / N/A / SKIP）
+    stats = terminalreporter.stats
+    passed = len(stats.get("passed", []))
+    failed = len(stats.get("failed", []))
+    skipped = len(stats.get("skipped", []))
+    errors = len(stats.get("error", []))
+    na_count = sum(len(ids) for ids in summary.values())
+    gate_pass_count = passed
+    gate_fail_count = failed + errors
+    gate_na_count = na_count
+    gate_skip = max(0, skipped - na_count)
+    gate_result = "PASS" if (gate_fail_count == 0) else "FAIL"
+
+    if passed or failed or errors or na_count:
+        lines.append("=" * 60)
+        lines.append("D0 Gate 判定")
+        lines.append(f"  PASS  = {gate_pass_count}")
+        lines.append(f"  N/A   = {gate_na_count}  （不适用该场景，由 na_skip() 显式标记）")
+        lines.append(f"  FAIL  = {gate_fail_count}")
+        if gate_skip:
+            lines.append(f"  SKIP  = {gate_skip}  （server 未运行等外部条件）")
+        lines.append(f"  Gate D0 = {gate_result}")
+        lines.append("=" * 60)
+    if lines:
+        for line in lines:
+            terminalreporter.write_line(line, bold=True, yellow=True)
