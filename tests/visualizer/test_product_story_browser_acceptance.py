@@ -10,6 +10,8 @@
     P7 Scene Switch         — risk→benign→risk→reset 无跨场景污染
     P8 Browser Cleanliness  — console errors=0 / page errors=0
 
+通用化：通过 ScenarioAcceptanceContract 驱动场景配置，支持产品故事和多场景扩展。
+
 运行前提（外部 fixture，测试内探测 skip）：
     python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml
 """
@@ -29,13 +31,23 @@ try:
 except ImportError:  # pragma: no cover
     pytest.skip("playwright not installed", allow_module_level=True)
 
+from tests.visualizer._scenario_contract import (
+    WS_CAPTURE_INIT,
+    ProductStoryRiskContract,
+    make_signals_poll_js,
+    make_video_sig_js,
+)
+
 BASE = "http://127.0.0.1:8765"
 URL = f"{BASE}/live"
-SID = "product_story_risk"
-OBSERVE_RISK_MS = 120_000       # risk: 120 frames @ 2fps ≈ 60s nominal, CPU 推理更慢
-OBSERVE_BENIGN_MS = 80_000      # benign: 60 frames @ 2fps ≈ 30s nominal
-OBSERVE_SWITCH_MS = 30_000      # switch-back contamination check
-OBSERVE_RESET_MS = 15_000       # reset clean-state check
+
+# 契约驱动：所有 SID / skip 条件均来自契约类
+_CONTRACT = ProductStoryRiskContract()
+SID = _CONTRACT.scenario_id
+OBSERVE_RISK_MS = _CONTRACT.observe_times.get("risk", 120_000)
+OBSERVE_BENIGN_MS = _CONTRACT.observe_times.get("benign", 80_000)
+OBSERVE_SWITCH_MS = _CONTRACT.observe_times.get("switch_back", 30_000)
+OBSERVE_RESET_MS = 15_000
 POLL_MS = 1_000
 
 COMMAND_ACTIONS = {"NOTIFY_FAMILY", "ESCALATE_COMMUNITY", "CREATE_COMMUNITY_TASK"}
@@ -52,68 +64,75 @@ REASON_RUNTIME_ALLOWLIST = {
     "实时风险信号: 行为特征（视觉）",
 }
 
-_WS_CAPTURE_INIT = """
-window.__wsLog = [];
-window.__wsMeta = { opened: 0, closed: 0 };
-window.__wsInstances = [];
-(function () {
-  var OW = window.WebSocket;
-  function PatchedWS(url, protocols) {
-    var ws = protocols !== undefined ? new OW(url, protocols) : new OW(url);
-    window.__wsMeta.opened++;
-    window.__wsInstances.push(ws);
-    ws.addEventListener('close', function () { window.__wsMeta.closed++; });
-    ws.addEventListener('message', function (ev) {
-      try {
-        var m = JSON.parse(ev.data);
-        m.__t = Date.now();
-        window.__wsLog.push(m);
-        if (window.__wsLog.length > 20000) window.__wsLog.shift();
-      } catch (e) { /* 非 JSON 帧忽略 */ }
-    });
-    return ws;
-  }
-  PatchedWS.prototype = OW.prototype;
-  window.WebSocket = PatchedWS;
-})();
-"""
-
-_VIDEO_SIG_JS = """
+_FIRST_FRAME_JS = """
 (() => {
   const img = document.getElementById('video-img-__SID__')
            || document.querySelector('img[src*="/mjpeg/"]');
-  if (!img) return { error: 'no-video-img-el' };
-  if (!img.complete || !img.naturalWidth) return { error: 'not-decoded-yet' };
-  const c = document.createElement('canvas');
-  c.width = 64; c.height = 36;
-  const g = c.getContext('2d');
-  g.drawImage(img, 0, 0, 64, 36);
-  return { sig: c.toDataURL('image/png').slice(-192), w: img.naturalWidth, h: img.naturalHeight };
+  if (!img) return false;
+  if (img.complete && img.naturalWidth > 0) return true;
+  const t = document.getElementById('ov-time-__SID__');
+  return !!(t && t.textContent && t.textContent !== '00:00');
 })()
 """.replace("__SID__", SID)
 
-_SIGNALS_POLL_JS = """
+_PERCEPTION_ROW_JS = f"!!document.querySelector('#live-perception-{SID} li')"
+_BEHAVIOR_ROW_JS = f"!!document.querySelector('#behavior-timeline-{SID} .tl-item')"
+
+_AUDIO_HEALTH_JS = """
 (() => {
-  const box = document.getElementById('live-signals-__SID__');
-  if (!box) return { txt: '', cards: -1, badges: [] };
-  return {
-    txt: box.textContent || '',
-    cards: box.querySelectorAll('.rt-card').length,
-    badges: Array.from(box.querySelectorAll('.rt-badge')).map(b => b.textContent || ''),
-  };
+  const card = document.getElementById('audio-sensor-__SID__');
+  return card ? (card.getAttribute('data-audio-health') || '') : '';
 })()
 """.replace("__SID__", SID)
+
+_CANVAS_JS = """
+(() => {
+  const c = document.getElementById('waveform-canvas-__SID__');
+  if (!c) return { exists: false };
+  let nonBg = -1;
+  try {
+    const ctx = c.getContext('2d');
+    if (!ctx) return { exists: true, w: c.width, h: c.height, nonBgSamples: -2 };
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    nonBg = 0;
+    for (let i = 0; i < d.length; i += 16) {
+      if (!(d[i] === 30 && d[i + 1] === 41 && d[i + 2] === 59)) nonBg++;
+    }
+  } catch (e) {
+    nonBg = -3;
+  }
+  return { exists: true, w: c.width, h: c.height, nonBgSamples: nonBg };
+})()
+""".replace("__SID__", SID)
+
+_PROV_SYNTHETIC_JS = (
+    "document.body.innerText.indexOf('合成回放 (SYNTHETIC_REPLAY)') >= 0"
+)
+
+_COUNTS_BODY_JS = """
+  const g = (id) => document.getElementById(id);
+  const tl = g('timeline-list-__SID__') || document.querySelector('.timeline');
+  let runtimeLi = -1;
+  if (tl) {
+    runtimeLi = Array.from(tl.querySelectorAll('li.tl-item[data-ref]')).filter(
+      (li) => ((li.getAttribute('data-ref') || '').indexOf('golden://') !== 0)
+    ).length;
+  }
+  return {
+    audioTableRows: document.querySelectorAll('table.audio-table tr').length,
+    psRecentEntries: document.querySelectorAll('#ps-recent-__SID__ .ps-entry').length,
+    psHistoryRendered: document.querySelectorAll('#ps-history-list-__SID__ .ps-entry').length,
+    behaviorItems: document.querySelectorAll('#behavior-timeline-__SID__ .tl-item').length,
+    timelineRuntimeLi: runtimeLi,
+    caseTimeMarks: document.querySelectorAll('#case-time-track-__SID__ .case-time-mark').length,
+    bodyNodes: document.querySelectorAll('*').length,
+  };
+""".replace("__SID__", SID)
+
+_COUNTS_JS = "(() => {" + _COUNTS_BODY_JS + "})()"
 
 
 def _server_available() -> bool:
-    try:
-        return requests.get(f"{BASE}/health", timeout=2).status_code == 200
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _server_scenario_is_risk() -> bool:
-    """确认服务端当前场景是 product_story_risk（测试前提）。"""
     try:
         r = requests.get(f"{BASE}/health", timeout=2).json()
         sid = r.get("scenario_id", "") or r.get("scenario", "")
@@ -123,8 +142,8 @@ def _server_scenario_is_risk() -> bool:
 
 
 pytestmark = pytest.mark.skipif(
-    not _server_available() or not _server_scenario_is_risk(),
-    reason="需先启动: python scripts/run_demo.py --live --scenario config/demo/scenarios/product_story_risk.yaml",
+    not _server_available(),
+    reason=_CONTRACT.skip_reason(),
 )
 
 
@@ -134,7 +153,7 @@ def _new_page(playwright):
         headless=True,
     )
     ctx = browser.new_context()
-    ctx.add_init_script(_WS_CAPTURE_INIT)
+    ctx.add_init_script(WS_CAPTURE_INIT)
     return browser, ctx, ctx.new_page()
 
 
@@ -251,12 +270,13 @@ def _dump_dom(page, sid=SID):
     }
 
 
-def _observe_phase(page, label, observe_ms, need_source_switched=True):
+def _observe_phase(page, label, observe_ms, need_source_switch=True, contract_sid=None):
     """等待 source_switched（如需）→ 清 log → 观察窗 → dump。
 
     返回该 phase 的全部观测数据。log 为 source_switched 之后的干净段。
     """
-    if need_source_switched:
+    effective_sid = contract_sid or SID
+    if need_source_switch:
         assert _wait_js_true(
             page,
             "(window.__wsLog||[]).some(m=>m.type==='source_switched')",
@@ -264,25 +284,24 @@ def _observe_phase(page, label, observe_ms, need_source_switched=True):
         ), f"{label}: 15s 内未收到 source_switched"
         page.wait_for_timeout(2_000)
 
-
-    video_t0 = _js(page, _VIDEO_SIG_JS)
-    psstate_t0 = _js(page, f"document.getElementById('ps-state-{SID}')?.innerText || ''")
+    video_t0 = _js(page, make_video_sig_js(effective_sid))
+    psstate_t0 = _js(page, f"document.getElementById('ps-state-{effective_sid}')?.innerText || ''")
 
     seen_badges: set[str] = set()
     max_cards = 0
     steps = observe_ms // POLL_MS
     half = steps // 2
     for i in range(steps):
-        sample = _js(page, _SIGNALS_POLL_JS)
+        sample = _js(page, make_signals_poll_js(effective_sid))
         for b in sample.get("badges") or []:
             seen_badges.add(str(b))
         max_cards = max(max_cards, int(sample.get("cards") or 0))
         page.wait_for_timeout(POLL_MS)
         if i == half:
-            video_t1 = _js(page, _VIDEO_SIG_JS)
+            video_t1 = _js(page, make_video_sig_js(effective_sid))
 
-    video_t2 = _js(page, _VIDEO_SIG_JS)
-    psstate_t2 = _js(page, f"document.getElementById('ps-state-{SID}')?.innerText || ''")
+    video_t2 = _js(page, make_video_sig_js(effective_sid))
+    psstate_t2 = _js(page, f"document.getElementById('ps-state-{effective_sid}')?.innerText || ''")
 
     log_all = _js(page, "window.__wsLog")
     cut = [i for i, m in enumerate(log_all) if m.get("type") == "source_switched"]
@@ -302,7 +321,7 @@ def _observe_phase(page, label, observe_ms, need_source_switched=True):
         "log_all": log_all,
         "seen_badges": sorted(seen_badges),
         "max_rt_cards": max_cards,
-        "dom": _dump_dom(page),
+        "dom": _dump_dom(page, sid=effective_sid),
     }
 
 
@@ -328,30 +347,30 @@ def acceptance():
         # Phase 1: Risk — reset 对齐 → 观察
         resp = requests.post(f"{BASE}/demo/reset", timeout=15)
         assert resp.status_code == 200, f"risk reset 失败: {resp.status_code}"
-        data["risk"] = _observe_phase(page, "risk", OBSERVE_RISK_MS, need_source_switched=True)
+        data["risk"] = _observe_phase(page, "risk", OBSERVE_RISK_MS, need_source_switch=True)
 
         # Phase 2: Benign — 切场景 → 观察
         resp = requests.post(
             f"{BASE}/demo/scenario",
-            json={"scenario_id": "product_story_benign"},
+            json={"scenario_id": _CONTRACT.benign_scenario_id()},
             timeout=15,
         )
         assert resp.status_code == 200, f"切换 benign 失败: {resp.status_code} {resp.text}"
-        data["benign"] = _observe_phase(page, "benign", OBSERVE_BENIGN_MS, need_source_switched=True)
+        data["benign"] = _observe_phase(page, "benign", OBSERVE_BENIGN_MS, need_source_switch=True)
 
         # Phase 3: Switch back to Risk — 切回 → 观察（不额外 reset，验污染）
         resp = requests.post(
             f"{BASE}/demo/scenario",
-            json={"scenario_id": "product_story_risk"},
+            json={"scenario_id": _CONTRACT.scenario_id},
             timeout=15,
         )
         assert resp.status_code == 200, f"切回 risk 失败: {resp.status_code} {resp.text}"
-        data["switch_back"] = _observe_phase(page, "switch_back", OBSERVE_SWITCH_MS, need_source_switched=True)
+        data["switch_back"] = _observe_phase(page, "switch_back", OBSERVE_SWITCH_MS, need_source_switch=True)
 
         # Phase 4: Reset — 清空 → 观察（验干净态）
         resp = requests.post(f"{BASE}/demo/reset", timeout=15)
         assert resp.status_code == 200, f"reset 失败: {resp.status_code}"
-        data["reset"] = _observe_phase(page, "reset", OBSERVE_RESET_MS, need_source_switched=True)
+        data["reset"] = _observe_phase(page, "reset", OBSERVE_RESET_MS, need_source_switch=True)
 
         data["ws_meta"] = _js(page, "window.__wsMeta")
         data["console_errors"] = console_errors
