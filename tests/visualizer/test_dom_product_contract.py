@@ -41,12 +41,12 @@ from tests.visualizer._dom_contract_base import (
     make_skipif,
     na_skip,
 )
-from tests.visualizer._scenario_contract import ProductStoryRiskContract
+from tests.visualizer._scenario_contract import TelephoneRiskContract
 
 # ---------------------------------------------------------------------------
 # 场景契约（telephone_risk 专属，provenance 与 render.py 对齐）
 # ---------------------------------------------------------------------------
-_CONTRACT = ProductStoryRiskContract()
+_CONTRACT = TelephoneRiskContract()
 _D0 = _CONTRACT.d0
 
 pytestmark = make_skipif(_D0.scenario_id, _D0.skip_reason)

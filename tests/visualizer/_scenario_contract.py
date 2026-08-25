@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 # ---------------------------------------------------------------------------
 # D0 Product Surface Contract configuration
@@ -328,17 +329,31 @@ class ScenarioAcceptanceContract:
 
 
 # ---------------------------------------------------------------------------
-# Product story contracts (replicate existing test structure)
+# Telephone risk contracts（重命名自 product_story_risk · 2026-08-25）
+#
+# 历史：原 ProductStoryRiskContract / ProductStoryBenignContract 已于 2026-08-25 重命名
+# 为 TelephoneRiskContract / TelephoneRiskBenignContract（场景身份迁移，详见
+# docs/design/architecture/SCENARIO-RENAME-CONFLICTS-2026-08-25.md §3 D1）。
+# telephone_risk_benign 仍是 telephone_risk 的 internal acceptance fixture（决策 C3 选 A），
+# **不**进入 Product Scenario Registry 白名单（白名单只有 telephone_risk / cctv / delivery 三项）。
 # ---------------------------------------------------------------------------
 
 
-class ProductStoryRiskContract(ScenarioAcceptanceContract):
-    """product_story_risk + product_story_benign four-phase acceptance contract."""
+class TelephoneRiskContract(ScenarioAcceptanceContract):
+    """telephone_risk + telephone_risk_benign four-phase acceptance contract.
+
+    重命名历史：曾以 ProductStoryRiskContract 命名（2026-08-25 迁移）；场景身份已冻结为
+    「电话交互 + 异常视觉 → 多模态风险」（更贴近电话风险产品语义，不再叫"product story"）。
+    """
+
+    # Product Scenario Registry 属性（D2 决策：放 Contract；场景应该证明的最终产品结论）。
+    # RAISED：电话 + 视觉联合触发，门窗报警 + 家属通知 + 社区上报。
+    expected_product_result: ClassVar[str] = "RAISED"
 
     def __init__(self) -> None:
         super().__init__(
-            scenario_id="product_story_risk",
-            narrative="夜间电话+人员 → 风险升级 → 通知家属 + 社区上报",
+            scenario_id="telephone_risk",
+            narrative="电话持续交互 + 异常视觉 → 多模态风险 → 通知家属 + 社区上报",
             phases=[
                 PhaseSpec("risk", observe_ms=120_000, need_source_switch=True),
                 PhaseSpec("benign", observe_ms=80_000, need_source_switch=True),
@@ -354,7 +369,7 @@ class ProductStoryRiskContract(ScenarioAcceptanceContract):
             _skip_assertions=[],
         )
         self.d0 = D0Contract(
-            scenario_id="product_story_risk",
+            scenario_id="telephone_risk",
             has_audio_surface=True,
             provenance={
                 "video": "实时推理 (REAL_RUNTIME_VIDEO)",
@@ -363,23 +378,27 @@ class ProductStoryRiskContract(ScenarioAcceptanceContract):
             },
             skip_reason=(
                 "需先启动: python scripts/run_demo.py --live "
-                "--scenario config/demo/scenarios/product_story_risk.yaml"
+                "--scenario config/demo/scenarios/telephone_risk.yaml"
             ),
         )
 
     def benign_scenario_id(self) -> str:
-        return "product_story_benign"
+        return "telephone_risk_benign"
 
 
-class ProductStoryBenignContract(ProductStoryRiskContract):
-    """Standalone benign-side validation (no risk+benign switch required)."""
+class TelephoneRiskBenignContract(TelephoneRiskContract):
+    """Standalone benign-side validation (no risk+benign switch required).
+
+    重命名历史：曾以 ProductStoryBenignContract 命名（2026-08-25）。
+    属于 telephone_risk 的 internal acceptance fixture，**不**进入 Product Scenario Registry。
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self.scenario_id = "product_story_benign"
+        self.scenario_id = "telephone_risk_benign"
         self._skip_assertions = ["TestP2RiskStory", "TestP7SceneSwitch"]
         self.d0 = D0Contract(
-            scenario_id="product_story_benign",
+            scenario_id="telephone_risk_benign",
             has_audio_surface=True,
             provenance={
                 "video": "无视觉轨",
@@ -388,7 +407,7 @@ class ProductStoryBenignContract(ProductStoryRiskContract):
             },
             skip_reason=(
                 "需先启动: python scripts/run_demo.py --live "
-                "--scenario config/demo/scenarios/product_story_benign.yaml"
+                "--scenario config/demo/scenarios/telephone_risk_benign.yaml"
             ),
         )
 
@@ -404,12 +423,16 @@ class CctvSurveillanceSuspiciousContract(ScenarioAcceptanceContract):
     Narrative (frozen):
         夜间人员出现 → 重复出现 → 异常停留 → 视觉风险信号 → RiskSignal → WARN → LOG_ONLY
 
-    Key differences from product_story_risk:
+    Key differences from telephone_risk:
         - No audio surface (CCTV video has no sound)
         - Single phase (no benign/benign switch)
         - Expected max risk level: WARN (not HIGH)
         - repeat_visit_count override: 2
     """
+
+    # Product Scenario Registry 属性（D2 决策）：WARN = 夜间异常升级但不到 HIGH，
+    # 仅观察记录（LOG_ONLY），不通知家属、不创建社区任务（AU-11 守护）。
+    expected_product_result: ClassVar[str] = "WARN"
 
     def __init__(self) -> None:
         super().__init__(
@@ -465,6 +488,10 @@ class DeliveryCourierNormalContract(ScenarioAcceptanceContract):
         - Daytime (start_time 14:00 UTC) → OddHourRule does NOT trigger
         - Single visit → repeat_visit rule does NOT trigger
     """
+
+    # Product Scenario Registry 属性（D2 决策）：MONITOR = 白天正常快递到访系统克制不升级，
+    # 仅记录（LOG_ONLY），验证「看到人 ≠ 报警」的对照基线。
+    expected_product_result: ClassVar[str] = "MONITOR"
 
     def __init__(self) -> None:
         super().__init__(

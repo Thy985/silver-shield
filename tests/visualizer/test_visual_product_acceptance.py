@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover
     pytest.skip("playwright not installed", allow_module_level=True)
 
 from tests.visualizer._scenario_contract import (
-    ProductStoryRiskContract,
+    TelephoneRiskContract,
     make_dom_capture_js,
     make_layout_js,
     make_video_sig_js,
@@ -36,7 +36,7 @@ BASE = "http://127.0.0.1:8765"
 URL = f"{BASE}/live"
 
 # 契约驱动
-_CONTRACT = ProductStoryRiskContract()
+_CONTRACT = TelephoneRiskContract()
 SID = _CONTRACT.scenario_id
 
 SCREENSHOT_DIR = Path("docs/reports/product_story_visual_acceptance")

@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover
 
 from tests.visualizer._scenario_contract import (
     WS_CAPTURE_INIT,
-    ProductStoryRiskContract,
+    TelephoneRiskContract,
     make_signals_poll_js,
     make_video_sig_js,
 )
@@ -42,7 +42,7 @@ BASE = "http://127.0.0.1:8765"
 URL = f"{BASE}/live"
 
 # 契约驱动：所有 SID / skip 条件均来自契约类
-_CONTRACT = ProductStoryRiskContract()
+_CONTRACT = TelephoneRiskContract()
 SID = _CONTRACT.scenario_id
 OBSERVE_RISK_MS = _CONTRACT.observe_times.get("risk", 120_000)
 OBSERVE_BENIGN_MS = _CONTRACT.observe_times.get("benign", 80_000)
