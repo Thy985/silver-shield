@@ -326,7 +326,7 @@ class TestRegistryWhitelistHint:
         assert "telephone_risk" in hint
         assert "cctv_surveillance_suspicious" in hint
         assert "delivery_courier_normal" in hint
-        assert "RAISED" in hint and "WARN" in hint and "MONITOR" in hint
+        assert "WARN" in hint and "MONITOR" in hint
 
     def test_returns_empty_string_when_registry_unavailable(self, monkeypatch) -> None:
         """Registry 模块不存在时容错返回空串（不阻塞错误响应）。"""

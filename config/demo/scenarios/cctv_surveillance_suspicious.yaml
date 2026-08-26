@@ -25,15 +25,16 @@ media_path: dataset/benign/media/CCTV_Surveillance_Final.mp4
 start_time: "2026-07-19T23:30:00+00:00"   # 夜间，OddHourRule 自然触发
 frame_interval_s: 0.5
 fps_target: 8
-loop: true                               # 可视化演示：循环重放，Dashboard 持续有内容
+loop: false                              # 不循环：避免媒体回放制造伪重复来访（repeat_visit 应来自真实观察窗内再次出现，非播放器循环）
 
 # P0-11.5a：场景级规则阈值覆盖。CCTV 夜间真实录像中同一人反复进出（track_id 复用），
-# 但默认 repeat_visit_count=3 需 3 次进出才触发 RepeatVisitRule，本段录像仅约 2 次 →
-# HighRiskApproachRule 三规则同帧不全中 → 无 HIGH。降到 2 即可稳定产出
-# 「长停留 + 重复 + 异常时段」同帧命中 → HIGH_RISK_APPROACH（家属通知 + 社区升级）。
+# 但 repeat_visit_count=2 会让视频内 2 次进出即触发 RepeatVisitRule，叠加 OddHour +
+# LongDuration → HighRiskApproachRule → HIGH（超出 WARN 期望）。
+# 提高到 3（默认值）：视频内 2 次进出不触发 repeat_visit，仅 visit_pending_verify +
+# abnormal_dwell → LOW（符合 WARN，不升级到社区上报）。
 # 仅作用于本场景，不动全局默认与其他场景。
 rule_overrides:
-  repeat_visit_count: 2
+  repeat_visit_count: 3
 
 # ADR-0021 Phase 1 · 演示层接入：本场景开启实时风险旁路 + 决策接入。
 # - enabled: true  → 装配 BehaviorBuilder / RecentBehaviorStore / RealTimeRiskEvaluator，
