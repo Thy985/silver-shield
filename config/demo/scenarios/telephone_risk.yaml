@@ -4,10 +4,10 @@
 # 决策见 docs/design/architecture/SCENARIO-RENAME-CONFLICTS-2026-08-25.md §3 D1）；
 # 旧 D2 报告保留原文件名（vision-eval-product-story-risk-2026-08-24.*）。
 #
-# 视觉源：真实 CCTV 视频（YOLO 可检测人）。
+# 视觉源：telephone_risk 专属视频（门前人物 + 电话交互多模态素材）。
 # 音频事实源（Owner 裁决 2026-08-24，出处 docs/reports/RISK-MIX-SIXTUPLE-VERIFICATION-2026-08-24.md §6）：
 #   synthetic_replay —— audio_replay_path 指向 validation fixture（声明式 audio 注入，
-#   不经 AudioPipeline 推理）；audio_path（mix.wav）降级为浏览器播放介质，不承担语义判定。
+#   不经 AudioPipeline 推理）；audio_path（wav）降级为浏览器播放介质，不承担语义判定。
 # rule_overrides 降 long_duration_seconds=30s 使停留触发 abnormal_dwell。
 # loop=true 确保观察窗内风险可重复触发。
 #
@@ -19,9 +19,9 @@ description: |
   Telephone Risk: 电话持续交互 + 门前人物出现 + 时间重叠 → Combined Evidence → RAISED → 通知家属 + 社区上报
   （历史命名 product_story_risk；2026-08-25 重命名以更贴近"电话交互 + 异常视觉 → 多模态风险"产品语义）
 
-source: CCTV_Surveillance_Final
+source: telephone_risk_demo
 source_type: video_file
-media_path: dataset/benign/media/CCTV_Surveillance_Final.mp4
+media_path: dataset/telephone_risk/media/telephone_risk_demo.mp4
 
 start_time: "2026-08-23T12:00:00+00:00"
 frame_interval_s: 0.5
@@ -29,7 +29,7 @@ fps_target: 8
 loop: true
 
 # 播放介质（浏览器 <audio> 播放 mix.wav），非语义判定事实源
-audio_path: dataset/_canonical/audio_semantic/product_story/telephone_risk/audio/mix.wav
+audio_path: dataset/telephone_risk/audio/telephone_risk_demo_16k_mono.wav
 # 音频语义事实源（synthetic_replay · validation fixture 声明式注入）
 audio_replay_path: src/home_perception/validation/fixtures/scenarios/product_story/telephone_risk_multimodal_001.yaml
 
