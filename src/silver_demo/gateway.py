@@ -850,6 +850,54 @@ def _live_disabled_html() -> str:
     )
 
 
+def _inject_scenario_switcher(html: str, current_scenario_id: str) -> str:
+    """在 live 模式 HTML 里注入场景切换按钮（POST /demo/scenario 热切换）。
+
+    仅在 ``</body>`` 前注入一段 CSS + div + JS，不影响 Case Viewer 渲染逻辑。
+    按钮列表来自 ``PRODUCT_SCENARIOS``（3 个产品演示场景白名单）。
+    """
+    from .product_scenarios import PRODUCT_SCENARIOS
+
+    buttons = "".join(
+        f'<button data-sid="{ps.scenario_id}">{ps.display_name}</button>'
+        for ps in PRODUCT_SCENARIOS
+    )
+    switcher = (
+        "<style>"
+        "#ss-switcher{position:fixed;top:12px;right:12px;z-index:9999;background:#fff;"
+        "border:1px solid #d0d7de;border-radius:8px;padding:8px;"
+        "box-shadow:0 2px 8px rgba(0,0,0,.12);font-family:system-ui,sans-serif;font-size:13px}"
+        "#ss-switcher .ss-title{font-weight:600;margin-bottom:6px;color:#57606a}"
+        "#ss-switcher button{display:block;width:100%;margin:3px 0;padding:6px 10px;"
+        "border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;"
+        "font-size:12px;text-align:left}"
+        "#ss-switcher button:hover{background:#eaeef2}"
+        "#ss-switcher button.ss-active{background:#ddf4ff;border-color:#0969da;font-weight:600}"
+        "#ss-switcher button:disabled{opacity:.5;cursor:wait}"
+        "</style>"
+        f'<div id="ss-switcher"><div class="ss-title">场景切换</div>{buttons}</div>'
+        "<script>(function(){"
+        f'var cur="{current_scenario_id}";'
+        "var box=document.getElementById('ss-switcher');"
+        "box.querySelectorAll('button').forEach(function(b){"
+        "if(b.dataset.sid===cur)b.classList.add('ss-active');"
+        "b.addEventListener('click',function(){"
+        "if(b.classList.contains('ss-active'))return;"
+        "box.querySelectorAll('button').forEach(function(x){x.disabled=true});"
+        "fetch('/demo/scenario',{method:'POST',headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({scenario_id:b.dataset.sid})})"
+        ".then(function(r){return r.json()})"
+        ".then(function(d){if(d.error){alert('切换失败: '+d.error);"
+        "box.querySelectorAll('button').forEach(function(x){x.disabled=false})}else{location.reload()}})"
+        ".catch(function(e){alert('请求失败: '+e);"
+        "box.querySelectorAll('button').forEach(function(x){x.disabled=false})})"
+        "})})})();</script>"
+    )
+    if "</body>" in html:
+        return html.replace("</body>", switcher + "</body>", 1)
+    return html + switcher
+
+
 def create_app(
     demo_settings: DemoSettings | None = None,
 ) -> FastAPI:
@@ -1019,6 +1067,8 @@ def create_app(
                 audio_base_dir=_live_audio_dir,
                 audio_base_url="/live_audio/",
             )
+            # 场景切换按钮（仅 live 模式注入，不影响旗舰 Case Viewer）
+            html = _inject_scenario_switcher(html, gateway.scenario.scenario_id)
             return HTMLResponse(html)
         except Exception as exc:  # noqa: BLE001  # 渲染失败 fail-closed：返回 500 + 诊断，绝不静默产残缺页
             structlog.get_logger(__name__).warning("live_case_viewer_render_failed", exc_info=exc)
