@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -389,3 +390,80 @@ def test_switch_source_without_cursor_reset_reproduces_bug():
     gw._feed_live_audio(acc2)
     # bug 行为：新 accumulator 收不到任何音频
     assert len(acc2.to_evidence_projection()["scenarios"][0]["audio_evidence"]) == 0
+
+
+def test_switch_source_reinjects_audio_for_new_scenario(monkeypatch):
+    """switch_source 必须重新注入新场景的 audio events，否则旧场景的 audio_evidence
+    会串场到新场景（cctv/delivery 切换后仍显示 telephone_risk 的 audio_telephone_persistent）。
+
+    验证方式：mock switch_source 的关键步骤（_rebuild_pipeline / run_loop / hub.broadcast），
+    隔离 YOLO 加载，仅验证 audio 注入逻辑。
+    """
+    import silver_demo.gateway as gw_mod
+    from silver_demo.gateway import DemoGateway
+
+    # 隔离 YOLO 加载 + 帧循环
+    async def _noop_run_loop(self):
+        while False:
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(DemoGateway, "_rebuild_pipeline", lambda self, scenario: None)
+    monkeypatch.setattr(DemoGateway, "run_loop", _noop_run_loop)
+    monkeypatch.setattr(DemoGateway, "_validate_frame_source", lambda self, scenario: None)
+
+    # mock source.load 避免访问 hp_settings.runtime
+    class _FakeSource:
+        frame_count = 100
+        def load(self, scenario, hp_settings):
+            pass
+    monkeypatch.setattr("silver_demo.gateway.Source", _FakeSource)
+
+    # mock live_audio_builder：第一次调用返回 telephone_risk 事件，第二次返回 cctv 空列表
+    call_count = 0
+    captured_scenarios = []
+
+    def _fake_audio_builder(hp, scenario):
+        nonlocal call_count
+        call_count += 1
+        captured_scenarios.append(scenario.scenario_id)
+        if scenario.scenario_id == "telephone_risk":
+            return [_audio_ev(0.5, "audio_telephone_persistent", event_id="t1")]
+        return []  # cctv/delivery 无音频
+
+    monkeypatch.setattr(gw_mod, "live_audio_builder", _fake_audio_builder)
+
+    # 构造第一个 scenario（telephone_risk）
+    from silver_demo.scenarios import ScenarioConfig
+
+    scenario_tel = ScenarioConfig(
+        scenario_id="telephone_risk",
+        source="t",
+        start_time=datetime.now(UTC),
+    )
+    scenario_cctv = ScenarioConfig(
+        scenario_id="cctv_surveillance_suspicious",
+        source="c",
+        start_time=datetime.now(UTC),
+    )
+
+    dg = DemoGateway.create_for_test()
+    dg.scenario = scenario_tel
+    dg.hp_settings = type("H", (), {"audio": type("A", (), {"enabled": True})()})()
+
+    # 模拟初始状态（类似 create_app 已注入 telephone_risk 事件）
+    dg.set_live_audio_events(_fake_audio_builder(dg.hp_settings, scenario_tel))
+    assert len(dg._live_audio_events) == 1
+    assert dg._live_audio_events[0]["kind"] == "audio_telephone_persistent"
+    assert call_count == 1
+
+    # 调用 switch_source 切换到 cctv
+    asyncio.run(dg.switch_source(scenario_cctv))
+
+    # 验证：live_audio_builder 被再次调用，传入新 scenario
+    assert call_count == 2, f"live_audio_builder 应被调用 2 次，实际 {call_count}"
+    assert captured_scenarios == ["telephone_risk", "cctv_surveillance_suspicious"]
+
+    # 验证：_live_audio_events 被新场景的空列表覆盖（不再有 telephone_risk 事件）
+    assert dg._live_audio_events == [], (
+        f"切换到 cctv 后 _live_audio_events 应为空，实际 {dg._live_audio_events!r}"
+    )

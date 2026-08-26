@@ -746,6 +746,18 @@ class DemoGateway:
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())
 
+        # 3.5 重新注入新场景的音频事件（避免旧场景 audio_evidence 串场到新场景；
+        # POST /demo/scenario 切换后若不重新注入，cctv/delivery 等无音频场景会继续
+        # 显示 telephone_risk 的 audio_telephone_persistent 误报）。
+        # 失败隔离：构建/注入异常 → 记日志跳过，绝不阻断实时循环（VM-5）。
+        try:
+            if live_audio_builder is not None:
+                self.set_live_audio_events(live_audio_builder(self.hp_settings, scenario))
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger(__name__).warning(
+                "live_audio_injection_failed_on_switch", exc_info=exc
+            )
+
         # 4. 广播切换事件（前端清空跨帧累积状态）
         await self.hub.broadcast(
             {
