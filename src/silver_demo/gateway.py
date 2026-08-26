@@ -137,6 +137,17 @@ class DemoGateway:
         # 与事件列表对齐的投递时刻轴（set_live_audio_events 构建；epoch 流归一化）。
         self._audio_feed_timeline: list[float] = []
 
+        # MJPEG 订阅者列表（方案 A · 修复场景切换后"检测不到人像"问题）：
+        # 旧实现 MJPEG 端点独立读 temp_source（按 fps_target=8 限速），与主帧循环
+        # YOLO 推理（CPU 受限 ~4fps）不同步 → cctv 60s 视频 MJPEG 60.5s 放完、
+        # 主帧循环 121s 处理完，MJPEG 流先结束后 <img> 定格 + 主帧循环还在跑 detection，
+        # 用户感知为"切换后长时间检测不到人像"。
+        # 新实现：每帧 process_frame 后由主帧循环编码一次并 put_nowait 到每个订阅者
+        # 的 asyncio.Queue（maxsize=2，慢消费者丢帧不阻塞），MJPEG 端点 await queue.get()
+        # 拉取 → MJPEG 流速度 = YOLO 处理速度，前端 <img> 与 perception_delta 严格对齐。
+        # 代价：MJPEG 流低于 fps_target=8（~4fps）但产品 demo 优选对齐而非"流畅但不准确"。
+        self._mjpeg_subscribers: list[asyncio.Queue[bytes | None]] = []
+
     @classmethod
     def create_for_test(cls) -> DemoGateway:
         """测试用工厂：构造未装配的网关实例，跳过 YOLO 加载与场景解析。
@@ -251,6 +262,9 @@ class DemoGateway:
                     self._delta_seq = 0
                     frame_iter = iter(self.source)
                     continue
+                # 帧源耗尽 + loop=false：MJPEG 流端点收到结束信号后退出（订阅者全部
+                # queue.get() 返回 None → 流生成器 break）。否则订阅者会无限阻塞。
+                self._signal_mjpeg_end()
                 break
 
             # 推进模拟时间（在网关内，不在 pipeline.run 内；process_frame 不推进 clock）
@@ -304,6 +318,20 @@ class DemoGateway:
             # 天然同步（单一事实源 VM-9）。
             # PR-C：frame_tick 携带 case_time（红线 §7.7：frame_index + case_time 双标识贯穿
             # frame_tick / perception_delta / risk_delta，Case Time chip 由此驱动）。
+
+            # MJPEG 订阅广播（方案 A · 修复 MJPEG 与 detection 错位）：
+            # 必须在 frame_tick 之前——确保 MJPEG 端点 await queue.get() 拿到的 jpeg bytes
+            # 与本帧 perception_delta / risk_delta 严格对齐（同一 frame 的画面与判定）。
+            # 失败隔离：编码异常 / 队列满 → 吞掉+记日志，绝不改变实时循环（VM-5）。
+            try:
+                _mjpeg_bytes = self._encode_mjpeg_frame(frame)
+                if _mjpeg_bytes is not None:
+                    self._broadcast_mjpeg_frame(_mjpeg_bytes)
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger(__name__).warning(
+                    "mjpeg_broadcast_failed", exc_info=exc
+                )
+
             try:
                 ft_case_time = self._last_case_time
             except AttributeError:  # fail-closed：ctx 尚未构造（防御性，正常不触）
@@ -529,6 +557,74 @@ class DemoGateway:
             if self.n_frames == 0:
                 raise RuntimeError(f"视频无可用帧: {mp!r}（可能编码不支持或时长为 0）")
 
+    # ------------------------------------------------------------------
+    # MJPEG 订阅广播（方案 A · 修复场景切换后 MJPEG 与 detection 错位）
+    # ------------------------------------------------------------------
+
+    def _encode_mjpeg_frame(
+        self,
+        frame: Any,
+        *,
+        max_width: int = 720,
+        quality: int = 50,
+    ) -> bytes | None:
+        """把单帧编码为 jpeg bytes（MJPEG 流广播用）。
+
+        失败隔离：编码异常 → 返回 None（仅记日志），主帧循环跳过本帧广播（不阻断
+        ``process_frame`` / ``perception_delta`` / 实时风险）。
+
+        cv2 延迟导入（仅本方法需要），避免 video_file 部署在无 cv2 环境时导入模块即报
+        ``ImportError``（与 ``VideoFileFrameSource`` 模式一致）。
+        """
+        import cv2
+
+        try:
+            if max_width and max_width > 0:
+                _, w = frame.shape[:2]
+                if w > max_width:
+                    scale = max_width / float(w)
+                    frame = cv2.resize(
+                        frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+                    )
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+            if not ok:
+                return None
+            return buf.tobytes()
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger(__name__).warning(
+                "mjpeg_encode_failed", error=str(exc)
+            )
+            return None
+
+    def _broadcast_mjpeg_frame(self, jpeg_bytes: bytes) -> None:
+        """把 jpeg bytes put 给所有 MJPEG 订阅者。
+
+        - 无订阅者 → 直接返回（编码已执行；MJPEG 端点未连时仍可工作，
+          但不浪费带宽；CPU 编码开销相对 YOLO 推理可忽略）
+        - ``asyncio.Queue(maxsize=2)`` 满（消费者慢）→ ``QueueFull`` 丢本帧，
+          避免阻塞主帧循环的 ``run_loop``（VM-5 探针铁律）
+        """
+        if not self._mjpeg_subscribers:
+            return
+        for queue in self._mjpeg_subscribers:
+            try:
+                queue.put_nowait(jpeg_bytes)
+            except asyncio.QueueFull:
+                # 慢消费者丢帧（MJPEG 端点偶尔卡顿可接受，不阻塞 run_loop）
+                pass
+
+    def _signal_mjpeg_end(self) -> None:
+        """通知所有 MJPEG 订阅者结束（场景帧源耗尽 / ``stop()`` / 场景切换）。
+
+        ``put_nowait(None)`` 让订阅者下次 ``queue.get()`` 返回 ``None``，
+        流生成器 ``break`` → MJPEG 端点关闭流（浏览器收到 multipart 结束）。
+        """
+        for queue in self._mjpeg_subscribers:
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
     def _apply_scenario_rule_overrides(self) -> None:
         """场景级规则阈值覆盖（P0-11.5a）。
 
@@ -713,6 +809,14 @@ class DemoGateway:
                 structlog.get_logger(__name__).warning("帧循环任务取消时发生异常", exc_info=exc)
             self._task = None
 
+        # 1.5 通知旧 MJPEG 订阅者结束 + 清空订阅者列表（方案 A · 同步 MJPEG 流与
+        # 主帧循环）：切换场景时旧的 MJPEG 流端点必须关闭（避免浏览器订阅旧场景画面），
+        # 否则新 run_loop 开始后旧订阅者会继续从旧 queue 读，新订阅者会从新 queue 读，
+        # 但场景帧源已替换 → 视觉/语义错位。先 put_nowait(None) 让旧流生成器 break，
+        # 再清空列表让新 MJPEG 端点访问时按需重建订阅。
+        self._signal_mjpeg_end()
+        self._mjpeg_subscribers = []
+
         # 2. 重建帧源 + 流水线状态（复用已加载 detector，清空跨场景/跨循环累积状态）
         self.scenario = scenario
         self._rebuild_pipeline(scenario)
@@ -745,6 +849,18 @@ class DemoGateway:
 
         # 3. 重开循环
         self._task = asyncio.create_task(self.run_loop())
+
+        # 3.5 重新注入新场景的音频事件（避免旧场景 audio_evidence 串场到新场景；
+        # POST /demo/scenario 切换后若不重新注入，cctv/delivery 等无音频场景会继续
+        # 显示 telephone_risk 的 audio_telephone_persistent 误报）。
+        # 失败隔离：构建/注入异常 → 记日志跳过，绝不阻断实时循环（VM-5）。
+        try:
+            if live_audio_builder is not None:
+                self.set_live_audio_events(live_audio_builder(self.hp_settings, scenario))
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger(__name__).warning(
+                "live_audio_injection_failed_on_switch", exc_info=exc
+            )
 
         # 4. 广播切换事件（前端清空跨帧累积状态）
         await self.hub.broadcast(
@@ -848,6 +964,56 @@ def _live_disabled_html() -> str:
         "<a href=\"/\">/（Verified Cases）</a>。</p>"
         "</body></html>"
     )
+
+
+def _inject_scenario_switcher(html: str, current_scenario_id: str) -> str:
+    """在 live 模式 HTML 里注入场景切换按钮（POST /demo/scenario 热切换）。
+
+    仅在 ``</body>`` 前注入一段 CSS + div + JS，不影响 Case Viewer 渲染逻辑。
+    按钮列表来自 ``PRODUCT_SCENARIOS``（3 个产品演示场景白名单）。
+    """
+    from .product_scenarios import PRODUCT_SCENARIOS
+
+    buttons = "".join(
+        f'<button data-sid="{ps.scenario_id}">{ps.display_name}</button>'
+        for ps in PRODUCT_SCENARIOS
+    )
+    switcher = (
+        "<style>"
+        "#ss-switcher{position:fixed;top:12px;right:12px;z-index:9999;background:#fff;"
+        "border:1px solid #d0d7de;border-radius:8px;padding:8px;"
+        "box-shadow:0 2px 8px rgba(0,0,0,.12);font-family:system-ui,sans-serif;font-size:13px}"
+        "#ss-switcher .ss-title{font-weight:600;margin-bottom:6px;color:#57606a}"
+        "#ss-switcher button{display:block;width:100%;margin:3px 0;padding:6px 10px;"
+        "border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;"
+        "font-size:12px;text-align:left}"
+        "#ss-switcher button:hover{background:#eaeef2}"
+        "#ss-switcher button.ss-active{background:#ddf4ff;border-color:#0969da;font-weight:600}"
+        "#ss-switcher button:disabled{opacity:.5;cursor:wait}"
+        "</style>"
+        f'<div id="ss-switcher"><div class="ss-title">场景切换</div>{buttons}</div>'
+        "<script>(function(){"
+        f'var cur="{current_scenario_id}";'
+        "var box=document.getElementById('ss-switcher');"
+        "box.querySelectorAll('button').forEach(function(b){"
+        "if(b.dataset.sid===cur)b.classList.add('ss-active');"
+        "b.addEventListener('click',function(){"
+        "if(b.classList.contains('ss-active'))return;"
+        "box.querySelectorAll('button').forEach(function(x){x.disabled=true});"
+        "fetch('/demo/scenario',{method:'POST',headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({scenario_id:b.dataset.sid})})"
+        ".then(function(r){return r.json()})"
+        ".then(function(d){if(d.error){alert('切换失败: '+d.error);"
+        "box.querySelectorAll('button').forEach(function(x){x.disabled=false})}else{location.reload()}})"
+        ".catch(function(e){alert('请求失败: '+e);"
+        "box.querySelectorAll('button').forEach(function(x){x.disabled=false})})"
+        "})})})();</script>"
+    )
+
+    idx = html.rfind("</body>")
+    if idx != -1:
+        return html[:idx] + switcher + html[idx:]
+    return html + switcher
 
 
 def create_app(
@@ -1019,6 +1185,8 @@ def create_app(
                 audio_base_dir=_live_audio_dir,
                 audio_base_url="/live_audio/",
             )
+            # 场景切换按钮（仅 live 模式注入，不影响旗舰 Case Viewer）
+            html = _inject_scenario_switcher(html, gateway.scenario.scenario_id)
             return HTMLResponse(html)
         except Exception as exc:  # noqa: BLE001  # 渲染失败 fail-closed：返回 500 + 诊断，绝不静默产残缺页
             structlog.get_logger(__name__).warning("live_case_viewer_render_failed", exc_info=exc)
@@ -1297,10 +1465,16 @@ def create_app(
     # ------------------------------------------------------------------
     @app.get("/mjpeg/{scenario_id}")
     async def mjpeg_stream(scenario_id: str) -> StreamingResponse:
-        """MJPEG 视频流 (multipart/x-mixed-replace)。
+        """MJPEG 视频流 (multipart/x-mixed-replace · 订阅模式)。
 
         浏览器原生解码 MJPEG，无 Base64 开销，CPU/延迟显著降低。
-        仅 live_enabled 时可用；帧源来自 gateway.source（与帧循环共用同一 Source）。
+        仅 live_enabled 时可用；帧来自 ``gateway._mjpeg_subscribers`` 的 ``asyncio.Queue``，
+        每帧由主帧循环 ``run_loop`` 在 ``process_frame`` 后编码并 ``put_nowait`` 广播（见
+        ``_broadcast_mjpeg_frame``）。
+
+        **方案 A 同步语义**：MJPEG 流速度 = YOLO 主帧循环处理速度（CPU 受限约 4 fps，
+        低于 ``fps_target=8``），但 ``<img>`` 画面与 ``perception_delta`` 严格对齐
+        —— 修复场景切换后 MJPEG 流先于 detection 结束导致"检测不到人像"的 UX 问题。
         """
         if not demo_settings.live_enabled:
             return JSONResponse(
@@ -1316,69 +1490,31 @@ def create_app(
 
 
         boundary = "frame"
-        quality = 50  # JPEG quality
-        max_width = 720  # 同 frame_tick 编码参数
+
+        # 订阅模式：每 MJPEG 端点创建独立 asyncio.Queue 加入 gateway 订阅者列表，
+        # run_loop 每帧编码后广播到所有订阅者。maxsize=2：慢消费者丢帧而非阻塞主帧循环。
+        my_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+        gateway._mjpeg_subscribers.append(my_queue)
 
         async def frame_generator() -> AsyncIterator[bytes]:
-            """生成 MJPEG 帧流。独立于主帧循环，直接从 Source 读取并编码。"""
-            # 创建独立的帧迭代器（不影响主循环的 frame_index / clock）
-            # 注意：source 是共享的，但 MP4 Source 每次迭代会重新打开文件，
-            # CAVIAR Source 是列表迭代。这里创建新迭代器避免与主循环竞争。
-            import cv2
-
-            # 获取帧源配置
-            scenario = gateway.scenario
-            hp_settings = gateway.hp_settings
-
-            # 创建临时 Source 实例用于 MJPEG 流（不影响主循环）
-            temp_source = Source()
-            temp_source.load(scenario, hp_settings)
-
-            while True:  # loop 模式下无限循环
-                try:
-                    for _, frame in temp_source:
-                        if frame is None:
-                            continue
-                        # 编码 JPEG
-                        try:
-                            if max_width and max_width > 0:
-                                _, w = frame.shape[:2]
-                                if w > max_width:
-                                    scale = max_width / float(w)
-                                    frame = cv2.resize(
-                                        frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
-                                    )
-                            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-                            if not ok:
-                                continue
-                            jpeg_bytes = buf.tobytes()
-                        except Exception as e:  # noqa: BLE001 (fault isolation: one frame fail shouldn't kill stream)
-                            structlog.get_logger().warning("MJPEG frame encode failed", error=str(e))
-                            continue
-
-                        # MJPEG 边界格式
-                        yield (
-                            f"--{boundary}\r\n"
-                            f"Content-Type: image/jpeg\r\n"
-                            f"Content-Length: {len(jpeg_bytes)}\r\n\r\n"
-                        ).encode("ascii") + jpeg_bytes + b"\r\n"
-
-                        # 限速：按 scenario.fps_target 控制帧率
-                        if scenario.fps_target and scenario.fps_target > 0:
-                            await asyncio.sleep(1.0 / scenario.fps_target)
-                        else:
-                            await asyncio.sleep(0)  # 让出事件循环
-
-                    # 流结束（视频结束）
-                    if not scenario.loop:
+            """阻塞 await queue.get() 拉取 jpeg bytes（主帧循环每帧编码后 put）。"""
+            try:
+                while True:
+                    jpeg_bytes = await my_queue.get()
+                    if jpeg_bytes is None:
+                        # 结束信号（场景帧源耗尽 / stop() / 场景切换）→ 流结束
                         break
-                    # loop 模式：重新创建 Source 继续
-                    temp_source = Source()
-                    temp_source.load(scenario, hp_settings)
-                except Exception as e:  # noqa: BLE001 (fault isolation: source reload fail shouldn't crash generator)
-                    # 生成器异常时静默结束
-                    structlog.get_logger().warning("MJPEG stream failed, ending", error=str(e))
-                    break
+                    yield (
+                        f"--{boundary}\r\n"
+                        f"Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg_bytes)}\r\n\r\n"
+                    ).encode("ascii") + jpeg_bytes + b"\r\n"
+            finally:
+                # 断开 / 异常 / 流结束时取消订阅（避免残留 queue 阻塞主帧循环）
+                try:
+                    gateway._mjpeg_subscribers.remove(my_queue)
+                except ValueError:
+                    pass
 
         return StreamingResponse(
             frame_generator(),
@@ -1462,6 +1598,7 @@ def _ensure_app() -> FastAPI:
 
 def main() -> None:
     """命令行入口：python -m silver_demo.gateway 或 uvicorn silver_demo.gateway:app。"""
+
     import uvicorn
 
     demo_settings = DemoSettings.from_env()
