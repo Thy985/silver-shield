@@ -5,7 +5,7 @@ P0-11.5a 目标：CCTV 夜间场景确定性产出 HIGH + family + community 命
 
 1. **场景规则覆盖**：`ScenarioConfig.rule_overrides` 字段 + 解析正确 +
    ``DemoGateway._apply_scenario_rule_overrides`` 把键写入 ``pipeline.rule_engine.thresholds``。
-   —— CCTV 场景 ``repeat_visit_count: 3 → 2`` 由此生效，HighRiskApproachRule
+   —— CCTV 场景 ``repeat_visit_count: 3``（loop=false 后需真实 3 次重复）由此生效，HighRiskApproachRule
    (LongDuration + RepeatVisit + OddHour 同帧全中) 才能确定性触发 HIGH。
 
 2. **家属联系配置**：`config/default.yaml` 的 ``action.family_contact`` 已配置，
@@ -59,8 +59,8 @@ def test_scenario_config_accepts_rule_overrides():
     assert sc.rule_overrides == {"repeat_visit_count": 2}
 
 
-def test_cctv_surveillance_yaml_has_rule_overrides_repeat_visit_count_2():
-    """CCTV 夜间场景 yaml 必须含 ``rule_overrides: {repeat_visit_count: 2}``。
+def test_cctv_surveillance_yaml_has_rule_overrides_repeat_visit_count_3():
+    """CCTV 夜间场景 yaml 必须含 ``rule_overrides: {repeat_visit_count: 3}``。
 
     该文件本地 untracked（不入库），缺失时 skip——但默认应存在。
     """
@@ -72,8 +72,8 @@ def test_cctv_surveillance_yaml_has_rule_overrides_repeat_visit_count_2():
     sc = load_scenario(path)
     assert sc.scenario_id == "cctv_surveillance_suspicious"
     assert sc.source_type == "video_file"
-    assert sc.rule_overrides == {"repeat_visit_count": 2}, (
-        f"CCTV 场景必须降 repeat_visit_count 至 2 以稳定产出 HIGH；当前 {sc.rule_overrides!r}"
+    assert sc.rule_overrides == {"repeat_visit_count": 3}, (
+        f"CCTV 场景 repeat_visit_count 必须为 3（loop=false 后需真实 3 次重复才触发 HIGH）；当前 {sc.rule_overrides!r}"
     )
 
 

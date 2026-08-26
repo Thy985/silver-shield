@@ -893,8 +893,10 @@ def _inject_scenario_switcher(html: str, current_scenario_id: str) -> str:
         "box.querySelectorAll('button').forEach(function(x){x.disabled=false})})"
         "})})})();</script>"
     )
-    if "</body>" in html:
-        return html.replace("</body>", switcher + "</body>", 1)
+
+    idx = html.rfind("</body>")
+    if idx != -1:
+        return html[:idx] + switcher + html[idx:]
     return html + switcher
 
 
@@ -1512,6 +1514,7 @@ def _ensure_app() -> FastAPI:
 
 def main() -> None:
     """命令行入口：python -m silver_demo.gateway 或 uvicorn silver_demo.gateway:app。"""
+
     import uvicorn
 
     demo_settings = DemoSettings.from_env()
