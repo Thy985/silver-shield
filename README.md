@@ -82,16 +82,19 @@
 
 ### 执行顺序（Owner 锁死，不可反序）
 
-| 步骤 | 内容 | 依据 |
-|---|---|---|
-| 1 | Audio Runtime Entry：RuntimeFrameContext + process_frame(ctx) 改造 | ADR-0039 |
-| 2 | RiskSignal → Decision：DecisionInput.risk_signals 字段 + RuleBasedDecisionPolicy 升级（同 PR 或紧随） | ADR-0040 |
-| 3 | 时钟统一：episode_start_unix 锚定 + SignalTemporalLinker 组件 | ADR-0041 |
-| 4 | RealTimeAudioRiskEvaluator 接线（MONITOR ceiling 下）+ modality-aware routing | ADR-0042 |
-| 5 | 双轨投影：ProjectionAccumulator 状态轨/事件轨扩展 | ADR-0043 |
-| 6 | YAMNet class_map 修复 → 真实 Δt / AudioKind 分布 → 参数回填（ADR-0041/0042 Open Items 关闭） | ADR-0037 数据基建（`data/generators/telephone_risk_v2.py`）|
-| 7 | Browser E2E 回归（含 P0-11 12 项端到端） | docs/05 §3 |
-| 8 | UI 打磨最后：Audio DOM / Risk Card / Narrative | LIVE-PERCEPTION-STREAM-SPEC |
+> **2026-08-25 状态更新**：步骤 1–6 已全部合入 `main`（ADR-0039~0043 实现队列完成）。
+> 当前进入步骤 7–8（UI 打磨 + Browser E2E 回归）。
+
+| 步骤 | 内容 | 依据 | 状态 |
+|---|---|---|---|
+| 1 | Audio Runtime Entry：RuntimeFrameContext + process_frame(ctx) 改造 | ADR-0039 | ✅ 已合入 |
+| 2 | RiskSignal → Decision：DecisionInput.risk_signals 字段 + RuleBasedDecisionPolicy 升级 | ADR-0040 | ✅ 已合入 |
+| 3 | 时钟统一：episode_start_unix 锚定 + SignalTemporalLinker 组件 | ADR-0041 | ✅ 已合入 |
+| 4 | RealTimeAudioRiskEvaluator 接线（MONITOR ceiling 下）+ modality-aware routing | ADR-0042 | ✅ 已合入 |
+| 5 | 双轨投影：ProjectionAccumulator 状态轨/事件轨扩展 | ADR-0043 | ✅ 已合入 |
+| 6 | YAMNet class_map 修复 → 真实 Δt / AudioKind 分布 → 参数回填 | ADR-0037 | ✅ 已合入 |
+| 7 | Browser E2E 回归（含 P0-11 12 项端到端） | docs/05 §3 | 🔄 进行中 |
+| 8 | UI 打磨最后：Audio DOM / Risk Card / Narrative | LIVE-PERCEPTION-STREAM-SPEC | ⏳ 待开始 |
 
 ### 硬门控（违反即返工）
 
