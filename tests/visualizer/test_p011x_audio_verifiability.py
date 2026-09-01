@@ -392,11 +392,17 @@ def test_r9_no_audio_sensor_idle():
     assert 'data-audio-health="UNAVAILABLE"' in html
 
 
-def test_r9_no_audio_kinds_dash():
-    """R9b：无音频 → Kinds detected 显示 —（不编造）。"""
+def test_r9_no_audio_kinds_unavailable():
+    """R9b：无音频 → AUDIO SENSOR 显式 UNAVAILABLE（不编造 kinds）。
+
+    Phase 1 三值语义：无音频轨场景显示 UNAVAILABLE + "本场景无音频轨"，
+    不再使用 "—" 占位（SSOT v4.0 P0-① Audio Surface State Contract）。
+    """
     scenario = _scenario_with_audio(has_audio=False)
     html = _render_audio_sensor_status(scenario)
-    assert "—" in html, "无音频 kinds → —"
+    assert "UNAVAILABLE" in html
+    assert "本场景无音频轨" in html
+    assert "\u2014" not in html
 
 
 # ---------------------------------------------------------------------------
