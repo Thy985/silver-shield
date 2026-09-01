@@ -1440,16 +1440,16 @@ def _render_action_closure(
              <div class="closure-role-title">家属端</div>
              <div class="closure-status" id="closure-family-status-{sid_html}">—</div>
              <div class="closure-actions">
-               <button class="rp-btn closure-btn" data-operator="family" data-action="acknowledge" id="closure-family-ack-{sid_html}">我知道了</button>
-               <button class="rp-btn closure-btn" data-operator="family" data-action="notify_community" id="closure-family-notify-{sid_html}">通知社区</button>
+               <button class="rp-btn closure-btn" data-operator="family" data-action="acknowledge" id="closure-family-ack-{sid_html}" title="标记本警告为已确认，开始等待社区处置">我知道了</button>
+               <button class="rp-btn closure-btn" data-operator="family" data-action="notify_community" id="closure-family-notify-{sid_html}" title="家属无法处理 · 升级给社区端">通知社区</button>
              </div>
            </div>
            <div class="closure-role">
              <div class="closure-role-title">社区端</div>
              <div class="closure-status" id="closure-community-status-{sid_html}">—</div>
              <div class="closure-actions">
-               <button class="rp-btn closure-btn" data-operator="community" data-action="accept" id="closure-community-accept-{sid_html}">接受任务</button>
-               <button class="rp-btn closure-btn" data-operator="community" data-action="complete" id="closure-community-complete-{sid_html}">完成处置</button>
+               <button class="rp-btn closure-btn" data-operator="community" data-action="accept" id="closure-community-accept-{sid_html}" title="接受任务后开始处置">接受任务</button>
+               <button class="rp-btn closure-btn" data-operator="community" data-action="complete" id="closure-community-complete-{sid_html}" title="处置完成 · 关闭工单 · 闭环">完成处置</button>
              </div>
            </div>
          </div>
@@ -1786,7 +1786,7 @@ def _render_live_shell(
             <div class="body">
               <div class="action-signals">
                 <div id="live-signals-{sid_html}"></div>
-                <div class="tl-empty" id="live-signals-empty-{sid_html}">当前无进行中风险信号</div>
+                <div class="tl-empty" id="live-signals-empty-{sid_html}">当前案例无高风险事件 · 继续观察中</div>
               </div>
               {closure_body}
             </div>
@@ -2339,6 +2339,7 @@ def render_case_viewer(
     <div class="topbar-main">
       <h1>{page_title}</h1>
       <p class="subtitle">{page_subtitle}</p>
+      <p class="demo-notice" title="本页面的所有画面、检测、风险事件、处置动作均为受控演示输入驱动">演示素材 · 非 7×24 真实设备</p>
     </div>
     <span class="spacer"></span>
     <details class="auth-badge">
@@ -2624,6 +2625,9 @@ def render_case_viewer(
   .auth-badge[open] {{ border-radius:10px; }}
   .auth-badge p {{ margin:6px 9px 8px; font-weight:400; font-size:12px; color:#7a5a00;
                    max-width:420px; line-height:1.5; }}
+  /* PR-B: 演示素材声明 - 副标题下方一行小字 */
+  .demo-notice {{ margin:4px 0 0; font-size:12px; color:#6b7a8a; font-weight:400;
+                  border-left:2px solid #cdd6e0; padding-left:8px; }}
   /* 阶段叙事 tabs（默认停①，可直切，不强制顺序） */
   .tabs {{ display:flex; gap:6px; margin:14px 0 0; padding:0 4px;
            border-bottom:1px solid #e3e8ee; }}
@@ -2861,7 +2865,10 @@ def render_case_viewer(
                color:#fff; background:#d64541; letter-spacing:.5px; }}
   .rt-badge.live {{ animation:rt-pulse 1.3s ease-in-out infinite; }}
   .rt-card.cleared .rt-badge {{ background:#2e9e6b; }}
-  @keyframes rt-pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.55; }} }}
+  /* PR-B: 关键数字显眼化 - HIGH 风险数字脉冲增强(加 scale 缩放) */
+  @keyframes rt-pulse {{ 0%,100% {{ opacity:1; transform:scale(1); }} 50% {{ opacity:.6; transform:scale(1.08); }} }}
+  .rt-card.live {{ animation:rt-card-glow 1.3s ease-in-out infinite; }}
+  @keyframes rt-card-glow {{ 0%,100% {{ box-shadow:0 0 0 0 rgba(214,69,65,0); }} 50% {{ box-shadow:0 0 12px 2px rgba(214,69,65,0.35); }} }}
   .rt-id {{ font-size:11px; color:#6b7a8a; font-family:ui-monospace,Menlo,Consolas,monospace; }}
   .rt-time {{ font-size:11px; color:#6b7a8a; margin-left:auto;
               font-variant-numeric:tabular-nums; }}
