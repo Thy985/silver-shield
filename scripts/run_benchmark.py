@@ -20,12 +20,31 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from home_perception.common.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _safe_print(text: str) -> None:
+    """Windows GBK 终端兼容：emoji（✅/⛔/❌）不会引发 UnicodeEncodeError。
+
+    优先按 UTF-8 输出；如环境不是 UTF-8，则降级为 ASCII 转义占位符。
+    """
+    try:
+        sys.stdout.buffer.write((text + "\n").encode("utf-8"))
+        sys.stdout.buffer.flush()
+    except (UnicodeEncodeError, AttributeError):
+        # 降级：emoji → 文本（保留语义）
+        fallback = (
+            text.replace("✅", "[PASS]")
+            .replace("⛔", "[FAIL]")
+            .replace("❌", "[X]")
+        )
+        print(fallback)
 
 
 class _SimpleClock:
@@ -283,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("benchmark_gate_conservation_failed", error=str(exc))
             print(f"[gate] 基线对照守恒校验失败（装配错误）：{exc}")
             return 1
-        print(gate.render_markdown())
+        _safe_print(gate.render_markdown())
         if not gate.passed:
             logger.warning("benchmark_gate_failed", set_id=args.set_id)
             # 退出码 3：Hard Gate / 阈值 / 回归未通过（区别于 1=加载/装配错误、2=输入错误）

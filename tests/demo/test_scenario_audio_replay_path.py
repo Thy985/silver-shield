@@ -79,13 +79,17 @@ def test_scenario_config_accepts_audio_replay_path():
             "telephone_risk_multimodal_001.yaml",
         ),
         (
-            "product_story_benign.yaml",
+            "telephone_risk_benign.yaml",
             "call_connected_normal_001.yaml",
         ),
     ],
 )
 def test_product_story_yaml_wires_audio_replay(name: str, fixture_tail: str):
-    """两个 Product Story 场景必须指向对应 fixture 的 audio_replay_path。"""
+    """两个 Product Story 场景必须指向对应 fixture 的 audio_replay_path。
+
+    注：原 `product_story_benign.yaml` 在 PR boundary #3 中重命名为
+    `telephone_risk_benign.yaml`（场景身份迁移），本测试同步迁移。
+    """
     from silver_demo.scenarios import load_scenario
 
     path = REPO_ROOT / "config" / "demo" / "scenarios" / name
