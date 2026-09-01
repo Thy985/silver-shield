@@ -12,7 +12,9 @@
   RAISED 进 ``reason_summary``、全量进 ``meta["risk_signals"]`` 摘要；
   CLEARED 仅计数不产生原因；**不参与 level/action/perception_score 判定**
   （Evidence Strength → Action 的 modality-aware routing 归 ADR-0042）；
-  纯信号无视觉触发仍返回 None（语义同现状）。
+  **纯 audio RAISED 信号无视觉触发 → audio-native 路径产出 LOW/MONITOR**
+  （ADR-0040 D6 升级 · ADR-0044，原"纯信号返回 None"断言随此升级作废）；
+  纯 CLEARED 信号仍返回 None（解除消息不产 Warning）。
 """
 
 from __future__ import annotations
@@ -274,9 +276,25 @@ class TestPolicyMinimalConsumption:
         assert with_sig.recommended_action == base.recommended_action
         assert with_sig.perception_score == base.perception_score
 
-    def test_signal_only_without_triggers_returns_none(self):
-        """纯信号无视觉触发仍返回 None（现状保持；独立触发归 ADR-0042 routing）。"""
+    def test_audio_raised_signal_only_without_triggers_emits_low_monitor(self):
+        """纯 audio RAISED 信号无视觉触发 → audio-native 路径产出 LOW/MONITOR。
+
+        语义变更说明：ADR-0044 引入 audio-native 决策——纯音频信号不再被早退分支吞掉，
+        而是按 category（COMMUNICATION → LOW + MONITOR）产出 WarningEvent；不经
+        signal_adapter.risk_signal_to_perception 翻译（硬门控 3）。
+        """
         w = RuleBasedDecisionPolicy().decide(
             DecisionInput(trigger_events=(), decision_context=make_ctx(), risk_signals=(make_signal(),))
+        )
+        assert w is not None
+        assert w.risk_level == "LOW"
+        assert w.recommended_action == "MONITOR"
+        assert w.meta["audio_native"] is True
+        assert w.meta["risk_signals"]["raised"] == 1
+
+    def test_cleared_signal_only_without_triggers_returns_none(self):
+        """纯 CLEARED 信号无视觉触发 → 仍返回 None（解除消息不产 Warning，语义保持）。"""
+        w = RuleBasedDecisionPolicy().decide(
+            DecisionInput(trigger_events=(), decision_context=make_ctx(), risk_signals=(make_signal(transition="cleared"),))
         )
         assert w is None

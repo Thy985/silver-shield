@@ -97,3 +97,20 @@ _verify_fold.py
 
 # --- CodeGraph 索引 ---
 .codegraph/
+
+# --- 临时 venv（ruff 自检创建）---
+.tmp_ruff_venv/
+
+# --- 测试临时产物（本地 pytest 运行生成，不入库）---
+.tmp_test/
+.pytest-tmp/
+
+# --- CodeArts Doer 本地状态 ---
+.codeartsdoer/
+
+# --- Live Perception Stream 产品设计规格（非模块交付物）---
+LIVE-*.md
+
+# --- Playwright E2E 测试工具（非 pytest 套件）---
+playwright_test_utils.py
+test_golden_*.py
