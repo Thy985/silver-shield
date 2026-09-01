@@ -426,23 +426,24 @@ class CctvSurveillanceSuspiciousContract(ScenarioAcceptanceContract):
     """cctv_surveillance_suspicious single-phase acceptance contract.
 
     Narrative (frozen):
-        夜间人员出现 → 重复出现 → 异常停留 → 视觉风险信号 → RiskSignal → WARN → LOG_ONLY
+        夜间人员出现 → 重复出现 → 异常停留 → 视觉风险信号 → RiskSignal → RAISED → HIGH →
+        ESCALATE_COMMUNITY + SEND_FAMILY_MESSAGE（P0-11.5a 5分钟确定性 HIGH 闭环）
 
     Key differences from telephone_risk:
         - No audio surface (CCTV video has no sound)
         - Single phase (no benign/benign switch)
-        - Expected max risk level: WARN (not HIGH)
-        - repeat_visit_count override: 2
+        - Expected max risk level: HIGH (not LOW) — 由 repeat_visit_count=2 触发
+        - 真实 GPU YOLO + ultralytics 推理路径
     """
 
-    # Product Scenario Registry 属性（D2 决策）：WARN = 夜间异常升级但不到 HIGH，
-    # 仅观察记录（LOG_ONLY），不通知家属、不创建社区任务（AU-11 守护）。
-    expected_product_result: ClassVar[str] = "WARN"
+    # Product Scenario Registry 属性（D2 决策）：RAISED = P0-11.5a 5分钟剧本
+    # 确定性 HIGH 闭环，repeat_visit_count=2 → 三规则同帧命中 → ESCALATE_COMMUNITY。
+    expected_product_result: ClassVar[str] = "RAISED"
 
     def __init__(self) -> None:
         super().__init__(
             scenario_id="cctv_surveillance_suspicious",
-            narrative="夜间反复出现 + 异常停留 → 视觉风险信号 → WARN/LOG_ONLY（无音频）",
+            narrative="夜间反复出现 + 异常停留 → 视觉风险信号 → RAISED/HIGH（无音频）",
             phases=[
                 PhaseSpec("cctv_observe", observe_ms=120_000, need_source_switch=True),
             ],

@@ -23,12 +23,12 @@
 | `scenario_id`                  | `expected_product_result` | 展示名                          | 启动命令（`--live`）                                                                | Contract                                       |
 | ------------------------------ | ------------------------- | ------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `telephone_risk`               | **RAISED**                | 电话风险（多模态高风险）        | `--scenario config/demo/scenarios/telephone_risk.yaml`                              | `TelephoneRiskContract`                        |
-| `cctv_surveillance_suspicious` | **WARN**                  | CCTV 夜间异常停留（怀疑）       | `--scenario config/demo/scenarios/cctv_surveillance_suspicious.yaml`                | `CctvSurveillanceSuspiciousContract`           |
+| `cctv_surveillance_suspicious` | **RAISED**                  | CCTV 夜间异常停留（怀疑）       | `--scenario config/demo/scenarios/cctv_surveillance_suspicious.yaml`                | `CctvSurveillanceSuspiciousContract`           |
 | `delivery_courier_normal`      | **MONITOR**               | 快递员正常来访                  | `--scenario config/demo/scenarios/delivery_courier_normal.yaml`                     | `DeliveryCourierNormalContract`                |
 
 ### 2.1 场景对照设计意图
 
-- `telephone_risk` × `cctv_surveillance_suspicious`：**「多模态 vs 单模态」**对照——前者电话 + 视觉联合触发 RAISED，后者仅视觉触发 WARN。
+- `telephone_risk` × `cctv_surveillance_suspicious`：**「多模态 vs 单模态」**对照——前者电话 + 视觉联合触发 WARN，后者仅视觉触发 RAISED/HIGH（P0-11.5a 5分钟确定性 HIGH 闭环核心场景）。
 - `cctv_surveillance_suspicious` × `delivery_courier_normal`：**「异常 vs 正常」**对照——验证系统「看到人 ≠ 报警」的克制能力（夜间反复 vs 白天单次）。
 - 三档 `expected_product_result`（RAISED / WARN / MONITOR）覆盖 SilverShield 决策档位，便于验证档位映射正确性。
 
