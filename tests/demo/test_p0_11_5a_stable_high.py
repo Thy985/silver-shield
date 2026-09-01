@@ -59,10 +59,14 @@ def test_scenario_config_accepts_rule_overrides():
     assert sc.rule_overrides == {"repeat_visit_count": 2}
 
 
-def test_cctv_surveillance_yaml_has_rule_overrides_repeat_visit_count_3():
-    """CCTV 夜间场景 yaml 必须含 ``rule_overrides: {repeat_visit_count: 3}``。
+def test_cctv_surveillance_yaml_has_rule_overrides_repeat_visit_count_2():
+    """CCTV 夜间场景 yaml 必须含 ``rule_overrides: {repeat_visit_count: 2}``。
 
     该文件本地 untracked（不入库），缺失时 skip——但默认应存在。
+
+    P0-11.5a 5分钟确定性 HIGH 闭环核心：repeat_visit_count=2 让视频内 2 次进出
+    触发 RepeatVisitRule，叠加 OddHour + LongDuration 同帧命中 → HighRiskApproachRule → HIGH。
+    测试于 2026-09-01 从 _3 恢复为 _2（PR #321 误将其改成 3 导致演示效果降级为 LOW-only）。
     """
     from silver_demo.scenarios import load_scenario
 
@@ -72,8 +76,8 @@ def test_cctv_surveillance_yaml_has_rule_overrides_repeat_visit_count_3():
     sc = load_scenario(path)
     assert sc.scenario_id == "cctv_surveillance_suspicious"
     assert sc.source_type == "video_file"
-    assert sc.rule_overrides == {"repeat_visit_count": 3}, (
-        f"CCTV 场景 repeat_visit_count 必须为 3（loop=false 后需真实 3 次重复才触发 HIGH）；当前 {sc.rule_overrides!r}"
+    assert sc.rule_overrides == {"repeat_visit_count": 2}, (
+        f"CCTV 场景 repeat_visit_count 必须为 2（P0-11.5a 5分钟确定性 HIGH 闭环）；当前 {sc.rule_overrides!r}"
     )
 
 

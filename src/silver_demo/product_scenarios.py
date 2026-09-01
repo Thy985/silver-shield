@@ -12,7 +12,7 @@
 scenario_id      expected_product_result             用途
 ========== ==================================== ==========================================
 telephone_risk               WARN          多模态风险：通知家属（不升级到社区上报）
-cctv_surveillance_suspicious WARN          夜间异常停留：仅 LOG_ONLY，不通知
+cctv_surveillance_suspicious RAISED        夜间异常停留：HIGH + ESCALATE_COMMUNITY（P0-11.5a 5分钟剧本）
 delivery_courier_normal      MONITOR       白天正常来访：系统克制，验证「看到人 ≠ 报警」
 ========== ==================================== ==========================================
 
@@ -76,11 +76,13 @@ PRODUCT_SCENARIOS: tuple[ProductScenario, ...] = (
         scenario_id="cctv_surveillance_suspicious",
         display_name="CCTV 夜间异常停留（怀疑）",
         scenario_yaml="config/demo/scenarios/cctv_surveillance_suspicious.yaml",
-        expected_product_result="WARN",
+        expected_product_result="RAISED",
         contract_module="tests.visualizer._scenario_contract",
         contract_class="CctvSurveillanceSuspiciousContract",
         description=(
-            "夜间反复出现 + 异常停留 → 视觉风险信号 → WARN/LOG_ONLY（无音频轨）。"
+            "夜间反复出现 + 异常停留 → 视觉风险信号 → RiskSignal → RAISED/HIGH"
+            "（P0-11.5a 5分钟确定性 HIGH 闭环核心场景：repeat_visit_count=2 + OddHour + LongDuration"
+            "同帧命中 → HighRiskApproachRule → ESCALATE_COMMUNITY + SEND_FAMILY_MESSAGE）"
             "与 delivery_courier_normal 形成「异常 vs 正常」对照基线。"
         ),
     ),
