@@ -86,6 +86,7 @@ def main() -> int:
         scenario_path=str(base_yaml),
         frame_loop_interval_s=args.loop_interval,
         jpeg_quality=30,
+        live_enabled=True,  # 真实 E2E 需要 Live 帧循环 + WS 广播（旗舰模式不装配 YOLO、不启帧循环、n_frames=-1）
     )
     app = create_app(ds)
 
@@ -143,8 +144,13 @@ def main() -> int:
 
     def check(name: str, ok: bool, detail: str = "") -> None:
         results.append((name, ok, detail))
-        mark = "✅" if ok else "❌"
-        print(f"  {mark} {name}" + (f" — {detail}" if detail else ""))
+        # Windows GBK 终端兼容：emoji 替换为 ASCII 标记（同 scripts/run_benchmark.py: _safe_print）
+        try:
+            mark = "✅" if ok else "❌"
+            print(f"  {mark} {name}" + (f" — {detail}" if detail else ""))
+        except UnicodeEncodeError:
+            mark = "[OK]" if ok else "[X]"
+            print(f"  {mark} {name}" + (f" — {detail}" if detail else ""))
 
     print("\n" + "=" * 56)
     print("  银龄盾 Demo · 真实端到端验证")
