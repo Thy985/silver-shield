@@ -40,14 +40,14 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 # 复用 run_demo.py 的音频注入逻辑（依赖倒置接缝）
-from run_demo import _build_live_audio_events, _register_synthetic_source
+from run_demo import _build_live_audio_events, _register_synthetic_source  # noqa: E402
 
-from home_perception.core.config import Settings
-from home_perception.runtime.pipeline import RuntimeFrameContext
-from silver_demo.config import DemoSettings
-from silver_demo.gateway import DemoGateway
-from silver_demo.product_scenarios import PRODUCT_SCENARIOS
-from silver_demo.scenarios import load_scenario
+from home_perception.core.config import Settings  # noqa: E402
+from home_perception.runtime.pipeline import RuntimeFrameContext  # noqa: E402
+from silver_demo.config import DemoSettings  # noqa: E402
+from silver_demo.gateway import DemoGateway, _resolve_inference_device  # noqa: E402
+from silver_demo.product_scenarios import PRODUCT_SCENARIOS  # noqa: E402
+from silver_demo.scenarios import load_scenario  # noqa: E402
 
 DEFAULT_FRAMES = 480
 
@@ -156,6 +156,20 @@ async def verify_all(n_frames: int = DEFAULT_FRAMES) -> VerifyReport:
 
     ds = DemoSettings.from_env()
     hp = Settings.load(ds.home_perception_config)
+
+    # 检测器设备选择：与 create_app 对齐（CUDA 可用时上 GPU），
+    # 否则 scenario_verify 直接构造 DemoGateway 会跳过 create_app 的设备解析，
+    # 导致 device 硬编码 cpu（实测 YOLO CPU 跑得比 GPU 慢 20-40x）。
+    # 复用同一 hp_settings 对象，使 assemble / _rebuild_pipeline 自动继承设备。
+    desired = _resolve_inference_device(hp)
+    cur = getattr(getattr(hp, "detection", None), "device", None)
+    if cur != desired:
+        try:
+            hp.detection.device = desired
+        except Exception:  # noqa: BLE001  # 冻结/不可变配置：复制后再改
+            hp = hp.model_copy(deep=True)
+            hp.detection.device = desired
+        print(f"[info] 推理设备: {cur!r} -> {desired!r}")
 
     # 用第一个场景装配 gateway（含 YOLO 加载，~7s）
     first_ps = PRODUCT_SCENARIOS[0]
