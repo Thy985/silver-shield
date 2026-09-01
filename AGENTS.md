@@ -280,7 +280,7 @@ AI Agent 在开始编码前，必须明确回答：
 | --- | --- |
 | 阶段 | MVP Release Candidate 已交付（tag `v0.1.0-mvp-rc`，P0-1~P0-10 全链路 + P0-10.5 冻结治理，2295 测试全绿）；P0-11 多角色协同闭环 Demo 已完成（12/12 端到端验证）。**本行为 README「当前状态」SSOT 的投影，须与 README 保持一致** |
 | 已完成 | P0-1 工程脚手架；P0-2 萤石稳健取流（RTSP/HLS + 断流重连）；P0-3 YOLO 检测；P0-4 FPS Benchmark；P0-5 目标跟踪；P0-6 VisitorEvent；P0-7a/b 特征 + 规则引擎；P0-8/9/10 决策 / 行动 / main 装配；P0-10.5 架构冻结治理；P0-11 多角色协同闭环 Demo（详见 `docs/08_roadmap.md` 与 `README.md`）。**2026-08-22：音频风险运行时审计 + 5 项契约拍板（ADR-0039~0043 全部 Accepted，见下 §10.1）** |
-| 待办 | MVP 范围全部交付。v2 增量已落地 main：Memory（ADR-0024/0025）/ Audio（ADR-0026）/ Validation（ADR-0032）/ Evaluation（ADR-0033）/ Integration（ADR-0034）/ Visualizer（ADR-0035/0036）。**进行中：多模态运行时改造（ADR-0039~0043 实现队列，执行顺序与硬门控见 README「当前执行路线」节）**。后续增强：LLM 解释、多设备、中心联动、真实 App / 用户体系 / 推送 |
+| 待办 | MVP 范围全部交付。v2 增量已落地 main：Memory（ADR-0024/0025）/ Audio（ADR-0026）/ Validation（ADR-0032）/ Evaluation（ADR-0033）/ Integration（ADR-0034）/ Visualizer（ADR-0035/0036）。**已完成：多模态运行时改造（ADR-0039~0043 全部合入）+ Browser E2E 回归（步骤 7）+ UI 最后打磨（步骤 8），详见 README「当前执行路线」节与 `docs/reports/2026-09-01-winddown-b-stage.md`**。后续增强：LLM 解释、多设备、中心联动、真实 App / 用户体系 / 推送 |
 | 已知基线偏差 | 早期 3 个脚手架提交已落 `origin/main`（早于本约定，属基线）；`prototypes/` 为历史验证脚本（含真实凭证，已 gitignore） |
 | 例外不视为违规 | 上述基线偏差已记录；新增代码必须按目标架构，不得延续"硬编码凭证 / 裸 print / 静默异常"等问题 |
 

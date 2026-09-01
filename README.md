@@ -93,8 +93,8 @@
 | 4 | RealTimeAudioRiskEvaluator 接线（MONITOR ceiling 下）+ modality-aware routing | ADR-0042 | ✅ 已合入 |
 | 5 | 双轨投影：ProjectionAccumulator 状态轨/事件轨扩展 | ADR-0043 | ✅ 已合入 |
 | 6 | YAMNet class_map 修复 → 真实 Δt / AudioKind 分布 → 参数回填 | ADR-0037 | ✅ 已合入 |
-| 7 | Browser E2E 回归（含 P0-11 12 项端到端） | docs/05 §3 | 🔄 进行中 |
-| 8 | UI 打磨最后：Audio DOM / Risk Card / Narrative | LIVE-PERCEPTION-STREAM-SPEC | ⏳ 待开始 |
+| 7 | Browser E2E 回归（含 P0-11 12 项端到端） | docs/05 §3 | ✅ 已合入 |
+| 8 | UI 打磨最后：Audio DOM / Risk Card / Narrative | LIVE-PERCEPTION-STREAM-SPEC | ✅ 已合入 |
 
 ### 硬门控（违反即返工）
 
